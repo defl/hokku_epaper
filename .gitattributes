@@ -1,0 +1,7 @@
+* text=auto
+*.py        text diff=python
+*.c         text diff=cpp
+*.sh        text eol=lf
+*.bin       binary
+*.jpeg      binary
+*.png       binary
