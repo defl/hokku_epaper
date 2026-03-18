@@ -41,7 +41,7 @@ There are two LEDs on the board: **red** and **green**.
 
 ### Development summary
 
-In Claude's own words limited to a 4 paragraphs:
+In Claude's own words limited to 4 paragraphs:
 
 > The investigation began with physical analysis of the PCB through close-up photography. The board images revealed a "SUNGALE-EINK-ESP32-V1.1" PCB dated 20250307 by huessendesign.com, carrying an ESP32-S3-WROOM-1 module (MCN16R8). Methodically examining each IC, we identified the power architecture: U2 — an 8-pin SOIC near the battery connector, clearly the charging IC. U3 near USB-C was marked "A4086A 2503" (likely a TP4086A LDO), and a chip near a 2R2 inductor was marked "MP9535A" (a DC-DC converter). The board labeling — silkscreen references like EN, RSTN, BUSY near the ESP32 module, and TF CARD, PWRON near the buttons — provided physical confirmation of the GPIO mapping we'd later extract from firmware disassembly.
 > 
