@@ -4,9 +4,9 @@ Open-source firmware for the Huessen/Hokku (and probably others) 13.3" color E-I
 
 ## Background
 
-I bought this frame in October 2025 from [Wayfair](https://www.wayfair.com/decor-pillows/pdp/hokku-designs-133-inch-wifi-epaper-art-photo-frame-w115006181.html) for about $280 — the cheapest Spectra 6 e-ink display I could find. The stock firmware didn't reliably update the image and was generally a pain to work with, so it was time to replace it. There's no public documentation on the hardware, so we had to do everything the hard way.
+I bought this frame in October 2025 from [Wayfair](https://www.wayfair.com/decor-pillows/pdp/hokku-designs-133-inch-wifi-epaper-art-photo-frame-w115006181.html) for about $280 — the cheapest Spectra 6 e-ink display I could find. The stock firmware didn't reliably update the image and was generally a pain to work with, so it was time to replace it. There's no public documentation on the hardware, so I had to do everything the hard way. SO I made it an experiment in Vibe coding; the repo contains zero lines of human-written code. 
 
-This is an experiment in AI-assisted development: the repo contains zero lines of human-written code. Claude Opus 4.6 was used throughout, and proved excellent at analyzing the original firmware but needed a lot of hand-holding when writing the hardware interface. My conclusion is that it's a bit of a savant fruitfly with ADHD, absolutely blow me away amazing at some things, has no idea what it did a minute ago, plain stupid at times and overall way too eager to just _do_ things if you don't hold it in check all the time.
+Claude Opus 4.6 was used throughout. Unfortunately one cannot simply tell AI do build this firmware and hope it works, it takes a lot of pushing and prodding and domain knowledge for it to finally do what I needed it to do. AI and proved excellent at analyzing the original firmware but needed a lot of hand-holding when writing the hardware interface. My conclusion is that AI, at the time of building this, is a savant fruitfly with ADHD: absolutely blow me away amazing at some things, has no idea what it did a minute ago, plain stupid at times and overall way too eager to just _do_ things if you don't hold it in check all the time. Can't recomment a Vibe coding career in embedded software just quite yet :)
 
 ## Getting Started
 
