@@ -1,4 +1,4 @@
-# Hokku 13.3" E-Ink Frame — Custom Firmware
+# Huessen/Hokku 13.3" E-Ink Frame — Custom Firmware
 
 Open-source firmware for the Huessen/Hokku (and probably others) 13.3" color E-Ink digital frame, built on ESP-IDF for the ESP32-S3.
 
