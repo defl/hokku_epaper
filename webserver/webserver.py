@@ -41,13 +41,17 @@ VISUAL_W = 1600   # landscape width
 VISUAL_H = 1200   # landscape height
 
 # ── Spectra 6 palette ──────────────────────────────────────────────
-PALETTE_REAL_RGB = np.array([
-    [25, 30, 33],       # 0: Black
-    [232, 232, 232],    # 1: White
-    [239, 222, 68],     # 2: Yellow
-    [178, 19, 24],      # 3: Red
-    [33, 87, 186],      # 4: Blue
-    [18, 95, 32],       # 5: Green
+# Measured palette: what the display actually renders (for dithering & error diffusion).
+# Source: esp32-photoframe project (photographed from real Spectra 6 panel).
+# These values differ significantly from theoretical values and produce more
+# accurate dithering because error diffusion is computed against actual output.
+PALETTE_MEASURED_RGB = np.array([
+    [2, 2, 2],          # 0: Black   (theoretical: 0,0,0)
+    [190, 200, 200],    # 1: White   (theoretical: 255,255,255)
+    [205, 202, 0],      # 2: Yellow  (theoretical: 255,255,0)
+    [135, 19, 0],       # 3: Red     (theoretical: 255,0,0)
+    [5, 64, 158],       # 4: Blue    (theoretical: 0,0,255)
+    [39, 102, 60],      # 5: Green   (theoretical: 0,255,0)
 ], dtype=np.float32)
 
 PALETTE_PREVIEW_RGB = np.array([
@@ -101,8 +105,53 @@ def _rgb_to_lab(rgb):
     xyz = _linear_to_xyz(linear)
     return _xyz_to_lab(xyz)
 
-# Precompute palette Lab values
-PALETTE_LAB = _rgb_to_lab(PALETTE_REAL_RGB)
+# Precompute palette Lab values from measured colors
+PALETTE_LAB = _rgb_to_lab(PALETTE_MEASURED_RGB)
+
+# Precompute display L* range for dynamic range compression
+_DISPLAY_BLACK_L = float(_rgb_to_lab(PALETTE_MEASURED_RGB[0:1])[0, 0])
+_DISPLAY_WHITE_L = float(_rgb_to_lab(PALETTE_MEASURED_RGB[1:2])[0, 0])
+
+# ── Dynamic range compression ─────────────────────────────────────
+# Remap source image luminance into the display's actual L* range so the
+# dithering algorithm doesn't try to reproduce brightness levels the panel
+# can't show. Based on esp32-photoframe's preprocessImage approach.
+
+def _compress_dynamic_range(img_array):
+    """Compress image luminance from full [0,100] L* to display's actual range."""
+    rgb = np.asarray(img_array, dtype=np.float64)
+    linear = _srgb_to_linear(rgb)
+    xyz = _linear_to_xyz(linear)
+    lab = _xyz_to_lab(xyz)
+
+    # Remap L* from [0, 100] to [display_black_L, display_white_L]
+    lab[..., 0] = _DISPLAY_BLACK_L + (lab[..., 0] / 100.0) * (_DISPLAY_WHITE_L - _DISPLAY_BLACK_L)
+
+    # Convert back: Lab -> XYZ -> linear RGB -> sRGB
+    ref = np.array([0.95047, 1.00000, 1.08883])
+    L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
+    fy = (L + 16) / 116.0
+    fx = a / 500.0 + fy
+    fz = fy - b / 200.0
+    eps = 0.008856
+    kappa = 903.3
+    xyz_out = np.zeros_like(lab)
+    xyz_out[..., 0] = np.where(fx ** 3 > eps, fx ** 3, (116 * fx - 16) / kappa) * ref[0]
+    xyz_out[..., 1] = np.where(L > kappa * eps, ((L + 16) / 116.0) ** 3, L / kappa) * ref[1]
+    xyz_out[..., 2] = np.where(fz ** 3 > eps, fz ** 3, (116 * fz - 16) / kappa) * ref[2]
+
+    M_inv = np.array([
+        [ 3.2404542, -1.5371385, -0.4985314],
+        [-0.9692660,  1.8760108,  0.0415560],
+        [ 0.0556434, -0.2040259,  1.0572252],
+    ])
+    linear_out = xyz_out @ M_inv.T
+    linear_out = np.clip(linear_out, 0, 1)
+    srgb = np.where(linear_out <= 0.0031308,
+                    linear_out * 12.92,
+                    1.055 * (linear_out ** (1.0 / 2.4)) - 0.055)
+    return np.clip(srgb * 255, 0, 255).astype(np.float32)
+
 
 # ── Disk cache ──────────────────────────────────────────────────────
 
@@ -206,7 +255,7 @@ def _floyd_steinberg_dither(canvas):
     h, w, _ = pixels.shape
     result_idx = np.zeros((h, w), dtype=np.uint8)
 
-    pal_rgb = PALETTE_REAL_RGB
+    pal_rgb = PALETTE_MEASURED_RGB
     lut = _RGB_LUT
     lut_max = lut.shape[0] - 1
     lut_scale = _LUT_SCALE
@@ -257,6 +306,11 @@ def _convert_image(img_path):
     print(f"  {img_path.name}: {img.size[0]}x{img.size[1]}")
 
     canvas = _prepare_canvas(img)
+
+    # Compress dynamic range to match display's actual luminance capabilities
+    canvas_array = _compress_dynamic_range(np.array(canvas, dtype=np.float32))
+    canvas = Image.fromarray(canvas_array.astype(np.uint8))
+
     result_idx = _floyd_steinberg_dither(canvas)
 
     nibbles = PALETTE_NIBBLE[result_idx]  # shape (1600, 1200)
