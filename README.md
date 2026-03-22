@@ -1,6 +1,8 @@
 # Hokku 13.3" E-Ink Frame — Custom Firmware
 
-Open-source firmware for the Huessen/Hokku (and probably others) 13.3" color e-ink digital frame, built on ESP-IDF for the ESP32-S3. The firmware is deliberately minimal — it just fetches a pre-rendered image from a server and pushes it to the display. All the heavy lifting (dithering, color correction, dynamic range compression) happens on the server side, so you can iterate on image quality without reflashing. See the [webserver README](webserver/README.md) for details on the processing pipeline.
+Open-source firmware for the Huessen/Hokku (and probably others) 13.3" color e-ink digital frame, built on ESP-IDF for the ESP32-S3.
+The firmware is deliberately minimal — it just fetches a pre-rendered image from a server and pushes it to the display. All the heavy lifting (dithering, color correction, dynamic range compression) happens on the server side,
+so you can iterate on image quality without reflashing. See the [webserver README](webserver/README.md) for details on the processing pipeline.
 
 ## Background
 
