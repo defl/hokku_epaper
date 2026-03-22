@@ -54,6 +54,14 @@ If you add or remove photos from the upload directory, hit the clear cache endpo
 curl http://localhost:8080/spectra6/clear_cache
 ```
 
+## Color correction
+
+The dithering pipeline uses measured palette values instead of theoretical ones. The measured RGB values (`PALETTE_MEASURED_RGB`) represent what the Spectra 6 panel actually renders for each color, which differs significantly from ideal sRGB. These were sourced from the [esp32-photoframe](https://github.com/vroland/esp32-photoframe) project, which photographed a real panel with a colorimeter.
+
+Before dithering, the image undergoes dynamic range compression: the source luminance (L\* 0–100) is remapped to the display's actual range (~1.4–81 L\*). This prevents the dithering algorithm from trying to reproduce brightness levels the panel cannot show, which reduces wasted dither noise in highlights and shadows.
+
+The measured values are from a different Spectra 6 panel and may not perfectly match the EL133UF1. To calibrate for your specific display, photograph a test pattern showing all 6 colors and update `PALETTE_MEASURED_RGB` with the measured sRGB values.
+
 ## Endpoints
 
 | Endpoint | Description |
