@@ -223,7 +223,7 @@ def _prepare_canvas(img):
     gamma = 0.85
     gamma_lut = [int(((i / 255.0) ** gamma) * 255) for i in range(256)] * 3
     canvas = canvas.point(gamma_lut)
-    canvas = ImageEnhance.Brightness(canvas).enhance(1.1)
+    canvas = ImageEnhance.Brightness(canvas).enhance(1.0)
     canvas = ImageEnhance.Contrast(canvas).enhance(1.1)
     canvas = ImageEnhance.Sharpness(canvas).enhance(1.3)
     canvas = ImageEnhance.Color(canvas).enhance(1.2)
