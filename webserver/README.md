@@ -30,12 +30,15 @@ After=network.target
 
 [Service]
 ExecStart=/usr/bin/python3 /opt/hokku/webserver.py
+Environment="PYTHONUNBUFFERED=1"
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+The `PYTHONUNBUFFERED=1` ensures log output appears immediately in `journalctl` rather than being buffered.
 
 Enable and start:
 
