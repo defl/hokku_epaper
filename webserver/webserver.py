@@ -1,8 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -u
 """Spectra 6 e-ink image server for EL133UF1 display (dual-panel, full resolution).
 
-Pre-converts ALL images in /images/upload/ on startup (using thread pool) and
-when new files appear. Each GET /spectra6 serves a random image from the pool.
+Pre-converts ALL images in /images/upload/ on startup and when new files
+appear. Each GET /spectra6 serves a random image from the pool.
 Converted results are cached on disk in /images/cache/ to survive restarts.
 
 Display: 1200x1600 native (portrait data), viewed as 1600x1200 landscape.
