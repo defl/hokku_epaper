@@ -18,14 +18,12 @@ Endpoints:
     GET /spectra6/status       — JSON status info
     GET /spectra6/clear_cache  — Wipe disk cache and re-convert all images
 """
-import os
 import hashlib
 import time
 import random
 import threading
 from pathlib import Path
 from io import BytesIO
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flask import Flask, send_file, jsonify
 from PIL import Image
@@ -69,7 +67,6 @@ UPLOAD_DIR = Path("/images/upload")
 CACHE_DIR = Path("/images/cache")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif"}
 POLL_INTERVAL = 10  # seconds between file checks
-NUM_WORKERS = os.cpu_count() or 4
 
 app = Flask(__name__)
 
@@ -214,14 +211,11 @@ _converting_count = 0
 
 
 def _list_images():
-    """Return list of (path, content_hash) for all images in upload dir."""
+    """Return list of image paths in upload dir."""
     if not UPLOAD_DIR.exists():
         return []
-    results = []
-    for f in UPLOAD_DIR.iterdir():
-        if f.suffix.lower() in IMAGE_EXTENSIONS and f.is_file():
-            results.append((f, _hash_file(f)))
-    return results
+    return [f for f in UPLOAD_DIR.iterdir()
+            if f.suffix.lower() in IMAGE_EXTENSIONS and f.is_file()]
 
 
 def _prepare_canvas(img):
@@ -385,27 +379,22 @@ def _convert_and_store(img_path, content_hash):
 
 def _sync_pool():
     """Convert any new/changed images, remove deleted ones from pool and cache."""
-    images = _list_images()
+    image_paths = _list_images()
     current_paths = set()
-    to_convert = []
 
-    for img_path, content_hash in images:
+    for img_path in image_paths:
         key = str(img_path)
         current_paths.add(key)
+
+        # Hash one file at a time to keep memory predictable
+        content_hash = _hash_file(img_path)
         with _lock:
             existing = _pool.get(key)
             if existing and existing["hash"] == content_hash:
                 continue
-        to_convert.append((img_path, content_hash))
 
-    if to_convert:
-        print(f"  Processing {len(to_convert)} image(s) with {NUM_WORKERS} workers...")
-        with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
-            futures = []
-            for img_path, content_hash in to_convert:
-                futures.append(executor.submit(_convert_and_store, img_path, content_hash))
-            for f in as_completed(futures):
-                f.result()
+        print(f"  Processing: {img_path.name}")
+        _convert_and_store(img_path, content_hash)
 
     # Remove pool entries for deleted files
     with _lock:
@@ -500,7 +489,6 @@ if __name__ == "__main__":
     print(f"Spectra 6 image server (full resolution: {VISUAL_W}x{VISUAL_H})")
     print(f"  Upload dir: {UPLOAD_DIR}")
     print(f"  Cache dir:  {CACHE_DIR}")
-    print(f"  Workers: {NUM_WORKERS}")
     print(f"  Poll interval: {POLL_INTERVAL}s")
     print(f"  Output: {TOTAL_BYTES} bytes per image ({PANEL_BYTES} per panel)")
     print(f"  Endpoints:")
