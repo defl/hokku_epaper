@@ -155,15 +155,21 @@ def _compress_dynamic_range(img_array):
 
 # ── Disk cache ──────────────────────────────────────────────────────
 
-def _cache_key(img_path, mtime):
-    """Generate a cache key from filename + mtime."""
-    h = hashlib.sha1(f"{img_path.name}:{mtime}".encode()).hexdigest()[:12]
-    stem = img_path.stem
-    return f"{stem}_{h}"
+def _hash_file(img_path):
+    """Compute SHA-1 hash of file contents."""
+    h = hashlib.sha1()
+    with open(img_path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
-def _load_from_cache(img_path, mtime):
+def _cache_key(img_path, content_hash):
+    """Generate a cache key from filename + content hash."""
+    return f"{img_path.stem}_{content_hash[:12]}"
+
+def _load_from_cache(img_path, content_hash):
     """Try to load converted data from disk cache. Returns (binary, preview_png) or None."""
-    key = _cache_key(img_path, mtime)
+    key = _cache_key(img_path, content_hash)
     bin_path = CACHE_DIR / f"{key}.bin"
     png_path = CACHE_DIR / f"{key}.png"
     if bin_path.exists() and png_path.exists():
@@ -173,12 +179,25 @@ def _load_from_cache(img_path, mtime):
             return raw_bytes, preview_bytes
     return None
 
-def _save_to_cache(img_path, mtime, raw_bytes, preview_bytes):
+def _save_to_cache(img_path, content_hash, raw_bytes, preview_bytes):
     """Save converted data to disk cache."""
-    key = _cache_key(img_path, mtime)
+    key = _cache_key(img_path, content_hash)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     (CACHE_DIR / f"{key}.bin").write_bytes(raw_bytes)
     (CACHE_DIR / f"{key}.png").write_bytes(preview_bytes)
+
+def _purge_stale_cache(valid_keys):
+    """Remove cache files that don't correspond to any current source image."""
+    if not CACHE_DIR.exists():
+        return
+    valid_files = set()
+    for key in valid_keys:
+        valid_files.add(f"{key}.bin")
+        valid_files.add(f"{key}.png")
+    for f in CACHE_DIR.iterdir():
+        if f.name not in valid_files:
+            f.unlink()
+            print(f"  Cache: removed stale {f.name}")
 
 def _clear_cache():
     """Remove all cached files."""
@@ -195,13 +214,13 @@ _converting_count = 0
 
 
 def _list_images():
-    """Return list of (path, mtime) for all images in upload dir."""
+    """Return list of (path, content_hash) for all images in upload dir."""
     if not UPLOAD_DIR.exists():
         return []
     results = []
     for f in UPLOAD_DIR.iterdir():
         if f.suffix.lower() in IMAGE_EXTENSIONS and f.is_file():
-            results.append((f, f.stat().st_mtime))
+            results.append((f, _hash_file(f)))
     return results
 
 
@@ -334,12 +353,12 @@ def _convert_image(img_path):
     return raw_bytes, preview_bytes
 
 
-def _convert_and_store(img_path, mtime):
+def _convert_and_store(img_path, content_hash):
     """Convert one image (or load from cache) and store in pool."""
     global _converting_count
     try:
         # Try disk cache first
-        cached = _load_from_cache(img_path, mtime)
+        cached = _load_from_cache(img_path, content_hash)
         if cached:
             raw_bytes, preview_bytes = cached
             print(f"  Cache hit: {img_path.name}")
@@ -348,7 +367,7 @@ def _convert_and_store(img_path, mtime):
                 _converting_count += 1
             try:
                 raw_bytes, preview_bytes = _convert_image(img_path)
-                _save_to_cache(img_path, mtime, raw_bytes, preview_bytes)
+                _save_to_cache(img_path, content_hash, raw_bytes, preview_bytes)
             finally:
                 with _lock:
                     _converting_count -= 1
@@ -357,7 +376,7 @@ def _convert_and_store(img_path, mtime):
             _pool[str(img_path)] = {
                 "binary": raw_bytes,
                 "preview_png": preview_bytes,
-                "mtime": mtime,
+                "hash": content_hash,
             }
         print(f"  Pool: {img_path.name} ready ({len(_pool)} total)")
     except Exception as e:
@@ -365,26 +384,26 @@ def _convert_and_store(img_path, mtime):
 
 
 def _sync_pool():
-    """Convert any new/changed images, remove deleted ones from pool."""
+    """Convert any new/changed images, remove deleted ones from pool and cache."""
     images = _list_images()
     current_paths = set()
     to_convert = []
 
-    for img_path, mtime in images:
+    for img_path, content_hash in images:
         key = str(img_path)
         current_paths.add(key)
         with _lock:
             existing = _pool.get(key)
-            if existing and existing["mtime"] == mtime:
+            if existing and existing["hash"] == content_hash:
                 continue
-        to_convert.append((img_path, mtime))
+        to_convert.append((img_path, content_hash))
 
     if to_convert:
         print(f"  Processing {len(to_convert)} image(s) with {NUM_WORKERS} workers...")
         with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
             futures = []
-            for img_path, mtime in to_convert:
-                futures.append(executor.submit(_convert_and_store, img_path, mtime))
+            for img_path, content_hash in to_convert:
+                futures.append(executor.submit(_convert_and_store, img_path, content_hash))
             for f in as_completed(futures):
                 f.result()
 
@@ -394,6 +413,13 @@ def _sync_pool():
             if key not in current_paths:
                 del _pool[key]
                 print(f"  Pool: removed deleted file {key}")
+
+    # Purge stale cache files that no longer match any current source image
+    with _lock:
+        valid_cache_keys = set()
+        for key, entry in _pool.items():
+            valid_cache_keys.add(_cache_key(Path(key), entry["hash"]))
+    _purge_stale_cache(valid_cache_keys)
 
 
 def _background_watcher():
