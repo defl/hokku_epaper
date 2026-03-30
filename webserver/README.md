@@ -48,7 +48,13 @@ sudo systemctl enable --now hokku-server
 
 Converting images to the Spectra 6 palette takes a while (expect 10-30 seconds per image depending on your hardware). Images are converted in the background when they're first detected in `/images/upload/`, and the results are cached in `/images/cache/`. The server won't serve an image until conversion is complete.
 
-If you add or remove photos from the upload directory, hit the clear cache endpoint to force a full re-scan and re-convert. You'll also want to clear the cache after updating `webserver.py` itself, since any changes to the dithering or palette logic won't take effect until the cached files are regenerated.
+The cache is fully automatic and content-aware. Every 10 seconds (and at startup) the server scans the upload directory and compares SHA-1 hashes of the source files against the cache:
+
+- **Added images** are detected and converted automatically.
+- **Changed images** (same filename, different content) trigger a re-conversion and the old cache entry is removed.
+- **Removed images** are pruned from both the in-memory pool and the disk cache.
+
+You should only need to manually clear the cache after updating `webserver.py` itself, since changes to the dithering or palette logic won't take effect until the cached files are regenerated.
 
 ```bash
 curl http://localhost:8080/spectra6/clear_cache
