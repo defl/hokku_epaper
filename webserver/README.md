@@ -13,6 +13,10 @@ python webserver.py
 
 Server starts on `http://0.0.0.0:8080`. Drop images into `/images/upload/` at any time — they are auto-detected and converted. Results are cached in `/images/cache/`.
 
+## Image rotation
+
+Instead of picking a random image each request, the server maintains a shuffled playlist. At startup (and whenever images are added, removed, or changed) the full image list is shuffled. Each `GET /spectra6` serves the next image in order, ensuring every image is shown exactly once before the list reshuffles and the cycle repeats.
+
 ## Debian/Ubuntu install with systemd
 
 ```bash
@@ -75,7 +79,7 @@ The measured values are from a different Spectra 6 panel and may not perfectly m
 
 | Endpoint | Description |
 |---|---|
-| `GET /spectra6` | 960,000 byte binary (random image) |
+| `GET /spectra6` | 960,000 byte binary (next from shuffled playlist) |
 | `GET /spectra6/preview` | PNG preview of last served image |
 | `GET /spectra6/status` | JSON pool status |
 | `GET /spectra6/clear_cache` | Wipe cache and re-convert all |
