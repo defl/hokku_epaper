@@ -523,6 +523,7 @@ if __name__ == "__main__":
     if images:
         print(f"  Found {len(images)} image(s), loading...")
         _sync_pool()
+        _rebuild_playlist()
         print(f"  Pool ready: {len(_pool)} image(s)")
     else:
         print(f"  No images found yet, waiting for uploads...")
