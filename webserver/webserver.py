@@ -2,7 +2,8 @@
 """Spectra 6 e-ink image server for EL133UF1 display (dual-panel, full resolution).
 
 Pre-converts ALL images in /images/upload/ on startup and when new files
-appear. Each GET /spectra6 serves a random image from the pool.
+appear. Each GET /spectra6 serves the next image from a shuffled playlist,
+cycling through all images before repeating.
 Converted results are cached on disk in /images/cache/ to survive restarts.
 
 Display: 1200x1600 native (portrait data), viewed as 1600x1200 landscape.
@@ -13,7 +14,7 @@ Usage:
     # Serves on http://0.0.0.0:8080/spectra6
 
 Endpoints:
-    GET /spectra6              — 960,000 byte binary (random image each time)
+    GET /spectra6              — 960,000 byte binary (next from shuffled playlist)
     GET /spectra6/preview      — PNG preview of last served image
     GET /spectra6/status       — JSON status info
     GET /spectra6/clear_cache  — Wipe disk cache and re-convert all images
@@ -208,6 +209,9 @@ _lock = threading.Lock()
 _pool = {}
 _last_served = {"key": None, "name": None, "binary": None, "preview_png": None}
 _converting_count = 0
+_playlist = []        # shuffled list of pool keys to cycle through
+_playlist_index = 0   # next position in the playlist
+_playlist_pool_keys = frozenset()  # pool keys when playlist was built
 
 
 def _list_images():
@@ -421,23 +425,37 @@ def _background_watcher():
         time.sleep(POLL_INTERVAL)
 
 
+def _rebuild_playlist():
+    """Rebuild the shuffled playlist from current pool keys. Must hold _lock."""
+    global _playlist, _playlist_index, _playlist_pool_keys
+    keys = list(_pool.keys())
+    random.shuffle(keys)
+    _playlist = keys
+    _playlist_index = 0
+    _playlist_pool_keys = frozenset(keys)
+    print(f"  Playlist rebuilt: {len(keys)} image(s)")
+
+
 @app.route("/spectra6")
 def serve_binary():
+    global _playlist_index
     with _lock:
         if not _pool:
             if _converting_count > 0:
                 return "Converting images, try again shortly", 503
             return "No images in /images/upload/", 404
-        keys = list(_pool.keys())
-        if len(keys) > 1 and _last_served["key"] in keys:
-            keys.remove(_last_served["key"])
-        key = random.choice(keys)
+        # Rebuild playlist if pool changed or playlist exhausted
+        current_keys = frozenset(_pool.keys())
+        if current_keys != _playlist_pool_keys or _playlist_index >= len(_playlist):
+            _rebuild_playlist()
+        key = _playlist[_playlist_index]
+        _playlist_index += 1
         entry = _pool[key]
         _last_served["key"] = key
         _last_served["name"] = Path(key).name
         _last_served["binary"] = entry["binary"]
         _last_served["preview_png"] = entry["preview_png"]
-    print(f"  Serving: {_last_served['name']}")
+    print(f"  Serving: {_last_served['name']} ({_playlist_index}/{len(_playlist)})")
     return send_file(
         BytesIO(entry["binary"]),
         mimetype="application/octet-stream",
@@ -462,6 +480,7 @@ def serve_preview():
 def serve_status():
     with _lock:
         pool_files = [Path(k).name for k in _pool.keys()]
+        playlist_names = [Path(k).name for k in _playlist]
         return jsonify({
             "upload_dir": str(UPLOAD_DIR),
             "cache_dir": str(CACHE_DIR),
@@ -470,6 +489,8 @@ def serve_status():
             "last_served": _last_served["name"],
             "converting": _converting_count,
             "ready": len(_pool) > 0,
+            "playlist": playlist_names,
+            "playlist_position": _playlist_index,
         })
 
 
@@ -492,7 +513,7 @@ if __name__ == "__main__":
     print(f"  Poll interval: {POLL_INTERVAL}s")
     print(f"  Output: {TOTAL_BYTES} bytes per image ({PANEL_BYTES} per panel)")
     print(f"  Endpoints:")
-    print(f"    GET /spectra6              — 960K binary (random)")
+    print(f"    GET /spectra6              — 960K binary (shuffled playlist)")
     print(f"    GET /spectra6/preview      — PNG preview of last served")
     print(f"    GET /spectra6/status       — JSON pool status")
     print(f"    GET /spectra6/clear_cache  — Wipe cache and re-convert")
