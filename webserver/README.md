@@ -5,7 +5,7 @@ Spectra 6 e-ink image server for the EL133UF1 display. Pre-converts images using
 ## Quick start
 
 ```bash
-pip install flask pillow numpy
+pip install flask pillow numpy pillow-heif
 mkdir -p /images/upload
 cp your-photos/*.jpg /images/upload/
 python webserver.py
@@ -20,7 +20,8 @@ Instead of picking a random image each request, the server maintains a shuffled 
 ## Debian/Ubuntu install with systemd
 
 ```bash
-sudo apt install python3 python3-flask python3-pil python3-numpy
+sudo apt install python3 python3-flask python3-pil python3-numpy libheif-dev
+pip install pillow-heif  # no apt package available, needs libheif-dev
 sudo mkdir -p /opt/hokku /images/upload /images/cache
 sudo cp webserver.py /opt/hokku/
 ```
