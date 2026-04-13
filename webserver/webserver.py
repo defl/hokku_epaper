@@ -28,7 +28,10 @@ from io import BytesIO
 
 from flask import Flask, send_file, jsonify
 from PIL import Image
+from pillow_heif import register_heif_opener
 import numpy as np
+
+register_heif_opener()
 
 # ── Display parameters ──────────────────────────────────────────────
 PANEL_W = 600     # each physical panel: 600 columns
@@ -66,7 +69,7 @@ PALETTE_NIBBLE = np.array([0x0, 0x1, 0x2, 0x3, 0x5, 0x6], dtype=np.uint8)
 
 UPLOAD_DIR = Path("/images/upload")
 CACHE_DIR = Path("/images/cache")
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif", ".heic", ".heif"}
 POLL_INTERVAL = 10  # seconds between file checks
 
 app = Flask(__name__)
