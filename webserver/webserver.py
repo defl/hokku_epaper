@@ -17,6 +17,7 @@ Endpoints:
     GET /spectra6              — 960,000 byte binary (next from shuffled playlist)
     GET /spectra6/preview      — PNG preview of last served image
     GET /spectra6/status       — JSON status info
+    GET /spectra6/playlist     — JSON playlist order and current position
     GET /spectra6/clear_cache  — Wipe disk cache and re-convert all images
 """
 import hashlib
@@ -497,6 +498,25 @@ def serve_status():
         })
 
 
+@app.route("/spectra6/playlist")
+def serve_playlist():
+    with _lock:
+        entries = []
+        for i, key in enumerate(_playlist):
+            entries.append({
+                "position": i + 1,
+                "name": Path(key).name,
+                "served": i < _playlist_index,
+                "next": i == _playlist_index,
+            })
+        return jsonify({
+            "playlist": entries,
+            "total": len(_playlist),
+            "served": _playlist_index,
+            "remaining": len(_playlist) - _playlist_index,
+        })
+
+
 @app.route("/spectra6/clear_cache")
 def clear_cache():
     _clear_cache()
@@ -519,6 +539,7 @@ if __name__ == "__main__":
     print(f"    GET /spectra6              — 960K binary (shuffled playlist)")
     print(f"    GET /spectra6/preview      — PNG preview of last served")
     print(f"    GET /spectra6/status       — JSON pool status")
+    print(f"    GET /spectra6/playlist     — JSON playlist order and position")
     print(f"    GET /spectra6/clear_cache  — Wipe cache and re-convert")
 
     # Load from cache or convert on startup

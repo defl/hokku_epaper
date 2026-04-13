@@ -83,6 +83,7 @@ The measured values are from a different Spectra 6 panel and may not perfectly m
 | `GET /spectra6` | 960,000 byte binary (next from shuffled playlist) |
 | `GET /spectra6/preview` | PNG preview of last served image |
 | `GET /spectra6/status` | JSON pool status |
+| `GET /spectra6/playlist` | JSON playlist order and current position |
 | `GET /spectra6/clear_cache` | Wipe cache and re-convert all |
 
 ## ESP32 configuration
