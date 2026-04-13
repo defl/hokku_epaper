@@ -19,6 +19,10 @@ You'll need two things running:
 
 (Since this is an AI-only project, you can also just feed the whole directory to Claude Code and let it figure out how to build and flash.)
 
+## Supported Image Formats
+
+JPEG, PNG, BMP, TIFF, WebP, GIF, HEIC/HEIF, and AVIF. Drop any of these into `/images/upload/` and the server will auto-detect and convert them. HEIC/HEIF requires the `pillow-heif` package (see [webserver/README.md](webserver/README.md) for install details).
+
 ## How The Firmware Works
 
 1. Boot, connect to WiFi, sync time via NTP (every 96 hours)

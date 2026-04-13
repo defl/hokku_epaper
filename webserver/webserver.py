@@ -69,7 +69,7 @@ PALETTE_NIBBLE = np.array([0x0, 0x1, 0x2, 0x3, 0x5, 0x6], dtype=np.uint8)
 
 UPLOAD_DIR = Path("/images/upload")
 CACHE_DIR = Path("/images/cache")
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif", ".heic", ".heif"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif", ".heic", ".heif", ".avif"}
 POLL_INTERVAL = 10  # seconds between file checks
 
 app = Flask(__name__)
