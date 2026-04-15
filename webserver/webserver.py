@@ -18,9 +18,12 @@ Endpoints:
     GET /hokku/preview      — PNG preview of last served image
     GET /hokku/status       — JSON status info
     GET /hokku/clear_cache  — Wipe disk cache and re-convert all images
+    GET /hokku/ui           — Web GUI for configuration and image management
+    GET /hokku/api/...      — JSON API for the web GUI
 """
 import hashlib
 import json
+import os
 import time
 import random
 import threading
@@ -28,7 +31,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from io import BytesIO
 
-from flask import Flask, send_file, jsonify, make_response
+from flask import Flask, send_file, jsonify, make_response, render_template, request, abort
 from PIL import Image
 from pillow_heif import register_heif_opener
 import numpy as np
@@ -45,17 +48,13 @@ VISUAL_W = 1600   # landscape width
 VISUAL_H = 1200   # landscape height
 
 # ── Spectra 6 palette ──────────────────────────────────────────────
-# Measured palette: what the display actually renders (for dithering & error diffusion).
-# Source: esp32-photoframe project (photographed from real Spectra 6 panel).
-# These values differ significantly from theoretical values and produce more
-# accurate dithering because error diffusion is computed against actual output.
 PALETTE_MEASURED_RGB = np.array([
-    [2, 2, 2],          # 0: Black   (theoretical: 0,0,0)
-    [190, 200, 200],    # 1: White   (theoretical: 255,255,255)
-    [205, 202, 0],      # 2: Yellow  (theoretical: 255,255,0)
-    [135, 19, 0],       # 3: Red     (theoretical: 255,0,0)
-    [5, 64, 158],       # 4: Blue    (theoretical: 0,0,255)
-    [39, 102, 60],      # 5: Green   (theoretical: 0,255,0)
+    [2, 2, 2],          # 0: Black
+    [190, 200, 200],    # 1: White
+    [205, 202, 0],      # 2: Yellow
+    [135, 19, 0],       # 3: Red
+    [5, 64, 158],       # 4: Blue
+    [39, 102, 60],      # 5: Green
 ], dtype=np.float32)
 
 PALETTE_PREVIEW_RGB = np.array([
@@ -70,7 +69,6 @@ PALETTE_PREVIEW_RGB = np.array([
 PALETTE_NIBBLE = np.array([0x0, 0x1, 0x2, 0x3, 0x5, 0x6], dtype=np.uint8)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif", ".heic", ".heif", ".avif"}
-POLL_INTERVAL = 10  # seconds between file checks
 
 # ── Configuration ──────────────────────────────────────────────────
 
@@ -80,12 +78,15 @@ DEFAULT_CONFIG = {
     "upload_dir": "/images/upload",
     "cache_dir": "/images/cache",
     "port": 8080,
+    "poll_interval_seconds": 10,
 }
+
+_config_file_path = None  # set during load, used for saving
 
 
 def _load_config():
     """Load config from file. Check HOKKU_CONFIG env, then ./config.json, then /etc/hokku/config.json."""
-    import os
+    global _config_file_path
     config = dict(DEFAULT_CONFIG)
 
     candidates = []
@@ -101,6 +102,7 @@ def _load_config():
                 with open(path) as f:
                     user_config = json.load(f)
                 config.update(user_config)
+                _config_file_path = path
                 print(f"  Config loaded from: {path}")
                 return config
             except (json.JSONDecodeError, OSError) as e:
@@ -110,13 +112,23 @@ def _load_config():
     return config
 
 
+def _save_config(config):
+    """Save config to the file it was loaded from (or ./config.json)."""
+    path = _config_file_path or Path("./config.json")
+    # Only save user-facing config keys
+    save_keys = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir", "port", "poll_interval_seconds"]
+    save_data = {k: config[k] for k in save_keys if k in config}
+    with open(path, "w") as f:
+        json.dump(save_data, f, indent=2)
+    print(f"  Config saved to: {path}")
+
+
 def _calculate_sleep_seconds(config):
     """Calculate seconds until next refresh_image_at_time based on server's clock and timezone."""
     try:
         import zoneinfo
         tz = zoneinfo.ZoneInfo(config["timezone"])
     except (ImportError, KeyError, Exception):
-        # Fallback: use local system time
         tz = None
 
     if tz:
@@ -128,7 +140,6 @@ def _calculate_sleep_seconds(config):
     if not times:
         return 21600  # fallback: 6 hours
 
-    # Parse HHMM strings into (hour, minute) tuples
     wake_times = []
     for t in times:
         t = str(t).zfill(4)
@@ -136,14 +147,12 @@ def _calculate_sleep_seconds(config):
         wake_times.append((h, m))
     wake_times.sort()
 
-    # Find next wake time
     for h, m in wake_times:
         candidate = now.replace(hour=h, minute=m, second=0, microsecond=0)
         if candidate > now:
             delta = (candidate - now).total_seconds()
-            return max(60, int(delta))  # minimum 60 seconds
+            return max(60, int(delta))
 
-    # All times today have passed, next is first time tomorrow
     h, m = wake_times[0]
     tomorrow = now + timedelta(days=1)
     candidate = tomorrow.replace(hour=h, minute=m, second=0, microsecond=0)
@@ -151,17 +160,40 @@ def _calculate_sleep_seconds(config):
     return max(60, int(delta))
 
 
+def format_duration_human(minutes):
+    """Format minutes into human-readable duration string."""
+    if minutes < 0:
+        return "0m"
+    if minutes < 60:
+        return f"{int(minutes)}m"
+    hours = minutes / 60
+    if hours < 24:
+        h = int(hours)
+        m = int(minutes % 60)
+        return f"{h}h {m}m" if m > 0 else f"{h}h"
+    days = hours / 24
+    if days < 30:
+        d = int(days)
+        h = int(hours % 24)
+        return f"{d}d {h}h" if h > 0 else f"{d}d"
+    if days < 365:
+        mo = int(days / 30)
+        d = int(days % 30)
+        return f"{mo}mo {d}d" if d > 0 else f"{mo}mo"
+    years = int(days / 365)
+    mo = int((days % 365) / 30)
+    return f"{years}y {mo}mo" if mo > 0 else f"{years}y"
+
+
 app = Flask(__name__)
 
 # ── CIE Lab conversion for perceptual color matching ─────────────────
 
 def _srgb_to_linear(c):
-    """Convert sRGB [0-255] to linear RGB [0-1]."""
     c = c / 255.0
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 def _linear_to_xyz(rgb):
-    """Convert linear RGB to CIE XYZ (D65 illuminant)."""
     M = np.array([
         [0.4124564, 0.3575761, 0.1804375],
         [0.2126729, 0.7151522, 0.0721750],
@@ -170,7 +202,6 @@ def _linear_to_xyz(rgb):
     return rgb @ M.T
 
 def _xyz_to_lab(xyz):
-    """Convert XYZ to CIE Lab."""
     ref = np.array([0.95047, 1.00000, 1.08883])
     xyz = xyz / ref
     f = np.where(xyz > 0.008856, xyz ** (1/3), 7.787 * xyz + 16/116)
@@ -180,34 +211,20 @@ def _xyz_to_lab(xyz):
     return np.stack([L, a, b], axis=-1)
 
 def _rgb_to_lab(rgb):
-    """Convert sRGB [0-255] to CIE Lab. Clamps input to valid range."""
     linear = _srgb_to_linear(np.clip(np.asarray(rgb, dtype=np.float64), 0, 255))
     xyz = _linear_to_xyz(linear)
     return _xyz_to_lab(xyz)
 
-# Precompute palette Lab values from measured colors
 PALETTE_LAB = _rgb_to_lab(PALETTE_MEASURED_RGB)
-
-# Precompute display L* range for dynamic range compression
 _DISPLAY_BLACK_L = float(_rgb_to_lab(PALETTE_MEASURED_RGB[0:1])[0, 0])
 _DISPLAY_WHITE_L = float(_rgb_to_lab(PALETTE_MEASURED_RGB[1:2])[0, 0])
 
-# ── Dynamic range compression ─────────────────────────────────────
-# Remap source image luminance into the display's actual L* range so the
-# dithering algorithm doesn't try to reproduce brightness levels the panel
-# can't show. Based on esp32-photoframe's preprocessImage approach.
-
 def _compress_dynamic_range(img_array):
-    """Compress image luminance from full [0,100] L* to display's actual range."""
     rgb = np.asarray(img_array, dtype=np.float64)
     linear = _srgb_to_linear(rgb)
     xyz = _linear_to_xyz(linear)
     lab = _xyz_to_lab(xyz)
-
-    # Remap L* from [0, 100] to [display_black_L, display_white_L]
     lab[..., 0] = _DISPLAY_BLACK_L + (lab[..., 0] / 100.0) * (_DISPLAY_WHITE_L - _DISPLAY_BLACK_L)
-
-    # Convert back: Lab -> XYZ -> linear RGB -> sRGB
     ref = np.array([0.95047, 1.00000, 1.08883])
     L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
     fy = (L + 16) / 116.0
@@ -219,7 +236,6 @@ def _compress_dynamic_range(img_array):
     xyz_out[..., 0] = np.where(fx ** 3 > eps, fx ** 3, (116 * fx - 16) / kappa) * ref[0]
     xyz_out[..., 1] = np.where(L > kappa * eps, ((L + 16) / 116.0) ** 3, L / kappa) * ref[1]
     xyz_out[..., 2] = np.where(fz ** 3 > eps, fz ** 3, (116 * fz - 16) / kappa) * ref[2]
-
     M_inv = np.array([
         [ 3.2404542, -1.5371385, -0.4985314],
         [-0.9692660,  1.8760108,  0.0415560],
@@ -236,7 +252,6 @@ def _compress_dynamic_range(img_array):
 # ── Disk cache ──────────────────────────────────────────────────────
 
 def _hash_file(img_path):
-    """Compute SHA-1 hash of file contents."""
     h = hashlib.sha1()
     with open(img_path, "rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
@@ -244,11 +259,9 @@ def _hash_file(img_path):
     return h.hexdigest()
 
 def _cache_key(img_path, content_hash):
-    """Generate a cache key from filename + content hash."""
     return f"{img_path.stem}_{content_hash[:12]}"
 
 def _load_from_cache(cache_dir, img_path, content_hash):
-    """Try to load converted data from disk cache. Returns (binary, preview_png) or None."""
     key = _cache_key(img_path, content_hash)
     bin_path = cache_dir / f"{key}.bin"
     png_path = cache_dir / f"{key}.png"
@@ -260,14 +273,12 @@ def _load_from_cache(cache_dir, img_path, content_hash):
     return None
 
 def _save_to_cache(cache_dir, img_path, content_hash, raw_bytes, preview_bytes):
-    """Save converted data to disk cache."""
     key = _cache_key(img_path, content_hash)
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / f"{key}.bin").write_bytes(raw_bytes)
     (cache_dir / f"{key}.png").write_bytes(preview_bytes)
 
 def _purge_stale_cache(cache_dir, valid_keys):
-    """Remove cache files that don't correspond to any current source image."""
     if not cache_dir.exists():
         return
     valid_files = set()
@@ -280,7 +291,6 @@ def _purge_stale_cache(cache_dir, valid_keys):
             print(f"  Cache: removed stale {f.name}")
 
 def _clear_cache_files(cache_dir):
-    """Remove all cached files (but keep database.json)."""
     if cache_dir.exists():
         for f in cache_dir.iterdir():
             if f.name != "database.json":
@@ -290,13 +300,20 @@ def _clear_cache_files(cache_dir):
 # ── Database (fair distribution tracking) ──────────────────────────
 
 def _load_database(cache_dir):
-    """Load database.json from cache dir. Returns dict with 'serve_data' key."""
     db_path = cache_dir / "database.json"
     if db_path.exists():
         try:
             with open(db_path) as f:
                 db = json.load(f)
             if "serve_data" in db:
+                # Migrate old show_count to show_index
+                for fname, entry in db["serve_data"].items():
+                    if "show_count" in entry and "show_index" not in entry:
+                        entry["show_index"] = entry.pop("show_count")
+                    if "total_show_count" not in entry:
+                        entry["total_show_count"] = 0
+                    if "total_show_minutes" not in entry:
+                        entry["total_show_minutes"] = 0.0
                 return db
         except (json.JSONDecodeError, OSError) as e:
             print(f"  Warning: failed to load database.json: {e}")
@@ -304,7 +321,6 @@ def _load_database(cache_dir):
 
 
 def _save_database(cache_dir, db):
-    """Save database.json to cache dir."""
     db_path = cache_dir / "database.json"
     cache_dir.mkdir(parents=True, exist_ok=True)
     with open(db_path, "w") as f:
@@ -312,10 +328,10 @@ def _save_database(cache_dir, db):
 
 
 def _pick_next_image(pool, db):
-    """Pick the least-shown image from pool. Random tie-breaking. Returns pool key or None.
+    """Pick the image with lowest show_index. Random tie-breaking.
 
     Also handles new image leveling: if any pool image is not in serve_data,
-    all existing entries with show_count > 0 are set to 1, so new images
+    all existing entries with show_index > 0 are set to 1, so new images
     (starting at 0) get shown first.
     """
     if not pool:
@@ -324,20 +340,19 @@ def _pick_next_image(pool, db):
     serve_data = db["serve_data"]
     pool_filenames = {Path(k).name for k in pool}
 
-    # Detect new images (in pool but not in serve_data)
+    # Detect new images
     has_new = any(Path(k).name not in serve_data for k in pool)
     if has_new:
-        # Level existing entries: set all show_count > 0 to 1
         for fname in list(serve_data.keys()):
-            if serve_data[fname]["show_count"] > 0:
-                serve_data[fname]["show_count"] = 1
-        # Initialize new images at 0
+            if serve_data[fname]["show_index"] > 0:
+                serve_data[fname]["show_index"] = 1
         for k in pool:
             fname = Path(k).name
             if fname not in serve_data:
-                serve_data[fname] = {"show_count": 0, "last_request": None}
+                serve_data[fname] = {"show_index": 0, "last_request": None,
+                                     "total_show_count": 0, "total_show_minutes": 0.0}
 
-    # Remove entries for images no longer in pool
+    # Remove entries for deleted images
     for fname in list(serve_data.keys()):
         if fname not in pool_filenames:
             del serve_data[fname]
@@ -346,33 +361,55 @@ def _pick_next_image(pool, db):
     for k in pool:
         fname = Path(k).name
         if fname not in serve_data:
-            serve_data[fname] = {"show_count": 0, "last_request": None}
+            serve_data[fname] = {"show_index": 0, "last_request": None,
+                                 "total_show_count": 0, "total_show_minutes": 0.0}
 
-    # Find minimum show_count among pool images
+    # Find minimum show_index
     pool_entries = []
     for k in pool:
         fname = Path(k).name
-        count = serve_data[fname]["show_count"]
-        pool_entries.append((k, fname, count))
+        idx = serve_data[fname]["show_index"]
+        pool_entries.append((k, fname, idx))
 
-    min_count = min(e[2] for e in pool_entries)
-    candidates = [(k, fname) for k, fname, count in pool_entries if count == min_count]
+    min_idx = min(e[2] for e in pool_entries)
+    candidates = [(k, fname) for k, fname, idx in pool_entries if idx == min_idx]
 
-    # Random tie-breaking
     chosen_key, chosen_fname = random.choice(candidates)
 
-    # Update serve_data
-    serve_data[chosen_fname]["show_count"] += 1
+    # Track display time for previously served image
+    _track_display_time(serve_data)
+
+    # Update serve_data for chosen image
+    serve_data[chosen_fname]["show_index"] += 1
     serve_data[chosen_fname]["last_request"] = datetime.now().isoformat(timespec="seconds")
+    serve_data[chosen_fname]["total_show_count"] = serve_data[chosen_fname].get("total_show_count", 0) + 1
 
     return chosen_key
+
+
+def _track_display_time(serve_data):
+    """Add elapsed display time to the previously served image."""
+    global _last_served
+    prev_name = _last_served.get("name")
+    prev_time = _last_served.get("served_at")
+    if prev_name and prev_time and prev_name in serve_data:
+        try:
+            prev_dt = datetime.fromisoformat(prev_time)
+            elapsed_minutes = (datetime.now() - prev_dt).total_seconds() / 60.0
+            if 0 < elapsed_minutes < 1440 * 30:  # sanity: less than 30 days
+                serve_data[prev_name]["total_show_minutes"] = (
+                    serve_data[prev_name].get("total_show_minutes", 0.0) + elapsed_minutes
+                )
+        except (ValueError, KeyError):
+            pass
 
 
 # ── Image pool (protected by lock) ──────────────────────────────────
 _lock = threading.Lock()
 _pool = {}
-_last_served = {"key": None, "name": None, "binary": None, "preview_png": None}
+_last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
 _converting_count = 0
+_converting_name = None  # name of currently converting image
 _config = dict(DEFAULT_CONFIG)
 _database = {"serve_data": {}}
 
@@ -380,13 +417,10 @@ _database = {"serve_data": {}}
 def _get_upload_dir():
     return Path(_config["upload_dir"])
 
-
 def _get_cache_dir():
     return Path(_config["cache_dir"])
 
-
 def _list_images():
-    """Return list of image paths in upload dir."""
     upload_dir = _get_upload_dir()
     if not upload_dir.exists():
         return []
@@ -395,7 +429,6 @@ def _list_images():
 
 
 def _prepare_canvas(img):
-    """Scale image to fit 1600x1200 landscape, enhance for e-ink, then rotate 90 CW for panel data."""
     from PIL import ImageEnhance, ImageOps
     w, h = img.size
     scale = min(VISUAL_W / w, VISUAL_H / h)
@@ -405,10 +438,7 @@ def _prepare_canvas(img):
     x_off = (VISUAL_W - new_w) // 2
     y_off = (VISUAL_H - new_h) // 2
     canvas.paste(img_resized, (x_off, y_off))
-
-    # E-ink compensation: lift midtones with gamma, then mild contrast/saturation
-    # Gamma < 1.0 brightens midtones without blowing out highlights
-    canvas = ImageOps.autocontrast(canvas, cutoff=0.5)  # normalize histogram
+    canvas = ImageOps.autocontrast(canvas, cutoff=0.5)
     gamma = 0.85
     gamma_lut = [int(((i / 255.0) ** gamma) * 255) for i in range(256)] * 3
     canvas = canvas.point(gamma_lut)
@@ -416,16 +446,14 @@ def _prepare_canvas(img):
     canvas = ImageEnhance.Contrast(canvas).enhance(1.1)
     canvas = ImageEnhance.Sharpness(canvas).enhance(1.3)
     canvas = ImageEnhance.Color(canvas).enhance(1.2)
-
-    canvas = canvas.rotate(-90, expand=True)  # -> 1200x1600 portrait (CW rotation)
+    canvas = canvas.rotate(-90, expand=True)
     return canvas
 
 
 def _build_rgb_lut():
-    """Precompute RGB -> nearest palette index lookup table (32 steps per channel)."""
     steps = 32
-    scale = 256 / steps  # 8
-    r_vals = np.arange(steps) * scale + scale / 2  # center of each bin
+    scale = 256 / steps
+    r_vals = np.arange(steps) * scale + scale / 2
     g_vals = np.arange(steps) * scale + scale / 2
     b_vals = np.arange(steps) * scale + scale / 2
     rr, gg, bb = np.meshgrid(r_vals, g_vals, b_vals, indexing='ij')
@@ -439,11 +467,9 @@ _RGB_LUT, _LUT_SCALE = _build_rgb_lut()
 
 
 def _floyd_steinberg_dither(canvas):
-    """Floyd-Steinberg dithering with precomputed Lab LUT and clamped error diffusion."""
     pixels = np.array(canvas, dtype=np.float32)
     h, w, _ = pixels.shape
     result_idx = np.zeros((h, w), dtype=np.uint8)
-
     pal_rgb = PALETTE_MEASURED_RGB
     lut = _RGB_LUT
     lut_max = lut.shape[0] - 1
@@ -451,11 +477,9 @@ def _floyd_steinberg_dither(canvas):
 
     for y in range(h):
         for x in range(w):
-            # Clamp pixel to valid range BEFORE matching and error computation
             r = min(max(pixels[y, x, 0], 0.0), 255.0)
             g = min(max(pixels[y, x, 1], 0.0), 255.0)
             b = min(max(pixels[y, x, 2], 0.0), 255.0)
-            # LUT lookup instead of per-pixel Lab conversion
             ri = min(int(r / lut_scale), lut_max)
             gi = min(int(g / lut_scale), lut_max)
             bi = min(int(b / lut_scale), lut_max)
@@ -482,53 +506,39 @@ def _floyd_steinberg_dither(canvas):
                     pixels[y + 1, x + 1, 2] += eb * 0.0625
         if y % 200 == 0:
             print(f"  Dithering: {y}/{h}")
-
     return result_idx
 
 
 def _convert_image(img_path):
-    """Convert a single image to Spectra 6 binary + preview. Thread-safe."""
     print(f"Converting: {img_path.name}")
     t0 = time.time()
-
     img = Image.open(img_path).convert("RGB")
     print(f"  {img_path.name}: {img.size[0]}x{img.size[1]}")
-
     canvas = _prepare_canvas(img)
-
-    # Compress dynamic range to match display's actual luminance capabilities
     canvas_array = _compress_dynamic_range(np.array(canvas, dtype=np.float32))
     canvas = Image.fromarray(canvas_array.astype(np.uint8))
-
     result_idx = _floyd_steinberg_dither(canvas)
-
-    nibbles = PALETTE_NIBBLE[result_idx]  # shape (1600, 1200)
-    # Split into two panels: left 600 cols -> CTRL1, right 600 cols -> CTRL2
-    panel1_nib = nibbles[:, :PANEL_W]     # (1600, 600)
-    panel2_nib = nibbles[:, PANEL_W:]     # (1600, 600)
-    panel1_bin = (panel1_nib[:, 0::2] << 4) | panel1_nib[:, 1::2]  # (1600, 300)
-    panel2_bin = (panel2_nib[:, 0::2] << 4) | panel2_nib[:, 1::2]  # (1600, 300)
+    nibbles = PALETTE_NIBBLE[result_idx]
+    panel1_nib = nibbles[:, :PANEL_W]
+    panel2_nib = nibbles[:, PANEL_W:]
+    panel1_bin = (panel1_nib[:, 0::2] << 4) | panel1_nib[:, 1::2]
+    panel2_bin = (panel2_nib[:, 0::2] << 4) | panel2_nib[:, 1::2]
     raw_bytes = panel1_bin.astype(np.uint8).tobytes() + panel2_bin.astype(np.uint8).tobytes()
     assert len(raw_bytes) == TOTAL_BYTES, f"Expected {TOTAL_BYTES}, got {len(raw_bytes)}"
-
     preview_rgb = PALETTE_PREVIEW_RGB[result_idx]
     preview_img = Image.fromarray(preview_rgb).rotate(90, expand=True)
     buf = BytesIO()
     preview_img.save(buf, format="PNG")
     preview_bytes = buf.getvalue()
-
     elapsed = time.time() - t0
     print(f"  {img_path.name}: done in {elapsed:.1f}s")
-
     return raw_bytes, preview_bytes
 
 
 def _convert_and_store(img_path, content_hash):
-    """Convert one image (or load from cache) and store in pool."""
-    global _converting_count
+    global _converting_count, _converting_name
     cache_dir = _get_cache_dir()
     try:
-        # Try disk cache first
         cached = _load_from_cache(cache_dir, img_path, content_hash)
         if cached:
             raw_bytes, preview_bytes = cached
@@ -536,12 +546,15 @@ def _convert_and_store(img_path, content_hash):
         else:
             with _lock:
                 _converting_count += 1
+                _converting_name = img_path.name
             try:
                 raw_bytes, preview_bytes = _convert_image(img_path)
                 _save_to_cache(cache_dir, img_path, content_hash, raw_bytes, preview_bytes)
             finally:
                 with _lock:
                     _converting_count -= 1
+                    if _converting_count == 0:
+                        _converting_name = None
 
         with _lock:
             _pool[str(img_path)] = {
@@ -555,7 +568,6 @@ def _convert_and_store(img_path, content_hash):
 
 
 def _sync_pool():
-    """Convert any new/changed images, remove deleted ones from pool and cache."""
     cache_dir = _get_cache_dir()
     image_paths = _list_images()
     current_paths = set()
@@ -563,25 +575,20 @@ def _sync_pool():
     for img_path in image_paths:
         key = str(img_path)
         current_paths.add(key)
-
-        # Hash one file at a time to keep memory predictable
         content_hash = _hash_file(img_path)
         with _lock:
             existing = _pool.get(key)
             if existing and existing["hash"] == content_hash:
                 continue
-
         print(f"  Processing: {img_path.name}")
         _convert_and_store(img_path, content_hash)
 
-    # Remove pool entries for deleted files
     with _lock:
         for key in list(_pool.keys()):
             if key not in current_paths:
                 del _pool[key]
                 print(f"  Pool: removed deleted file {key}")
 
-    # Purge stale cache files that no longer match any current source image
     with _lock:
         valid_cache_keys = set()
         for key, entry in _pool.items():
@@ -590,16 +597,15 @@ def _sync_pool():
 
 
 def _background_watcher():
-    """Background thread: polls for new/changed/deleted images."""
     while True:
         try:
             _sync_pool()
         except Exception as e:
             print(f"  Watcher error: {e}")
-        time.sleep(POLL_INTERVAL)
+        time.sleep(_config.get("poll_interval_seconds", 10))
 
 
-# ── Flask routes ───────────────────────────────────────────────────
+# ── Flask routes: device endpoints ─────────────────────────────────
 
 @app.route("/hokku/")
 def serve_binary():
@@ -619,8 +625,8 @@ def serve_binary():
         _last_served["name"] = Path(key).name
         _last_served["binary"] = entry["binary"]
         _last_served["preview_png"] = entry["preview_png"]
+        _last_served["served_at"] = datetime.now().isoformat(timespec="seconds")
 
-        # Save database after update
         _save_database(_get_cache_dir(), _database)
 
     sleep_seconds = _calculate_sleep_seconds(_config)
@@ -639,11 +645,7 @@ def serve_preview():
         data = _last_served["preview_png"]
     if data is None:
         return "No image served yet", 404
-    return send_file(
-        BytesIO(data),
-        mimetype="image/png",
-        download_name="preview.png",
-    )
+    return send_file(BytesIO(data), mimetype="image/png", download_name="preview.png")
 
 
 @app.route("/hokku/status")
@@ -658,12 +660,14 @@ def serve_status():
             "pool_files": pool_files,
             "last_served": _last_served["name"],
             "converting": _converting_count,
+            "converting_name": _converting_name,
             "ready": len(_pool) > 0,
             "serve_data": serve_data,
             "config": {
                 "timezone": _config["timezone"],
                 "refresh_image_at_time": _config["refresh_image_at_time"],
                 "port": _config["port"],
+                "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
             },
         })
 
@@ -673,9 +677,168 @@ def clear_cache():
     _clear_cache_files(_get_cache_dir())
     with _lock:
         _pool.clear()
-    # Trigger re-conversion in background
     threading.Thread(target=_sync_pool, daemon=True).start()
     return jsonify({"status": "cache cleared, re-converting"})
+
+
+# ── Flask routes: Web GUI ──────────────────────────────────────────
+
+@app.route("/hokku/ui")
+def web_gui():
+    return render_template("index.html")
+
+
+@app.route("/hokku/api/status")
+def api_status():
+    """JSON API for the web GUI — includes enriched serve_data with formatted durations."""
+    try:
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo(_config["timezone"])
+        now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+    except Exception:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with _lock:
+        pool_files = sorted(Path(k).name for k in _pool.keys())
+        serve_data = _database.get("serve_data", {})
+
+        enriched = {}
+        for fname in pool_files:
+            entry = serve_data.get(fname, {})
+            enriched[fname] = {
+                "show_index": entry.get("show_index", 0),
+                "last_request": entry.get("last_request"),
+                "total_show_count": entry.get("total_show_count", 0),
+                "total_show_minutes": entry.get("total_show_minutes", 0.0),
+                "total_show_formatted": format_duration_human(entry.get("total_show_minutes", 0.0)),
+            }
+
+        return jsonify({
+            "pool_files": pool_files,
+            "pool_size": len(_pool),
+            "serve_data": enriched,
+            "last_served": _last_served["name"],
+            "converting": _converting_count,
+            "converting_name": _converting_name,
+            "server_time": now_str,
+            "config": {
+                "timezone": _config["timezone"],
+                "refresh_image_at_time": _config["refresh_image_at_time"],
+                "port": _config["port"],
+                "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
+                "upload_dir": str(_get_upload_dir()),
+                "cache_dir": str(_get_cache_dir()),
+            },
+        })
+
+
+@app.route("/hokku/api/original/<filename>")
+def api_original(filename):
+    """Serve the original uploaded image."""
+    img_path = _get_upload_dir() / filename
+    if not img_path.exists() or not img_path.is_file():
+        abort(404)
+    return send_file(img_path)
+
+
+@app.route("/hokku/api/thumbnail/<filename>")
+def api_thumbnail(filename):
+    """Serve a thumbnail of the original image (~300px wide)."""
+    img_path = _get_upload_dir() / filename
+    if not img_path.exists() or not img_path.is_file():
+        abort(404)
+    try:
+        img = Image.open(img_path)
+        img.thumbnail((300, 300), Image.LANCZOS)
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=80)
+        buf.seek(0)
+        return send_file(buf, mimetype="image/jpeg")
+    except Exception:
+        abort(500)
+
+
+@app.route("/hokku/api/dithered/<filename>")
+def api_dithered(filename):
+    """Serve the dithered preview PNG for an image."""
+    with _lock:
+        for key, entry in _pool.items():
+            if Path(key).name == filename:
+                return send_file(BytesIO(entry["preview_png"]), mimetype="image/png")
+    abort(404)
+
+
+@app.route("/hokku/api/show_next/<filename>", methods=["POST"])
+def api_show_next(filename):
+    """Set an image's show_index to min-1 so it's served next."""
+    with _lock:
+        serve_data = _database.get("serve_data", {})
+        if filename not in serve_data:
+            return jsonify({"error": "Image not found in database"}), 404
+
+        # Find current minimum show_index
+        min_idx = min(e["show_index"] for e in serve_data.values()) if serve_data else 0
+        serve_data[filename]["show_index"] = min_idx - 1
+
+        _save_database(_get_cache_dir(), _database)
+
+    return jsonify({"status": "ok", "filename": filename, "new_show_index": min_idx - 1})
+
+
+@app.route("/hokku/api/config", methods=["POST"])
+def api_config():
+    """Update server configuration."""
+    global _config
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No JSON body"}), 400
+
+    changed = False
+    if "timezone" in data:
+        _config["timezone"] = data["timezone"]
+        changed = True
+    if "refresh_image_at_time" in data:
+        _config["refresh_image_at_time"] = data["refresh_image_at_time"]
+        changed = True
+    if "poll_interval_seconds" in data:
+        val = int(data["poll_interval_seconds"])
+        if val >= 1:
+            _config["poll_interval_seconds"] = val
+            changed = True
+
+    if changed:
+        _save_config(_config)
+
+    return jsonify({"status": "ok", "config": {
+        "timezone": _config["timezone"],
+        "refresh_image_at_time": _config["refresh_image_at_time"],
+        "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
+    }})
+
+
+@app.route("/hokku/api/clear_cache", methods=["POST"])
+def api_clear_cache():
+    """Wipe cache and trigger re-conversion."""
+    _clear_cache_files(_get_cache_dir())
+    with _lock:
+        _pool.clear()
+    threading.Thread(target=_sync_pool, daemon=True).start()
+    return jsonify({"status": "cache cleared, re-converting"})
+
+
+@app.route("/hokku/api/time")
+def api_time():
+    """Return current server time in configured timezone."""
+    try:
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo(_config["timezone"])
+        now = datetime.now(tz)
+    except Exception:
+        now = datetime.now()
+    return jsonify({
+        "time": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "timezone": _config["timezone"],
+    })
 
 
 # ── Main ───────────────────────────────────────────────────────────
@@ -684,32 +847,29 @@ def main():
     global _config, _database
 
     _config = _load_config()
-
     upload_dir = _get_upload_dir()
     cache_dir = _get_cache_dir()
-
     upload_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
-
-    # Load database
     _database = _load_database(cache_dir)
 
     port = _config["port"]
+    poll = _config.get("poll_interval_seconds", 10)
 
     print(f"Hokku image server (full resolution: {VISUAL_W}x{VISUAL_H})")
     print(f"  Upload dir: {upload_dir}")
     print(f"  Cache dir:  {cache_dir}")
     print(f"  Timezone:   {_config['timezone']}")
     print(f"  Refresh at: {_config['refresh_image_at_time']}")
-    print(f"  Poll interval: {POLL_INTERVAL}s")
+    print(f"  Poll interval: {poll}s")
     print(f"  Output: {TOTAL_BYTES} bytes per image ({PANEL_BYTES} per panel)")
     print(f"  Endpoints:")
     print(f"    GET /hokku/             — 960K binary (fair rotation) + X-Sleep-Seconds header")
     print(f"    GET /hokku/preview      — PNG preview of last served")
     print(f"    GET /hokku/status       — JSON pool status")
     print(f"    GET /hokku/clear_cache  — Wipe cache and re-convert")
+    print(f"    GET /hokku/ui           — Web GUI")
 
-    # Load from cache or convert on startup
     images = _list_images()
     if images:
         print(f"  Found {len(images)} image(s), loading...")
@@ -718,7 +878,6 @@ def main():
     else:
         print(f"  No images found yet, waiting for uploads...")
 
-    # Start background watcher thread
     watcher = threading.Thread(target=_background_watcher, daemon=True)
     watcher.start()
 

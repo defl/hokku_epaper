@@ -3,5 +3,6 @@
   "refresh_image_at_time": ["0600", "1200", "1800"],
   "upload_dir": "/images/upload",
   "cache_dir": "/images/cache",
-  "port": 8080
+  "port": 8080,
+  "poll_interval_seconds": 10
 }
