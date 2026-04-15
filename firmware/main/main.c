@@ -152,10 +152,6 @@ static bool config_is_valid(void)
     return config.wifi_ssid[0] != '\0' && config.image_url[0] != '\0';
 }
 
-/* ── Embedded image ──────────────────────────────────────────────── */
-extern const uint8_t testimg_start[] asm("_binary_test_quadrants_bin_start");
-extern const uint8_t testimg_end[]   asm("_binary_test_quadrants_bin_end");
-
 /* ── Forward declarations ────────────────────────────────────────── */
 static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_data);
 
@@ -329,49 +325,25 @@ static void draw_string(uint8_t *fb, int fb_w, int fb_h, int x, int y,
     }
 }
 
-/* Create a white framebuffer with a message, and display it. */
+/* Display a text message on the e-ink screen.
+ * Blanks everything to white, draws black text on panel 1 only.
+ * Panel 1 = left half of landscape view (600x1600 portrait data, 480K at 4bpp).
+ * Panel 2 stays blank white. scale=3 → ~33 chars/line, ~66 lines. */
 static void display_message(const char *msg)
 {
-    /* Allocate in PSRAM */
     uint8_t *fb = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
     if (!fb) {
         ESP_LOGE(TAG, "Cannot allocate framebuffer for message");
         return;
     }
 
-    /* Fill with white (nibble 0x1 = white in Spectra 6) */
+    /* Fill entire buffer with white (nibble 0x1 = white in Spectra 6) */
     memset(fb, 0x11, TOTAL_IMAGE_SIZE);
 
-    /* The framebuffer is in portrait orientation: 1200 wide x 1600 tall (two 600-wide panels).
-     * But our display_dual function splits: first 480K = panel1 (left 600 cols),
-     * second 480K = panel2 (right 600 cols).
-     * For simplicity, draw text into a single 1200x800 logical buffer in landscape,
-     * then rotate to portrait and split into panels. */
+    /* Draw black text into panel 1 only (first 480K) */
+    draw_string(fb, 600, 1600, 20, 40, msg, 0x0, 3);
 
-    /* Actually, we draw directly into the portrait buffer for simplicity.
-     * Panel 1: rows 0-1599, cols 0-599 (bytes 0..479999)
-     * Panel 2: rows 0-1599, cols 0-599 (bytes 480000..959999)
-     * For text display, we treat it as a single 1200-wide buffer.
-     * Each panel's row is 300 bytes (600 pixels / 2 at 4bpp).
-     *
-     * Let's keep it simple: draw into panel 1 only (left half of landscape = top in portrait).
-     * scale=3 gives readable text: 18x24 pixel chars, ~33 chars per line, ~66 lines.
-     */
-    int panel_w = PANEL_W;  /* 600 */
-    int panel_h = PANEL_H;  /* 1600 - but PANEL_H is really DISPLAY_H=800 */
-
-    /* Actually PANEL_H is not defined as 1600. Let me recalculate.
-     * PANEL_SIZE = DISPLAY_W * DISPLAY_H / 2 = 1200 * 800 / 2 = 480000
-     * Each panel pixel data: 600 cols * 1600 rows = 960000 pixels, at 4bpp = 480000 bytes.
-     * Wait no. The panels are 600 wide x 1600 tall physically (portrait data).
-     * So: 600 * 1600 / 2 = 480000 bytes per panel. Correct.
-     */
-    int pw = 600;
-    int ph = 1600;
-    /* Draw black text on white background in panel 1 */
-    draw_string(fb, pw, ph, 20, 40, msg, 0x0, 3);
-
-    /* Display it */
+    /* Display: panel 1 has text, panel 2 is blank white */
     epaper_display_dual(fb, fb + PANEL_SIZE);
     heap_caps_free(fb);
 }
