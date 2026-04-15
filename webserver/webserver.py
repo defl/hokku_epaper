@@ -1,33 +1,34 @@
 #!/usr/bin/env -S python3 -u
-"""Spectra 6 e-ink image server for EL133UF1 display (dual-panel, full resolution).
+"""Hokku e-ink image server for EL133UF1 display (dual-panel, full resolution).
 
-Pre-converts ALL images in /images/upload/ on startup and when new files
-appear. Each GET /spectra6 serves the next image from a shuffled playlist,
-cycling through all images before repeating.
-Converted results are cached on disk in /images/cache/ to survive restarts.
+Pre-converts ALL images in the upload directory on startup and when new files
+appear. Each GET /hokku/ serves the least-shown image (fair distribution),
+with an X-Sleep-Seconds header telling the firmware when to wake next.
+Converted results are cached on disk to survive restarts.
 
 Display: 1200x1600 native (portrait data), viewed as 1600x1200 landscape.
 Two panels of 1200x800, each 480K at 4bpp. Total output: 960K bytes.
 
 Usage:
-    python spectra6_convert.py
-    # Serves on http://0.0.0.0:8080/spectra6
+    python webserver.py
+    # Serves on http://0.0.0.0:8080/hokku/
 
 Endpoints:
-    GET /spectra6              — 960,000 byte binary (next from shuffled playlist)
-    GET /spectra6/preview      — PNG preview of last served image
-    GET /spectra6/status       — JSON status info
-    GET /spectra6/playlist     — JSON playlist order and current position
-    GET /spectra6/clear_cache  — Wipe disk cache and re-convert all images
+    GET /hokku/             — 960,000 byte binary (fair rotation) + X-Sleep-Seconds header
+    GET /hokku/preview      — PNG preview of last served image
+    GET /hokku/status       — JSON status info
+    GET /hokku/clear_cache  — Wipe disk cache and re-convert all images
 """
 import hashlib
+import json
 import time
 import random
 import threading
+from datetime import datetime, timedelta
 from pathlib import Path
 from io import BytesIO
 
-from flask import Flask, send_file, jsonify
+from flask import Flask, send_file, jsonify, make_response
 from PIL import Image
 from pillow_heif import register_heif_opener
 import numpy as np
@@ -68,10 +69,87 @@ PALETTE_PREVIEW_RGB = np.array([
 
 PALETTE_NIBBLE = np.array([0x0, 0x1, 0x2, 0x3, 0x5, 0x6], dtype=np.uint8)
 
-UPLOAD_DIR = Path("/images/upload")
-CACHE_DIR = Path("/images/cache")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif", ".heic", ".heif", ".avif"}
 POLL_INTERVAL = 10  # seconds between file checks
+
+# ── Configuration ──────────────────────────────────────────────────
+
+DEFAULT_CONFIG = {
+    "timezone": "America/Chicago",
+    "refresh_image_at_time": ["0600", "1200", "1800"],
+    "upload_dir": "/images/upload",
+    "cache_dir": "/images/cache",
+    "port": 8080,
+}
+
+
+def _load_config():
+    """Load config from file. Check HOKKU_CONFIG env, then ./config.json, then /etc/hokku/config.json."""
+    import os
+    config = dict(DEFAULT_CONFIG)
+
+    candidates = []
+    env_path = os.environ.get("HOKKU_CONFIG")
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.append(Path("./config.json"))
+    candidates.append(Path("/etc/hokku/config.json"))
+
+    for path in candidates:
+        if path.exists():
+            try:
+                with open(path) as f:
+                    user_config = json.load(f)
+                config.update(user_config)
+                print(f"  Config loaded from: {path}")
+                return config
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"  Warning: failed to load config from {path}: {e}")
+
+    print("  No config file found, using defaults")
+    return config
+
+
+def _calculate_sleep_seconds(config):
+    """Calculate seconds until next refresh_image_at_time based on server's clock and timezone."""
+    try:
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo(config["timezone"])
+    except (ImportError, KeyError, Exception):
+        # Fallback: use local system time
+        tz = None
+
+    if tz:
+        now = datetime.now(tz)
+    else:
+        now = datetime.now()
+
+    times = config.get("refresh_image_at_time", ["0600", "1200", "1800"])
+    if not times:
+        return 21600  # fallback: 6 hours
+
+    # Parse HHMM strings into (hour, minute) tuples
+    wake_times = []
+    for t in times:
+        t = str(t).zfill(4)
+        h, m = int(t[:2]), int(t[2:])
+        wake_times.append((h, m))
+    wake_times.sort()
+
+    # Find next wake time
+    for h, m in wake_times:
+        candidate = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if candidate > now:
+            delta = (candidate - now).total_seconds()
+            return max(60, int(delta))  # minimum 60 seconds
+
+    # All times today have passed, next is first time tomorrow
+    h, m = wake_times[0]
+    tomorrow = now + timedelta(days=1)
+    candidate = tomorrow.replace(hour=h, minute=m, second=0, microsecond=0)
+    delta = (candidate - now).total_seconds()
+    return max(60, int(delta))
+
 
 app = Flask(__name__)
 
@@ -169,11 +247,11 @@ def _cache_key(img_path, content_hash):
     """Generate a cache key from filename + content hash."""
     return f"{img_path.stem}_{content_hash[:12]}"
 
-def _load_from_cache(img_path, content_hash):
+def _load_from_cache(cache_dir, img_path, content_hash):
     """Try to load converted data from disk cache. Returns (binary, preview_png) or None."""
     key = _cache_key(img_path, content_hash)
-    bin_path = CACHE_DIR / f"{key}.bin"
-    png_path = CACHE_DIR / f"{key}.png"
+    bin_path = cache_dir / f"{key}.bin"
+    png_path = cache_dir / f"{key}.png"
     if bin_path.exists() and png_path.exists():
         raw_bytes = bin_path.read_bytes()
         if len(raw_bytes) == TOTAL_BYTES:
@@ -181,48 +259,138 @@ def _load_from_cache(img_path, content_hash):
             return raw_bytes, preview_bytes
     return None
 
-def _save_to_cache(img_path, content_hash, raw_bytes, preview_bytes):
+def _save_to_cache(cache_dir, img_path, content_hash, raw_bytes, preview_bytes):
     """Save converted data to disk cache."""
     key = _cache_key(img_path, content_hash)
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    (CACHE_DIR / f"{key}.bin").write_bytes(raw_bytes)
-    (CACHE_DIR / f"{key}.png").write_bytes(preview_bytes)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f"{key}.bin").write_bytes(raw_bytes)
+    (cache_dir / f"{key}.png").write_bytes(preview_bytes)
 
-def _purge_stale_cache(valid_keys):
+def _purge_stale_cache(cache_dir, valid_keys):
     """Remove cache files that don't correspond to any current source image."""
-    if not CACHE_DIR.exists():
+    if not cache_dir.exists():
         return
     valid_files = set()
     for key in valid_keys:
         valid_files.add(f"{key}.bin")
         valid_files.add(f"{key}.png")
-    for f in CACHE_DIR.iterdir():
-        if f.name not in valid_files:
+    for f in cache_dir.iterdir():
+        if f.name not in valid_files and f.name != "database.json":
             f.unlink()
             print(f"  Cache: removed stale {f.name}")
 
-def _clear_cache():
-    """Remove all cached files."""
-    if CACHE_DIR.exists():
-        for f in CACHE_DIR.iterdir():
-            f.unlink()
+def _clear_cache_files(cache_dir):
+    """Remove all cached files (but keep database.json)."""
+    if cache_dir.exists():
+        for f in cache_dir.iterdir():
+            if f.name != "database.json":
+                f.unlink()
         print("  Cache cleared")
+
+# ── Database (fair distribution tracking) ──────────────────────────
+
+def _load_database(cache_dir):
+    """Load database.json from cache dir. Returns dict with 'serve_data' key."""
+    db_path = cache_dir / "database.json"
+    if db_path.exists():
+        try:
+            with open(db_path) as f:
+                db = json.load(f)
+            if "serve_data" in db:
+                return db
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"  Warning: failed to load database.json: {e}")
+    return {"serve_data": {}}
+
+
+def _save_database(cache_dir, db):
+    """Save database.json to cache dir."""
+    db_path = cache_dir / "database.json"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with open(db_path, "w") as f:
+        json.dump(db, f, indent=2)
+
+
+def _pick_next_image(pool, db):
+    """Pick the least-shown image from pool. Random tie-breaking. Returns pool key or None.
+
+    Also handles new image leveling: if any pool image is not in serve_data,
+    all existing entries with show_count > 0 are set to 1, so new images
+    (starting at 0) get shown first.
+    """
+    if not pool:
+        return None
+
+    serve_data = db["serve_data"]
+    pool_filenames = {Path(k).name for k in pool}
+
+    # Detect new images (in pool but not in serve_data)
+    has_new = any(Path(k).name not in serve_data for k in pool)
+    if has_new:
+        # Level existing entries: set all show_count > 0 to 1
+        for fname in list(serve_data.keys()):
+            if serve_data[fname]["show_count"] > 0:
+                serve_data[fname]["show_count"] = 1
+        # Initialize new images at 0
+        for k in pool:
+            fname = Path(k).name
+            if fname not in serve_data:
+                serve_data[fname] = {"show_count": 0, "last_request": None}
+
+    # Remove entries for images no longer in pool
+    for fname in list(serve_data.keys()):
+        if fname not in pool_filenames:
+            del serve_data[fname]
+
+    # Ensure all pool images have entries
+    for k in pool:
+        fname = Path(k).name
+        if fname not in serve_data:
+            serve_data[fname] = {"show_count": 0, "last_request": None}
+
+    # Find minimum show_count among pool images
+    pool_entries = []
+    for k in pool:
+        fname = Path(k).name
+        count = serve_data[fname]["show_count"]
+        pool_entries.append((k, fname, count))
+
+    min_count = min(e[2] for e in pool_entries)
+    candidates = [(k, fname) for k, fname, count in pool_entries if count == min_count]
+
+    # Random tie-breaking
+    chosen_key, chosen_fname = random.choice(candidates)
+
+    # Update serve_data
+    serve_data[chosen_fname]["show_count"] += 1
+    serve_data[chosen_fname]["last_request"] = datetime.now().isoformat(timespec="seconds")
+
+    return chosen_key
+
 
 # ── Image pool (protected by lock) ──────────────────────────────────
 _lock = threading.Lock()
 _pool = {}
 _last_served = {"key": None, "name": None, "binary": None, "preview_png": None}
 _converting_count = 0
-_playlist = []        # shuffled list of pool keys to cycle through
-_playlist_index = 0   # next position in the playlist
-_playlist_pool_keys = frozenset()  # pool keys when playlist was built
+_config = dict(DEFAULT_CONFIG)
+_database = {"serve_data": {}}
+
+
+def _get_upload_dir():
+    return Path(_config["upload_dir"])
+
+
+def _get_cache_dir():
+    return Path(_config["cache_dir"])
 
 
 def _list_images():
     """Return list of image paths in upload dir."""
-    if not UPLOAD_DIR.exists():
+    upload_dir = _get_upload_dir()
+    if not upload_dir.exists():
         return []
-    return [f for f in UPLOAD_DIR.iterdir()
+    return [f for f in upload_dir.iterdir()
             if f.suffix.lower() in IMAGE_EXTENSIONS and f.is_file()]
 
 
@@ -358,9 +526,10 @@ def _convert_image(img_path):
 def _convert_and_store(img_path, content_hash):
     """Convert one image (or load from cache) and store in pool."""
     global _converting_count
+    cache_dir = _get_cache_dir()
     try:
         # Try disk cache first
-        cached = _load_from_cache(img_path, content_hash)
+        cached = _load_from_cache(cache_dir, img_path, content_hash)
         if cached:
             raw_bytes, preview_bytes = cached
             print(f"  Cache hit: {img_path.name}")
@@ -369,7 +538,7 @@ def _convert_and_store(img_path, content_hash):
                 _converting_count += 1
             try:
                 raw_bytes, preview_bytes = _convert_image(img_path)
-                _save_to_cache(img_path, content_hash, raw_bytes, preview_bytes)
+                _save_to_cache(cache_dir, img_path, content_hash, raw_bytes, preview_bytes)
             finally:
                 with _lock:
                     _converting_count -= 1
@@ -387,6 +556,7 @@ def _convert_and_store(img_path, content_hash):
 
 def _sync_pool():
     """Convert any new/changed images, remove deleted ones from pool and cache."""
+    cache_dir = _get_cache_dir()
     image_paths = _list_images()
     current_paths = set()
 
@@ -416,7 +586,7 @@ def _sync_pool():
         valid_cache_keys = set()
         for key, entry in _pool.items():
             valid_cache_keys.add(_cache_key(Path(key), entry["hash"]))
-    _purge_stale_cache(valid_cache_keys)
+    _purge_stale_cache(cache_dir, valid_cache_keys)
 
 
 def _background_watcher():
@@ -429,45 +599,41 @@ def _background_watcher():
         time.sleep(POLL_INTERVAL)
 
 
-def _rebuild_playlist():
-    """Rebuild the shuffled playlist from current pool keys. Must hold _lock."""
-    global _playlist, _playlist_index, _playlist_pool_keys
-    keys = list(_pool.keys())
-    random.shuffle(keys)
-    _playlist = keys
-    _playlist_index = 0
-    _playlist_pool_keys = frozenset(keys)
-    print(f"  Playlist rebuilt: {len(keys)} image(s)")
+# ── Flask routes ───────────────────────────────────────────────────
 
-
-@app.route("/spectra6")
+@app.route("/hokku/")
 def serve_binary():
-    global _playlist_index
+    global _database
     with _lock:
         if not _pool:
             if _converting_count > 0:
                 return "Converting images, try again shortly", 503
-            return "No images in /images/upload/", 404
-        # Rebuild playlist if pool changed or playlist exhausted
-        current_keys = frozenset(_pool.keys())
-        if current_keys != _playlist_pool_keys or _playlist_index >= len(_playlist):
-            _rebuild_playlist()
-        key = _playlist[_playlist_index]
-        _playlist_index += 1
+            return "No images in upload directory", 404
+
+        key = _pick_next_image(_pool, _database)
+        if key is None:
+            return "No images available", 404
+
         entry = _pool[key]
         _last_served["key"] = key
         _last_served["name"] = Path(key).name
         _last_served["binary"] = entry["binary"]
         _last_served["preview_png"] = entry["preview_png"]
-    print(f"  Serving: {_last_served['name']} ({_playlist_index}/{len(_playlist)})")
-    return send_file(
-        BytesIO(entry["binary"]),
-        mimetype="application/octet-stream",
-        download_name="spectra6.bin",
-    )
+
+        # Save database after update
+        _save_database(_get_cache_dir(), _database)
+
+    sleep_seconds = _calculate_sleep_seconds(_config)
+    print(f"  Serving: {_last_served['name']} (sleep_seconds={sleep_seconds})")
+
+    response = make_response(entry["binary"])
+    response.headers["Content-Type"] = "application/octet-stream"
+    response.headers["X-Sleep-Seconds"] = str(sleep_seconds)
+    response.headers["Content-Disposition"] = "attachment; filename=hokku.bin"
+    return response
 
 
-@app.route("/spectra6/preview")
+@app.route("/hokku/preview")
 def serve_preview():
     with _lock:
         data = _last_served["preview_png"]
@@ -480,46 +646,31 @@ def serve_preview():
     )
 
 
-@app.route("/spectra6/status")
+@app.route("/hokku/status")
 def serve_status():
     with _lock:
         pool_files = [Path(k).name for k in _pool.keys()]
-        playlist_names = [Path(k).name for k in _playlist]
+        serve_data = _database.get("serve_data", {})
         return jsonify({
-            "upload_dir": str(UPLOAD_DIR),
-            "cache_dir": str(CACHE_DIR),
+            "upload_dir": str(_get_upload_dir()),
+            "cache_dir": str(_get_cache_dir()),
             "pool_size": len(_pool),
             "pool_files": pool_files,
             "last_served": _last_served["name"],
             "converting": _converting_count,
             "ready": len(_pool) > 0,
-            "playlist": playlist_names,
-            "playlist_position": _playlist_index,
+            "serve_data": serve_data,
+            "config": {
+                "timezone": _config["timezone"],
+                "refresh_image_at_time": _config["refresh_image_at_time"],
+                "port": _config["port"],
+            },
         })
 
 
-@app.route("/spectra6/playlist")
-def serve_playlist():
-    with _lock:
-        entries = []
-        for i, key in enumerate(_playlist):
-            entries.append({
-                "position": i + 1,
-                "name": Path(key).name,
-                "served": i < _playlist_index,
-                "next": i == _playlist_index,
-            })
-        return jsonify({
-            "playlist": entries,
-            "total": len(_playlist),
-            "served": _playlist_index,
-            "remaining": len(_playlist) - _playlist_index,
-        })
-
-
-@app.route("/spectra6/clear_cache")
+@app.route("/hokku/clear_cache")
 def clear_cache():
-    _clear_cache()
+    _clear_cache_files(_get_cache_dir())
     with _lock:
         _pool.clear()
     # Trigger re-conversion in background
@@ -527,27 +678,42 @@ def clear_cache():
     return jsonify({"status": "cache cleared, re-converting"})
 
 
-if __name__ == "__main__":
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Spectra 6 image server (full resolution: {VISUAL_W}x{VISUAL_H})")
-    print(f"  Upload dir: {UPLOAD_DIR}")
-    print(f"  Cache dir:  {CACHE_DIR}")
+# ── Main ───────────────────────────────────────────────────────────
+
+def main():
+    global _config, _database
+
+    _config = _load_config()
+
+    upload_dir = _get_upload_dir()
+    cache_dir = _get_cache_dir()
+
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load database
+    _database = _load_database(cache_dir)
+
+    port = _config["port"]
+
+    print(f"Hokku image server (full resolution: {VISUAL_W}x{VISUAL_H})")
+    print(f"  Upload dir: {upload_dir}")
+    print(f"  Cache dir:  {cache_dir}")
+    print(f"  Timezone:   {_config['timezone']}")
+    print(f"  Refresh at: {_config['refresh_image_at_time']}")
     print(f"  Poll interval: {POLL_INTERVAL}s")
     print(f"  Output: {TOTAL_BYTES} bytes per image ({PANEL_BYTES} per panel)")
     print(f"  Endpoints:")
-    print(f"    GET /spectra6              — 960K binary (shuffled playlist)")
-    print(f"    GET /spectra6/preview      — PNG preview of last served")
-    print(f"    GET /spectra6/status       — JSON pool status")
-    print(f"    GET /spectra6/playlist     — JSON playlist order and position")
-    print(f"    GET /spectra6/clear_cache  — Wipe cache and re-convert")
+    print(f"    GET /hokku/             — 960K binary (fair rotation) + X-Sleep-Seconds header")
+    print(f"    GET /hokku/preview      — PNG preview of last served")
+    print(f"    GET /hokku/status       — JSON pool status")
+    print(f"    GET /hokku/clear_cache  — Wipe cache and re-convert")
 
     # Load from cache or convert on startup
     images = _list_images()
     if images:
         print(f"  Found {len(images)} image(s), loading...")
         _sync_pool()
-        _rebuild_playlist()
         print(f"  Pool ready: {len(_pool)} image(s)")
     else:
         print(f"  No images found yet, waiting for uploads...")
@@ -556,5 +722,9 @@ if __name__ == "__main__":
     watcher = threading.Thread(target=_background_watcher, daemon=True)
     watcher.start()
 
-    print(f"  Starting server...")
-    app.run(host="0.0.0.0", port=8080)
+    print(f"  Starting server on port {port}...")
+    app.run(host="0.0.0.0", port=port)
+
+
+if __name__ == "__main__":
+    main()
