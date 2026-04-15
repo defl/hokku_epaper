@@ -2,14 +2,12 @@
 import json
 import os
 import tempfile
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-# Add parent dir to path
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -20,36 +18,31 @@ import webserver
 
 class TestConfigLoading:
     def test_default_config(self):
-        """Default config has all expected keys."""
         config = webserver.DEFAULT_CONFIG
         assert "timezone" in config
         assert "refresh_image_at_time" in config
         assert "upload_dir" in config
         assert "cache_dir" in config
         assert "port" in config
+        assert "poll_interval_seconds" in config
 
     def test_load_config_from_file(self):
-        """Config loads from a JSON file."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump({"timezone": "Europe/London", "port": 9090}, f)
+            json.dump({"timezone": "Europe/London", "port": 9090, "poll_interval_seconds": 30}, f)
             temp_path = f.name
-
         try:
             with patch.dict(os.environ, {"HOKKU_CONFIG": temp_path}):
                 config = webserver._load_config()
             assert config["timezone"] == "Europe/London"
             assert config["port"] == 9090
-            # Defaults preserved for unset keys
-            assert "refresh_image_at_time" in config
+            assert config["poll_interval_seconds"] == 30
         finally:
             os.unlink(temp_path)
 
     def test_load_config_env_var(self):
-        """HOKKU_CONFIG env var takes priority."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"timezone": "Asia/Tokyo"}, f)
             temp_path = f.name
-
         try:
             with patch.dict(os.environ, {"HOKKU_CONFIG": temp_path}):
                 config = webserver._load_config()
@@ -58,9 +51,7 @@ class TestConfigLoading:
             os.unlink(temp_path)
 
     def test_load_config_missing_file(self):
-        """Missing config file returns defaults."""
         with patch.dict(os.environ, {"HOKKU_CONFIG": "/nonexistent/config.json"}, clear=False):
-            # Also patch to prevent finding ./config.json
             config = webserver._load_config()
         assert config["port"] == webserver.DEFAULT_CONFIG["port"]
 
@@ -69,121 +60,142 @@ class TestConfigLoading:
 
 class TestSleepCalculation:
     def test_next_time_today(self):
-        """Returns seconds until next wake time today."""
-        config = {
-            "timezone": "UTC",
-            "refresh_image_at_time": ["0600", "1200", "1800"],
-        }
-        # Mock: it's 10:00 UTC, next wake is 12:00 = 7200 seconds
-        with patch("webserver.datetime") as mock_dt:
-            mock_now = datetime(2026, 4, 14, 10, 0, 0)
-            mock_dt.now.return_value = mock_now
-            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-            # Can't easily mock datetime.now with zoneinfo, test with fallback
-        # Direct test with known values
+        config = {"timezone": "UTC", "refresh_image_at_time": ["0600", "1200", "1800"]}
         sleep = webserver._calculate_sleep_seconds(config)
-        # Result should be positive
         assert sleep >= 60
 
     def test_empty_times_fallback(self):
-        """Empty refresh times returns 6h fallback."""
         config = {"timezone": "UTC", "refresh_image_at_time": []}
         sleep = webserver._calculate_sleep_seconds(config)
         assert sleep == 21600
 
     def test_minimum_sleep(self):
-        """Sleep is at least 60 seconds."""
-        config = {
-            "timezone": "UTC",
-            "refresh_image_at_time": ["0000", "0001", "0002"],
-        }
+        config = {"timezone": "UTC", "refresh_image_at_time": ["0000", "0001", "0002"]}
         sleep = webserver._calculate_sleep_seconds(config)
         assert sleep >= 60
 
     def test_hhmm_parsing(self):
-        """HHMM format is correctly parsed."""
-        config = {
-            "timezone": "UTC",
-            "refresh_image_at_time": ["0930", "1845"],
-        }
+        config = {"timezone": "UTC", "refresh_image_at_time": ["0930", "1845"]}
         sleep = webserver._calculate_sleep_seconds(config)
         assert isinstance(sleep, int)
         assert sleep >= 60
+
+
+# ── Duration formatting tests ──────────────────────────────────────
+
+class TestFormatDuration:
+    def test_minutes(self):
+        assert webserver.format_duration_human(30) == "30m"
+
+    def test_hours(self):
+        assert webserver.format_duration_human(90) == "1h 30m"
+
+    def test_hours_exact(self):
+        assert webserver.format_duration_human(120) == "2h"
+
+    def test_days(self):
+        assert webserver.format_duration_human(60 * 36) == "1d 12h"
+
+    def test_months(self):
+        assert webserver.format_duration_human(60 * 24 * 45) == "1mo 15d"
+
+    def test_years(self):
+        assert webserver.format_duration_human(60 * 24 * 400) == "1y 1mo"
+
+    def test_zero(self):
+        assert webserver.format_duration_human(0) == "0m"
+
+    def test_negative(self):
+        assert webserver.format_duration_human(-5) == "0m"
 
 
 # ── Fair distribution tests ────────────────────────────────────────
 
 class TestFairDistribution:
     def _make_pool(self, names):
-        """Create a mock pool dict from a list of filenames."""
         return {f"/images/{n}": {"binary": b"x", "preview_png": b"x", "hash": "abc"} for n in names}
 
-    def test_picks_least_shown(self):
-        """Picks image with lowest show_count."""
+    def _make_entry(self, show_index=0, total_show_count=0, total_show_minutes=0.0):
+        return {"show_index": show_index, "last_request": None,
+                "total_show_count": total_show_count, "total_show_minutes": total_show_minutes}
+
+    def test_picks_lowest_show_index(self):
         pool = self._make_pool(["a.jpg", "b.jpg", "c.jpg"])
         db = {"serve_data": {
-            "a.jpg": {"show_count": 3, "last_request": None},
-            "b.jpg": {"show_count": 1, "last_request": None},
-            "c.jpg": {"show_count": 5, "last_request": None},
+            "a.jpg": self._make_entry(show_index=3),
+            "b.jpg": self._make_entry(show_index=1),
+            "c.jpg": self._make_entry(show_index=5),
         }}
+        # Reset _last_served to avoid time tracking issues
+        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
         key = webserver._pick_next_image(pool, db)
         assert Path(key).name == "b.jpg"
-        assert db["serve_data"]["b.jpg"]["show_count"] == 2
+        assert db["serve_data"]["b.jpg"]["show_index"] == 2
 
     def test_new_image_leveling(self):
-        """When new image appears, existing counts > 0 are set to 1."""
         pool = self._make_pool(["a.jpg", "b.jpg", "new.jpg"])
         db = {"serve_data": {
-            "a.jpg": {"show_count": 5, "last_request": None},
-            "b.jpg": {"show_count": 3, "last_request": None},
-            # new.jpg not in serve_data
+            "a.jpg": self._make_entry(show_index=5),
+            "b.jpg": self._make_entry(show_index=3),
         }}
+        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
         key = webserver._pick_next_image(pool, db)
-        # new.jpg should be picked (show_count=0)
         assert Path(key).name == "new.jpg"
-        # Existing counts should be leveled to 1
-        assert db["serve_data"]["a.jpg"]["show_count"] == 1
-        assert db["serve_data"]["b.jpg"]["show_count"] == 1
-        # new.jpg now has count 1 (0 + 1 after serving)
-        assert db["serve_data"]["new.jpg"]["show_count"] == 1
+        assert db["serve_data"]["a.jpg"]["show_index"] == 1
+        assert db["serve_data"]["b.jpg"]["show_index"] == 1
+        assert db["serve_data"]["new.jpg"]["show_index"] == 1  # 0 + 1 after serving
 
     def test_removes_deleted_images(self):
-        """Entries for deleted images are removed from serve_data."""
         pool = self._make_pool(["a.jpg"])
         db = {"serve_data": {
-            "a.jpg": {"show_count": 2, "last_request": None},
-            "deleted.jpg": {"show_count": 10, "last_request": None},
+            "a.jpg": self._make_entry(show_index=2),
+            "deleted.jpg": self._make_entry(show_index=10),
         }}
+        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
         webserver._pick_next_image(pool, db)
         assert "deleted.jpg" not in db["serve_data"]
 
     def test_empty_pool(self):
-        """Returns None for empty pool."""
         db = {"serve_data": {}}
         key = webserver._pick_next_image({}, db)
         assert key is None
 
     def test_random_tiebreak(self):
-        """When multiple images tie, selection is random (not always same)."""
         pool = self._make_pool(["a.jpg", "b.jpg", "c.jpg"])
         seen = set()
         for _ in range(50):
             db = {"serve_data": {
-                "a.jpg": {"show_count": 0, "last_request": None},
-                "b.jpg": {"show_count": 0, "last_request": None},
-                "c.jpg": {"show_count": 0, "last_request": None},
+                "a.jpg": self._make_entry(),
+                "b.jpg": self._make_entry(),
+                "c.jpg": self._make_entry(),
             }}
+            webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
             key = webserver._pick_next_image(pool, db)
             seen.add(Path(key).name)
-        # With random tie-breaking, we should see at least 2 different images in 50 tries
         assert len(seen) >= 2
 
-    def test_updates_last_request(self):
-        """last_request is set to current timestamp."""
-        pool = self._make_pool(["a.jpg"])
+    def test_negative_show_index(self):
+        """show_index can be negative (e.g. from show-next button)."""
+        pool = self._make_pool(["a.jpg", "b.jpg"])
         db = {"serve_data": {
-            "a.jpg": {"show_count": 0, "last_request": None},
+            "a.jpg": self._make_entry(show_index=-1),
+            "b.jpg": self._make_entry(show_index=3),
         }}
+        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        key = webserver._pick_next_image(pool, db)
+        assert Path(key).name == "a.jpg"
+
+    def test_total_show_count_increments(self):
+        pool = self._make_pool(["a.jpg"])
+        db = {"serve_data": {"a.jpg": self._make_entry(total_show_count=5)}}
+        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._pick_next_image(pool, db)
+        assert db["serve_data"]["a.jpg"]["total_show_count"] == 6
+
+    def test_updates_last_request(self):
+        pool = self._make_pool(["a.jpg"])
+        db = {"serve_data": {"a.jpg": self._make_entry()}}
+        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
         before = datetime.now().isoformat(timespec="seconds")
         webserver._pick_next_image(pool, db)
         after = datetime.now().isoformat(timespec="seconds")
@@ -196,28 +208,38 @@ class TestFairDistribution:
 
 class TestDatabase:
     def test_save_and_load(self):
-        """Database roundtrips through JSON."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
             db = {"serve_data": {
-                "test.jpg": {"show_count": 3, "last_request": "2026-04-14T12:00:00"},
+                "test.jpg": {"show_index": 3, "last_request": "2026-04-14T12:00:00",
+                              "total_show_count": 10, "total_show_minutes": 500.0},
             }}
             webserver._save_database(cache_dir, db)
             loaded = webserver._load_database(cache_dir)
-            assert loaded["serve_data"]["test.jpg"]["show_count"] == 3
+            assert loaded["serve_data"]["test.jpg"]["show_index"] == 3
+            assert loaded["serve_data"]["test.jpg"]["total_show_count"] == 10
+            assert loaded["serve_data"]["test.jpg"]["total_show_minutes"] == 500.0
 
     def test_load_missing(self):
-        """Loading from missing file returns empty database."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db = webserver._load_database(Path(tmpdir))
             assert db == {"serve_data": {}}
 
     def test_load_corrupt(self):
-        """Loading corrupt JSON returns empty database."""
         with tempfile.TemporaryDirectory() as tmpdir:
             (Path(tmpdir) / "database.json").write_text("not json{{{")
             db = webserver._load_database(Path(tmpdir))
             assert db == {"serve_data": {}}
+
+    def test_migrate_show_count_to_show_index(self):
+        """Old databases with show_count get migrated to show_index."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = {"serve_data": {"img.jpg": {"show_count": 7, "last_request": None}}}
+            (Path(tmpdir) / "database.json").write_text(json.dumps(db))
+            loaded = webserver._load_database(Path(tmpdir))
+            assert "show_index" in loaded["serve_data"]["img.jpg"]
+            assert loaded["serve_data"]["img.jpg"]["show_index"] == 7
+            assert "show_count" not in loaded["serve_data"]["img.jpg"]
 
 
 # ── Flask endpoint tests ──────────────────────────────────────────
@@ -225,42 +247,71 @@ class TestDatabase:
 class TestFlaskEndpoints:
     @pytest.fixture
     def client(self):
-        """Create a Flask test client."""
         webserver.app.config["TESTING"] = True
         with webserver.app.test_client() as client:
             yield client
 
     def test_hokku_no_images(self, client):
-        """GET /hokku/ returns 404 when no images."""
         with patch.object(webserver, "_pool", {}), \
              patch.object(webserver, "_converting_count", 0):
             resp = client.get("/hokku/")
             assert resp.status_code == 404
 
     def test_hokku_converting(self, client):
-        """GET /hokku/ returns 503 when converting."""
         with patch.object(webserver, "_pool", {}), \
              patch.object(webserver, "_converting_count", 1):
             resp = client.get("/hokku/")
             assert resp.status_code == 503
 
     def test_preview_no_image(self, client):
-        """GET /hokku/preview returns 404 when nothing served."""
         with patch.object(webserver, "_last_served",
-                         {"key": None, "name": None, "binary": None, "preview_png": None}):
+                         {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}):
             resp = client.get("/hokku/preview")
             assert resp.status_code == 404
 
     def test_status_endpoint(self, client):
-        """GET /hokku/status returns JSON."""
         with patch.object(webserver, "_pool", {}), \
              patch.object(webserver, "_database", {"serve_data": {}}), \
              patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
+             patch.object(webserver, "_converting_count", 0), \
+             patch.object(webserver, "_converting_name", None), \
              patch.object(webserver, "_last_served",
-                         {"key": None, "name": None, "binary": None, "preview_png": None}), \
-             patch.object(webserver, "_converting_count", 0):
+                         {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}):
             resp = client.get("/hokku/status")
             assert resp.status_code == 200
             data = resp.get_json()
             assert "pool_size" in data
+            assert "converting_name" in data
             assert "config" in data
+            assert "poll_interval_seconds" in data["config"]
+
+    def test_api_status_endpoint(self, client):
+        with patch.object(webserver, "_pool", {}), \
+             patch.object(webserver, "_database", {"serve_data": {}}), \
+             patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
+             patch.object(webserver, "_converting_count", 0), \
+             patch.object(webserver, "_converting_name", None), \
+             patch.object(webserver, "_last_served",
+                         {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}):
+            resp = client.get("/hokku/api/status")
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert "server_time" in data
+            assert "config" in data
+
+    def test_api_show_next(self, client):
+        db = {"serve_data": {
+            "a.jpg": {"show_index": 3, "last_request": None, "total_show_count": 0, "total_show_minutes": 0.0},
+            "b.jpg": {"show_index": 1, "last_request": None, "total_show_count": 0, "total_show_minutes": 0.0},
+        }}
+        with patch.object(webserver, "_database", db), \
+             patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
+             patch("webserver._save_database"):
+            resp = client.post("/hokku/api/show_next/a.jpg")
+            assert resp.status_code == 200
+            assert db["serve_data"]["a.jpg"]["show_index"] == 0  # min(3,1) - 1 = 0
+
+    def test_web_gui_loads(self, client):
+        resp = client.get("/hokku/ui")
+        assert resp.status_code == 200
+        assert b"Hokku" in resp.data
