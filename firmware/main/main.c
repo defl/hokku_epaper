@@ -4,18 +4,19 @@
  *
  * Features:
  *   - WiFi image download from HTTP server
- *   - NTP time sync with RTC drift compensation
- *   - Scheduled refresh at 06:00, 12:00, 18:00
+ *   - Server-driven sleep schedule (X-Sleep-Seconds header)
+ *   - USB serial config tool (set WiFi credentials + server URL)
  *   - Deep sleep between refreshes (~8uA target)
  *   - Button wakeup (GPIO1, GPIO12)
  *   - Battery voltage monitoring
+ *   - On-screen error messages for misconfiguration
  *
- * Decoded from original firmware (ESP-IDF v5.2.2) IROM.bin disassembly.
+ * Configuration stored in NVS (no compile-time secrets.h needed).
+ * Use the hokku-config tool to set WiFi SSID, password, and server URL.
  */
 
 #include <string.h>
-#include <time.h>
-#include <sys/time.h>
+#include <stdio.h>
 #include <math.h>
 
 #include "freertos/FreeRTOS.h"
@@ -25,6 +26,7 @@
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
+#include "driver/usb_serial_jtag.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -34,7 +36,6 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
-#include "esp_netif_sntp.h"
 #include "esp_http_client.h"
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
@@ -76,50 +77,304 @@ static const char *TAG = "epaper";
 #define NUM_CHUNKS      (DISPLAY_H / ROWS_PER_CHUNK)  /* 100 chunks per panel */
 
 /* ── Network config ──────────────────────────────────────────────── */
-/* WIFI_SSID, WIFI_PASS, IMAGE_URL — copy secrets.h.example to secrets.h */
-#if __has_include("secrets.h")
-#include "secrets.h"
-#else
-#error "Missing secrets.h — copy secrets.h.example to secrets.h and fill in your values"
-#endif
 #define WIFI_CONNECT_TIMEOUT_MS  15000
-#define NTP_SERVER         "pool.ntp.org"
-#define NTP_SYNC_TIMEOUT_MS      10000
 #define HTTP_TIMEOUT_MS    30000
-
-/* ── Schedule (from secrets.h) ───────────────────────────────────── */
-#ifndef WAKE_HOURS_INIT
-#define WAKE_HOURS_INIT    {6, 12, 18}
-#endif
-#ifndef TIMEZONE
-#define TIMEZONE           "CST6CDT,M3.2.0,M11.1.0"
-#endif
-static const int WAKE_HOURS[] = WAKE_HOURS_INIT;
-#define NUM_WAKE_HOURS     (sizeof(WAKE_HOURS) / sizeof(WAKE_HOURS[0]))
 
 /* ── Battery ─────────────────────────────────────────────────────── */
 #define BATT_LOW_MV        3400
 #define BATT_CHARGE_MV     3300  /* below this: charge-only mode, skip WiFi/display */
 #define BATT_DIVIDER_MULT  3.34f  /* calibrated: ADC ~1230mV at pin → 4.1V actual */
 
+/* ── Deep sleep fallback ─────────────────────────────────────────── */
+#define SLEEP_3H_US        (3LL * 3600 * 1000000LL)
+#define SLEEP_1H_US        (1LL * 3600 * 1000000LL)
+
 /* ── RTC memory (survives deep sleep) ────────────────────────────── */
 RTC_DATA_ATTR static int      boot_count = 0;
 RTC_DATA_ATTR static uint8_t  wifi_channel = 0;
 RTC_DATA_ATTR static uint8_t  wifi_bssid[6] = {0};
 RTC_DATA_ATTR static bool     has_wifi_cache = false;
-RTC_DATA_ATTR static int64_t  last_ntp_sync_epoch = 0;  /* for weekly re-sync check */
 RTC_DATA_ATTR static uint16_t last_battery_mv = 0;
 RTC_DATA_ATTR static bool     was_sleeping = false;  /* detect USB reset after deep sleep */
+RTC_DATA_ATTR static int32_t  last_sleep_seconds = 0;  /* fallback if server unreachable */
+
+/* ── NVS config ──────────────────────────────────────────────────── */
+typedef struct {
+    char wifi_ssid[33];
+    char wifi_pass[65];
+    char image_url[257];
+} config_t;
+
+static config_t config = {0};
+
+static bool config_load(void)
+{
+    nvs_handle_t nvs;
+    if (nvs_open("hokku", NVS_READONLY, &nvs) != ESP_OK) return false;
+
+    size_t len;
+    len = sizeof(config.wifi_ssid);
+    nvs_get_str(nvs, "wifi_ssid", config.wifi_ssid, &len);
+    len = sizeof(config.wifi_pass);
+    nvs_get_str(nvs, "wifi_pass", config.wifi_pass, &len);
+    len = sizeof(config.image_url);
+    nvs_get_str(nvs, "image_url", config.image_url, &len);
+
+    nvs_close(nvs);
+    return true;
+}
+
+static bool config_save_str(const char *key, const char *value)
+{
+    /* Only write if value actually changed */
+    nvs_handle_t nvs;
+    if (nvs_open("hokku", NVS_READWRITE, &nvs) != ESP_OK) return false;
+
+    char existing[257] = {0};
+    size_t len = sizeof(existing);
+    esp_err_t err = nvs_get_str(nvs, key, existing, &len);
+
+    if (err == ESP_OK && strcmp(existing, value) == 0) {
+        nvs_close(nvs);
+        return true;  /* no change needed */
+    }
+
+    err = nvs_set_str(nvs, key, value);
+    if (err == ESP_OK) {
+        nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+    return err == ESP_OK;
+}
+
+static bool config_is_valid(void)
+{
+    return config.wifi_ssid[0] != '\0' && config.image_url[0] != '\0';
+}
 
 /* ── Embedded image ──────────────────────────────────────────────── */
 extern const uint8_t testimg_start[] asm("_binary_test_quadrants_bin_start");
 extern const uint8_t testimg_end[]   asm("_binary_test_quadrants_bin_end");
+
+/* ── Forward declarations ────────────────────────────────────────── */
+static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_data);
 
 /* ── Globals ─────────────────────────────────────────────────────── */
 static spi_device_handle_t spi_handle;
 static EventGroupHandle_t  wifi_events;
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  Simple Text Rendering (5x7 font into 4bpp framebuffer)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Minimal 5x7 bitmap font for ASCII 32-126. Each char is 5 bytes (columns).
+ * Bit 0 = top row, bit 6 = bottom row. */
+static const uint8_t font5x7[][5] = {
+    {0x00,0x00,0x00,0x00,0x00}, /*   */
+    {0x00,0x00,0x5F,0x00,0x00}, /* ! */
+    {0x00,0x07,0x00,0x07,0x00}, /* " */
+    {0x14,0x7F,0x14,0x7F,0x14}, /* # */
+    {0x24,0x2A,0x7F,0x2A,0x12}, /* $ */
+    {0x23,0x13,0x08,0x64,0x62}, /* % */
+    {0x36,0x49,0x55,0x22,0x50}, /* & */
+    {0x00,0x05,0x03,0x00,0x00}, /* ' */
+    {0x00,0x1C,0x22,0x41,0x00}, /* ( */
+    {0x00,0x41,0x22,0x1C,0x00}, /* ) */
+    {0x08,0x2A,0x1C,0x2A,0x08}, /* * */
+    {0x08,0x08,0x3E,0x08,0x08}, /* + */
+    {0x00,0x50,0x30,0x00,0x00}, /* , */
+    {0x08,0x08,0x08,0x08,0x08}, /* - */
+    {0x00,0x60,0x60,0x00,0x00}, /* . */
+    {0x20,0x10,0x08,0x04,0x02}, /* / */
+    {0x3E,0x51,0x49,0x45,0x3E}, /* 0 */
+    {0x00,0x42,0x7F,0x40,0x00}, /* 1 */
+    {0x42,0x61,0x51,0x49,0x46}, /* 2 */
+    {0x21,0x41,0x45,0x4B,0x31}, /* 3 */
+    {0x18,0x14,0x12,0x7F,0x10}, /* 4 */
+    {0x27,0x45,0x45,0x45,0x39}, /* 5 */
+    {0x3C,0x4A,0x49,0x49,0x30}, /* 6 */
+    {0x01,0x71,0x09,0x05,0x03}, /* 7 */
+    {0x36,0x49,0x49,0x49,0x36}, /* 8 */
+    {0x06,0x49,0x49,0x29,0x1E}, /* 9 */
+    {0x00,0x36,0x36,0x00,0x00}, /* : */
+    {0x00,0x56,0x36,0x00,0x00}, /* ; */
+    {0x00,0x08,0x14,0x22,0x41}, /* < */
+    {0x14,0x14,0x14,0x14,0x14}, /* = */
+    {0x41,0x22,0x14,0x08,0x00}, /* > */
+    {0x02,0x01,0x51,0x09,0x06}, /* ? */
+    {0x32,0x49,0x79,0x41,0x3E}, /* @ */
+    {0x7E,0x11,0x11,0x11,0x7E}, /* A */
+    {0x7F,0x49,0x49,0x49,0x36}, /* B */
+    {0x3E,0x41,0x41,0x41,0x22}, /* C */
+    {0x7F,0x41,0x41,0x22,0x1C}, /* D */
+    {0x7F,0x49,0x49,0x49,0x41}, /* E */
+    {0x7F,0x09,0x09,0x01,0x01}, /* F */
+    {0x3E,0x41,0x41,0x51,0x32}, /* G */
+    {0x7F,0x08,0x08,0x08,0x7F}, /* H */
+    {0x00,0x41,0x7F,0x41,0x00}, /* I */
+    {0x20,0x40,0x41,0x3F,0x01}, /* J */
+    {0x7F,0x08,0x14,0x22,0x41}, /* K */
+    {0x7F,0x40,0x40,0x40,0x40}, /* L */
+    {0x7F,0x02,0x04,0x02,0x7F}, /* M */
+    {0x7F,0x04,0x08,0x10,0x7F}, /* N */
+    {0x3E,0x41,0x41,0x41,0x3E}, /* O */
+    {0x7F,0x09,0x09,0x09,0x06}, /* P */
+    {0x3E,0x41,0x51,0x21,0x5E}, /* Q */
+    {0x7F,0x09,0x19,0x29,0x46}, /* R */
+    {0x46,0x49,0x49,0x49,0x31}, /* S */
+    {0x01,0x01,0x7F,0x01,0x01}, /* T */
+    {0x3F,0x40,0x40,0x40,0x3F}, /* U */
+    {0x1F,0x20,0x40,0x20,0x1F}, /* V */
+    {0x7F,0x20,0x18,0x20,0x7F}, /* W */
+    {0x63,0x14,0x08,0x14,0x63}, /* X */
+    {0x03,0x04,0x78,0x04,0x03}, /* Y */
+    {0x61,0x51,0x49,0x45,0x43}, /* Z */
+    {0x00,0x00,0x7F,0x41,0x41}, /* [ */
+    {0x02,0x04,0x08,0x10,0x20}, /* \ */
+    {0x41,0x41,0x7F,0x00,0x00}, /* ] */
+    {0x04,0x02,0x01,0x02,0x04}, /* ^ */
+    {0x40,0x40,0x40,0x40,0x40}, /* _ */
+    {0x00,0x01,0x02,0x04,0x00}, /* ` */
+    {0x20,0x54,0x54,0x54,0x78}, /* a */
+    {0x7F,0x48,0x44,0x44,0x38}, /* b */
+    {0x38,0x44,0x44,0x44,0x20}, /* c */
+    {0x38,0x44,0x44,0x48,0x7F}, /* d */
+    {0x38,0x54,0x54,0x54,0x18}, /* e */
+    {0x08,0x7E,0x09,0x01,0x02}, /* f */
+    {0x08,0x14,0x54,0x54,0x3C}, /* g */
+    {0x7F,0x08,0x04,0x04,0x78}, /* h */
+    {0x00,0x44,0x7D,0x40,0x00}, /* i */
+    {0x20,0x40,0x44,0x3D,0x00}, /* j */
+    {0x00,0x7F,0x10,0x28,0x44}, /* k */
+    {0x00,0x41,0x7F,0x40,0x00}, /* l */
+    {0x7C,0x04,0x18,0x04,0x78}, /* m */
+    {0x7C,0x08,0x04,0x04,0x78}, /* n */
+    {0x38,0x44,0x44,0x44,0x38}, /* o */
+    {0x7C,0x14,0x14,0x14,0x08}, /* p */
+    {0x08,0x14,0x14,0x18,0x7C}, /* q */
+    {0x7C,0x08,0x04,0x04,0x08}, /* r */
+    {0x48,0x54,0x54,0x54,0x20}, /* s */
+    {0x04,0x3F,0x44,0x40,0x20}, /* t */
+    {0x3C,0x40,0x40,0x20,0x7C}, /* u */
+    {0x1C,0x20,0x40,0x20,0x1C}, /* v */
+    {0x3C,0x40,0x30,0x40,0x3C}, /* w */
+    {0x44,0x28,0x10,0x28,0x44}, /* x */
+    {0x0C,0x50,0x50,0x50,0x3C}, /* y */
+    {0x44,0x64,0x54,0x4C,0x44}, /* z */
+    {0x00,0x08,0x36,0x41,0x00}, /* { */
+    {0x00,0x00,0x7F,0x00,0x00}, /* | */
+    {0x00,0x41,0x36,0x08,0x00}, /* } */
+    {0x08,0x08,0x2A,0x1C,0x08}, /* ~ */
+};
+
+/* Draw a single character at (x, y) in the 4bpp framebuffer.
+ * The framebuffer is in portrait orientation: 1200 wide, 1600 tall.
+ * color is a 4-bit nibble value (0=black, 1=white). */
+static void draw_char(uint8_t *fb, int fb_w, int fb_h, int x, int y,
+                       char ch, uint8_t color, int scale)
+{
+    if (ch < 32 || ch > 126) ch = '?';
+    const uint8_t *glyph = font5x7[ch - 32];
+
+    for (int col = 0; col < 5; col++) {
+        uint8_t bits = glyph[col];
+        for (int row = 0; row < 7; row++) {
+            if (bits & (1 << row)) {
+                /* Draw a scale x scale block */
+                for (int sy = 0; sy < scale; sy++) {
+                    for (int sx = 0; sx < scale; sx++) {
+                        int px = x + col * scale + sx;
+                        int py = y + row * scale + sy;
+                        if (px >= 0 && px < fb_w && py >= 0 && py < fb_h) {
+                            int idx = py * fb_w + px;
+                            int byte_idx = idx / 2;
+                            if (idx % 2 == 0) {
+                                fb[byte_idx] = (fb[byte_idx] & 0x0F) | (color << 4);
+                            } else {
+                                fb[byte_idx] = (fb[byte_idx] & 0xF0) | (color & 0x0F);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Draw a string at (x, y) with given scale. Wraps at fb_w. */
+static void draw_string(uint8_t *fb, int fb_w, int fb_h, int x, int y,
+                         const char *str, uint8_t color, int scale)
+{
+    int char_w = 6 * scale;  /* 5 pixels + 1 gap */
+    int char_h = 8 * scale;  /* 7 pixels + 1 gap */
+    int cx = x, cy = y;
+
+    while (*str) {
+        if (*str == '\n') {
+            cx = x;
+            cy += char_h;
+            str++;
+            continue;
+        }
+        if (cx + char_w > fb_w) {
+            cx = x;
+            cy += char_h;
+        }
+        if (cy + char_h > fb_h) break;
+        draw_char(fb, fb_w, fb_h, cx, cy, *str, color, scale);
+        cx += char_w;
+        str++;
+    }
+}
+
+/* Create a white framebuffer with a message, and display it. */
+static void display_message(const char *msg)
+{
+    /* Allocate in PSRAM */
+    uint8_t *fb = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
+    if (!fb) {
+        ESP_LOGE(TAG, "Cannot allocate framebuffer for message");
+        return;
+    }
+
+    /* Fill with white (nibble 0x1 = white in Spectra 6) */
+    memset(fb, 0x11, TOTAL_IMAGE_SIZE);
+
+    /* The framebuffer is in portrait orientation: 1200 wide x 1600 tall (two 600-wide panels).
+     * But our display_dual function splits: first 480K = panel1 (left 600 cols),
+     * second 480K = panel2 (right 600 cols).
+     * For simplicity, draw text into a single 1200x800 logical buffer in landscape,
+     * then rotate to portrait and split into panels. */
+
+    /* Actually, we draw directly into the portrait buffer for simplicity.
+     * Panel 1: rows 0-1599, cols 0-599 (bytes 0..479999)
+     * Panel 2: rows 0-1599, cols 0-599 (bytes 480000..959999)
+     * For text display, we treat it as a single 1200-wide buffer.
+     * Each panel's row is 300 bytes (600 pixels / 2 at 4bpp).
+     *
+     * Let's keep it simple: draw into panel 1 only (left half of landscape = top in portrait).
+     * scale=3 gives readable text: 18x24 pixel chars, ~33 chars per line, ~66 lines.
+     */
+    int panel_w = PANEL_W;  /* 600 */
+    int panel_h = PANEL_H;  /* 1600 - but PANEL_H is really DISPLAY_H=800 */
+
+    /* Actually PANEL_H is not defined as 1600. Let me recalculate.
+     * PANEL_SIZE = DISPLAY_W * DISPLAY_H / 2 = 1200 * 800 / 2 = 480000
+     * Each panel pixel data: 600 cols * 1600 rows = 960000 pixels, at 4bpp = 480000 bytes.
+     * Wait no. The panels are 600 wide x 1600 tall physically (portrait data).
+     * So: 600 * 1600 / 2 = 480000 bytes per panel. Correct.
+     */
+    int pw = 600;
+    int ph = 1600;
+    /* Draw black text on white background in panel 1 */
+    draw_string(fb, pw, ph, 20, 40, msg, 0x0, 3);
+
+    /* Display it */
+    epaper_display_dual(fb, fb + PANEL_SIZE);
+    heap_caps_free(fb);
+}
 
 /* ═══════════════════════════════════════════════════════════════════
  *  SPI / E-Paper Display Driver
@@ -434,8 +689,8 @@ static bool wifi_connect(void)
             .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
-    strncpy((char *)wifi_cfg.sta.ssid, WIFI_SSID, sizeof(wifi_cfg.sta.ssid));
-    strncpy((char *)wifi_cfg.sta.password, WIFI_PASS, sizeof(wifi_cfg.sta.password));
+    strncpy((char *)wifi_cfg.sta.ssid, config.wifi_ssid, sizeof(wifi_cfg.sta.ssid));
+    strncpy((char *)wifi_cfg.sta.password, config.wifi_pass, sizeof(wifi_cfg.sta.password));
 
     /* Use cached channel/BSSID for fast reconnect */
     if (has_wifi_cache && wifi_channel > 0) {
@@ -503,68 +758,7 @@ static void wifi_shutdown(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- *  NTP Time Sync
- * ═══════════════════════════════════════════════════════════════════ */
-
-static bool ntp_sync(void)
-{
-    setenv("TZ", TIMEZONE, 1);
-    tzset();
-
-    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(NTP_SERVER);
-    esp_netif_sntp_init(&config);
-
-    int retry = 0;
-    const int max_retry = NTP_SYNC_TIMEOUT_MS / 100;
-    while (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(100)) != ESP_OK && retry < max_retry) {
-        retry++;
-    }
-
-    esp_netif_sntp_deinit();
-
-    if (retry >= max_retry) {
-        ESP_LOGE(TAG, "NTP sync timeout");
-        return false;
-    }
-
-    time_t now;
-    time(&now);
-    struct tm t;
-    localtime_r(&now, &t);
-    ESP_LOGI(TAG, "NTP synced: %04d-%02d-%02d %02d:%02d:%02d",
-             t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
-             t.tm_hour, t.tm_min, t.tm_sec);
-
-    /* Persist to NVS so it survives esp_restart() */
-    nvs_handle_t nvs;
-    if (nvs_open("hokku", NVS_READWRITE, &nvs) == ESP_OK) {
-        nvs_set_i64(nvs, "ntp_epoch", (int64_t)now);
-        nvs_commit(nvs);
-        nvs_close(nvs);
-    }
-    last_ntp_sync_epoch = now;
-    return true;
-}
-
-static bool need_ntp_resync(void)
-{
-    /* Load from NVS on first check (RTC memory doesn't survive esp_restart) */
-    if (last_ntp_sync_epoch == 0) {
-        nvs_handle_t nvs;
-        if (nvs_open("hokku", NVS_READONLY, &nvs) == ESP_OK) {
-            nvs_get_i64(nvs, "ntp_epoch", &last_ntp_sync_epoch);
-            nvs_close(nvs);
-        }
-    }
-    if (last_ntp_sync_epoch == 0) return true;
-    time_t now;
-    time(&now);
-    /* Re-sync if >96 hours since last sync */
-    return (now - last_ntp_sync_epoch) > (96 * 3600);
-}
-
-/* ═══════════════════════════════════════════════════════════════════
- *  HTTP Image Download
+ *  HTTP Image Download (reads X-Sleep-Seconds header)
  * ═══════════════════════════════════════════════════════════════════ */
 
 typedef struct {
@@ -585,7 +779,10 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-static uint8_t *download_image(void)
+/* Download image and extract X-Sleep-Seconds header.
+ * Returns image buffer (caller frees) or NULL on failure.
+ * *out_sleep_seconds is set if header present, otherwise unchanged. */
+static uint8_t *download_image(int32_t *out_sleep_seconds)
 {
     uint8_t *buf = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
     if (!buf) {
@@ -595,17 +792,33 @@ static uint8_t *download_image(void)
 
     http_download_ctx_t ctx = { .buf = buf, .received = 0, .capacity = TOTAL_IMAGE_SIZE };
 
-    esp_http_client_config_t config = {
-        .url = IMAGE_URL,
+    esp_http_client_config_t http_cfg = {
+        .url = config.image_url,
         .event_handler = http_event_handler,
         .user_data = &ctx,
         .timeout_ms = HTTP_TIMEOUT_MS,
         .buffer_size = 4096,
     };
 
-    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
+
+    /* Read X-Sleep-Seconds header before cleanup */
+    char *sleep_hdr = NULL;
+    if (err == ESP_OK) {
+        esp_http_client_get_header(client, "X-Sleep-Seconds", &sleep_hdr);
+    }
+
+    /* Parse sleep seconds before cleanup destroys the header data */
+    if (sleep_hdr != NULL && sleep_hdr[0] != '\0') {
+        int32_t secs = atoi(sleep_hdr);
+        if (secs > 0) {
+            *out_sleep_seconds = secs;
+            ESP_LOGI(TAG, "X-Sleep-Seconds: %d", secs);
+        }
+    }
+
     esp_http_client_cleanup(client);
 
     if (err != ESP_OK || status != 200) {
@@ -632,40 +845,6 @@ static void split_and_display(const uint8_t *img)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- *  Schedule & Sleep
- * ═══════════════════════════════════════════════════════════════════ */
-
-static int64_t time_until_next_wake_us(void)
-{
-    time_t now;
-    time(&now);
-    struct tm t;
-    localtime_r(&now, &t);
-
-    int now_secs = t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec;
-    int next_secs = -1;
-
-    for (int i = 0; i < (int)NUM_WAKE_HOURS; i++) {
-        int wake_secs = WAKE_HOURS[i] * 3600;
-        if (wake_secs > now_secs) {
-            next_secs = wake_secs;
-            break;
-        }
-    }
-
-    /* No more wake times today -> first wake tomorrow */
-    if (next_secs < 0) {
-        next_secs = WAKE_HOURS[0] * 3600 + 86400;
-    }
-
-    int sleep_secs = next_secs - now_secs;
-    ESP_LOGI(TAG, "Next wake in %d:%02d:%02d",
-             sleep_secs / 3600, (sleep_secs % 3600) / 60, sleep_secs % 60);
-
-    return (int64_t)sleep_secs * 1000000LL;
-}
-
-/* ═══════════════════════════════════════════════════════════════════
  *  Battery Monitoring
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -685,8 +864,7 @@ static int read_battery_mv(void)
     };
     bool calibrated = (adc_cali_create_scheme_curve_fitting(&cali_cfg, &cali) == ESP_OK);
 
-    /* Original FW: 50 samples per round, 10 rounds with 50-tick delays.
-     * Simplified: 50 samples with short delays for good averaging. */
+    /* 50 samples with short delays for good averaging. */
     int raw_sum = 0;
     for (int i = 0; i < 50; i++) {
         int raw;
@@ -704,7 +882,6 @@ static int read_battery_mv(void)
         mv = (raw_avg * 2200) / 4095;  /* DB_6 range ~2200mV */
     }
 
-    /* Original FW multiplier: 4.476562 (voltage divider ratio ~4.48:1) */
     int battery_mv = (int)(mv * BATT_DIVIDER_MULT);
 
     ESP_LOGI("BATT", "ADC raw_avg=%d, calibrated_mv=%d, battery=%d mV",
@@ -799,12 +976,204 @@ static void enter_deep_sleep(int64_t sleep_us)
     rtc_gpio_init(PIN_PWR_BUTTON);
     rtc_gpio_pullup_en(PIN_PWR_BUTTON);
 
-    ESP_LOGI(TAG, "Entering deep sleep for %.1f hours",
-             sleep_us / 3600000000.0);
+    if (sleep_us > 0) {
+        ESP_LOGI(TAG, "Entering deep sleep for %.1f hours",
+                 sleep_us / 3600000000.0);
+    } else {
+        ESP_LOGI(TAG, "Entering deep sleep (no timer, button wake only)");
+    }
 
     was_sleeping = true;
     esp_deep_sleep_start();
     /* Never returns */
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  USB Serial Config Protocol
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static bool usb_serial_installed = false;
+
+static void usb_serial_init(void)
+{
+    if (usb_serial_installed) return;
+    usb_serial_jtag_driver_config_t cfg = {
+        .rx_buffer_size = 512,
+        .tx_buffer_size = 512,
+    };
+    if (usb_serial_jtag_driver_install(&cfg) == ESP_OK) {
+        usb_serial_installed = true;
+    }
+}
+
+static void usb_serial_deinit(void)
+{
+    if (usb_serial_installed) {
+        usb_serial_jtag_driver_uninstall();
+        usb_serial_installed = false;
+    }
+}
+
+static void usb_serial_send(const char *str)
+{
+    if (!usb_serial_installed) return;
+    usb_serial_jtag_write_bytes((const uint8_t *)str, strlen(str), pdMS_TO_TICKS(100));
+}
+
+/* Read a line from USB serial. Returns number of chars read (0 if timeout). */
+static int usb_serial_readline(char *buf, int bufsize, int timeout_ms)
+{
+    int pos = 0;
+    int64_t deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+
+    while (pos < bufsize - 1 && esp_timer_get_time() < deadline) {
+        uint8_t ch;
+        int n = usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(100));
+        if (n <= 0) continue;
+        if (ch == '\n' || ch == '\r') {
+            if (pos > 0) break;  /* end of line */
+            continue;  /* skip leading newlines */
+        }
+        buf[pos++] = (char)ch;
+    }
+    buf[pos] = '\0';
+    return pos;
+}
+
+/* Process a single HOKKU: command. Returns true if DONE received. */
+static bool process_config_command(const char *line)
+{
+    if (strncmp(line, "HOKKU:", 6) != 0) return false;
+    const char *cmd = line + 6;
+
+    if (strcmp(cmd, "PING") == 0) {
+        usb_serial_send("OK:PONG\n");
+        return false;
+    }
+
+    if (strcmp(cmd, "DONE") == 0) {
+        usb_serial_send("OK:DONE\n");
+        return true;
+    }
+
+    if (strncmp(cmd, "SET ", 4) == 0) {
+        const char *kv = cmd + 4;
+        const char *eq = strchr(kv, '=');
+        if (!eq) {
+            usb_serial_send("ERR:missing '=' in SET command\n");
+            return false;
+        }
+        char key[32] = {0};
+        int klen = (int)(eq - kv);
+        if (klen >= (int)sizeof(key)) klen = sizeof(key) - 1;
+        strncpy(key, kv, klen);
+        const char *value = eq + 1;
+
+        if (strcmp(key, "wifi_ssid") == 0 || strcmp(key, "wifi_pass") == 0 ||
+            strcmp(key, "image_url") == 0) {
+            if (config_save_str(key, value)) {
+                char resp[300];
+                snprintf(resp, sizeof(resp), "OK:%s=%s\n", key,
+                         strcmp(key, "wifi_pass") == 0 ? "****" : value);
+                usb_serial_send(resp);
+            } else {
+                usb_serial_send("ERR:NVS write failed\n");
+            }
+        } else {
+            char resp[64];
+            snprintf(resp, sizeof(resp), "ERR:unknown key '%s'\n", key);
+            usb_serial_send(resp);
+        }
+        return false;
+    }
+
+    if (strncmp(cmd, "GET ", 4) == 0) {
+        const char *key = cmd + 4;
+
+        if (strcmp(key, "ALL") == 0) {
+            /* Reload config from NVS */
+            config_load();
+            char resp[512];
+            snprintf(resp, sizeof(resp),
+                     "OK:wifi_ssid=%s\nOK:wifi_pass=****\nOK:image_url=%s\n",
+                     config.wifi_ssid, config.image_url);
+            usb_serial_send(resp);
+            return false;
+        }
+
+        char value[257] = {0};
+        nvs_handle_t nvs;
+        if (nvs_open("hokku", NVS_READONLY, &nvs) == ESP_OK) {
+            size_t len = sizeof(value);
+            nvs_get_str(nvs, key, value, &len);
+            nvs_close(nvs);
+        }
+        char resp[300];
+        if (strcmp(key, "wifi_pass") == 0) {
+            snprintf(resp, sizeof(resp), "OK:%s=****\n", key);
+        } else {
+            snprintf(resp, sizeof(resp), "OK:%s=%s\n", key, value);
+        }
+        usb_serial_send(resp);
+        return false;
+    }
+
+    if (strcmp(cmd, "ERASE") == 0) {
+        nvs_handle_t nvs;
+        if (nvs_open("hokku", NVS_READWRITE, &nvs) == ESP_OK) {
+            nvs_erase_all(nvs);
+            nvs_commit(nvs);
+            nvs_close(nvs);
+            usb_serial_send("OK:erased\n");
+        } else {
+            usb_serial_send("ERR:NVS open failed\n");
+        }
+        return false;
+    }
+
+    usb_serial_send("ERR:unknown command\n");
+    return false;
+}
+
+/* Listen for config commands during boot. Returns true if config mode was entered. */
+static bool config_listen(int initial_timeout_ms)
+{
+    usb_serial_init();
+
+    char line[320];
+    bool in_config_mode = false;
+
+    int64_t deadline = esp_timer_get_time() + (int64_t)initial_timeout_ms * 1000;
+
+    while (esp_timer_get_time() < deadline) {
+        int n = usb_serial_readline(line, sizeof(line), 100);
+        if (n == 0) continue;
+
+        if (strncmp(line, "HOKKU:", 6) == 0) {
+            if (!in_config_mode) {
+                in_config_mode = true;
+                /* Extend deadline to 30s from now */
+                deadline = esp_timer_get_time() + 30000000LL;
+                ESP_LOGI(TAG, "Entered config mode");
+            }
+            /* Reset deadline on each command */
+            deadline = esp_timer_get_time() + 30000000LL;
+
+            if (process_config_command(line)) {
+                /* DONE received */
+                break;
+            }
+        }
+    }
+
+    usb_serial_deinit();
+
+    if (in_config_mode) {
+        /* Reload config after changes */
+        config_load();
+    }
+
+    return in_config_mode;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -816,18 +1185,27 @@ void app_main(void)
     boot_count++;
     int64_t boot_time = esp_timer_get_time();
 
-    /* Wait for USB-Serial/JTAG to be ready */
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    /* Init NVS early (required for config + WiFi) */
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_flash_init();
+    }
+
+    /* Load config from NVS */
+    config_load();
+
+    /* Wait for USB-Serial/JTAG to be ready, listen for config commands */
+    ESP_LOGI(TAG, "Boot #%d — listening for config commands (5s)...", boot_count);
+    config_listen(5000);
 
     /* Determine wakeup cause */
     esp_sleep_wakeup_cause_t wakeup = esp_sleep_get_wakeup_cause();
     bool is_scheduled_wake = (wakeup == ESP_SLEEP_WAKEUP_TIMER || wakeup == ESP_SLEEP_WAKEUP_EXT1);
 
-    /* Detect USB reset after deep sleep: wakeup is UNDEFINED but RTC flag says
-       we were sleeping. Deep sleep disconnects USB-Serial/JTAG on ESP32-S3,
-       which causes the host to reset the chip — appearing as a fresh boot. */
+    /* Detect USB reset after deep sleep */
     bool is_usb_reset_after_sleep = (!is_scheduled_wake && was_sleeping);
-    was_sleeping = false;  /* clear for this boot cycle */
+    was_sleeping = false;
 
     bool is_true_first_boot = (!is_scheduled_wake && !is_usb_reset_after_sleep);
 
@@ -853,62 +1231,90 @@ void app_main(void)
     last_battery_mv = read_battery_mv();
     ESP_LOGI(TAG, "Battery: %d mV", last_battery_mv);
 
-    /* Init NVS (required for WiFi and NTP persistence) */
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        nvs_flash_erase();
-        nvs_flash_init();
+    /* Check config validity */
+    if (!config_is_valid()) {
+        ESP_LOGE(TAG, "No valid config found. Display setup message.");
+        display_message(
+            "Hokku installed but\n"
+            "cannot read config.\n"
+            "\n"
+            "Re-install using the\n"
+            "hokku-config tool.\n"
+            "\n"
+            "Connect USB and run:\n"
+            "hokku-config set\n"
+            "  --ssid <wifi>\n"
+            "  --password <pass>\n"
+            "  --url <server-url>"
+        );
+        /* Sleep forever — only button/USB reset wakes */
+        enter_deep_sleep(0);
+        /* Never returns */
     }
 
     /* USB reset after deep sleep: image is already on display, skip refresh.
        Just wait 30s (for reflashing) then go back to sleep. */
     if (is_usb_reset_after_sleep) {
         ESP_LOGI(TAG, "USB reset after deep sleep — image already on display.");
-        /* Set timezone for schedule calculation */
-        setenv("TZ", TIMEZONE, 1);
-        tzset();
         ESP_LOGI(TAG, "Waiting 30s for reflash window...");
         vTaskDelay(pdMS_TO_TICKS(30000));
-        int64_t sleep_us = time_until_next_wake_us();
+        int64_t sleep_us = last_sleep_seconds > 0
+            ? (int64_t)last_sleep_seconds * 1000000LL
+            : SLEEP_3H_US;
         enter_deep_sleep(sleep_us);
         /* Never returns */
     }
 
-    /* Normal boot path: WiFi → NTP → download → display */
+    /* ── Normal boot path: WiFi → download (with sleep header) → display ── */
+
+    int32_t sleep_seconds = 0;
     uint8_t *img = NULL;
+
     if (wifi_connect()) {
         gpio_set_level(PIN_WIFI_LED, 1);
-
-        /* NTP sync if needed (first boot or every 96h) */
-        if (need_ntp_resync()) {
-            ESP_LOGI(TAG, "NTP resync needed");
-            ntp_sync();
-        } else {
-            /* Restore timezone even without NTP sync */
-            setenv("TZ", TIMEZONE, 1);
-            tzset();
-        }
-
-        img = download_image();
+        img = download_image(&sleep_seconds);
         wifi_shutdown();
         gpio_set_level(PIN_WIFI_LED, 0);
     }
 
-    /* Fall back to embedded image on first boot only */
-    if (!img && is_true_first_boot) {
-        ESP_LOGW(TAG, "Download failed, using embedded test image");
-        img = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
-        if (img) memcpy(img, testimg_start, TOTAL_IMAGE_SIZE);
+    /* Download failed — show error on screen */
+    if (!img) {
+        char msg[512];
+        snprintf(msg, sizeof(msg),
+                 "Image download failed.\n"
+                 "\n"
+                 "Tried to connect to:\n"
+                 "%s\n"
+                 "\n"
+                 "Press reset to try\n"
+                 "again.\n"
+                 "\n"
+                 "Will retry\n"
+                 "automatically in\n"
+                 "3 hours.",
+                 config.image_url);
+
+        /* Only show error on first boot; on scheduled wake, keep existing image */
+        if (is_true_first_boot) {
+            display_message(msg);
+        } else {
+            ESP_LOGW(TAG, "Download failed, keeping current image on display.");
+        }
+
+        enter_deep_sleep(SLEEP_3H_US);
+        /* Never returns */
     }
 
-    if (img) {
-        ESP_LOGI(TAG, "Displaying image...");
-        split_and_display(img);
-        free(img);
-        ESP_LOGI(TAG, "Image displayed.");
-    } else if (!is_true_first_boot) {
-        ESP_LOGW(TAG, "Download failed, keeping current image on display.");
+    /* Store sleep seconds in RTC for fallback */
+    if (sleep_seconds > 0) {
+        last_sleep_seconds = sleep_seconds;
     }
+
+    /* Display the image */
+    ESP_LOGI(TAG, "Displaying image...");
+    split_and_display(img);
+    free(img);
+    ESP_LOGI(TAG, "Image displayed.");
 
     if (is_scheduled_wake) {
         /* Woke from deep sleep (timer or button) — wait 30s then sleep again */
@@ -920,7 +1326,7 @@ void app_main(void)
             vTaskDelay(pdMS_TO_TICKS(remaining_us / 1000));
         }
 
-        int64_t sleep_us = time_until_next_wake_us();
+        int64_t sleep_us = (int64_t)sleep_seconds * 1000000LL;
         enter_deep_sleep(sleep_us);
         /* Never returns */
     }
@@ -955,7 +1361,7 @@ void app_main(void)
                 ESP_LOGI(TAG, "Button 1 pressed — entering deep sleep.");
                 while (gpio_get_level(PIN_BUTTON_1) == 0)
                     vTaskDelay(pdMS_TO_TICKS(50));
-                int64_t sleep_us = time_until_next_wake_us();
+                int64_t sleep_us = (int64_t)sleep_seconds * 1000000LL;
                 enter_deep_sleep(sleep_us);
             }
         }
@@ -971,13 +1377,14 @@ void app_main(void)
                 uint8_t *next = NULL;
                 if (wifi_connect()) {
                     gpio_set_level(PIN_WIFI_LED, 1);
-                    next = download_image();
+                    next = download_image(&sleep_seconds);
                     wifi_shutdown();
                     gpio_set_level(PIN_WIFI_LED, 0);
                 }
                 if (next) {
                     split_and_display(next);
                     free(next);
+                    if (sleep_seconds > 0) last_sleep_seconds = sleep_seconds;
                     ESP_LOGI(TAG, "Done. Press button for next image.");
                 } else {
                     ESP_LOGW(TAG, "Download failed, keeping current image.");
@@ -990,8 +1397,8 @@ void app_main(void)
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 
-    ESP_LOGI(TAG, "60s timeout — entering deep sleep schedule.");
-    int64_t sleep_us = time_until_next_wake_us();
+    ESP_LOGI(TAG, "60s timeout — entering deep sleep.");
+    int64_t sleep_us = (int64_t)sleep_seconds * 1000000LL;
     enter_deep_sleep(sleep_us);
     /* Never returns */
 }
