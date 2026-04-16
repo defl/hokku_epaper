@@ -298,7 +298,9 @@ def _purge_stale_cache(cache_dir, valid_keys):
         valid_files.add(f"{key}.bin")
         valid_files.add(f"{key}.png")
     for f in cache_dir.iterdir():
-        if f.name not in valid_files and f.name != "database.json":
+        if f.is_dir() or f.name == "database.json":
+            continue
+        if f.name not in valid_files:
             f.unlink()
             print(f"  Cache: removed stale {f.name}")
 
