@@ -384,8 +384,11 @@ static void hw_gpio_init(void)
     gpio_set_direction(PIN_SYS_POWER, GPIO_MODE_INPUT_OUTPUT);
     gpio_set_level(PIN_SYS_POWER, 1);  /* keep system powered */
 
+    /* De-isolate and reset all RTC pins EXCEPT BUSY (GPIO7).
+     * BUSY is handled separately — gpio_reset_pin enables pull-up which
+     * masks the display controller's weak BUSY signal. See HARDWARE_FACTS.md. */
     const int rtc_pins[] = {
-        PIN_EPAPER_PWR_EN, PIN_EPAPER_RST, PIN_EPAPER_BUSY,
+        PIN_EPAPER_PWR_EN, PIN_EPAPER_RST,
         PIN_CTRL1, PIN_CTRL2, PIN_EPAPER_CS, PIN_WORK_LED,
         PIN_EPAPER_SCLK, PIN_BATT_ADC,
     };
@@ -396,6 +399,20 @@ static void hw_gpio_init(void)
         }
         gpio_reset_pin(rtc_pins[i]);
     }
+
+    /* Configure BUSY (GPIO7) WITHOUT gpio_reset_pin — manually de-isolate,
+     * deinit RTC, and configure as input with NO pull-up. */
+    if (rtc_gpio_is_valid_gpio(PIN_EPAPER_BUSY)) {
+        rtc_gpio_hold_dis(PIN_EPAPER_BUSY);
+        rtc_gpio_deinit(PIN_EPAPER_BUSY);
+    }
+    gpio_config_t busy_early_cfg = {
+        .pin_bit_mask = (1ULL << PIN_EPAPER_BUSY),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    };
+    gpio_config(&busy_early_cfg);
 
     gpio_config_t pwr_cfg = {
         .pin_bit_mask = (1ULL << PIN_SYS_POWER) | (1ULL << PIN_EPAPER_PWR_EN),
@@ -565,7 +582,31 @@ static void epaper_send_panel(int ctrl_pin, const uint8_t *image)
 /* Send 480K per panel and refresh. ctrl1_data and ctrl2_data are each 480K. */
 static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_data)
 {
+    /* Diagnostic: test if GPIO7 can be driven LOW */
+    ESP_LOGI(TAG, "BUSY before power-cycle: %d", gpio_get_level(PIN_EPAPER_BUSY));
+    gpio_set_direction(PIN_EPAPER_BUSY, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_EPAPER_BUSY, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    ESP_LOGI(TAG, "BUSY forced LOW (output): %d", gpio_get_level(PIN_EPAPER_BUSY));
+    gpio_set_direction(PIN_EPAPER_BUSY, GPIO_MODE_INPUT);
+    gpio_pullup_dis(PIN_EPAPER_BUSY);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    ESP_LOGI(TAG, "BUSY released (input, no pull): %d", gpio_get_level(PIN_EPAPER_BUSY));
+
+    /* Power-cycle the display controller to ensure it's responsive. */
+    gpio_set_level(PIN_EPAPER_PWR_EN, 0);
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    ESP_LOGI(TAG, "BUSY with display power OFF: %d", gpio_get_level(PIN_EPAPER_BUSY));
+
+    gpio_set_level(PIN_EPAPER_PWR_EN, 1);
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    ESP_LOGI(TAG, "BUSY after power ON (500ms): %d", gpio_get_level(PIN_EPAPER_BUSY));
+
     epaper_reset();
+
+    ESP_LOGI(TAG, "BUSY after reset: %d", gpio_get_level(PIN_EPAPER_BUSY));
     epaper_init_panel();
 
     ESP_LOGI(TAG, "SYS=%d PWR_EN=%d RST=%d BUSY=%d",
