@@ -226,8 +226,8 @@ def _flash_nvs(port, nvs_binary):
             "--chip", "esp32s3",
             "--port", port,
             "--baud", "921600",
-            "write_flash",
-            "--flash_mode", "dio",
+            "write-flash",
+            "--flash-mode", "dio",
             hex(NVS_OFFSET), tmp_path,
         ]
         print(f"Flashing NVS partition ({len(nvs_binary)} bytes) to {port}...")
@@ -253,7 +253,7 @@ def _read_nvs_from_device(port):
             "--chip", "esp32s3",
             "--port", port,
             "--baud", "921600",
-            "read_flash",
+            "read-flash",
             hex(NVS_OFFSET), hex(NVS_SIZE), tmp_path,
         ]
         print(f"Reading NVS partition from {port}...")

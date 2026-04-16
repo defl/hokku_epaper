@@ -103,7 +103,7 @@ def read_device_flash(port):
                 "--chip", "esp32s3",
                 "--port", port,
                 "--baud", "921600",
-                "read_flash",
+                "read-flash",
                 hex(read_start), hex(read_size), tmp_path,
             ])
         finally:
@@ -349,8 +349,8 @@ def write_config(port, config):
                 "--chip", "esp32s3",
                 "--port", port,
                 "--baud", "921600",
-                "write_flash",
-                "--flash_mode", "dio",
+                "write-flash",
+                "--flash-mode", "dio",
                 hex(NVS_OFFSET), tmp_path,
             ])
         finally:
@@ -409,10 +409,10 @@ def flash_firmware(port):
             "--chip", "esp32s3",
             "--port", port,
             "--baud", "921600",
-            "write_flash",
-            "--flash_mode", "dio",
-            "--flash_freq", "80m",
-            "--flash_size", "16MB",
+            "write-flash",
+            "--flash-mode", "dio",
+            "--flash-freq", "80m",
+            "--flash-size", "16MB",
             hex(BOOTLOADER_OFFSET), str(bootloader),
             hex(PARTITION_TABLE_OFFSET), str(partition_table),
             hex(APP_OFFSET), str(app),
