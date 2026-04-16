@@ -439,6 +439,11 @@ def _list_images():
 
 
 def _prepare_canvas(img):
+    """Scale image to fit 1600x1200 landscape, enhance for e-ink, rotate 90 CW.
+
+    Returns (canvas, padding_mask) where padding_mask is a boolean numpy array
+    (True = padding pixel, should be forced to white after dithering).
+    """
     from PIL import ImageEnhance, ImageOps
     w, h = img.size
     scale = min(VISUAL_W / w, VISUAL_H / h)
@@ -448,6 +453,11 @@ def _prepare_canvas(img):
     x_off = (VISUAL_W - new_w) // 2
     y_off = (VISUAL_H - new_h) // 2
     canvas.paste(img_resized, (x_off, y_off))
+
+    # Build padding mask before rotation (True = padding, not image content)
+    mask = np.ones((VISUAL_H, VISUAL_W), dtype=bool)
+    mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
+
     canvas = ImageOps.autocontrast(canvas, cutoff=0.5)
     gamma = 0.85
     gamma_lut = [int(((i / 255.0) ** gamma) * 255) for i in range(256)] * 3
@@ -457,7 +467,11 @@ def _prepare_canvas(img):
     canvas = ImageEnhance.Sharpness(canvas).enhance(1.3)
     canvas = ImageEnhance.Color(canvas).enhance(1.2)
     canvas = canvas.rotate(-90, expand=True)
-    return canvas
+
+    # Rotate mask to match: -90° CW = np.rot90 with k=3
+    mask = np.rot90(mask, k=3)
+
+    return canvas, mask
 
 
 def _build_rgb_lut():
@@ -530,10 +544,15 @@ def _convert_image(img_path):
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
     print(f"  {img_path.name}: {img.size[0]}x{img.size[1]}")
-    canvas = _prepare_canvas(img)
+    canvas, padding_mask = _prepare_canvas(img)
     canvas_array = _compress_dynamic_range(np.array(canvas, dtype=np.float32))
     canvas = Image.fromarray(canvas_array.astype(np.uint8))
     result_idx = _floyd_steinberg_dither(canvas)
+
+    # Force padding areas to pure white (palette index 1) — without this,
+    # the enhancement + dithering pipeline turns pure white into a slightly
+    # off-white that gets dithered as a visible dotted pattern.
+    result_idx[padding_mask] = 1
     nibbles = PALETTE_NIBBLE[result_idx]
     panel1_nib = nibbles[:, :PANEL_W]
     panel2_nib = nibbles[:, PANEL_W:]
