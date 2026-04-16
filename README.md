@@ -25,7 +25,7 @@ JPEG, PNG, BMP, TIFF, WebP, GIF, HEIC/HEIF, and AVIF. Drop any of these into `/i
 
 ## How to Flash
 
-To flash the firmware, open the back cover of the frame and connect a USB cable to the ESP32-S3 board's USB-C port as shown below:
+To flash the firmware, take off the front cover of the frame (it's magnetically attached, be careful as it's easily damaged) and connect a USB cable to the ESP32-S3 board's USB-C port as shown below. You need a USB-A to USB-C cable.
 
 ![Connecting the USB cable for flashing](images/flashing_cable.png)
 
