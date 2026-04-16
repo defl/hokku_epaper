@@ -1008,7 +1008,8 @@ void app_main(void)
     last_battery_mv = read_battery_mv();
     ESP_LOGI(TAG, "Battery: %d mV", last_battery_mv);
 
-    /* Check config version */
+    /* Check config version — do this before the USB-reset shortcut so
+     * error screens are always shown even after a reset. */
     if (config.cfg_ver != CONFIG_VERSION) {
         ESP_LOGE(TAG, "Config version mismatch: got %d, need %d", config.cfg_ver, CONFIG_VERSION);
         char msg[256];
@@ -1020,7 +1021,10 @@ void app_main(void)
                  "Found: %d\n"
                  "\n"
                  "Run hokku-setup to\n"
-                 "reconfigure.",
+                 "reconfigure.\n"
+                 "\n"
+                 "Press reset to\n"
+                 "try again.",
                  CONFIG_VERSION, config.cfg_ver);
         display_message(msg);
         enter_deep_sleep(0);
@@ -1036,15 +1040,17 @@ void app_main(void)
             "\n"
             "Connect USB and run\n"
             "hokku-setup to\n"
-            "configure."
+            "configure.\n"
+            "\n"
+            "Press reset to\n"
+            "try again."
         );
-        /* Sleep forever — only button/USB reset wakes */
         enter_deep_sleep(0);
         /* Never returns */
     }
 
-    /* USB reset after deep sleep: image is already on display, skip refresh.
-       Just wait 30s (for reflashing) then go back to sleep. */
+    /* USB reset after deep sleep: config is valid, image is already on display,
+       skip refresh. Just wait 30s (for reflashing) then go back to sleep. */
     if (is_usb_reset_after_sleep) {
         ESP_LOGI(TAG, "USB reset after deep sleep — image already on display.");
         ESP_LOGI(TAG, "Waiting 30s for reflash window...");

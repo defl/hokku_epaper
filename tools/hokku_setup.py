@@ -423,6 +423,28 @@ def flash_firmware(port):
         return False
 
 
+def _refresh_device_state(port):
+    """Re-read NVS config and firmware status from device."""
+    config = None
+    config_version_ok = False
+    firmware_current = None
+
+    try:
+        nvs = read_nvs_from_device(port)
+        if nvs and nvs.get("cfg_ver") == CONFIG_VERSION:
+            config = nvs
+            config_version_ok = True
+    except Exception:
+        pass
+
+    try:
+        firmware_current = check_firmware_current(port)
+    except Exception:
+        pass
+
+    return config, config_version_ok, firmware_current
+
+
 def main_menu(device):
     """Show the main menu and handle user choice."""
     port = device["port"]
@@ -442,17 +464,26 @@ def main_menu(device):
             print("  Firmware: unknown (no release binaries or unreadable)")
         print()
 
-        print("  What would you like to do?")
-        print("    [1] Update configuration")
-        fw_label = "    [2] Flash firmware + configure"
+        # Determine default option
         if firmware_current is False:
-            fw_label += " <-- recommended"
-        print(fw_label)
-        print("    [3] Flash firmware only" + (" (keep existing config)" if config else ""))
-        print("    [4] Exit")
+            default = "2"
+        elif not config:
+            default = "2"
+        else:
+            default = "1"
+
+        print("  What would you like to do?")
+        for num, label in [("1", "Update configuration"),
+                           ("2", "Flash firmware + configure"),
+                           ("3", "Flash firmware only" + (" (keep existing config)" if config else "")),
+                           ("4", "Exit")]:
+            marker = " <-- default" if num == default else ""
+            print(f"    [{num}] {label}{marker}")
         print()
 
-        choice = input("  > ").strip()
+        choice = input(f"  [{default}]> ").strip()
+        if choice == "":
+            choice = default
 
         if choice == "1":
             new_config = prompt_config(config)
@@ -471,9 +502,17 @@ def main_menu(device):
                     write_config(port, new_config)
                     config = new_config
                     print("  Setup complete! Device will restart.")
+            # Re-read device state after flashing
+            print("  Re-reading device state...")
+            config, _, firmware_current = _refresh_device_state(port)
+            config = config or {}
 
         elif choice == "3":
-            flash_firmware(port)
+            if flash_firmware(port):
+                # Re-read device state after flashing
+                print("  Re-reading device state...")
+                config, _, firmware_current = _refresh_device_state(port)
+                config = config or {}
 
         elif choice == "4":
             print("  Bye!")
