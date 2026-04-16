@@ -98,7 +98,12 @@ RTC_DATA_ATTR static bool     was_sleeping = false;  /* detect USB reset after d
 RTC_DATA_ATTR static int32_t  last_sleep_seconds = 0;  /* fallback if server unreachable */
 
 /* ── NVS config ──────────────────────────────────────────────────── */
+/* Config version — must match the version written by hokku-config/hokku-setup.
+ * Increment when NVS config fields change. Source of truth: CLAUDE.md */
+#define CONFIG_VERSION  1
+
 typedef struct {
+    uint8_t cfg_ver;
     char wifi_ssid[33];
     char wifi_pass[65];
     char image_url[257];
@@ -111,6 +116,8 @@ static bool config_load(void)
 {
     nvs_handle_t nvs;
     if (nvs_open("hokku", NVS_READONLY, &nvs) != ESP_OK) return false;
+
+    nvs_get_u8(nvs, "cfg_ver", &config.cfg_ver);
 
     size_t len;
     len = sizeof(config.wifi_ssid);
@@ -1001,6 +1008,25 @@ void app_main(void)
     last_battery_mv = read_battery_mv();
     ESP_LOGI(TAG, "Battery: %d mV", last_battery_mv);
 
+    /* Check config version */
+    if (config.cfg_ver != CONFIG_VERSION) {
+        ESP_LOGE(TAG, "Config version mismatch: got %d, need %d", config.cfg_ver, CONFIG_VERSION);
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "Config version\n"
+                 "mismatch.\n"
+                 "\n"
+                 "Expected: %d\n"
+                 "Found: %d\n"
+                 "\n"
+                 "Run hokku-setup to\n"
+                 "reconfigure.",
+                 CONFIG_VERSION, config.cfg_ver);
+        display_message(msg);
+        enter_deep_sleep(0);
+        /* Never returns */
+    }
+
     /* Check config validity */
     if (!config_is_valid()) {
         ESP_LOGE(TAG, "No valid config found. Display setup message.");
@@ -1008,14 +1034,9 @@ void app_main(void)
             "Hokku installed but\n"
             "cannot read config.\n"
             "\n"
-            "Re-install using the\n"
-            "hokku-config tool.\n"
-            "\n"
-            "Connect USB and run:\n"
-            "hokku-config set\n"
-            "  --ssid <wifi>\n"
-            "  --password <pass>\n"
-            "  --url <server-url>"
+            "Connect USB and run\n"
+            "hokku-setup to\n"
+            "configure."
         );
         /* Sleep forever — only button/USB reset wakes */
         enter_deep_sleep(0);

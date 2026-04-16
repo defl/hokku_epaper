@@ -66,7 +66,12 @@ NVS_VERSION = 0xFE  # NVS version 2
 
 # Entry types
 NS_TYPE = 0x01       # Namespace (stored as uint8)
+U8_TYPE = 0x04       # uint8
 STR_TYPE = 0x21      # String type
+
+# Config version — increment every time NVS config fields change.
+# Must match firmware's CONFIG_VERSION. Source of truth is CLAUDE.md.
+CONFIG_VERSION = 1
 
 # Page states
 PAGE_ACTIVE = 0xFFFFFFFE  # Active page
@@ -142,6 +147,16 @@ def _build_nvs_binary(config_dict):
             entry_offset += NVS_ENTRY_SIZE
             entry_idx += 1
 
+        elif entry_type == U8_TYPE:
+            # uint8: value in byte 24, span=1
+            entry[24] = data_bytes[0] if data_bytes else 0
+            data_crc = _crc32(entry[8:32])
+            struct.pack_into("<I", entry, 4, data_crc)
+            page[entry_offset:entry_offset + NVS_ENTRY_SIZE] = entry
+            set_bitmap(entry_idx, 1)
+            entry_offset += NVS_ENTRY_SIZE
+            entry_idx += 1
+
         elif entry_type == STR_TYPE:
             # String: size in bytes 24-25, then data in subsequent entries
             str_len = len(data_bytes) + 1  # include null terminator
@@ -173,6 +188,9 @@ def _build_nvs_binary(config_dict):
     # Write namespace entry (index 1)
     write_entry(0x01, NS_TYPE, NVS_NAMESPACE, b"")
 
+    # Write config version as first data entry (uint8)
+    write_entry(0x01, U8_TYPE, "cfg_ver", bytes([CONFIG_VERSION]))
+
     # Write string entries
     for key, value in config_dict.items():
         data = value.encode("utf-8")
@@ -189,10 +207,11 @@ def _build_nvs_binary(config_dict):
     return partition
 
 
-def _read_nvs_strings(partition_data):
-    """Read string entries from an NVS partition binary.
+def _read_nvs(partition_data):
+    """Read entries from an NVS partition binary.
 
     Returns dict of key-value pairs from the 'hokku' namespace.
+    String values are returned as str, uint8 values as int.
     """
     result = {}
     if len(partition_data) < NVS_PAGE_SIZE:
@@ -224,6 +243,8 @@ def _read_nvs_strings(partition_data):
 
         if entry_type == NS_TYPE:
             ns_map[entry[24]] = key
+        elif entry_type == U8_TYPE and ns_map.get(ns_idx) == NVS_NAMESPACE:
+            result[key] = entry[24]  # uint8 value
         elif entry_type == STR_TYPE and ns_map.get(ns_idx) == NVS_NAMESPACE:
             str_len = struct.unpack_from("<H", entry, 24)[0]
             # String data is in subsequent entries

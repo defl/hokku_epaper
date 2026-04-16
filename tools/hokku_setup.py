@@ -18,8 +18,8 @@ import serial.tools.list_ports
 # Import NVS functions from hokku_config
 from hokku_config import (
     ESP32S3_VID, ESP32S3_PID,
-    NVS_OFFSET, NVS_SIZE,
-    _build_nvs_binary, _read_nvs_strings,
+    NVS_OFFSET, NVS_SIZE, CONFIG_VERSION,
+    _build_nvs_binary, _read_nvs,
     find_esp32_port, backup_dir,
 )
 
@@ -56,16 +56,29 @@ def scan_devices():
             "is_esp32": is_esp32,
             "config": None,
             "has_hokku": False,
+            "config_version_ok": False,
+            "firmware_current": None,  # None=unknown, True=matches release, False=differs
         }
 
         if is_esp32:
             try:
                 config = read_nvs_from_device(port.device)
-                if config:
+                if config and config.get("cfg_ver") == CONFIG_VERSION:
                     device["config"] = config
                     device["has_hokku"] = True
+                    device["config_version_ok"] = True
+                elif config and "cfg_ver" in config:
+                    # Wrong config version — treat as needing reconfiguration
+                    device["has_hokku"] = True
+                    device["config_version_ok"] = False
             except Exception:
-                pass  # can't read NVS, that's fine
+                pass
+
+            # Check if firmware matches release binary
+            try:
+                device["firmware_current"] = check_firmware_current(port.device)
+            except Exception:
+                pass
 
         devices.append(device)
 
@@ -100,7 +113,53 @@ def read_nvs_from_device(port):
 
         with open(tmp_path, "rb") as f:
             data = f.read()
-        return _read_nvs_strings(data)
+        return _read_nvs(data)
+    except Exception:
+        return None
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def check_firmware_current(port):
+    """Compare on-device firmware with release binary. Returns True if matching."""
+    app_bin = FIRMWARE_DIR / "hokku_epaper.bin"
+    if not app_bin.exists():
+        return None  # no release binary to compare against
+
+    try:
+        import esptool
+    except ImportError:
+        return None
+
+    # Read first 256 bytes of app partition from device
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        tmp_path = f.name
+
+    try:
+        old_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+        try:
+            esptool.main([
+                "--chip", "esp32s3",
+                "--port", port,
+                "--baud", "921600",
+                "read_flash",
+                hex(APP_OFFSET), "256", tmp_path,
+            ])
+        finally:
+            sys.stdout.close()
+            sys.stdout = old_stdout
+
+        with open(tmp_path, "rb") as f:
+            device_header = f.read()
+
+        with open(app_bin, "rb") as f:
+            release_header = f.read(256)
+
+        return device_header == release_header
     except Exception:
         return None
     finally:
@@ -115,16 +174,20 @@ def format_device_line(idx, device):
     parts = [f"  [{idx}] {device['port']}"]
 
     if device["is_esp32"]:
-        if device["has_hokku"]:
+        if device["has_hokku"] and device["config_version_ok"]:
             cfg = device["config"]
             name = cfg.get("screen_name", "")
             ssid = cfg.get("wifi_ssid", "")
-            detail = f"Hokku firmware"
+            detail = "Hokku firmware"
             if name:
                 detail += f", name={name}"
             if ssid:
                 detail += f", ssid={ssid}"
+            if device["firmware_current"] is False:
+                detail += ", firmware update available"
             parts.append(f"ESP32-S3 ({detail})")
+        elif device["has_hokku"] and not device["config_version_ok"]:
+            parts.append("ESP32-S3 (Hokku firmware, config needs update)")
         else:
             parts.append("ESP32-S3 (no Hokku firmware)")
     else:
@@ -364,15 +427,27 @@ def main_menu(device):
     """Show the main menu and handle user choice."""
     port = device["port"]
     config = device.get("config") or {}
-    has_firmware = device.get("has_hokku", False)
+    firmware_current = device.get("firmware_current")
 
     while True:
         print()
         show_current_config(config)
 
+        # Show firmware status
+        if firmware_current is True:
+            print("  Firmware: up to date")
+        elif firmware_current is False:
+            print("  Firmware: UPDATE AVAILABLE")
+        else:
+            print("  Firmware: unknown (no release binaries or unreadable)")
+        print()
+
         print("  What would you like to do?")
         print("    [1] Update configuration")
-        print("    [2] Flash firmware + configure")
+        fw_label = "    [2] Flash firmware + configure"
+        if firmware_current is False:
+            fw_label += " <-- recommended"
+        print(fw_label)
         print("    [3] Flash firmware only" + (" (keep existing config)" if config else ""))
         print("    [4] Exit")
         print()

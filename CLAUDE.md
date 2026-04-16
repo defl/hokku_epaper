@@ -4,6 +4,15 @@ Hardware
 ========
 - The known facts are in HARDWARE_FACTS.md, though this might be wrong so treat with caution
 
+NVS Config Version
+==================
+- Current config version: 1
+- Stored as uint8 "cfg_ver" in NVS namespace "hokku"
+- Defined in firmware/main/main.c as CONFIG_VERSION and in tools/hokku_config.py as CONFIG_VERSION
+- INCREMENT THIS VALUE every time NVS config fields are added, removed, or changed
+- Firmware refuses to boot if cfg_ver doesn't match its CONFIG_VERSION
+- hokku-setup treats mismatched cfg_ver as unconfigured
+
 Coding and compiling
 ====================
 - always git commit firmware code before building and flashing, the comment is a 1 line summary of the change
