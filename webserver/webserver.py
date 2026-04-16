@@ -522,7 +522,13 @@ def _floyd_steinberg_dither(canvas):
 def _convert_image(img_path):
     print(f"Converting: {img_path.name}")
     t0 = time.time()
-    img = Image.open(img_path).convert("RGB")
+    from PIL import ImageOps
+    img = Image.open(img_path)
+    # Apply EXIF orientation before converting — phones and cameras store
+    # rotation as metadata rather than rotating the actual pixel data.
+    # Without this, portrait photos appear sideways on the display.
+    img = ImageOps.exif_transpose(img)
+    img = img.convert("RGB")
     print(f"  {img_path.name}: {img.size[0]}x{img.size[1]}")
     canvas = _prepare_canvas(img)
     canvas_array = _compress_dynamic_range(np.array(canvas, dtype=np.float32))
@@ -735,7 +741,9 @@ def api_thumbnail(filename):
     if not img_path.exists() or not img_path.is_file():
         abort(404)
     try:
+        from PIL import ImageOps
         img = Image.open(img_path)
+        img = ImageOps.exif_transpose(img)
         img.thumbnail((300, 300), Image.LANCZOS)
         buf = BytesIO()
         img.save(buf, format="JPEG", quality=80)
