@@ -920,14 +920,15 @@ def main():
 
     images = _list_images()
     if images:
-        print(f"  Found {len(images)} image(s), loading...")
-        _sync_pool()
-        print(f"  Pool ready: {len(_pool)} image(s)")
+        print(f"  Found {len(images)} image(s), converting in background...")
     else:
         print(f"  No images found yet, waiting for uploads...")
 
     watcher = threading.Thread(target=_background_watcher, daemon=True)
     watcher.start()
+
+    # Start initial sync in background so the server is immediately reachable
+    threading.Thread(target=_sync_pool, daemon=True).start()
 
     print(f"  Starting server on port {port}...")
     app.run(host="0.0.0.0", port=port)
