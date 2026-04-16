@@ -263,28 +263,6 @@ class TestFlaskEndpoints:
             resp = client.get("/hokku/")
             assert resp.status_code == 503
 
-    def test_preview_no_image(self, client):
-        with patch.object(webserver, "_last_served",
-                         {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}):
-            resp = client.get("/hokku/preview")
-            assert resp.status_code == 404
-
-    def test_status_endpoint(self, client):
-        with patch.object(webserver, "_pool", {}), \
-             patch.object(webserver, "_database", {"serve_data": {}}), \
-             patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
-             patch.object(webserver, "_converting_count", 0), \
-             patch.object(webserver, "_converting_name", None), \
-             patch.object(webserver, "_last_served",
-                         {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}):
-            resp = client.get("/hokku/status")
-            assert resp.status_code == 200
-            data = resp.get_json()
-            assert "pool_size" in data
-            assert "converting_name" in data
-            assert "config" in data
-            assert "poll_interval_seconds" in data["config"]
-
     def test_api_status_endpoint(self, client):
         with patch.object(webserver, "_pool", {}), \
              patch.object(webserver, "_database", {"serve_data": {}}), \

@@ -15,9 +15,6 @@ Usage:
 
 Endpoints:
     GET /hokku/             — 960,000 byte binary (fair rotation) + X-Sleep-Seconds header
-    GET /hokku/preview      — PNG preview of last served image
-    GET /hokku/status       — JSON status info
-    GET /hokku/clear_cache  — Wipe disk cache and re-convert all images
     GET /hokku/ui           — Web GUI for configuration and image management
     GET /hokku/api/...      — JSON API for the web GUI
 """
@@ -639,48 +636,6 @@ def serve_binary():
     return response
 
 
-@app.route("/hokku/preview")
-def serve_preview():
-    with _lock:
-        data = _last_served["preview_png"]
-    if data is None:
-        return "No image served yet", 404
-    return send_file(BytesIO(data), mimetype="image/png", download_name="preview.png")
-
-
-@app.route("/hokku/status")
-def serve_status():
-    with _lock:
-        pool_files = [Path(k).name for k in _pool.keys()]
-        serve_data = _database.get("serve_data", {})
-        return jsonify({
-            "upload_dir": str(_get_upload_dir()),
-            "cache_dir": str(_get_cache_dir()),
-            "pool_size": len(_pool),
-            "pool_files": pool_files,
-            "last_served": _last_served["name"],
-            "converting": _converting_count,
-            "converting_name": _converting_name,
-            "ready": len(_pool) > 0,
-            "serve_data": serve_data,
-            "config": {
-                "timezone": _config["timezone"],
-                "refresh_image_at_time": _config["refresh_image_at_time"],
-                "port": _config["port"],
-                "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
-            },
-        })
-
-
-@app.route("/hokku/clear_cache")
-def clear_cache():
-    _clear_cache_files(_get_cache_dir())
-    with _lock:
-        _pool.clear()
-    threading.Thread(target=_sync_pool, daemon=True).start()
-    return jsonify({"status": "cache cleared, re-converting"})
-
-
 # ── Flask routes: Web GUI ──────────────────────────────────────────
 
 @app.route("/hokku/ui")
@@ -865,9 +820,6 @@ def main():
     print(f"  Output: {TOTAL_BYTES} bytes per image ({PANEL_BYTES} per panel)")
     print(f"  Endpoints:")
     print(f"    GET /hokku/             — 960K binary (fair rotation) + X-Sleep-Seconds header")
-    print(f"    GET /hokku/preview      — PNG preview of last served")
-    print(f"    GET /hokku/status       — JSON pool status")
-    print(f"    GET /hokku/clear_cache  — Wipe cache and re-convert")
     print(f"    GET /hokku/ui           — Web GUI")
 
     images = _list_images()
