@@ -61,47 +61,41 @@ def scan_devices():
         }
 
         if is_esp32:
-            # Check if Hokku firmware is installed by looking for project name
-            # in the app binary, and whether it matches the release binary
-            try:
-                fw_check = check_firmware_current(port.device)
-                device["firmware_current"] = fw_check
-            except Exception:
-                pass
-
-            try:
-                device["has_hokku_firmware"] = check_is_hokku_firmware(port.device)
-            except Exception:
-                pass
-
-            # Read NVS config
-            try:
-                config = read_nvs_from_device(port.device)
-                if config and config.get("cfg_ver") == CONFIG_VERSION:
-                    device["config"] = config
-                    device["config_version_ok"] = True
-                elif config and "cfg_ver" in config:
-                    device["config_version_ok"] = False
-            except Exception:
-                pass
+            # Single flash read: NVS partition + app header in one esptool call
+            nvs_data, app_header = read_device_flash(port.device)
+            state = parse_device_state(nvs_data, app_header)
+            device["config"] = state["config"]
+            device["has_hokku_firmware"] = state["has_hokku_firmware"]
+            device["config_version_ok"] = state["config_version_ok"]
+            device["firmware_current"] = state["firmware_current"]
 
         devices.append(device)
 
     return devices
 
 
-def read_nvs_from_device(port):
-    """Read NVS config from device. Returns dict or None."""
+def read_device_flash(port):
+    """Read NVS partition and app header from device in a single esptool session.
+
+    Returns (nvs_data: bytes, app_header: bytes) or (None, None) on failure.
+    We read one continuous block from NVS_OFFSET (0x9000) through the first
+    256 bytes of the app partition (0x10000 + 256 = 0x10100), which covers
+    both the NVS partition and the app header in a single read.
+    """
     try:
         import esptool
     except ImportError:
-        return None
+        return None, None
+
+    # Read from 0x9000 to 0x10100 (NVS partition + app header) in one call
+    read_start = NVS_OFFSET
+    read_end = APP_OFFSET + 256
+    read_size = read_end - read_start
 
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
         tmp_path = f.name
 
     try:
-        # Suppress esptool output
         old_stdout = sys.stdout
         sys.stdout = open(os.devnull, 'w')
         try:
@@ -110,7 +104,7 @@ def read_nvs_from_device(port):
                 "--port", port,
                 "--baud", "921600",
                 "read_flash",
-                hex(NVS_OFFSET), hex(NVS_SIZE), tmp_path,
+                hex(read_start), hex(read_size), tmp_path,
             ])
         finally:
             sys.stdout.close()
@@ -118,9 +112,13 @@ def read_nvs_from_device(port):
 
         with open(tmp_path, "rb") as f:
             data = f.read()
-        return _read_nvs(data)
+
+        # Split into NVS partition and app header
+        nvs_data = data[:NVS_SIZE]
+        app_header = data[APP_OFFSET - NVS_OFFSET:][:256]
+        return nvs_data, app_header
     except Exception:
-        return None
+        return None, None
     finally:
         try:
             os.unlink(tmp_path)
@@ -128,89 +126,43 @@ def read_nvs_from_device(port):
             pass
 
 
-def check_firmware_current(port):
-    """Compare on-device firmware with release binary. Returns True if matching."""
+def parse_device_state(nvs_data, app_header):
+    """Parse device state from raw flash data.
+
+    Returns dict with: config, has_hokku_firmware, config_version_ok, firmware_current
+    """
+    result = {
+        "config": None,
+        "has_hokku_firmware": False,
+        "config_version_ok": False,
+        "firmware_current": None,
+    }
+
+    # Check for Hokku firmware: project name "hokku_epaper" in app header
+    if app_header and b"hokku_epaper" in app_header:
+        result["has_hokku_firmware"] = True
+
+    # Compare firmware with release binary
+    # Skip first 24 bytes (esp_image_header_t) which esptool modifies during flash
+    # (flash mode, freq, size, SHA digest fields are updated by esptool)
     app_bin = FIRMWARE_DIR / "hokku_epaper.bin"
-    if not app_bin.exists():
-        return None  # no release binary to compare against
-
-    try:
-        import esptool
-    except ImportError:
-        return None
-
-    # Read first 256 bytes of app partition from device
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-        tmp_path = f.name
-
-    try:
-        old_stdout = sys.stdout
-        sys.stdout = open(os.devnull, 'w')
-        try:
-            esptool.main([
-                "--chip", "esp32s3",
-                "--port", port,
-                "--baud", "921600",
-                "read_flash",
-                hex(APP_OFFSET), "256", tmp_path,
-            ])
-        finally:
-            sys.stdout.close()
-            sys.stdout = old_stdout
-
-        with open(tmp_path, "rb") as f:
-            device_header = f.read()
-
+    if app_header and app_bin.exists():
         with open(app_bin, "rb") as f:
             release_header = f.read(256)
+        # Compare bytes 24-255 (app descriptor, segment headers — stable across flash)
+        if len(app_header) >= 256 and len(release_header) >= 256:
+            result["firmware_current"] = (app_header[24:] == release_header[24:])
 
-        return device_header == release_header
-    except Exception:
-        return None
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    # Read NVS config
+    if nvs_data:
+        config = _read_nvs(nvs_data)
+        if config and config.get("cfg_ver") == CONFIG_VERSION:
+            result["config"] = config
+            result["config_version_ok"] = True
+        elif config and "cfg_ver" in config:
+            result["config_version_ok"] = False
 
-
-def check_is_hokku_firmware(port):
-    """Check if the device has Hokku firmware by looking for project name in app binary."""
-    try:
-        import esptool
-    except ImportError:
-        return False
-
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-        tmp_path = f.name
-
-    try:
-        old_stdout = sys.stdout
-        sys.stdout = open(os.devnull, 'w')
-        try:
-            esptool.main([
-                "--chip", "esp32s3",
-                "--port", port,
-                "--baud", "921600",
-                "read_flash",
-                hex(APP_OFFSET), "256", tmp_path,
-            ])
-        finally:
-            sys.stdout.close()
-            sys.stdout = old_stdout
-
-        with open(tmp_path, "rb") as f:
-            header = f.read()
-
-        # ESP-IDF app binary has project name "hokku_epaper" at offset ~80
-        return b"hokku_epaper" in header
-    except Exception:
-        return False
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    return result
 
 
 def format_device_line(idx, device):
@@ -476,22 +428,9 @@ def flash_firmware(port):
 
 def _refresh_device_state(port):
     """Re-read NVS config and firmware status from device."""
-    config = None
-    firmware_current = None
-
-    try:
-        nvs = read_nvs_from_device(port)
-        if nvs and nvs.get("cfg_ver") == CONFIG_VERSION:
-            config = nvs
-    except Exception:
-        pass
-
-    try:
-        firmware_current = check_firmware_current(port)
-    except Exception:
-        pass
-
-    return config, firmware_current
+    nvs_data, app_header = read_device_flash(port)
+    state = parse_device_state(nvs_data, app_header)
+    return state["config"], state["firmware_current"]
 
 
 def main_menu(device):
