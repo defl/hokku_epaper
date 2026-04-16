@@ -942,6 +942,35 @@ static void enter_deep_sleep(int64_t sleep_us)
     rtc_gpio_init(PIN_PWR_BUTTON);
     rtc_gpio_pullup_en(PIN_PWR_BUTTON);
 
+    /* If USB is connected (charger active), deep sleep will immediately
+     * cause a USB disconnect → host reset → reboot loop. Instead, wait
+     * in a light sleep polling loop until the timer expires, then restart.
+     * This keeps the device responsive for reflashing while charging. */
+    bool usb_connected = (gpio_get_level(PIN_CHG_STATUS) == 0);
+    if (usb_connected && sleep_us > 0) {
+        ESP_LOGI(TAG, "USB connected — waiting %.1f hours instead of deep sleep",
+                 sleep_us / 3600000000.0);
+        /* Poll in 1-second intervals; re-check USB in case it's unplugged */
+        int64_t remaining_us = sleep_us;
+        while (remaining_us > 0) {
+            int64_t chunk = remaining_us > 1000000 ? 1000000 : remaining_us;
+            vTaskDelay(pdMS_TO_TICKS(chunk / 1000));
+            remaining_us -= chunk;
+            /* If USB disconnected mid-wait, switch to real deep sleep */
+            if (gpio_get_level(PIN_CHG_STATUS) != 0) {
+                ESP_LOGI(TAG, "USB disconnected — switching to deep sleep");
+                break;
+            }
+        }
+        if (remaining_us <= 0) {
+            /* Timer expired while on USB — restart to refresh image */
+            ESP_LOGI(TAG, "Wait complete — restarting");
+            esp_restart();
+            /* Never returns */
+        }
+        /* Fall through to deep sleep (USB was unplugged) */
+    }
+
     if (sleep_us > 0) {
         ESP_LOGI(TAG, "Entering deep sleep for %.1f hours",
                  sleep_us / 3600000000.0);
