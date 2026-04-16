@@ -76,6 +76,7 @@ DEFAULT_CONFIG = {
     "cache_dir": "/images/cache",
     "port": 8080,
     "poll_interval_seconds": 10,
+    "orientation": "landscape",
 }
 
 _config_file_path = None  # set during load, used for saving
@@ -113,7 +114,7 @@ def _save_config(config):
     """Save config to the file it was loaded from (or ./config.json)."""
     path = _config_file_path or Path("./config.json")
     # Only save user-facing config keys
-    save_keys = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir", "port", "poll_interval_seconds"]
+    save_keys = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir", "port", "poll_interval_seconds", "orientation"]
     save_data = {k: config[k] for k in save_keys if k in config}
     with open(path, "w") as f:
         json.dump(save_data, f, indent=2)
@@ -269,7 +270,8 @@ def _hash_file(img_path):
     return h.hexdigest()
 
 def _cache_key(img_path, content_hash):
-    return f"{img_path.stem}_{content_hash[:12]}"
+    orientation = _config.get("orientation", "landscape")
+    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}"
 
 def _load_from_cache(cache_dir, img_path, content_hash):
     key = _cache_key(img_path, content_hash)
@@ -439,23 +441,33 @@ def _list_images():
 
 
 def _prepare_canvas(img):
-    """Scale image to fit 1600x1200 landscape, enhance for e-ink, rotate 90 CW.
+    """Scale image to fit display, enhance for e-ink, produce 1200x1600 native buffer.
+
+    In landscape mode: composites on 1600x1200 canvas, then rotates -90° to 1200x1600.
+    In portrait mode: composites directly on 1200x1600 canvas, no rotation needed.
 
     Returns (canvas, padding_mask) where padding_mask is a boolean numpy array
     (True = padding pixel, should be forced to white after dithering).
     """
     from PIL import ImageEnhance, ImageOps
+    orientation = _config.get("orientation", "landscape")
+    portrait = (orientation == "portrait")
+
+    # Canvas dimensions: landscape = 1600x1200, portrait = 1200x1600
+    canvas_w = VISUAL_H if portrait else VISUAL_W   # 1200 or 1600
+    canvas_h = VISUAL_W if portrait else VISUAL_H   # 1600 or 1200
+
     w, h = img.size
-    scale = min(VISUAL_W / w, VISUAL_H / h)
+    scale = min(canvas_w / w, canvas_h / h)
     new_w, new_h = int(w * scale), int(h * scale)
     img_resized = img.resize((new_w, new_h), Image.LANCZOS)
-    canvas = Image.new("RGB", (VISUAL_W, VISUAL_H), (255, 255, 255))
-    x_off = (VISUAL_W - new_w) // 2
-    y_off = (VISUAL_H - new_h) // 2
+    canvas = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
+    x_off = (canvas_w - new_w) // 2
+    y_off = (canvas_h - new_h) // 2
     canvas.paste(img_resized, (x_off, y_off))
 
-    # Build padding mask before rotation (True = padding, not image content)
-    mask = np.ones((VISUAL_H, VISUAL_W), dtype=bool)
+    # Build padding mask (True = padding, not image content)
+    mask = np.ones((canvas_h, canvas_w), dtype=bool)
     mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
 
     canvas = ImageOps.autocontrast(canvas, cutoff=0.5)
@@ -466,10 +478,11 @@ def _prepare_canvas(img):
     canvas = ImageEnhance.Contrast(canvas).enhance(1.1)
     canvas = ImageEnhance.Sharpness(canvas).enhance(1.3)
     canvas = ImageEnhance.Color(canvas).enhance(1.2)
-    canvas = canvas.rotate(-90, expand=True)
 
-    # Rotate mask to match: -90° CW = np.rot90 with k=3
-    mask = np.rot90(mask, k=3)
+    if not portrait:
+        # Landscape: rotate -90° CW to get 1200x1600 native format
+        canvas = canvas.rotate(-90, expand=True)
+        mask = np.rot90(mask, k=3)
 
     return canvas, mask
 
@@ -561,7 +574,13 @@ def _convert_image(img_path):
     raw_bytes = panel1_bin.astype(np.uint8).tobytes() + panel2_bin.astype(np.uint8).tobytes()
     assert len(raw_bytes) == TOTAL_BYTES, f"Expected {TOTAL_BYTES}, got {len(raw_bytes)}"
     preview_rgb = PALETTE_PREVIEW_RGB[result_idx]
-    preview_img = Image.fromarray(preview_rgb).rotate(90, expand=True)
+    orientation = _config.get("orientation", "landscape")
+    if orientation == "landscape":
+        # Rotate back 90° CCW for human-friendly landscape preview
+        preview_img = Image.fromarray(preview_rgb).rotate(90, expand=True)
+    else:
+        # Portrait: already in natural viewing orientation
+        preview_img = Image.fromarray(preview_rgb)
     buf = BytesIO()
     preview_img.save(buf, format="PNG")
     preview_bytes = buf.getvalue()
@@ -738,6 +757,7 @@ def api_status():
                 "refresh_image_at_time": _config["refresh_image_at_time"],
                 "port": _config["port"],
                 "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
+                "orientation": _config.get("orientation", "landscape"),
                 "upload_dir": str(_get_upload_dir()),
                 "cache_dir": str(_get_cache_dir()),
             },
@@ -820,13 +840,30 @@ def api_config():
             _config["poll_interval_seconds"] = val
             changed = True
 
+    orientation_changed = False
+    if "orientation" in data:
+        val = data["orientation"]
+        if val in ("landscape", "portrait"):
+            if _config.get("orientation", "landscape") != val:
+                orientation_changed = True
+            _config["orientation"] = val
+            changed = True
+
     if changed:
         _save_config(_config)
+
+    if orientation_changed:
+        # Orientation affects image processing, so clear cache and re-convert
+        _clear_cache_files(_get_cache_dir())
+        with _lock:
+            _pool.clear()
+        threading.Thread(target=_sync_pool, daemon=True).start()
 
     return jsonify({"status": "ok", "config": {
         "timezone": _config["timezone"],
         "refresh_image_at_time": _config["refresh_image_at_time"],
         "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
+        "orientation": _config.get("orientation", "landscape"),
     }})
 
 
