@@ -621,7 +621,18 @@ def _convert_and_store(img_path, content_hash):
         print(f"  Error converting {img_path.name}: {e}")
 
 
+_sync_lock = threading.Lock()
+
 def _sync_pool():
+    if not _sync_lock.acquire(blocking=False):
+        print("  Sync already running, skipping")
+        return
+    try:
+        _sync_pool_inner()
+    finally:
+        _sync_lock.release()
+
+def _sync_pool_inner():
     cache_dir = _get_cache_dir()
     image_paths = _list_images()
     current_paths = set()
@@ -926,9 +937,6 @@ def main():
 
     watcher = threading.Thread(target=_background_watcher, daemon=True)
     watcher.start()
-
-    # Start initial sync in background so the server is immediately reachable
-    threading.Thread(target=_sync_pool, daemon=True).start()
 
     print(f"  Starting server on port {port}...")
     app.run(host="0.0.0.0", port=port)
