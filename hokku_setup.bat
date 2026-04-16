@@ -41,16 +41,12 @@ call .venv\Scripts\activate.bat
 
 REM Install dependencies
 echo Installing dependencies...
-pip install flask pillow numpy pillow-heif pillow-avif-plugin
+pip install pyserial esptool
 if %errorlevel% neq 0 (
     echo Failed to install dependencies.
     exit /b 1
 )
 
-REM Create image directories if they don't exist
-if not exist images\upload mkdir images\upload
-if not exist images\cache mkdir images\cache
-
-REM Run the webserver
-echo Starting Hokku image server...
-python webserver\webserver.py
+REM Run the setup tool
+echo.
+python tools\hokku_setup.py
