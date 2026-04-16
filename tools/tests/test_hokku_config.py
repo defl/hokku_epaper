@@ -51,18 +51,25 @@ class TestNvsBinaryGeneration:
         result = hokku_config._read_nvs_strings(binary)
         assert result.get("wifi_ssid") == "MyNetwork"
 
+    def test_roundtrip_with_screen_name(self):
+        """screen_name survives roundtrip."""
+        config = {"wifi_ssid": "Test", "screen_name": "Living Room"}
+        binary = hokku_config._build_nvs_binary(config)
+        result = hokku_config._read_nvs_strings(binary)
+        assert result["screen_name"] == "Living Room"
+
     def test_roundtrip_multiple_keys(self):
         """Write and read back multiple keys."""
         config = {
             "wifi_ssid": "TestNet",
             "wifi_pass": "secret123",
-            "image_url": "http://192.168.1.100:8080/hokku/",
+            "image_url": "http://192.168.1.100:8080/hokku/screen/",
         }
         binary = hokku_config._build_nvs_binary(config)
         result = hokku_config._read_nvs_strings(binary)
         assert result["wifi_ssid"] == "TestNet"
         assert result["wifi_pass"] == "secret123"
-        assert result["image_url"] == "http://192.168.1.100:8080/hokku/"
+        assert result["image_url"] == "http://192.168.1.100:8080/hokku/screen/"
 
     def test_empty_config(self):
         """Empty config produces valid binary with no entries."""

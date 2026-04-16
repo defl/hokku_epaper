@@ -49,6 +49,13 @@
   .image-card .actions a { font-size: 0.8em; color: #2563eb; text-decoration: none; }
   .image-card .actions a:hover { text-decoration: underline; }
 
+  /* Screens table */
+  .screens-section { background: #fff; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .screens-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+  .screens-table th { text-align: left; padding: 6px 12px; border-bottom: 2px solid #e5e7eb; color: #555; font-weight: 600; }
+  .screens-table td { padding: 6px 12px; border-bottom: 1px solid #f0f0f0; }
+  .screens-empty { color: #999; font-style: italic; padding: 12px 0; font-size: 0.9em; }
+
   .toast { position: fixed; bottom: 20px; right: 20px; background: #333; color: #fff; padding: 10px 20px; border-radius: 6px; font-size: 0.9em; z-index: 1000; opacity: 0; transition: opacity 0.3s; }
   .toast.show { opacity: 1; }
 </style>
@@ -127,6 +134,14 @@
   <div class="stat">Images: <strong id="stat-pool-size">0</strong></div>
   <div class="stat">Last served: <strong id="stat-last-served">-</strong></div>
   <div id="processing-indicator" class="processing-indicator idle">Idle</div>
+</div>
+
+<!-- Connected Screens -->
+<div class="screens-section">
+  <h2>Connected Screens</h2>
+  <div id="screens-container">
+    <div class="screens-empty">No screens have connected yet.</div>
+  </div>
 </div>
 
 <!-- Image Grid -->
@@ -232,6 +247,23 @@ async function showNext(filename) {
   }
 }
 
+function renderScreens(screens) {
+  const container = document.getElementById('screens-container');
+  const names = Object.keys(screens || {});
+  if (names.length === 0) {
+    container.innerHTML = '<div class="screens-empty">No screens have connected yet.</div>';
+    return;
+  }
+  let html = '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Requests</th><th>Last Seen</th></tr>';
+  names.sort();
+  names.forEach(name => {
+    const s = screens[name];
+    html += `<tr><td>${name}</td><td>${s.ip || '-'}</td><td>${s.request_count || 0}</td><td>${s.last_seen || '-'}</td></tr>`;
+  });
+  html += '</table>';
+  container.innerHTML = html;
+}
+
 function renderImageGrid(poolFiles, serveData) {
   const grid = document.getElementById('image-grid');
   grid.innerHTML = '';
@@ -298,6 +330,9 @@ async function refreshStatus() {
       proc.className = 'processing-indicator idle';
       proc.textContent = 'Idle';
     }
+
+    // Screens
+    renderScreens(data.screens);
 
     // Image grid
     renderImageGrid(data.pool_files, data.serve_data);

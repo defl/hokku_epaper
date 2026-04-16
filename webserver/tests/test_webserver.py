@@ -254,13 +254,13 @@ class TestFlaskEndpoints:
     def test_hokku_no_images(self, client):
         with patch.object(webserver, "_pool", {}), \
              patch.object(webserver, "_converting_count", 0):
-            resp = client.get("/hokku/")
+            resp = client.get("/hokku/screen/")
             assert resp.status_code == 404
 
     def test_hokku_converting(self, client):
         with patch.object(webserver, "_pool", {}), \
              patch.object(webserver, "_converting_count", 1):
-            resp = client.get("/hokku/")
+            resp = client.get("/hokku/screen/")
             assert resp.status_code == 503
 
     def test_api_status_endpoint(self, client):
@@ -276,6 +276,25 @@ class TestFlaskEndpoints:
             data = resp.get_json()
             assert "server_time" in data
             assert "config" in data
+            assert "screens" in data
+
+    def test_screen_tracking(self, client):
+        """X-Screen-Name header is tracked in database."""
+        pool = {"/images/a.jpg": {"binary": b"x" * 960000, "preview_png": b"png", "hash": "abc"}}
+        db = {"serve_data": {"a.jpg": {"show_index": 0, "last_request": None,
+              "total_show_count": 0, "total_show_minutes": 0.0}}}
+        with patch.object(webserver, "_pool", pool), \
+             patch.object(webserver, "_database", db), \
+             patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
+             patch.object(webserver, "_converting_count", 0), \
+             patch.object(webserver, "_last_served",
+                         {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}), \
+             patch("webserver._save_database"):
+            resp = client.get("/hokku/screen/", headers={"X-Screen-Name": "Living Room"})
+            assert resp.status_code == 200
+            assert "screens" in db
+            assert "Living Room" in db["screens"]
+            assert db["screens"]["Living Room"]["request_count"] == 1
 
     def test_api_show_next(self, client):
         db = {"serve_data": {

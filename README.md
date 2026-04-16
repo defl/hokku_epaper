@@ -1,4 +1,4 @@
-# Hokku
+# Huessen/Hokku 13.3" E-Ink Frame open source firmware and image server
 
 Open source firmware and image server for the Hokku / Huessen 13.3" six-color e-ink photo frame.
 

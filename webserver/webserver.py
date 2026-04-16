@@ -14,7 +14,7 @@ Usage:
     # Serves on http://0.0.0.0:8080/hokku/
 
 Endpoints:
-    GET /hokku/             — 960,000 byte binary (fair rotation) + X-Sleep-Seconds header
+    GET /hokku/screen/      — 960,000 byte binary (fair rotation) + X-Sleep-Seconds header
     GET /hokku/ui           — Web GUI for configuration and image management
     GET /hokku/api/...      — JSON API for the web GUI
 """
@@ -617,7 +617,7 @@ def _background_watcher():
 
 # ── Flask routes: device endpoints ─────────────────────────────────
 
-@app.route("/hokku/")
+@app.route("/hokku/screen/")
 def serve_binary():
     global _database
     with _lock:
@@ -637,10 +637,22 @@ def serve_binary():
         _last_served["preview_png"] = entry["preview_png"]
         _last_served["served_at"] = datetime.now().isoformat(timespec="seconds")
 
+        # Track the calling screen
+        screen_name = request.headers.get("X-Screen-Name", "unnamed")
+        screen_ip = request.remote_addr or "unknown"
+        if "screens" not in _database:
+            _database["screens"] = {}
+        screens = _database["screens"]
+        if screen_name not in screens:
+            screens[screen_name] = {"ip": screen_ip, "request_count": 0, "last_seen": None}
+        screens[screen_name]["ip"] = screen_ip
+        screens[screen_name]["request_count"] += 1
+        screens[screen_name]["last_seen"] = datetime.now().isoformat(timespec="seconds")
+
         _save_database(_get_cache_dir(), _database)
 
     sleep_seconds = _calculate_sleep_seconds(_config)
-    print(f"  Serving: {_last_served['name']} (sleep_seconds={sleep_seconds})")
+    print(f"  Serving: {_last_served['name']} to {screen_name} (sleep_seconds={sleep_seconds})")
 
     response = make_response(entry["binary"])
     response.headers["Content-Type"] = "application/octet-stream"
@@ -685,10 +697,13 @@ def api_status():
                 "total_show_formatted": format_duration_human(entry.get("total_show_minutes", 0.0)),
             }
 
+        screens = _database.get("screens", {})
+
         return jsonify({
             "pool_files": pool_files,
             "pool_size": len(_pool),
             "serve_data": enriched,
+            "screens": screens,
             "last_served": _last_served["name"],
             "converting": _converting_count,
             "converting_name": _converting_name,
@@ -836,7 +851,7 @@ def main():
     print(f"  Poll interval: {poll}s")
     print(f"  Output: {TOTAL_BYTES} bytes per image ({PANEL_BYTES} per panel)")
     print(f"  Endpoints:")
-    print(f"    GET /hokku/             — 960K binary (fair rotation) + X-Sleep-Seconds header")
+    print(f"    GET /hokku/screen/      — 960K binary (fair rotation) + X-Sleep-Seconds header")
     print(f"    GET /hokku/ui           — Web GUI")
 
     images = _list_images()
