@@ -55,28 +55,33 @@ def scan_devices():
             "description": port.description or port.device,
             "is_esp32": is_esp32,
             "config": None,
-            "has_hokku": False,
+            "has_hokku_firmware": False,  # True if firmware on device matches a Hokku build
             "config_version_ok": False,
             "firmware_current": None,  # None=unknown, True=matches release, False=differs
         }
 
         if is_esp32:
+            # Check if Hokku firmware is installed by looking for project name
+            # in the app binary, and whether it matches the release binary
+            try:
+                fw_check = check_firmware_current(port.device)
+                device["firmware_current"] = fw_check
+            except Exception:
+                pass
+
+            try:
+                device["has_hokku_firmware"] = check_is_hokku_firmware(port.device)
+            except Exception:
+                pass
+
+            # Read NVS config
             try:
                 config = read_nvs_from_device(port.device)
                 if config and config.get("cfg_ver") == CONFIG_VERSION:
                     device["config"] = config
-                    device["has_hokku"] = True
                     device["config_version_ok"] = True
                 elif config and "cfg_ver" in config:
-                    # Wrong config version — treat as needing reconfiguration
-                    device["has_hokku"] = True
                     device["config_version_ok"] = False
-            except Exception:
-                pass
-
-            # Check if firmware matches release binary
-            try:
-                device["firmware_current"] = check_firmware_current(port.device)
             except Exception:
                 pass
 
@@ -169,12 +174,51 @@ def check_firmware_current(port):
             pass
 
 
+def check_is_hokku_firmware(port):
+    """Check if the device has Hokku firmware by looking for project name in app binary."""
+    try:
+        import esptool
+    except ImportError:
+        return False
+
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        tmp_path = f.name
+
+    try:
+        old_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+        try:
+            esptool.main([
+                "--chip", "esp32s3",
+                "--port", port,
+                "--baud", "921600",
+                "read_flash",
+                hex(APP_OFFSET), "256", tmp_path,
+            ])
+        finally:
+            sys.stdout.close()
+            sys.stdout = old_stdout
+
+        with open(tmp_path, "rb") as f:
+            header = f.read()
+
+        # ESP-IDF app binary has project name "hokku_epaper" at offset ~80
+        return b"hokku_epaper" in header
+    except Exception:
+        return False
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
 def format_device_line(idx, device):
     """Format a device for display in the selection list."""
     parts = [f"  [{idx}] {device['port']}"]
 
     if device["is_esp32"]:
-        if device["has_hokku"] and device["config_version_ok"]:
+        if device["has_hokku_firmware"] and device["config_version_ok"]:
             cfg = device["config"]
             name = cfg.get("screen_name", "")
             ssid = cfg.get("wifi_ssid", "")
@@ -186,8 +230,10 @@ def format_device_line(idx, device):
             if device["firmware_current"] is False:
                 detail += ", firmware update available"
             parts.append(f"ESP32-S3 ({detail})")
-        elif device["has_hokku"] and not device["config_version_ok"]:
-            parts.append("ESP32-S3 (Hokku firmware, config needs update)")
+        elif device["has_hokku_firmware"] and not device["config_version_ok"]:
+            parts.append("ESP32-S3 (Hokku firmware, needs configuration)")
+        elif device["has_hokku_firmware"]:
+            parts.append("ESP32-S3 (Hokku firmware)")
         else:
             parts.append("ESP32-S3 (no Hokku firmware)")
     else:
@@ -203,12 +249,17 @@ def select_device(devices):
     if len(esp32_devices) == 1:
         dev = esp32_devices[0]
         print(f"  Found device: {dev['port']}", end="")
-        if dev["has_hokku"]:
-            cfg = dev["config"]
+        if dev["has_hokku_firmware"]:
+            cfg = dev.get("config") or {}
             name = cfg.get("screen_name", "")
-            print(f" (Hokku firmware{', name=' + name if name else ''})")
+            if dev["config_version_ok"] and name:
+                print(f" (Hokku firmware, name={name})")
+            elif dev["config_version_ok"]:
+                print(f" (Hokku firmware, configured)")
+            else:
+                print(f" (Hokku firmware, needs configuration)")
         else:
-            print(" (ESP32-S3, no Hokku firmware)")
+            print(" (ESP32-S3)")
         print()
         return dev
 
@@ -426,14 +477,12 @@ def flash_firmware(port):
 def _refresh_device_state(port):
     """Re-read NVS config and firmware status from device."""
     config = None
-    config_version_ok = False
     firmware_current = None
 
     try:
         nvs = read_nvs_from_device(port)
         if nvs and nvs.get("cfg_ver") == CONFIG_VERSION:
             config = nvs
-            config_version_ok = True
     except Exception:
         pass
 
@@ -442,7 +491,7 @@ def _refresh_device_state(port):
     except Exception:
         pass
 
-    return config, config_version_ok, firmware_current
+    return config, firmware_current
 
 
 def main_menu(device):
@@ -504,14 +553,14 @@ def main_menu(device):
                     print("  Setup complete! Device will restart.")
             # Re-read device state after flashing
             print("  Re-reading device state...")
-            config, _, firmware_current = _refresh_device_state(port)
+            config, firmware_current = _refresh_device_state(port)
             config = config or {}
 
         elif choice == "3":
             if flash_firmware(port):
                 # Re-read device state after flashing
                 print("  Re-reading device state...")
-                config, _, firmware_current = _refresh_device_state(port)
+                config, firmware_current = _refresh_device_state(port)
                 config = config or {}
 
         elif choice == "4":
