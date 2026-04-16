@@ -142,6 +142,7 @@ static bool config_is_valid(void)
 
 /* ── Forward declarations ────────────────────────────────────────── */
 static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_data);
+static void split_and_display(const uint8_t *img);
 
 /* ── Globals ─────────────────────────────────────────────────────── */
 static spi_device_handle_t spi_handle;
@@ -314,52 +315,26 @@ static void draw_string(uint8_t *fb, int fb_w, int fb_h, int x, int y,
 }
 
 /* Display a text message on the e-ink screen.
- * Renders text into a full 1200x1600 framebuffer (both panels), then splits
- * into two 480K panel buffers — identical path to displaying an image.
- * scale=3 → ~66 chars/line across full width, ~66 lines. */
+ * Buffer layout is identical to an image: first 480K = panel 1 (600 wide),
+ * second 480K = panel 2 (600 wide). Both filled white, text drawn on panel 1.
+ * Sent via split_and_display — same path as downloaded images. */
 static void display_message(const char *msg)
 {
-    /* Allocate a logical 1200-wide framebuffer. Each row = 600 bytes (1200 pixels at 4bpp).
-     * Total = 1200/2 * 1600 = 960000 bytes, same as TOTAL_IMAGE_SIZE.
-     * But the layout is row-major across the full 1200 width, NOT split into panels yet. */
     uint8_t *fb = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
     if (!fb) {
         ESP_LOGE(TAG, "Cannot allocate framebuffer for message");
         return;
     }
 
-    /* Fill with white (nibble 0x1 = white in Spectra 6) */
+    /* Fill entire 960K with white (both panels) */
     memset(fb, 0x11, TOTAL_IMAGE_SIZE);
 
-    /* Draw black text across the full 1200-pixel width, 1600 rows tall (portrait) */
-    int fb_h = PANEL_SIZE / (PANEL_W / 2);  /* 480000 / 300 = 1600 rows */
-    draw_string(fb, DISPLAY_W, fb_h, 20, 40, msg, 0x0, 3);
+    /* Draw text into panel 1 (first 480K, 600 pixels wide, 1600 rows) */
+    int panel_h = PANEL_SIZE / (PANEL_W / 2);  /* 480000 / 300 = 1600 rows */
+    draw_string(fb, PANEL_W, panel_h, 20, 40, msg, 0x0, 3);
 
-    /* Split the 1200-wide framebuffer into two 600-wide panel buffers.
-     * Panel 1 = left 600 cols, Panel 2 = right 600 cols.
-     * Each panel row is 300 bytes (600 pixels / 2 at 4bpp).
-     * Full row is 600 bytes (1200 pixels / 2 at 4bpp). */
-    uint8_t *panel1 = heap_caps_malloc(PANEL_SIZE, MALLOC_CAP_SPIRAM);
-    uint8_t *panel2 = heap_caps_malloc(PANEL_SIZE, MALLOC_CAP_SPIRAM);
-    if (!panel1 || !panel2) {
-        ESP_LOGE(TAG, "Cannot allocate panel buffers");
-        if (panel1) heap_caps_free(panel1);
-        if (panel2) heap_caps_free(panel2);
-        heap_caps_free(fb);
-        return;
-    }
-
-    int full_row_bytes = DISPLAY_W / 2;   /* 600 bytes per row (1200 pixels) */
-    int panel_row_bytes = PANEL_W / 2;    /* 300 bytes per row (600 pixels) */
-    for (int y = 0; y < fb_h; y++) {
-        memcpy(panel1 + y * panel_row_bytes, fb + y * full_row_bytes, panel_row_bytes);
-        memcpy(panel2 + y * panel_row_bytes, fb + y * full_row_bytes + panel_row_bytes, panel_row_bytes);
-    }
-
-    epaper_display_dual(panel1, panel2);
-
-    heap_caps_free(panel1);
-    heap_caps_free(panel2);
+    /* Display via the same path as images */
+    split_and_display(fb);
     heap_caps_free(fb);
 }
 
