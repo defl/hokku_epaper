@@ -730,7 +730,12 @@ typedef struct {
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 {
     http_download_ctx_t *ctx = (http_download_ctx_t *)evt->user_data;
-    if (evt->event_id == HTTP_EVENT_ON_DATA) {
+    if (evt->event_id == HTTP_EVENT_ON_CONNECTED) {
+        /* Reset buffer on each new connection (handles redirects).
+         * Without this, a 308 redirect's body accumulates before the
+         * real image data, causing a size mismatch. */
+        ctx->received = 0;
+    } else if (evt->event_id == HTTP_EVENT_ON_DATA) {
         if (ctx->received + evt->data_len <= ctx->capacity) {
             memcpy(ctx->buf + ctx->received, evt->data, evt->data_len);
             ctx->received += evt->data_len;
