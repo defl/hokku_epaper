@@ -126,7 +126,7 @@ def _build_nvs_binary(config_dict):
         """Write a single entry (or multi-span entry) to the page."""
         nonlocal entry_offset, entry_idx
 
-        entry = bytearray(NVS_ENTRY_SIZE)
+        entry = bytearray(b"\xff" * NVS_ENTRY_SIZE)  # must match ESP-IDF's 0xFF init for correct CRC
         entry[0] = ns_idx          # namespace index
         entry[1] = entry_type      # type
         entry[2] = span            # span (number of entries this takes)
