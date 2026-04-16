@@ -1147,13 +1147,8 @@ void app_main(void)
                  "3 hours.",
                  config.image_url);
 
-        /* Only show error on first boot; on scheduled wake, keep existing image */
-        if (is_true_first_boot) {
-            display_message(msg);
-        } else {
-            ESP_LOGW(TAG, "Download failed, keeping current image on display.");
-        }
-
+        ESP_LOGE(TAG, "Download failed, displaying error message.");
+        display_message(msg);
         enter_deep_sleep(SLEEP_3H_US);
         /* Never returns */
     }

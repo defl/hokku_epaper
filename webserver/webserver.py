@@ -642,7 +642,7 @@ def _background_watcher():
 
 # ── Flask routes: device endpoints ─────────────────────────────────
 
-@app.route("/hokku/screen/")
+@app.route("/hokku/screen/", strict_slashes=False)
 def serve_binary():
     global _database
     with _lock:
