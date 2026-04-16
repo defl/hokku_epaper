@@ -453,12 +453,14 @@ def main_menu(device):
         print()
 
         # Determine default option
-        if firmware_current is False:
-            default = "2"
+        if firmware_current is False and not config:
+            default = "2"  # need both firmware and config
+        elif firmware_current is False and config:
+            default = "3"  # firmware outdated but config is fine
         elif not config:
-            default = "2"
+            default = "2"  # need config (and might as well flash too)
         else:
-            default = "1"
+            default = "1"  # everything up to date
 
         print("  What would you like to do?")
         for num, label in [("1", "Update configuration"),
