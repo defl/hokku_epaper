@@ -5,14 +5,14 @@
  * Features:
  *   - WiFi image download from HTTP server
  *   - Server-driven sleep schedule (X-Sleep-Seconds header)
- *   - USB serial config tool (set WiFi credentials + server URL)
  *   - Deep sleep between refreshes (~8uA target)
  *   - Button wakeup (GPIO1, GPIO12)
  *   - Battery voltage monitoring
  *   - On-screen error messages for misconfiguration
  *
  * Configuration stored in NVS (no compile-time secrets.h needed).
- * Use the hokku-config tool to set WiFi SSID, password, and server URL.
+ * Use the hokku-config tool to flash WiFi SSID, password, and server
+ * URL to the NVS partition via esptool (works any time USB is connected).
  */
 
 #include <string.h>
@@ -26,7 +26,6 @@
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
-#include "driver/usb_serial_jtag.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -122,29 +121,6 @@ static bool config_load(void)
 
     nvs_close(nvs);
     return true;
-}
-
-static bool config_save_str(const char *key, const char *value)
-{
-    /* Only write if value actually changed */
-    nvs_handle_t nvs;
-    if (nvs_open("hokku", NVS_READWRITE, &nvs) != ESP_OK) return false;
-
-    char existing[257] = {0};
-    size_t len = sizeof(existing);
-    esp_err_t err = nvs_get_str(nvs, key, existing, &len);
-
-    if (err == ESP_OK && strcmp(existing, value) == 0) {
-        nvs_close(nvs);
-        return true;  /* no change needed */
-    }
-
-    err = nvs_set_str(nvs, key, value);
-    if (err == ESP_OK) {
-        nvs_commit(nvs);
-    }
-    nvs_close(nvs);
-    return err == ESP_OK;
 }
 
 static bool config_is_valid(void)
@@ -961,194 +937,6 @@ static void enter_deep_sleep(int64_t sleep_us)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- *  USB Serial Config Protocol
- * ═══════════════════════════════════════════════════════════════════ */
-
-static bool usb_serial_installed = false;
-
-static void usb_serial_init(void)
-{
-    if (usb_serial_installed) return;
-    usb_serial_jtag_driver_config_t cfg = {
-        .rx_buffer_size = 512,
-        .tx_buffer_size = 512,
-    };
-    if (usb_serial_jtag_driver_install(&cfg) == ESP_OK) {
-        usb_serial_installed = true;
-    }
-}
-
-static void usb_serial_deinit(void)
-{
-    if (usb_serial_installed) {
-        usb_serial_jtag_driver_uninstall();
-        usb_serial_installed = false;
-    }
-}
-
-static void usb_serial_send(const char *str)
-{
-    if (!usb_serial_installed) return;
-    usb_serial_jtag_write_bytes((const uint8_t *)str, strlen(str), pdMS_TO_TICKS(100));
-}
-
-/* Read a line from USB serial. Returns number of chars read (0 if timeout). */
-static int usb_serial_readline(char *buf, int bufsize, int timeout_ms)
-{
-    int pos = 0;
-    int64_t deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
-
-    while (pos < bufsize - 1 && esp_timer_get_time() < deadline) {
-        uint8_t ch;
-        int n = usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(100));
-        if (n <= 0) continue;
-        if (ch == '\n' || ch == '\r') {
-            if (pos > 0) break;  /* end of line */
-            continue;  /* skip leading newlines */
-        }
-        buf[pos++] = (char)ch;
-    }
-    buf[pos] = '\0';
-    return pos;
-}
-
-/* Process a single HOKKU: command. Returns true if DONE received. */
-static bool process_config_command(const char *line)
-{
-    if (strncmp(line, "HOKKU:", 6) != 0) return false;
-    const char *cmd = line + 6;
-
-    if (strcmp(cmd, "PING") == 0) {
-        usb_serial_send("OK:PONG\n");
-        return false;
-    }
-
-    if (strcmp(cmd, "DONE") == 0) {
-        usb_serial_send("OK:DONE\n");
-        return true;
-    }
-
-    if (strncmp(cmd, "SET ", 4) == 0) {
-        const char *kv = cmd + 4;
-        const char *eq = strchr(kv, '=');
-        if (!eq) {
-            usb_serial_send("ERR:missing '=' in SET command\n");
-            return false;
-        }
-        char key[32] = {0};
-        int klen = (int)(eq - kv);
-        if (klen >= (int)sizeof(key)) klen = sizeof(key) - 1;
-        strncpy(key, kv, klen);
-        const char *value = eq + 1;
-
-        if (strcmp(key, "wifi_ssid") == 0 || strcmp(key, "wifi_pass") == 0 ||
-            strcmp(key, "image_url") == 0) {
-            if (config_save_str(key, value)) {
-                char resp[300];
-                snprintf(resp, sizeof(resp), "OK:%s=%s\n", key,
-                         strcmp(key, "wifi_pass") == 0 ? "****" : value);
-                usb_serial_send(resp);
-            } else {
-                usb_serial_send("ERR:NVS write failed\n");
-            }
-        } else {
-            char resp[64];
-            snprintf(resp, sizeof(resp), "ERR:unknown key '%s'\n", key);
-            usb_serial_send(resp);
-        }
-        return false;
-    }
-
-    if (strncmp(cmd, "GET ", 4) == 0) {
-        const char *key = cmd + 4;
-
-        if (strcmp(key, "ALL") == 0) {
-            /* Reload config from NVS */
-            config_load();
-            char resp[512];
-            snprintf(resp, sizeof(resp),
-                     "OK:wifi_ssid=%s\nOK:wifi_pass=****\nOK:image_url=%s\n",
-                     config.wifi_ssid, config.image_url);
-            usb_serial_send(resp);
-            return false;
-        }
-
-        char value[257] = {0};
-        nvs_handle_t nvs;
-        if (nvs_open("hokku", NVS_READONLY, &nvs) == ESP_OK) {
-            size_t len = sizeof(value);
-            nvs_get_str(nvs, key, value, &len);
-            nvs_close(nvs);
-        }
-        char resp[300];
-        if (strcmp(key, "wifi_pass") == 0) {
-            snprintf(resp, sizeof(resp), "OK:%s=****\n", key);
-        } else {
-            snprintf(resp, sizeof(resp), "OK:%s=%s\n", key, value);
-        }
-        usb_serial_send(resp);
-        return false;
-    }
-
-    if (strcmp(cmd, "ERASE") == 0) {
-        nvs_handle_t nvs;
-        if (nvs_open("hokku", NVS_READWRITE, &nvs) == ESP_OK) {
-            nvs_erase_all(nvs);
-            nvs_commit(nvs);
-            nvs_close(nvs);
-            usb_serial_send("OK:erased\n");
-        } else {
-            usb_serial_send("ERR:NVS open failed\n");
-        }
-        return false;
-    }
-
-    usb_serial_send("ERR:unknown command\n");
-    return false;
-}
-
-/* Listen for config commands during boot. Returns true if config mode was entered. */
-static bool config_listen(int initial_timeout_ms)
-{
-    usb_serial_init();
-
-    char line[320];
-    bool in_config_mode = false;
-
-    int64_t deadline = esp_timer_get_time() + (int64_t)initial_timeout_ms * 1000;
-
-    while (esp_timer_get_time() < deadline) {
-        int n = usb_serial_readline(line, sizeof(line), 100);
-        if (n == 0) continue;
-
-        if (strncmp(line, "HOKKU:", 6) == 0) {
-            if (!in_config_mode) {
-                in_config_mode = true;
-                /* Extend deadline to 30s from now */
-                deadline = esp_timer_get_time() + 30000000LL;
-                ESP_LOGI(TAG, "Entered config mode");
-            }
-            /* Reset deadline on each command */
-            deadline = esp_timer_get_time() + 30000000LL;
-
-            if (process_config_command(line)) {
-                /* DONE received */
-                break;
-            }
-        }
-    }
-
-    usb_serial_deinit();
-
-    if (in_config_mode) {
-        /* Reload config after changes */
-        config_load();
-    }
-
-    return in_config_mode;
-}
-
-/* ═══════════════════════════════════════════════════════════════════
  *  Main
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -1167,9 +955,8 @@ void app_main(void)
     /* Load config from NVS */
     config_load();
 
-    /* Wait for USB-Serial/JTAG to be ready, listen for config commands */
-    ESP_LOGI(TAG, "Boot #%d — listening for config commands (5s)...", boot_count);
-    config_listen(5000);
+    /* Brief wait for USB-Serial/JTAG console to be ready */
+    vTaskDelay(pdMS_TO_TICKS(500));
 
     /* Determine wakeup cause */
     esp_sleep_wakeup_cause_t wakeup = esp_sleep_get_wakeup_cause();
