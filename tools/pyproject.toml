@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 hokku-config = "hokku_config:main"
+hokku-setup = "hokku_setup:main"
 
 [tool.setuptools]
-py-modules = ["hokku_config"]
+py-modules = ["hokku_config", "hokku_setup"]
