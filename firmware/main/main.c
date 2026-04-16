@@ -102,6 +102,7 @@ typedef struct {
     char wifi_ssid[33];
     char wifi_pass[65];
     char image_url[257];
+    char screen_name[65];  /* optional display name, sent as X-Screen-Name header */
 } config_t;
 
 static config_t config = {0};
@@ -118,6 +119,8 @@ static bool config_load(void)
     nvs_get_str(nvs, "wifi_pass", config.wifi_pass, &len);
     len = sizeof(config.image_url);
     nvs_get_str(nvs, "image_url", config.image_url, &len);
+    len = sizeof(config.screen_name);
+    nvs_get_str(nvs, "screen_name", config.screen_name, &len);
 
     nvs_close(nvs);
     return true;
@@ -749,6 +752,12 @@ static uint8_t *download_image(int32_t *out_sleep_seconds)
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+
+    /* Send screen name so the server can identify this device */
+    if (config.screen_name[0] != '\0') {
+        esp_http_client_set_header(client, "X-Screen-Name", config.screen_name);
+    }
+
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
 
@@ -955,8 +964,10 @@ void app_main(void)
     /* Load config from NVS */
     config_load();
 
-    /* Brief wait for USB-Serial/JTAG console to be ready */
-    vTaskDelay(pdMS_TO_TICKS(500));
+    /* Wait for USB-Serial/JTAG console to connect so boot logs are visible.
+     * Flashing via esptool works regardless of this delay — esptool resets
+     * the chip into ROM bootloader before app_main runs. */
+    vTaskDelay(pdMS_TO_TICKS(5000));
 
     /* Determine wakeup cause */
     esp_sleep_wakeup_cause_t wakeup = esp_sleep_get_wakeup_cause();
