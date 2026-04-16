@@ -358,6 +358,12 @@ def cmd_set(args):
         config["wifi_pass"] = args.password
     if args.url is not None:
         config["image_url"] = args.url
+    if args.name is not None:
+        name_bytes = args.name.encode("utf-8")
+        if len(name_bytes) > 64:
+            print(f"Error: screen name is {len(name_bytes)} bytes, maximum is 64.")
+            sys.exit(1)
+        config["screen_name"] = args.name
 
     if "wifi_ssid" not in config or "image_url" not in config:
         print("Error: wifi_ssid and image_url are required.")
@@ -450,7 +456,8 @@ def main():
     set_parser = subparsers.add_parser("set", help="Set configuration values")
     set_parser.add_argument("--ssid", help="WiFi network name")
     set_parser.add_argument("--password", help="WiFi password")
-    set_parser.add_argument("--url", help="Image server URL (e.g. http://server:8080/hokku/)")
+    set_parser.add_argument("--url", help="Image server URL (e.g. http://server:8080/hokku/screen/)")
+    set_parser.add_argument("--name", help="Screen name for identification (max 64 bytes)")
     set_parser.set_defaults(func=cmd_set)
 
     get_parser = subparsers.add_parser("get", help="Read current configuration")
