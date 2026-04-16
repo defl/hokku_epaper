@@ -97,7 +97,7 @@ class TestNvsBinaryGeneration:
         binary = hokku_config._build_nvs_binary({"wifi_ssid": "x"})
         state = struct.unpack_from("<I", binary, 0)[0]
         assert state == hokku_config.PAGE_ACTIVE
-        assert binary[8] == hokku_config.NVS_VERSION
+        assert binary[8] == 0xFE  # NVS version 2
 
     def test_read_empty_partition(self):
         """Reading all-0xFF partition returns empty dict."""

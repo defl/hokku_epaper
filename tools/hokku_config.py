@@ -50,24 +50,15 @@ def find_esp32_port():
 
 
 # ── NVS partition binary generation ────────────────────────────────
-# The ESP-IDF NVS library uses a specific binary format. Rather than
-# depending on the full ESP-IDF nvs_partition_gen.py, we generate the
-# binary directly. NVS format:
-#   - Page size: 4096 bytes
-#   - Page header: 32 bytes (state, seq, version, crc)
-#   - 126 entries per page, each 32 bytes
-#   - Namespace entry: type=1 (uint8), key=namespace name
-#   - String entry: type=0x21, span=1+ceil(len/32), data across entries
-
+# NVS partition format constants
 NVS_PAGE_SIZE = 4096
 NVS_ENTRY_SIZE = 32
-NVS_ENTRIES_PER_PAGE = 126
-NVS_VERSION = 0xFE  # NVS version 2
 
-# Entry types
-NS_TYPE = 0x01       # Namespace (stored as uint8)
-U8_TYPE = 0x04       # uint8
-STR_TYPE = 0x21      # String type
+# Entry types (ESP-IDF NVS)
+# Note: uint8 (0x01) and namespace share the same type code.
+# Namespace entries have ns_idx=0; data entries have ns_idx>0.
+U8_TYPE = 0x01       # uint8 (also used for namespace entries)
+STR_TYPE = 0x21      # String
 
 # Config version — increment every time NVS config fields change.
 # Must match firmware's CONFIG_VERSION. Source of truth is CLAUDE.md.
@@ -77,138 +68,92 @@ CONFIG_VERSION = 1
 PAGE_ACTIVE = 0xFFFFFFFE  # Active page
 
 
-def _crc32(data):
-    """CRC32 matching ESP-IDF NVS implementation."""
-    import binascii
-    return binascii.crc32(data) & 0xFFFFFFFF
+def _find_nvs_partition_gen():
+    """Find ESP-IDF's nvs_partition_gen.py tool."""
+    # Check common ESP-IDF installation paths
+    candidates = [
+        Path(os.environ.get("IDF_PATH", "")) / "components" / "nvs_flash" / "nvs_partition_generator" / "nvs_partition_gen.py",
+        Path("C:/esp/v5.5.3/esp-idf/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"),
+        Path("/opt/esp-idf/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
+
+def _find_idf_python():
+    """Find the ESP-IDF Python venv interpreter."""
+    candidates = [
+        Path(os.environ.get("IDF_PYTHON_ENV_PATH", "")) / "Scripts" / "python.exe",
+        Path(os.environ.get("IDF_PYTHON_ENV_PATH", "")) / "bin" / "python",
+        Path("C:/Espressif/tools/python/v5.5.3/venv/Scripts/python.exe"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
 
 
 def _build_nvs_binary(config_dict):
-    """Build an NVS partition binary from a dict of key-value string pairs.
+    """Build an NVS partition binary using ESP-IDF's nvs_partition_gen.py.
 
-    All values are stored as strings in the 'hokku' namespace.
-    Returns bytes of the full NVS partition (NVS_SIZE bytes).
+    Creates a CSV with the config values and calls the ESP-IDF tool to
+    generate a properly formatted NVS partition binary.
     """
-    page = bytearray(b"\xff" * NVS_PAGE_SIZE)
+    import subprocess
 
-    # ── Page header (32 bytes) ──
-    # Bytes 0-3: page state (ACTIVE = 0xFFFFFFFE)
-    struct.pack_into("<I", page, 0, PAGE_ACTIVE)
-    # Bytes 4-7: sequence number
-    struct.pack_into("<I", page, 4, 0)
-    # Bytes 8: version
-    page[8] = NVS_VERSION
-    # Bytes 9-31: reserved (zeros)
-    # CRC of header bytes 4-27
-    hdr_crc = _crc32(page[4:28])
-    struct.pack_into("<I", page, 28, hdr_crc)
+    nvs_gen = _find_nvs_partition_gen()
+    idf_python = _find_idf_python()
 
-    # Entry bitmap: 126 entries, 2 bits each = 252 bits = 32 bytes
-    # Starts at offset 32. 0b11 = empty, 0b10 = written
-    bitmap_offset = 32
-    bitmap = bytearray(32)
-    for i in range(32):
-        bitmap[i] = 0xFF  # all entries empty initially
+    if nvs_gen is None:
+        raise RuntimeError(
+            "Cannot find ESP-IDF nvs_partition_gen.py. "
+            "Set IDF_PATH environment variable or install ESP-IDF."
+        )
+    if idf_python is None:
+        raise RuntimeError(
+            "Cannot find ESP-IDF Python environment. "
+            "Set IDF_PYTHON_ENV_PATH or install ESP-IDF."
+        )
 
-    # Entries start at offset 64
-    entry_offset = 64
-    entry_idx = 0
-
-    def set_bitmap(idx, span):
-        """Mark entries as written (0b10) in the bitmap."""
-        for i in range(idx, idx + span):
-            byte_pos = (i * 2) // 8
-            bit_pos = (i * 2) % 8
-            bitmap[byte_pos] &= ~(0x03 << bit_pos)  # clear both bits
-            bitmap[byte_pos] |= (0x02 << bit_pos)    # set to 0b10 (written)
-
-    def write_entry(ns_idx, entry_type, key, data_bytes, span=1):
-        """Write a single entry (or multi-span entry) to the page."""
-        nonlocal entry_offset, entry_idx
-
-        entry = bytearray(b"\xff" * NVS_ENTRY_SIZE)  # must match ESP-IDF's 0xFF init for correct CRC
-        entry[0] = ns_idx          # namespace index
-        entry[1] = entry_type      # type
-        entry[2] = span            # span (number of entries this takes)
-        entry[3] = 0xFF            # chunk index (0xFF = no chunk)
-
-        # CRC of data (bytes 8-31 of first entry + subsequent entries)
-        # Key: bytes 8-23 (16 bytes, null-terminated)
-        key_bytes = key.encode("utf-8")[:15] + b"\x00"
-        entry[8:8 + len(key_bytes)] = key_bytes
-
-        if entry_type == NS_TYPE:
-            # Namespace: data is uint8 namespace index in bytes 24-31
-            entry[24] = ns_idx
-            data_crc = _crc32(entry[8:32])
-            struct.pack_into("<I", entry, 4, data_crc)
-            page[entry_offset:entry_offset + NVS_ENTRY_SIZE] = entry
-            set_bitmap(entry_idx, 1)
-            entry_offset += NVS_ENTRY_SIZE
-            entry_idx += 1
-
-        elif entry_type == U8_TYPE:
-            # uint8: value in byte 24, span=1
-            entry[24] = data_bytes[0] if data_bytes else 0
-            data_crc = _crc32(entry[8:32])
-            struct.pack_into("<I", entry, 4, data_crc)
-            page[entry_offset:entry_offset + NVS_ENTRY_SIZE] = entry
-            set_bitmap(entry_idx, 1)
-            entry_offset += NVS_ENTRY_SIZE
-            entry_idx += 1
-
-        elif entry_type == STR_TYPE:
-            # String: size in bytes 24-25, then data in subsequent entries
-            str_len = len(data_bytes) + 1  # include null terminator
-            struct.pack_into("<H", entry, 24, str_len)
-
-            # Subsequent entry data
-            padded = data_bytes + b"\x00"
-            # Pad to multiple of 32 bytes
-            while len(padded) % NVS_ENTRY_SIZE != 0:
-                padded += b"\xff"
-
-            # Calculate CRC over bytes 8-31 of first entry + all subsequent data
-            crc_data = bytes(entry[8:32]) + padded
-            data_crc = _crc32(crc_data)
-            struct.pack_into("<I", entry, 4, data_crc)
-
-            page[entry_offset:entry_offset + NVS_ENTRY_SIZE] = entry
-            set_bitmap(entry_idx, span)
-            entry_offset += NVS_ENTRY_SIZE
-            entry_idx += 1
-
-            # Write subsequent entries with string data
-            for i in range(0, len(padded), NVS_ENTRY_SIZE):
-                chunk = padded[i:i + NVS_ENTRY_SIZE]
-                page[entry_offset:entry_offset + NVS_ENTRY_SIZE] = chunk
-                entry_offset += NVS_ENTRY_SIZE
-                entry_idx += 1
-
-    # Write namespace entry (index 1)
-    write_entry(0x01, NS_TYPE, NVS_NAMESPACE, b"")
-
-    # Write config version as first data entry (uint8)
-    write_entry(0x01, U8_TYPE, "cfg_ver", bytes([CONFIG_VERSION]))
-
-    # Write string entries
+    # Build CSV: key,type,encoding,value
+    csv_lines = ["key,type,encoding,value"]
+    csv_lines.append(f"{NVS_NAMESPACE},namespace,,")
+    csv_lines.append(f"cfg_ver,data,u8,{CONFIG_VERSION}")
     for key, value in config_dict.items():
-        data = value.encode("utf-8")
-        # Span = 1 (header) + ceil((len+1) / 32) for data entries
-        data_entries = (len(data) + 1 + NVS_ENTRY_SIZE - 1) // NVS_ENTRY_SIZE
-        span = 1 + data_entries
-        write_entry(0x01, STR_TYPE, key, data, span)
+        # Escape commas in values
+        escaped = value.replace('"', '""')
+        csv_lines.append(f'{key},data,string,"{escaped}"')
 
-    # Write bitmap
-    page[bitmap_offset:bitmap_offset + 32] = bitmap
+    csv_content = "\n".join(csv_lines) + "\n"
 
-    # Build full partition (pad remaining pages with 0xFF)
-    partition = bytes(page) + b"\xff" * (NVS_SIZE - NVS_PAGE_SIZE)
-    return partition
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+        f.write(csv_content)
+        csv_path = f.name
+
+    bin_path = csv_path.replace(".csv", ".bin")
+
+    try:
+        result = subprocess.run(
+            [str(idf_python), str(nvs_gen), "generate", csv_path, bin_path, hex(NVS_SIZE)],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"nvs_partition_gen.py failed: {result.stderr}")
+
+        with open(bin_path, "rb") as f:
+            return f.read()
+    finally:
+        for p in [csv_path, bin_path]:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
 
 def _read_nvs(partition_data):
-    """Read entries from an NVS partition binary.
+    """Read entries from an NVS partition binary (ESP-IDF format).
 
     Returns dict of key-value pairs from the 'hokku' namespace.
     String values are returned as str, uint8 values as int.
@@ -224,8 +169,8 @@ def _read_nvs(partition_data):
     if state not in (PAGE_ACTIVE, 0xFFFFFFFC):  # ACTIVE or FULL
         return result
 
-    # Read entries
-    offset = 64  # skip header + bitmap
+    # Read entries starting at offset 64 (after 32-byte header + 32-byte bitmap)
+    offset = 64
     ns_map = {}  # ns_index -> ns_name
 
     while offset + NVS_ENTRY_SIZE <= NVS_PAGE_SIZE:
@@ -239,9 +184,14 @@ def _read_nvs(partition_data):
 
         # Read key (bytes 8-23, null-terminated)
         key_raw = entry[8:24]
-        key = key_raw.split(b"\x00")[0].decode("utf-8", errors="replace")
+        null_pos = key_raw.find(b"\x00")
+        if null_pos >= 0:
+            key = key_raw[:null_pos].decode("utf-8", errors="replace")
+        else:
+            key = key_raw.decode("utf-8", errors="replace").rstrip("\xff")
 
-        if entry_type == NS_TYPE:
+        if entry_type == U8_TYPE and ns_idx == 0:
+            # Namespace entry: ns_idx=0, type=0x01, value is the namespace index
             ns_map[entry[24]] = key
         elif entry_type == U8_TYPE and ns_map.get(ns_idx) == NVS_NAMESPACE:
             result[key] = entry[24]  # uint8 value
