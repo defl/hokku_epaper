@@ -28,7 +28,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from io import BytesIO
 
-from flask import Flask, send_file, jsonify, make_response, render_template, request, abort
+from flask import Flask, send_file, jsonify, make_response, render_template, request, abort, redirect
 from PIL import Image
 from pillow_heif import register_heif_opener
 import numpy as np
@@ -46,12 +46,12 @@ VISUAL_H = 1200   # landscape height
 
 # ── Spectra 6 palette ──────────────────────────────────────────────
 PALETTE_MEASURED_RGB = np.array([
-    [2, 2, 2],          # 0: Black
-    [190, 200, 200],    # 1: White
-    [205, 202, 0],      # 2: Yellow
-    [135, 19, 0],       # 3: Red
-    [5, 64, 158],       # 4: Blue
-    [39, 102, 60],      # 5: Green
+    [2, 2, 2],          # 0: Black   (theoretical: 0,0,0)
+    [190, 200, 200],    # 1: White   (theoretical: 255,255,255)
+    [205, 202, 0],      # 2: Yellow  (theoretical: 255,255,0)
+    [135, 19, 0],       # 3: Red     (theoretical: 255,0,0)
+    [5, 64, 158],       # 4: Blue    (theoretical: 0,0,255)
+    [39, 102, 60],      # 5: Green   (theoretical: 0,255,0)
 ], dtype=np.float32)
 
 PALETTE_PREVIEW_RGB = np.array([
@@ -187,10 +187,12 @@ app = Flask(__name__)
 # ── CIE Lab conversion for perceptual color matching ─────────────────
 
 def _srgb_to_linear(c):
+    """Convert sRGB [0-255] to linear RGB [0-1]."""
     c = c / 255.0
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 def _linear_to_xyz(rgb):
+    """Convert linear RGB to CIE XYZ (D65 illuminant)."""
     M = np.array([
         [0.4124564, 0.3575761, 0.1804375],
         [0.2126729, 0.7151522, 0.0721750],
@@ -199,6 +201,7 @@ def _linear_to_xyz(rgb):
     return rgb @ M.T
 
 def _xyz_to_lab(xyz):
+    """Convert XYZ to CIE Lab."""
     ref = np.array([0.95047, 1.00000, 1.08883])
     xyz = xyz / ref
     f = np.where(xyz > 0.008856, xyz ** (1/3), 7.787 * xyz + 16/116)
@@ -208,15 +211,25 @@ def _xyz_to_lab(xyz):
     return np.stack([L, a, b], axis=-1)
 
 def _rgb_to_lab(rgb):
+    """Convert sRGB [0-255] to CIE Lab. Clamps input to valid range."""
     linear = _srgb_to_linear(np.clip(np.asarray(rgb, dtype=np.float64), 0, 255))
     xyz = _linear_to_xyz(linear)
     return _xyz_to_lab(xyz)
 
+# Precompute palette Lab values from measured colors
 PALETTE_LAB = _rgb_to_lab(PALETTE_MEASURED_RGB)
+
+# Precompute display L* range for dynamic range compression
 _DISPLAY_BLACK_L = float(_rgb_to_lab(PALETTE_MEASURED_RGB[0:1])[0, 0])
 _DISPLAY_WHITE_L = float(_rgb_to_lab(PALETTE_MEASURED_RGB[1:2])[0, 0])
 
+# ── Dynamic range compression ─────────────────────────────────────
+# Remap source image luminance into the display's actual L* range so the
+# dithering algorithm doesn't try to reproduce brightness levels the panel
+# can't show. Based on esp32-photoframe's preprocessImage approach.
+
 def _compress_dynamic_range(img_array):
+    """Compress image luminance from full [0,100] L* to display's actual range."""
     rgb = np.asarray(img_array, dtype=np.float64)
     linear = _srgb_to_linear(rgb)
     xyz = _linear_to_xyz(linear)
@@ -637,6 +650,10 @@ def serve_binary():
 
 
 # ── Flask routes: Web GUI ──────────────────────────────────────────
+
+@app.route("/")
+def root():
+    return redirect("/hokku/ui")
 
 @app.route("/hokku/ui")
 def web_gui():
