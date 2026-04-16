@@ -282,8 +282,9 @@ function renderImageGrid(poolFiles, serveData) {
     const card = document.createElement('div');
     card.className = 'image-card';
     card.innerHTML = `
-      <img src="/hokku/api/dithered/${encodeURIComponent(fname)}" alt="${fname}"
-           onclick="window.open('/hokku/api/dithered/${encodeURIComponent(fname)}')">
+      <img src="/hokku/api/thumbnail/${encodeURIComponent(fname)}" alt="${fname}"
+           onclick="window.open('/hokku/api/original/${encodeURIComponent(fname)}')"
+           style="cursor:pointer" title="Click to view original">
       <div class="card-body">
         <div class="filename">${fname}</div>
         <div class="stats">
