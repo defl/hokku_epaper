@@ -304,8 +304,13 @@ def _purge_stale_cache(cache_dir, valid_keys):
 
 def _clear_cache_files(cache_dir):
     if cache_dir.exists():
+        import shutil
         for f in cache_dir.iterdir():
-            if f.name != "database.json":
+            if f.name == "database.json":
+                continue
+            if f.is_dir():
+                shutil.rmtree(f)
+            else:
                 f.unlink()
         print("  Cache cleared")
 
@@ -784,23 +789,36 @@ def api_original(filename):
     return send_file(img_path)
 
 
+_thumb_lock = threading.Lock()
+
 @app.route("/hokku/api/thumbnail/<filename>")
 def api_thumbnail(filename):
-    """Serve a thumbnail of the original image (~300px wide)."""
+    """Serve a cached thumbnail of the original image (~300px wide)."""
     img_path = _get_upload_dir() / filename
     if not img_path.exists() or not img_path.is_file():
         abort(404)
-    try:
-        from PIL import ImageOps
-        img = Image.open(img_path)
-        img = ImageOps.exif_transpose(img)
-        img.thumbnail((300, 300), Image.LANCZOS)
-        buf = BytesIO()
-        img.save(buf, format="JPEG", quality=80)
-        buf.seek(0)
-        return send_file(buf, mimetype="image/jpeg")
-    except Exception:
-        abort(500)
+
+    # Serve from disk cache if available
+    thumb_dir = _get_cache_dir() / "thumbs"
+    thumb_path = thumb_dir / (img_path.stem + "_thumb.jpg")
+    if thumb_path.exists() and thumb_path.stat().st_mtime >= img_path.stat().st_mtime:
+        return send_file(thumb_path, mimetype="image/jpeg")
+
+    # Generate and cache — serialize to avoid memory spikes from parallel decodes
+    with _thumb_lock:
+        # Re-check after acquiring lock (another request may have generated it)
+        if thumb_path.exists() and thumb_path.stat().st_mtime >= img_path.stat().st_mtime:
+            return send_file(thumb_path, mimetype="image/jpeg")
+        try:
+            from PIL import ImageOps
+            thumb_dir.mkdir(parents=True, exist_ok=True)
+            img = Image.open(img_path)
+            img = ImageOps.exif_transpose(img)
+            img.thumbnail((300, 300), Image.LANCZOS)
+            img.save(thumb_path, format="JPEG", quality=80)
+            return send_file(thumb_path, mimetype="image/jpeg")
+        except Exception:
+            abort(500)
 
 
 @app.route("/hokku/api/dithered/<filename>")
