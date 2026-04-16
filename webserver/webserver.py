@@ -780,13 +780,30 @@ def api_status():
         })
 
 
+# Formats browsers can display natively — everything else gets converted to JPEG
+_BROWSER_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif"}
+
 @app.route("/hokku/api/original/<filename>")
 def api_original(filename):
-    """Serve the original uploaded image."""
+    """Serve the original uploaded image, converting to JPEG if the browser can't display it."""
     img_path = _get_upload_dir() / filename
     if not img_path.exists() or not img_path.is_file():
         abort(404)
-    return send_file(img_path)
+    if img_path.suffix.lower() in _BROWSER_IMAGE_EXTS:
+        return send_file(img_path)
+    # Convert non-browser formats (HEIC, TIFF, etc.) to JPEG
+    try:
+        from PIL import ImageOps
+        img = Image.open(img_path)
+        img = ImageOps.exif_transpose(img)
+        img = img.convert("RGB")
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=92)
+        buf.seek(0)
+        return send_file(buf, mimetype="image/jpeg")
+    except Exception:
+        # Fall back to serving the raw file
+        return send_file(img_path)
 
 
 _thumb_lock = threading.Lock()
