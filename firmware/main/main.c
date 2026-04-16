@@ -89,6 +89,8 @@ static const char *TAG = "epaper";
 #define SLEEP_1H_US        (1LL * 3600 * 1000000LL)
 
 /* ── RTC memory (survives deep sleep) ────────────────────────────── */
+#define RTC_MAGIC 0x484F4B55  /* "HOKU" — validates RTC memory isn't stale after flash */
+RTC_DATA_ATTR static uint32_t rtc_magic = 0;
 RTC_DATA_ATTR static int      boot_count = 0;
 RTC_DATA_ATTR static uint8_t  wifi_channel = 0;
 RTC_DATA_ATTR static uint8_t  wifi_bssid[6] = {0};
@@ -948,6 +950,7 @@ static void enter_deep_sleep(int64_t sleep_us)
     }
 
     was_sleeping = true;
+    rtc_magic = RTC_MAGIC;
     esp_deep_sleep_start();
     /* Never returns */
 }
@@ -958,6 +961,21 @@ static void enter_deep_sleep(int64_t sleep_us)
 
 void app_main(void)
 {
+    /* Validate RTC memory. After an esptool flash (hard reset), RTC memory
+     * retains stale values from the previous firmware run. The magic value
+     * lets us detect this and treat it as a fresh boot. */
+    if (rtc_magic != RTC_MAGIC) {
+        /* RTC memory is stale — clear everything */
+        rtc_magic = 0;
+        boot_count = 0;
+        wifi_channel = 0;
+        memset(wifi_bssid, 0, sizeof(wifi_bssid));
+        has_wifi_cache = false;
+        last_battery_mv = 0;
+        was_sleeping = false;
+        last_sleep_seconds = 0;
+    }
+
     boot_count++;
     int64_t boot_time = esp_timer_get_time();
 
@@ -980,7 +998,11 @@ void app_main(void)
     esp_sleep_wakeup_cause_t wakeup = esp_sleep_get_wakeup_cause();
     bool is_scheduled_wake = (wakeup == ESP_SLEEP_WAKEUP_TIMER || wakeup == ESP_SLEEP_WAKEUP_EXT1);
 
-    /* Detect USB reset after deep sleep */
+    /* Detect USB reset after deep sleep: wakeup is UNDEFINED but RTC flag says
+     * we were sleeping. Deep sleep disconnects USB-Serial/JTAG on ESP32-S3,
+     * which causes the host to reset the chip — appearing as a fresh boot.
+     * The RTC magic check at the top of app_main ensures was_sleeping is only
+     * trusted when RTC memory is valid (not stale from a previous flash). */
     bool is_usb_reset_after_sleep = (!is_scheduled_wake && was_sleeping);
     was_sleeping = false;
 
