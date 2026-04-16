@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hokku - Image Server</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; padding: 20px; max-width: 1400px; margin: 0 auto; }
+  h1 { margin-bottom: 20px; font-size: 1.6em; }
+  h2 { margin: 20px 0 10px; font-size: 1.2em; color: #555; }
+
+  /* Config section */
+  .config-section { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .config-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .config-row label { min-width: 140px; font-weight: 600; font-size: 0.9em; }
+  .config-row input, .config-row select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9em; }
+  .config-row input[type="number"] { width: 80px; }
+  .config-row .info { color: #888; font-size: 0.85em; }
+  .time-entry { display: inline-flex; align-items: center; gap: 4px; background: #e8e8e8; border-radius: 4px; padding: 4px 8px; margin: 2px; }
+  .time-entry .remove-time { cursor: pointer; color: #c00; font-weight: bold; border: none; background: none; font-size: 1.1em; }
+  #add-time-input { width: 60px; }
+  .btn { padding: 6px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; font-weight: 500; }
+  .btn-primary { background: #2563eb; color: #fff; }
+  .btn-primary:hover { background: #1d4ed8; }
+  .btn-secondary { background: #e5e7eb; color: #333; }
+  .btn-secondary:hover { background: #d1d5db; }
+  .btn-danger { background: #dc2626; color: #fff; }
+  .btn-danger:hover { background: #b91c1c; }
+  .btn-small { padding: 4px 10px; font-size: 0.8em; }
+  .server-time { font-size: 0.9em; color: #666; margin-left: 8px; }
+
+  /* Status bar */
+  .status-bar { background: #fff; border-radius: 8px; padding: 12px 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .status-bar .stat { font-size: 0.9em; }
+  .status-bar .stat strong { color: #2563eb; }
+  .processing-indicator { background: #fef3c7; color: #92400e; padding: 4px 12px; border-radius: 4px; font-size: 0.85em; }
+  .processing-indicator.idle { background: #d1fae5; color: #065f46; }
+
+  /* Image grid */
+  .image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .image-card { background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .image-card img { width: 100%; height: 200px; object-fit: contain; background: #f0f0f0; cursor: pointer; }
+  .image-card .card-body { padding: 12px; }
+  .image-card .filename { font-weight: 600; font-size: 0.9em; margin-bottom: 6px; word-break: break-all; }
+  .image-card .stats { font-size: 0.8em; color: #666; margin-bottom: 8px; }
+  .image-card .stats span { margin-right: 12px; }
+  .image-card .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .image-card .actions a { font-size: 0.8em; color: #2563eb; text-decoration: none; }
+  .image-card .actions a:hover { text-decoration: underline; }
+
+  /* Screens table */
+  .screens-section { background: #fff; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .screens-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+  .screens-table th { text-align: left; padding: 6px 12px; border-bottom: 2px solid #e5e7eb; color: #555; font-weight: 600; }
+  .screens-table td { padding: 6px 12px; border-bottom: 1px solid #f0f0f0; }
+  .screens-empty { color: #999; font-style: italic; padding: 12px 0; font-size: 0.9em; }
+
+  .toast { position: fixed; bottom: 20px; right: 20px; background: #333; color: #fff; padding: 10px 20px; border-radius: 6px; font-size: 0.9em; z-index: 1000; opacity: 0; transition: opacity 0.3s; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<h1>Hokku Image Server</h1>
+
+<!-- Config Section -->
+<div class="config-section">
+  <h2>Configuration</h2>
+
+  <div class="config-row">
+    <label>Timezone:</label>
+    <select id="timezone">
+      <option>America/New_York</option>
+      <option>America/Chicago</option>
+      <option>America/Denver</option>
+      <option>America/Los_Angeles</option>
+      <option>America/Anchorage</option>
+      <option>Pacific/Honolulu</option>
+      <option>America/Toronto</option>
+      <option>America/Vancouver</option>
+      <option>America/Sao_Paulo</option>
+      <option>Europe/London</option>
+      <option>Europe/Paris</option>
+      <option>Europe/Berlin</option>
+      <option>Europe/Amsterdam</option>
+      <option>Europe/Rome</option>
+      <option>Europe/Madrid</option>
+      <option>Europe/Stockholm</option>
+      <option>Europe/Helsinki</option>
+      <option>Europe/Moscow</option>
+      <option>Asia/Dubai</option>
+      <option>Asia/Kolkata</option>
+      <option>Asia/Bangkok</option>
+      <option>Asia/Shanghai</option>
+      <option>Asia/Tokyo</option>
+      <option>Asia/Seoul</option>
+      <option>Asia/Singapore</option>
+      <option>Australia/Sydney</option>
+      <option>Australia/Melbourne</option>
+      <option>Australia/Perth</option>
+      <option>Pacific/Auckland</option>
+      <option>UTC</option>
+    </select>
+    <span class="server-time" id="server-time"></span>
+  </div>
+
+  <div class="config-row">
+    <label>Refresh times:</label>
+    <div id="refresh-times"></div>
+    <input type="text" id="add-time-input" placeholder="HHMM">
+    <button class="btn btn-secondary btn-small" onclick="addTime()">Add</button>
+  </div>
+
+  <div class="config-row">
+    <label>Poll interval:</label>
+    <input type="number" id="poll-interval" min="1" max="3600"> <span class="info">seconds between image directory checks</span>
+  </div>
+
+  <div class="config-row">
+    <label>Server address:</label>
+    <span class="info" id="server-address"></span>
+  </div>
+
+  <div class="config-row">
+    <label></label>
+    <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+    <button class="btn btn-danger" onclick="clearCache()">Clear Cache &amp; Re-convert</button>
+  </div>
+</div>
+
+<!-- Status Bar -->
+<div class="status-bar">
+  <div class="stat">Images: <strong id="stat-pool-size">0</strong></div>
+  <div class="stat">Last served: <strong id="stat-last-served">-</strong></div>
+  <div id="processing-indicator" class="processing-indicator idle">Idle</div>
+</div>
+
+<!-- Connected Screens -->
+<div class="screens-section">
+  <h2>Connected Screens</h2>
+  <div id="screens-container">
+    <div class="screens-empty">No screens have connected yet.</div>
+  </div>
+</div>
+
+<!-- Image Grid -->
+<h2>Images</h2>
+<div class="image-grid" id="image-grid"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let currentConfig = {};
+let refreshTimes = [];
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function formatHHMM(s) {
+  s = String(s).padStart(4, '0');
+  return s.slice(0,2) + ':' + s.slice(2,4);
+}
+
+function renderRefreshTimes() {
+  const el = document.getElementById('refresh-times');
+  el.innerHTML = '';
+  refreshTimes.sort();
+  refreshTimes.forEach((t, i) => {
+    const span = document.createElement('span');
+    span.className = 'time-entry';
+    span.innerHTML = `${formatHHMM(t)} <button class="remove-time" onclick="removeTime(${i})">&times;</button>`;
+    el.appendChild(span);
+  });
+}
+
+function addTime() {
+  const input = document.getElementById('add-time-input');
+  let val = input.value.trim().replace(':', '');
+  if (/^\d{3,4}$/.test(val)) {
+    val = val.padStart(4, '0');
+    const h = parseInt(val.slice(0,2)), m = parseInt(val.slice(2,4));
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+      if (!refreshTimes.includes(val)) {
+        refreshTimes.push(val);
+        renderRefreshTimes();
+      }
+      input.value = '';
+      return;
+    }
+  }
+  showToast('Invalid time format. Use HHMM (e.g. 0930, 1845)');
+}
+
+function removeTime(idx) {
+  refreshTimes.splice(idx, 1);
+  renderRefreshTimes();
+}
+
+async function saveConfig() {
+  const data = {
+    timezone: document.getElementById('timezone').value,
+    refresh_image_at_time: refreshTimes,
+    poll_interval_seconds: parseInt(document.getElementById('poll-interval').value) || 10,
+  };
+  try {
+    const resp = await fetch('/hokku/api/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
+    });
+    if (resp.ok) {
+      showToast('Configuration saved');
+      refreshStatus();
+    } else {
+      showToast('Failed to save configuration');
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+async function clearCache() {
+  if (!confirm('Clear all cached conversions and re-process all images?')) return;
+  try {
+    await fetch('/hokku/api/clear_cache', {method: 'POST'});
+    showToast('Cache cleared, re-converting...');
+    refreshStatus();
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+async function showNext(filename) {
+  try {
+    const resp = await fetch('/hokku/api/show_next/' + encodeURIComponent(filename), {method: 'POST'});
+    if (resp.ok) {
+      showToast(filename + ' will be shown next');
+      refreshStatus();
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+function renderScreens(screens) {
+  const container = document.getElementById('screens-container');
+  const names = Object.keys(screens || {});
+  if (names.length === 0) {
+    container.innerHTML = '<div class="screens-empty">No screens have connected yet.</div>';
+    return;
+  }
+  let html = '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Requests</th><th>Last Seen</th></tr>';
+  names.sort();
+  names.forEach(name => {
+    const s = screens[name];
+    html += `<tr><td>${name}</td><td>${s.ip || '-'}</td><td>${s.request_count || 0}</td><td>${s.last_seen || '-'}</td></tr>`;
+  });
+  html += '</table>';
+  container.innerHTML = html;
+}
+
+function renderImageGrid(poolFiles, serveData) {
+  const grid = document.getElementById('image-grid');
+  grid.innerHTML = '';
+  poolFiles.forEach(fname => {
+    const data = serveData[fname] || {};
+    const card = document.createElement('div');
+    card.className = 'image-card';
+    card.innerHTML = `
+      <img src="/hokku/api/dithered/${encodeURIComponent(fname)}" alt="${fname}"
+           onclick="window.open('/hokku/api/dithered/${encodeURIComponent(fname)}')">
+      <div class="card-body">
+        <div class="filename">${fname}</div>
+        <div class="stats">
+          <span>Shown: ${data.total_show_count || 0}x</span>
+          <span>Display time: ${data.total_show_formatted || '0m'}</span>
+        </div>
+        <div class="actions">
+          <a href="/hokku/api/original/${encodeURIComponent(fname)}" target="_blank">Original</a>
+          <a href="/hokku/api/dithered/${encodeURIComponent(fname)}" target="_blank">Dithered</a>
+          <button class="btn btn-primary btn-small" onclick="showNext('${fname}')">Show Next</button>
+        </div>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+async function refreshStatus() {
+  try {
+    const resp = await fetch('/hokku/api/status');
+    const data = await resp.json();
+
+    // Update config UI
+    const tz = document.getElementById('timezone');
+    const cfg = data.config;
+    // Set timezone
+    let found = false;
+    for (let opt of tz.options) {
+      if (opt.value === cfg.timezone) { opt.selected = true; found = true; break; }
+    }
+    if (!found) {
+      const opt = document.createElement('option');
+      opt.value = cfg.timezone;
+      opt.textContent = cfg.timezone;
+      opt.selected = true;
+      tz.appendChild(opt);
+    }
+
+    refreshTimes = cfg.refresh_image_at_time || [];
+    renderRefreshTimes();
+    document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
+    document.getElementById('server-address').textContent = `${location.hostname}:${cfg.port}`;
+    document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
+
+    // Status bar
+    document.getElementById('stat-pool-size').textContent = data.pool_size;
+    document.getElementById('stat-last-served').textContent = data.last_served || '-';
+
+    const proc = document.getElementById('processing-indicator');
+    if (data.converting > 0) {
+      proc.className = 'processing-indicator';
+      proc.textContent = `Dithering ${data.converting_name || '...'}`;
+    } else {
+      proc.className = 'processing-indicator idle';
+      proc.textContent = 'Idle';
+    }
+
+    // Screens
+    renderScreens(data.screens);
+
+    // Image grid
+    renderImageGrid(data.pool_files, data.serve_data);
+    currentConfig = cfg;
+  } catch (e) {
+    console.error('Status refresh failed:', e);
+  }
+}
+
+// Initial load + auto-refresh every 5 seconds
+refreshStatus();
+setInterval(refreshStatus, 5000);
+</script>
+</body>
+</html>
