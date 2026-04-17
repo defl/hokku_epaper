@@ -58,6 +58,46 @@
 
   .toast { position: fixed; bottom: 20px; right: 20px; background: #333; color: #fff; padding: 10px 20px; border-radius: 6px; font-size: 0.9em; z-index: 1000; opacity: 0; transition: opacity 0.3s; }
   .toast.show { opacity: 1; }
+
+  /* Upload zone */
+  .upload-zone { background: #fff; border: 2px dashed #c0c8d4; border-radius: 8px; padding: 24px; margin-bottom: 16px; text-align: center; color: #666; transition: background 0.15s, border-color 0.15s; cursor: pointer; }
+  .upload-zone:hover { border-color: #2563eb; color: #2563eb; }
+  .upload-zone .upload-hint { font-size: 0.95em; }
+  .upload-zone .upload-sub { font-size: 0.8em; color: #999; margin-top: 4px; }
+  .upload-zone input[type="file"] { display: none; }
+
+  /* Drag overlay shown while dragging files anywhere on the page */
+  .drag-overlay { position: fixed; inset: 0; background: rgba(37, 99, 235, 0.15); border: 4px dashed #2563eb; pointer-events: none; display: none; z-index: 2000; align-items: center; justify-content: center; }
+  .drag-overlay.show { display: flex; }
+  .drag-overlay .drag-msg { background: #fff; padding: 20px 32px; border-radius: 8px; font-size: 1.2em; font-weight: 600; color: #2563eb; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+
+  /* Delete (trash) button on image cards */
+  .image-card { position: relative; }
+  .image-card .delete-btn { position: absolute; top: 8px; right: 8px; z-index: 3; background: rgba(255,255,255,0.92); color: #dc2626; border: none; border-radius: 4px; width: 36px; height: 36px; font-size: 1.2em; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 3px rgba(0,0,0,0.25); transition: background 0.15s; }
+  .image-card .delete-btn:hover { background: #dc2626; color: #fff; }
+
+  /* Upload progress list */
+  .upload-progress { background: #fff; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: none; }
+  .upload-progress.show { display: block; }
+  .upload-progress .upload-row { display: flex; justify-content: space-between; font-size: 0.85em; padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
+  .upload-progress .upload-row:last-child { border-bottom: none; }
+  .upload-progress .upload-row.error { color: #dc2626; }
+  .upload-progress .upload-row.ok { color: #065f46; }
+
+  /* Pending dither badge */
+  .image-card.pending img { opacity: 0.6; }
+  .image-card .pending-badge { position: absolute; top: 8px; left: 8px; z-index: 1; max-width: calc(100% - 60px); background: #fef3c7; color: #92400e; padding: 4px 10px; border-radius: 4px; font-size: 0.75em; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.15); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .image-card .actions .pending-note { font-size: 0.8em; color: #92400e; font-style: italic; }
+  .image-card .actions a.disabled, .image-card .actions button:disabled { color: #aaa; pointer-events: none; cursor: not-allowed; }
+  .image-card .actions button:disabled { background: #e5e7eb; }
+
+  /* Confirmation modal */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 3000; }
+  .modal-backdrop.show { display: flex; }
+  .modal { background: #fff; border-radius: 8px; padding: 24px; min-width: 320px; max-width: 480px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+  .modal h3 { margin-bottom: 12px; font-size: 1.1em; color: #333; }
+  .modal p { margin-bottom: 20px; color: #555; word-break: break-all; }
+  .modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 </style>
 </head>
 <body>
@@ -156,11 +196,33 @@
 
 <!-- Image Grid -->
 <h2>Images</h2>
+
+<div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+  <div class="upload-hint">Drag &amp; drop images here, or click to choose files</div>
+  <div class="upload-sub">JPG, PNG, HEIC, WebP, AVIF, TIFF, BMP, GIF</div>
+  <input type="file" id="file-input" multiple accept="image/*,.heic,.heif,.avif,.tiff">
+</div>
+
+<div class="upload-progress" id="upload-progress"></div>
+
 <div class="image-grid" id="image-grid"></div>
+
+<div class="drag-overlay" id="drag-overlay"><div class="drag-msg">Drop images to upload</div></div>
 
 <div id="processing-banner" style="display:none; background:#fef3c7; color:#92400e; border-radius:8px; padding:20px; margin-top:20px; text-align:center; font-size:1.1em; font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,0.1);"></div>
 
 <div class="toast" id="toast"></div>
+
+<div class="modal-backdrop" id="confirm-modal">
+  <div class="modal">
+    <h3 id="confirm-title">Confirm</h3>
+    <p id="confirm-message"></p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="confirm-cancel">Cancel</button>
+      <button class="btn btn-danger" id="confirm-ok">Delete</button>
+    </div>
+  </div>
+</div>
 
 <script>
 let currentConfig = {};
@@ -277,14 +339,25 @@ function renderScreens(screens) {
   container.innerHTML = html;
 }
 
-function renderImageGrid(poolFiles, serveData) {
+function renderImageGrid(uploadFiles, serveData) {
   const grid = document.getElementById('image-grid');
   grid.innerHTML = '';
-  poolFiles.forEach(fname => {
+  uploadFiles.forEach(entry => {
+    const fname = entry.name;
+    const dithered = entry.dithered;
     const data = serveData[fname] || {};
     const card = document.createElement('div');
-    card.className = 'image-card';
+    card.className = 'image-card' + (dithered ? '' : ' pending');
+    const safeName = fname.replace(/'/g, "\\'");
+    const pendingBadge = dithered ? '' : '<div class="pending-badge" title="Dithered version for the e-ink display is still being generated">Dithering…</div>';
+    const actions = dithered
+      ? `<a href="/hokku/api/original/${encodeURIComponent(fname)}" target="_blank">Original</a>
+         <a href="/hokku/api/dithered/${encodeURIComponent(fname)}" target="_blank">Dithered</a>
+         <button class="btn btn-primary btn-small" onclick="showNext('${safeName}')">Show Next</button>`
+      : `<a href="/hokku/api/original/${encodeURIComponent(fname)}" target="_blank">Original</a>`;
     card.innerHTML = `
+      <button class="delete-btn" onclick="deleteImage('${safeName}')" title="Delete this image">&#x1F5D1;</button>
+      ${pendingBadge}
       <img src="/hokku/api/thumbnail/${encodeURIComponent(fname)}" alt="${fname}"
            onclick="window.open('/hokku/api/original/${encodeURIComponent(fname)}')"
            style="cursor:pointer" title="Click to view original">
@@ -294,11 +367,7 @@ function renderImageGrid(poolFiles, serveData) {
           <span>Shown: ${data.total_show_count || 0}x</span>
           <span>Display time: ${data.total_show_formatted || '0m'}</span>
         </div>
-        <div class="actions">
-          <a href="/hokku/api/original/${encodeURIComponent(fname)}" target="_blank">Original</a>
-          <a href="/hokku/api/dithered/${encodeURIComponent(fname)}" target="_blank">Dithered</a>
-          <button class="btn btn-primary btn-small" onclick="showNext('${fname}')">Show Next</button>
-        </div>
+        <div class="actions">${actions}</div>
       </div>
     `;
     grid.appendChild(card);
@@ -333,8 +402,11 @@ async function refreshStatus() {
     document.getElementById('server-address').textContent = `${location.hostname}:${cfg.port}`;
     document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
 
-    // Status bar
-    document.getElementById('stat-pool-size').textContent = data.pool_size;
+    // Status bar — show both total uploaded and how many are dithered & ready
+    const uploaded = data.upload_size != null ? data.upload_size : data.pool_size;
+    const ready = data.pool_size;
+    document.getElementById('stat-pool-size').textContent =
+      uploaded === ready ? uploaded : `${ready} / ${uploaded} ready`;
     document.getElementById('stat-last-served').textContent = data.last_served || '-';
 
     const proc = document.getElementById('processing-indicator');
@@ -360,13 +432,177 @@ async function refreshStatus() {
     // Screens
     renderScreens(data.screens);
 
-    // Image grid
-    renderImageGrid(data.pool_files, data.serve_data);
+    // Image grid — render every uploaded file (dithered or pending)
+    renderImageGrid(data.upload_files || data.pool_files.map(n => ({name: n, dithered: true})), data.serve_data);
     currentConfig = cfg;
   } catch (e) {
     console.error('Status refresh failed:', e);
   }
 }
+
+function showConfirm({title, message, okLabel}) {
+  return new Promise(resolve => {
+    const modal = document.getElementById('confirm-modal');
+    document.getElementById('confirm-title').textContent = title;
+    document.getElementById('confirm-message').textContent = message;
+    const okBtn = document.getElementById('confirm-ok');
+    const cancelBtn = document.getElementById('confirm-cancel');
+    okBtn.textContent = okLabel || 'OK';
+    modal.classList.add('show');
+
+    const cleanup = (result) => {
+      modal.classList.remove('show');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      modal.removeEventListener('click', onBackdrop);
+      document.removeEventListener('keydown', onKey);
+      resolve(result);
+    };
+    const onOk = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onBackdrop = (e) => { if (e.target === modal) cleanup(false); };
+    const onKey = (e) => {
+      if (e.key === 'Escape') cleanup(false);
+      else if (e.key === 'Enter') cleanup(true);
+    };
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    modal.addEventListener('click', onBackdrop);
+    document.addEventListener('keydown', onKey);
+    okBtn.focus();
+  });
+}
+
+async function deleteImage(fname) {
+  const ok = await showConfirm({
+    title: 'Delete image?',
+    message: `"${fname}" will be permanently removed. This cannot be undone.`,
+    okLabel: 'Delete',
+  });
+  if (!ok) return;
+  try {
+    const resp = await fetch('/hokku/api/image/' + encodeURIComponent(fname), {method: 'DELETE'});
+    if (resp.ok) {
+      showToast('Deleted ' + fname);
+      refreshStatus();
+    } else {
+      const err = await resp.json().catch(() => ({}));
+      showToast('Delete failed: ' + (err.error || resp.status));
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+// ── Upload + drag-and-drop ────────────────────────────────────────
+const ALLOWED_EXTS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp', '.gif', '.heic', '.heif', '.avif'];
+
+function renderUploadProgress(rows) {
+  const el = document.getElementById('upload-progress');
+  if (!rows.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
+  el.classList.add('show');
+  el.innerHTML = rows.map(r => `<div class="upload-row ${r.status}"><span>${r.name}</span><span>${r.message}</span></div>`).join('');
+}
+
+async function uploadFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+
+  const rows = files.map(f => ({name: f.name, status: 'pending', message: 'Uploading...'}));
+  renderUploadProgress(rows);
+
+  const form = new FormData();
+  let anyValid = false;
+  files.forEach((f, i) => {
+    const ext = '.' + (f.name.split('.').pop() || '').toLowerCase();
+    if (!ALLOWED_EXTS.includes(ext)) {
+      rows[i].status = 'error';
+      rows[i].message = 'Unsupported type';
+    } else {
+      form.append('files', f);
+      anyValid = true;
+    }
+  });
+  renderUploadProgress(rows);
+
+  if (!anyValid) {
+    setTimeout(() => renderUploadProgress([]), 4000);
+    return;
+  }
+
+  try {
+    const resp = await fetch('/hokku/api/upload', {method: 'POST', body: form});
+    if (!resp.ok) {
+      // Server returned a non-2xx (likely an HTML error page from Flask).
+      // Surface a meaningful message instead of the JSON parser's "Unexpected token '<'".
+      let detail = `HTTP ${resp.status}`;
+      try { const j = await resp.json(); if (j && j.error) detail = j.error; } catch (_) {}
+      throw new Error(detail);
+    }
+    const data = await resp.json();
+    const savedSet = new Set(data.saved || []);
+    const skippedMap = {};
+    (data.skipped || []).forEach(s => { skippedMap[s.filename] = s.reason; });
+
+    rows.forEach(r => {
+      if (r.status === 'error') return;
+      // Server may rename to avoid clobbering — match on prefix as best-effort
+      const matched = (data.saved || []).find(n => n === r.name || n.startsWith(r.name.replace(/\.[^.]+$/, '') + '_'));
+      if (matched) {
+        r.status = 'ok';
+        r.message = matched === r.name ? 'Uploaded' : 'Uploaded as ' + matched;
+      } else if (skippedMap[r.name]) {
+        r.status = 'error';
+        r.message = skippedMap[r.name];
+      } else {
+        r.status = 'error';
+        r.message = 'Failed';
+      }
+    });
+    renderUploadProgress(rows);
+    showToast(`Uploaded ${(data.saved || []).length} file(s) — converting in background`);
+    refreshStatus();
+    setTimeout(() => renderUploadProgress([]), 6000);
+  } catch (e) {
+    rows.forEach(r => { if (r.status === 'pending') { r.status = 'error'; r.message = e.message; } });
+    renderUploadProgress(rows);
+    showToast('Upload error: ' + e.message);
+  }
+}
+
+document.getElementById('file-input').addEventListener('change', e => {
+  uploadFiles(e.target.files);
+  e.target.value = '';
+});
+
+// Whole-page drag-and-drop. Show overlay while a file is being dragged.
+let dragDepth = 0;
+const overlay = document.getElementById('drag-overlay');
+
+function isFileDrag(e) {
+  return e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+}
+
+window.addEventListener('dragenter', e => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  overlay.classList.add('show');
+});
+window.addEventListener('dragover', e => { if (isFileDrag(e)) e.preventDefault(); });
+window.addEventListener('dragleave', e => {
+  if (!isFileDrag(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) overlay.classList.remove('show');
+});
+window.addEventListener('drop', e => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  overlay.classList.remove('show');
+  uploadFiles(e.dataTransfer.files);
+});
 
 // Initial load + auto-refresh every 5 seconds
 refreshStatus();

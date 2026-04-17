@@ -1,3 +1,52 @@
+hokku-server (2.1.3-1) unstable; urgency=low
+
+  * Web GUI: pending-dither badge renamed from "Generating preview…" to
+    "Dithering…" with a tooltip clarifying it refers to the e-ink display
+    version (the thumbnail itself is already shown).
+  * Web GUI: removed the redundant "Dithered preview not ready yet" line
+    on pending cards — the badge is enough.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 16 Apr 2026 00:00:00 +0000
+
+hokku-server (2.1.2-1) unstable; urgency=low
+
+  * Fix: thumbnail generator crashed with "cannot write mode RGBA as JPEG"
+    on PNGs with alpha. Now flattens RGBA / LA / paletted-with-transparency
+    onto a white background before saving.
+  * Web GUI: delete (trash) button raised to z-index 3 and enlarged so it
+    stays clickable when overlaid on the "Generating preview" badge area.
+  * Web GUI: pending badge truncates with ellipsis and never extends under
+    the trash button.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 16 Apr 2026 00:00:00 +0000
+
+hokku-server (2.1.1-1) unstable; urgency=low
+
+  * Upload/delete endpoints return JSON error responses on filesystem
+    failures (e.g. systemd ProtectSystem read-only mounts) instead of
+    Flask HTML error pages, so the web GUI can show a useful message.
+  * Web GUI: image grid shows every uploaded file, with a "Generating
+    preview" badge on entries still being dithered.
+  * Web GUI: status bar shows "ready / total" while a batch is converting.
+  * Web GUI: replaced browser confirm() on delete with a styled modal
+    (Esc cancels, Enter confirms).
+  * Webserver: thumbnail pre-pass at the start of every sync so the grid
+    has visible previews quickly even during long dither batches.
+  * API: /hokku/api/status adds upload_files [{name, dithered}] and
+    upload_size fields.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 16 Apr 2026 00:00:00 +0000
+
+hokku-server (2.1.0-1) unstable; urgency=low
+
+  * Web GUI: drag-and-drop image upload (whole-page drop zone)
+  * Web GUI: per-image trash button to delete uploads
+  * New API: POST /hokku/api/upload, DELETE /hokku/api/image/<name>
+  * Pool sync coalesces concurrent triggers so changes during a sync are
+    never silently dropped
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 16 Apr 2026 00:00:00 +0000
+
 hokku-server (2.0.1-1) unstable; urgency=low
 
   * Web GUI with config editor, image grid, screen tracking

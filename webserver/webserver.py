@@ -29,6 +29,7 @@ from pathlib import Path
 from io import BytesIO
 
 from flask import Flask, send_file, jsonify, make_response, render_template, request, abort, redirect
+from werkzeug.utils import secure_filename
 from PIL import Image
 from pillow_heif import register_heif_opener
 import numpy as np
@@ -654,13 +655,28 @@ def _convert_and_store(img_path, content_hash):
 
 
 _sync_lock = threading.Lock()
+_sync_state_lock = threading.Lock()
+_sync_pending = False
 
 def _sync_pool():
-    if not _sync_lock.acquire(blocking=False):
-        print("  Sync already running, skipping")
-        return
+    """Run a pool sync. If one is already running, mark a rerun-pending flag
+    so the in-progress sync loops once more — this guarantees changes made
+    during a sync (uploads, deletions) are never silently dropped, while
+    still serializing actual sync work."""
+    global _sync_pending
+    with _sync_state_lock:
+        if not _sync_lock.acquire(blocking=False):
+            _sync_pending = True
+            print("  Sync already running, queued rerun")
+            return
+        _sync_pending = False
     try:
-        _sync_pool_inner()
+        while True:
+            _sync_pool_inner()
+            with _sync_state_lock:
+                if not _sync_pending:
+                    break
+                _sync_pending = False
     finally:
         _sync_lock.release()
 
@@ -669,6 +685,13 @@ def _sync_pool_inner():
     cache_dir = _get_cache_dir()
     image_paths = _list_images()
     current_paths = set()
+
+    # Fast pre-pass: build any missing thumbnails before the slow dither loop.
+    # Cheap (~tens of ms each) and lets the web UI show previews for every
+    # uploaded image immediately instead of waiting for dithering to reach it.
+    for img_path in image_paths:
+        if not _thumb_path_for(img_path).exists():
+            _ensure_thumbnail(img_path)
 
     # Count how many need conversion
     to_convert = []
@@ -793,7 +816,14 @@ def api_status():
 
     with _lock:
         pool_files = sorted(Path(k).name for k in _pool.keys())
+        pool_set = set(pool_files)
         serve_data = _database.get("serve_data", {})
+
+        # Include every file in the upload dir, marking whether the dithered
+        # conversion is ready yet. The frontend uses this to render a card
+        # for pending images with a "generating preview" badge.
+        all_upload = sorted(p.name for p in _list_images())
+        upload_files = [{"name": n, "dithered": n in pool_set} for n in all_upload]
 
         enriched = {}
         for fname in pool_files:
@@ -810,7 +840,9 @@ def api_status():
 
         return jsonify({
             "pool_files": pool_files,
+            "upload_files": upload_files,
             "pool_size": len(_pool),
+            "upload_size": len(upload_files),
             "serve_data": enriched,
             "screens": screens,
             "last_served": _last_served["name"],
@@ -859,34 +891,54 @@ def api_original(filename):
 
 _thumb_lock = threading.Lock()
 
+def _thumb_path_for(img_path):
+    return _get_cache_dir() / "thumbs" / (img_path.stem + "_thumb.jpg")
+
+def _ensure_thumbnail(img_path):
+    """Build the thumbnail for img_path if it doesn't exist or is stale.
+    Returns the cached thumbnail Path on success, None on failure. Cheap
+    enough (~tens of ms) to call eagerly during _sync_pool so the grid
+    can show previews before the slow dither finishes."""
+    thumb_path = _thumb_path_for(img_path)
+    try:
+        if thumb_path.exists() and thumb_path.stat().st_mtime >= img_path.stat().st_mtime:
+            return thumb_path
+    except OSError:
+        pass
+    with _thumb_lock:
+        try:
+            if thumb_path.exists() and thumb_path.stat().st_mtime >= img_path.stat().st_mtime:
+                return thumb_path
+            from PIL import ImageOps
+            thumb_path.parent.mkdir(parents=True, exist_ok=True)
+            img = Image.open(img_path)
+            img = ImageOps.exif_transpose(img)
+            # JPEG can't encode alpha — flatten RGBA / LA / P-with-transparency
+            # onto a white canvas before saving.
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                img = img.convert("RGBA")
+                bg = Image.new("RGB", img.size, (255, 255, 255))
+                bg.paste(img, mask=img.split()[-1])
+                img = bg
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            img.thumbnail((300, 300), Image.LANCZOS)
+            img.save(thumb_path, format="JPEG", quality=80)
+            return thumb_path
+        except Exception as e:
+            print(f"  Thumbnail error: {img_path.name}: {e}")
+            return None
+
 @app.route("/hokku/api/thumbnail/<filename>")
 def api_thumbnail(filename):
     """Serve a cached thumbnail of the original image (~300px wide)."""
     img_path = _get_upload_dir() / filename
     if not img_path.exists() or not img_path.is_file():
         abort(404)
-
-    # Serve from disk cache if available
-    thumb_dir = _get_cache_dir() / "thumbs"
-    thumb_path = thumb_dir / (img_path.stem + "_thumb.jpg")
-    if thumb_path.exists() and thumb_path.stat().st_mtime >= img_path.stat().st_mtime:
-        return send_file(thumb_path, mimetype="image/jpeg")
-
-    # Generate and cache — serialize to avoid memory spikes from parallel decodes
-    with _thumb_lock:
-        # Re-check after acquiring lock (another request may have generated it)
-        if thumb_path.exists() and thumb_path.stat().st_mtime >= img_path.stat().st_mtime:
-            return send_file(thumb_path, mimetype="image/jpeg")
-        try:
-            from PIL import ImageOps
-            thumb_dir.mkdir(parents=True, exist_ok=True)
-            img = Image.open(img_path)
-            img = ImageOps.exif_transpose(img)
-            img.thumbnail((300, 300), Image.LANCZOS)
-            img.save(thumb_path, format="JPEG", quality=80)
-            return send_file(thumb_path, mimetype="image/jpeg")
-        except Exception:
-            abort(500)
+    thumb_path = _ensure_thumbnail(img_path)
+    if thumb_path is None:
+        abort(500)
+    return send_file(thumb_path, mimetype="image/jpeg")
 
 
 @app.route("/hokku/api/dithered/<filename>")
@@ -970,6 +1022,96 @@ def api_config():
         "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
         "orientation": _config.get("orientation", "landscape"),
     }})
+
+
+@app.route("/hokku/api/upload", methods=["POST"])
+def api_upload():
+    """Accept one or more uploaded image files. Triggers background re-sync."""
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "No files provided"}), 400
+
+    upload_dir = _get_upload_dir()
+    try:
+        upload_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return jsonify({"error": f"Upload directory not writable ({upload_dir}): {e.strerror or e}"}), 500
+
+    saved = []
+    skipped = []
+    for f in files:
+        if not f or not f.filename:
+            continue
+        # secure_filename strips path components and unsafe chars but preserves extension
+        safe_name = secure_filename(f.filename)
+        if not safe_name:
+            skipped.append({"filename": f.filename, "reason": "invalid filename"})
+            continue
+        ext = Path(safe_name).suffix.lower()
+        if ext not in IMAGE_EXTENSIONS:
+            skipped.append({"filename": f.filename, "reason": f"unsupported type {ext}"})
+            continue
+
+        # Avoid clobbering an existing file by suffixing _1, _2, ...
+        dest = upload_dir / safe_name
+        if dest.exists():
+            stem = dest.stem
+            n = 1
+            while dest.exists():
+                dest = upload_dir / f"{stem}_{n}{ext}"
+                n += 1
+
+        try:
+            f.save(dest)
+        except OSError as e:
+            # Most common culprit: systemd ProtectSystem=strict blocking writes
+            # outside StateDirectory. Return a structured error so the UI can show
+            # something more useful than Flask's HTML 500 page.
+            print(f"  Upload error: {dest}: {e}")
+            return jsonify({
+                "error": f"Failed to save {dest.name}: {e.strerror or e}",
+                "saved": saved,
+                "skipped": skipped,
+            }), 500
+        saved.append(dest.name)
+        print(f"  Upload: saved {dest.name}")
+
+    if saved:
+        threading.Thread(target=_sync_pool, daemon=True).start()
+
+    return jsonify({"status": "ok", "saved": saved, "skipped": skipped})
+
+
+@app.route("/hokku/api/image/<filename>", methods=["DELETE"])
+def api_delete_image(filename):
+    """Delete an uploaded image and its associated cache files."""
+    safe_name = secure_filename(filename)
+    if not safe_name:
+        return jsonify({"error": "Invalid filename"}), 400
+
+    img_path = _get_upload_dir() / safe_name
+    if not img_path.exists() or not img_path.is_file():
+        return jsonify({"error": "Image not found"}), 404
+
+    # Remove the cached thumbnail (matched by stem; _sync_pool ignores the thumbs/ dir)
+    thumb_path = _get_cache_dir() / "thumbs" / (img_path.stem + "_thumb.jpg")
+    if thumb_path.exists():
+        try:
+            thumb_path.unlink()
+        except OSError:
+            pass
+
+    try:
+        img_path.unlink()
+    except OSError as e:
+        print(f"  Delete error: {img_path}: {e}")
+        return jsonify({"error": f"Failed to delete {safe_name}: {e.strerror or e}"}), 500
+    print(f"  Delete: removed {safe_name}")
+
+    # _sync_pool drops the pool entry and purges the matching cache .bin/.png
+    threading.Thread(target=_sync_pool, daemon=True).start()
+
+    return jsonify({"status": "ok", "deleted": safe_name})
 
 
 @app.route("/hokku/api/clear_cache", methods=["POST"])

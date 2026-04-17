@@ -6,7 +6,7 @@ Spectra 6 e-ink image server for Hokku/Huessen frames. Converts images using Flo
 
 **Debian/Ubuntu** (recommended):
 ```bash
-apt install ./hokku-server_2.0.1-1_all.deb
+apt install ./hokku-server_2.1.3-1_all.deb
 ```
 The deb installs dependencies, creates the config, and starts the service automatically.
 
@@ -29,6 +29,9 @@ The web GUI at `http://server:8080/` lets you:
 
 - **Configure**: timezone, refresh schedule (HHMM format), orientation (landscape/portrait), poll interval
 - **Browse images**: thumbnails with original and dithered views, show counts, total display time
+- **Upload images**: drag and drop files anywhere on the page, or click the upload zone to browse
+- **Pending-dither indicator**: every uploaded image appears in the grid immediately. Files still being converted to the e-ink palette show a yellow "Dithering…" badge and a faded thumbnail; the status bar shows `ready / total` until the batch finishes
+- **Delete images**: trashcan button on each thumbnail with a styled confirm dialog (Esc cancels, Enter confirms); also removes the cached conversion
 - **Manage screens**: see all connected frames with name, IP, request count, last seen
 - **Show Next**: queue a specific image to be shown on the next refresh
 - **Clear Cache**: force re-conversion of all images (useful after changing orientation)
@@ -88,6 +91,8 @@ If you delete `database.json`, the server starts fresh — all images get equal 
 | `/hokku/api/thumbnail/<name>` | GET | 300px thumbnail |
 | `/hokku/api/dithered/<name>` | GET | Dithered preview PNG |
 | `/hokku/api/show_next/<name>` | POST | Queue image as next |
+| `/hokku/api/upload` | POST | Upload one or more images (multipart `files`) |
+| `/hokku/api/image/<name>` | DELETE | Delete an uploaded image and its cached conversion |
 | `/hokku/api/config` | POST | Update configuration |
 | `/hokku/api/clear_cache` | POST | Wipe cache and re-convert |
 | `/hokku/api/time` | GET | Current server time in configured timezone |

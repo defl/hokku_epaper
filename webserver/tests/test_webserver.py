@@ -317,6 +317,110 @@ class TestFlaskEndpoints:
         assert b"Hokku" in resp.data
 
 
+# ── Thumbnail mode-conversion tests ───────────────────────────────
+
+class TestEnsureThumbnail:
+    """_ensure_thumbnail must produce a valid JPEG for every PIL mode the
+    upload dir might throw at it. Real bug fixed here: PNGs with alpha
+    (RGBA / LA / paletted-with-transparency) used to crash with 'cannot
+    write mode RGBA as JPEG' and leave no thumbnail."""
+
+    @pytest.fixture
+    def tmp_cache(self, tmp_path):
+        """Point _config at a fresh temp cache_dir so thumbnails write there."""
+        cache_dir = tmp_path / "cache"
+        upload_dir = tmp_path / "upload"
+        upload_dir.mkdir()
+        cfg = {**webserver.DEFAULT_CONFIG,
+               "cache_dir": str(cache_dir),
+               "upload_dir": str(upload_dir)}
+        with patch.object(webserver, "_config", cfg):
+            yield {"cache_dir": cache_dir, "upload_dir": upload_dir}
+
+    def _save(self, upload_dir, name, img):
+        """Save img into the upload dir; format inferred from extension."""
+        path = upload_dir / name
+        img.save(path)
+        return path
+
+    def _assert_valid_jpeg(self, thumb_path):
+        """Thumbnail file must exist and be a decodable JPEG within bounds."""
+        assert thumb_path is not None, "_ensure_thumbnail returned None"
+        assert thumb_path.exists()
+        assert thumb_path.suffix == ".jpg"
+        thumb = Image.open(thumb_path)
+        assert thumb.format == "JPEG"
+        assert thumb.mode == "RGB"
+        assert max(thumb.size) <= 300
+
+    def test_rgba_png_does_not_crash(self, tmp_cache):
+        """The exact bug from the field: RGBA PNGs used to raise
+        OSError('cannot write mode RGBA as JPEG')."""
+        img = Image.new("RGBA", (400, 200), (255, 0, 0, 128))
+        path = self._save(tmp_cache["upload_dir"], "rgba.png", img)
+        self._assert_valid_jpeg(webserver._ensure_thumbnail(path))
+
+    def test_la_grayscale_with_alpha(self, tmp_cache):
+        """LA mode (grayscale + alpha) — same alpha-channel issue as RGBA."""
+        img = Image.new("LA", (400, 200), (128, 200))
+        path = self._save(tmp_cache["upload_dir"], "la.png", img)
+        self._assert_valid_jpeg(webserver._ensure_thumbnail(path))
+
+    def test_palette_with_transparency(self, tmp_cache):
+        """Paletted PNGs with a tRNS chunk are reported as mode 'P' but
+        carry transparency in img.info — must be flattened too."""
+        img = Image.new("P", (400, 200))
+        img.putpalette([0, 0, 0, 255, 0, 0, 0, 255, 0] + [0] * (256 * 3 - 9))
+        img.info["transparency"] = 0
+        path = self._save(tmp_cache["upload_dir"], "palette.png", img)
+        self._assert_valid_jpeg(webserver._ensure_thumbnail(path))
+
+    def test_palette_no_transparency_converts_to_rgb(self, tmp_cache):
+        """Paletted without transparency hits the elif branch (mode != RGB)."""
+        img = Image.new("P", (400, 200))
+        img.putpalette([0, 0, 0, 200, 100, 50] + [0] * (256 * 3 - 6))
+        path = self._save(tmp_cache["upload_dir"], "p.png", img)
+        self._assert_valid_jpeg(webserver._ensure_thumbnail(path))
+
+    def test_grayscale_l_mode(self, tmp_cache):
+        """Plain grayscale (L) — no alpha, but still needs RGB conversion."""
+        img = Image.new("L", (400, 200), 128)
+        path = self._save(tmp_cache["upload_dir"], "gray.png", img)
+        self._assert_valid_jpeg(webserver._ensure_thumbnail(path))
+
+    def test_rgb_passthrough(self, tmp_cache):
+        """Plain RGB JPEG goes through neither conversion branch."""
+        img = Image.new("RGB", (400, 200), (10, 20, 30))
+        path = self._save(tmp_cache["upload_dir"], "rgb.jpg", img)
+        self._assert_valid_jpeg(webserver._ensure_thumbnail(path))
+
+    def test_thumbnail_reused_when_fresh(self, tmp_cache):
+        """Second call must return the cached path without rewriting it."""
+        img = Image.new("RGB", (400, 200), (10, 20, 30))
+        path = self._save(tmp_cache["upload_dir"], "cached.jpg", img)
+
+        thumb1 = webserver._ensure_thumbnail(path)
+        mtime1 = thumb1.stat().st_mtime_ns
+
+        thumb2 = webserver._ensure_thumbnail(path)
+        assert thumb2 == thumb1
+        assert thumb2.stat().st_mtime_ns == mtime1, "Fresh thumbnail should not be rewritten"
+
+    def test_thumbnail_regenerated_when_source_newer(self, tmp_cache):
+        """If the source mtime is newer than the cached thumbnail, regenerate."""
+        import time as _time
+        img = Image.new("RGB", (400, 200), (10, 20, 30))
+        path = self._save(tmp_cache["upload_dir"], "stale.jpg", img)
+
+        thumb1 = webserver._ensure_thumbnail(path)
+        # Backdate the thumbnail so the source appears newer
+        old = thumb1.stat().st_mtime - 100
+        os.utime(thumb1, (old, old))
+
+        thumb2 = webserver._ensure_thumbnail(path)
+        assert thumb2.stat().st_mtime > old, "Stale thumbnail should be regenerated"
+
+
 # ── Orientation and padding mask tests ────────────────────────────
 
 class TestOrientation:

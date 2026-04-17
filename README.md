@@ -4,7 +4,7 @@ Open source firmware and image server for the Hokku / Huessen 13.3" six-color e-
 
 ## Features
 
-- **Web GUI** — configure the server, browse images, manage screens at `http://server:port/`
+- **Web GUI** — configure the server, upload images by drag-and-drop, browse and delete images (with a "Dithering…" badge on freshly-uploaded ones still being converted), manage screens at `http://server:port/`
 - **Multi-screen support** — name each frame, track which images they've shown
 - **Fair image rotation** — least-shown image served next, new images get priority
 - **Server-driven schedule** — configure refresh times on the server, firmware just sleeps
@@ -25,7 +25,7 @@ You need two things:
 **Debian/Ubuntu** (recommended):
 ```bash
 # Download the .deb from the latest release
-apt install ./hokku-server_2.0.1-1_all.deb
+apt install ./hokku-server_2.1.3-1_all.deb
 # Starts automatically via systemd, web GUI at http://server:8080/
 # Drop your photos into /var/lib/hokku/upload/ or install samba
 # and make it very easy to manage them from any machine in your network
