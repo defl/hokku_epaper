@@ -36,7 +36,15 @@ To flash the firmware, take off the front cover of the frame (it's magnetically 
 
 ![Connecting the USB cable for flashing](images/flashing_cable.png)
 
-Once connected, run `python hokku_setup.py` from the `tools/` directory (or `hokku_setup.bat` on Windows).
+Once connected, run `python hokku_setup.py` from the `tools/` directory (or `hokku_setup.bat` on Windows). The setup tool walks you through WiFi credentials, server address, and screen name — then flashes the firmware:
+
+![Setup tool configuring a frame](images/configurator.png)
+
+### Image Server
+
+The web GUI lets you manage your image library, configure refresh times, and monitor connected frames. Drop photos into the upload directory and the server automatically converts them to the 6-color e-ink palette:
+
+![Web GUI showing image library and configuration](images/server.png)
 
 See [webserver/README.md](webserver/README.md) for server details and [firmware/README.md](firmware/README.md) for firmware development.
 
