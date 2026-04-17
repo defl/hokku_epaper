@@ -64,7 +64,9 @@ The web GUI lets you manage your image library, configure refresh times, and mon
 
 ![Web GUI showing image library and configuration](images/server.png)
 
-See [webserver/README.md](webserver/README.md) for server details and [firmware/README.md](firmware/README.md) for firmware development.
+For more details see:
+- **[Image Server documentation](webserver/README.md)** — configuration, web GUI, API endpoints, color correction, systemd service
+- **[Firmware documentation](firmware/README.md)** — building from source, manual flashing, developer notes
 
 ## Features
 
