@@ -30,6 +30,14 @@ python hokku_setup.py
 
 The setup tool detects your frame over USB, flashes the firmware, and writes your WiFi credentials — no toolchain or compilation needed.
 
+### How to Flash
+
+To flash the firmware, take off the front cover of the frame (it's magnetically attached, be careful as it's easily damaged) and connect a USB-A to USB-C cable to the ESP32-S3 board's USB-C port as shown below:
+
+![Connecting the USB cable for flashing](images/flashing_cable.png)
+
+Once connected, run `python hokku_setup.py` from the `tools/` directory (or `hokku_setup.bat` on Windows).
+
 See [webserver/README.md](webserver/README.md) for server details and [firmware/README.md](firmware/README.md) for firmware development.
 
 ## Features
@@ -39,6 +47,7 @@ See [webserver/README.md](webserver/README.md) for server details and [firmware/
 - **Fair image rotation** — least-shown image served next, new images get priority
 - **Server-driven schedule** — configure refresh times on the server, firmware just sleeps
 - **EXIF-aware** — phone photos displayed in correct orientation
+- **Landscape or portrait** — pick your mounting orientation, server rotates for you
 - **Spectra 6 dithering** — Floyd-Steinberg with measured palette values and dynamic range compression
 - **No cloud, no accounts** — everything runs on your local network
 

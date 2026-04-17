@@ -76,6 +76,7 @@ DEFAULT_CONFIG = {
     "cache_dir": "/images/cache",
     "port": 8080,
     "poll_interval_seconds": 10,
+    "orientation": "landscape",
 }
 
 _config_file_path = None  # set during load, used for saving
@@ -113,7 +114,7 @@ def _save_config(config):
     """Save config to the file it was loaded from (or ./config.json)."""
     path = _config_file_path or Path("./config.json")
     # Only save user-facing config keys
-    save_keys = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir", "port", "poll_interval_seconds"]
+    save_keys = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir", "port", "poll_interval_seconds", "orientation"]
     save_data = {k: config[k] for k in save_keys if k in config}
     with open(path, "w") as f:
         json.dump(save_data, f, indent=2)
@@ -269,7 +270,8 @@ def _hash_file(img_path):
     return h.hexdigest()
 
 def _cache_key(img_path, content_hash):
-    return f"{img_path.stem}_{content_hash[:12]}"
+    orientation = _config.get("orientation", "landscape")
+    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}"
 
 def _load_from_cache(cache_dir, img_path, content_hash):
     key = _cache_key(img_path, content_hash)
@@ -288,6 +290,25 @@ def _save_to_cache(cache_dir, img_path, content_hash, raw_bytes, preview_bytes):
     (cache_dir / f"{key}.bin").write_bytes(raw_bytes)
     (cache_dir / f"{key}.png").write_bytes(preview_bytes)
 
+def _read_cached_binary(img_path, content_hash):
+    """Load binary bytes for an image from the disk cache. Returns None if missing."""
+    key = _cache_key(img_path, content_hash)
+    bin_path = _get_cache_dir() / f"{key}.bin"
+    if not bin_path.exists():
+        return None
+    data = bin_path.read_bytes()
+    if len(data) != TOTAL_BYTES:
+        return None
+    return data
+
+def _read_cached_preview(img_path, content_hash):
+    """Load preview PNG bytes for an image from the disk cache. Returns None if missing."""
+    key = _cache_key(img_path, content_hash)
+    png_path = _get_cache_dir() / f"{key}.png"
+    if not png_path.exists():
+        return None
+    return png_path.read_bytes()
+
 def _purge_stale_cache(cache_dir, valid_keys):
     if not cache_dir.exists():
         return
@@ -296,14 +317,21 @@ def _purge_stale_cache(cache_dir, valid_keys):
         valid_files.add(f"{key}.bin")
         valid_files.add(f"{key}.png")
     for f in cache_dir.iterdir():
-        if f.name not in valid_files and f.name != "database.json":
+        if f.is_dir() or f.name == "database.json":
+            continue
+        if f.name not in valid_files:
             f.unlink()
             print(f"  Cache: removed stale {f.name}")
 
 def _clear_cache_files(cache_dir):
     if cache_dir.exists():
+        import shutil
         for f in cache_dir.iterdir():
-            if f.name != "database.json":
+            if f.name == "database.json":
+                continue
+            if f.is_dir():
+                shutil.rmtree(f)
+            else:
                 f.unlink()
         print("  Cache cleared")
 
@@ -417,7 +445,7 @@ def _track_display_time(serve_data):
 # ── Image pool (protected by lock) ──────────────────────────────────
 _lock = threading.Lock()
 _pool = {}
-_last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+_last_served = {"key": None, "name": None, "served_at": None}
 _converting_count = 0
 _converting_name = None  # name of currently converting image
 _config = dict(DEFAULT_CONFIG)
@@ -439,23 +467,33 @@ def _list_images():
 
 
 def _prepare_canvas(img):
-    """Scale image to fit 1600x1200 landscape, enhance for e-ink, rotate 90 CW.
+    """Scale image to fit display, enhance for e-ink, produce 1200x1600 native buffer.
+
+    In landscape mode: composites on 1600x1200 canvas, then rotates -90° to 1200x1600.
+    In portrait mode: composites directly on 1200x1600 canvas, no rotation needed.
 
     Returns (canvas, padding_mask) where padding_mask is a boolean numpy array
     (True = padding pixel, should be forced to white after dithering).
     """
     from PIL import ImageEnhance, ImageOps
+    orientation = _config.get("orientation", "landscape")
+    portrait = (orientation == "portrait")
+
+    # Canvas dimensions: landscape = 1600x1200, portrait = 1200x1600
+    canvas_w = VISUAL_H if portrait else VISUAL_W   # 1200 or 1600
+    canvas_h = VISUAL_W if portrait else VISUAL_H   # 1600 or 1200
+
     w, h = img.size
-    scale = min(VISUAL_W / w, VISUAL_H / h)
+    scale = min(canvas_w / w, canvas_h / h)
     new_w, new_h = int(w * scale), int(h * scale)
     img_resized = img.resize((new_w, new_h), Image.LANCZOS)
-    canvas = Image.new("RGB", (VISUAL_W, VISUAL_H), (255, 255, 255))
-    x_off = (VISUAL_W - new_w) // 2
-    y_off = (VISUAL_H - new_h) // 2
+    canvas = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
+    x_off = (canvas_w - new_w) // 2
+    y_off = (canvas_h - new_h) // 2
     canvas.paste(img_resized, (x_off, y_off))
 
-    # Build padding mask before rotation (True = padding, not image content)
-    mask = np.ones((VISUAL_H, VISUAL_W), dtype=bool)
+    # Build padding mask (True = padding, not image content)
+    mask = np.ones((canvas_h, canvas_w), dtype=bool)
     mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
 
     canvas = ImageOps.autocontrast(canvas, cutoff=0.5)
@@ -466,10 +504,11 @@ def _prepare_canvas(img):
     canvas = ImageEnhance.Contrast(canvas).enhance(1.1)
     canvas = ImageEnhance.Sharpness(canvas).enhance(1.3)
     canvas = ImageEnhance.Color(canvas).enhance(1.2)
-    canvas = canvas.rotate(-90, expand=True)
 
-    # Rotate mask to match: -90° CW = np.rot90 with k=3
-    mask = np.rot90(mask, k=3)
+    if not portrait:
+        # Landscape: rotate -90° CW to get 1200x1600 native format
+        canvas = canvas.rotate(-90, expand=True)
+        mask = np.rot90(mask, k=3)
 
     return canvas, mask
 
@@ -561,7 +600,13 @@ def _convert_image(img_path):
     raw_bytes = panel1_bin.astype(np.uint8).tobytes() + panel2_bin.astype(np.uint8).tobytes()
     assert len(raw_bytes) == TOTAL_BYTES, f"Expected {TOTAL_BYTES}, got {len(raw_bytes)}"
     preview_rgb = PALETTE_PREVIEW_RGB[result_idx]
-    preview_img = Image.fromarray(preview_rgb).rotate(90, expand=True)
+    orientation = _config.get("orientation", "landscape")
+    if orientation == "landscape":
+        # Rotate back 90° CCW for human-friendly landscape preview
+        preview_img = Image.fromarray(preview_rgb).rotate(90, expand=True)
+    else:
+        # Portrait: already in natural viewing orientation
+        preview_img = Image.fromarray(preview_rgb)
     buf = BytesIO()
     preview_img.save(buf, format="PNG")
     preview_bytes = buf.getvalue()
@@ -592,17 +637,26 @@ def _convert_and_store(img_path, content_hash):
                         _converting_name = None
 
         with _lock:
-            _pool[str(img_path)] = {
-                "binary": raw_bytes,
-                "preview_png": preview_bytes,
-                "hash": content_hash,
-            }
+            # Only store metadata in RAM; actual bytes live on disk.
+            # This keeps memory flat regardless of pool size.
+            _pool[str(img_path)] = {"hash": content_hash}
         print(f"  Pool: {img_path.name} ready ({len(_pool)} total)")
     except Exception as e:
         print(f"  Error converting {img_path.name}: {e}")
 
 
+_sync_lock = threading.Lock()
+
 def _sync_pool():
+    if not _sync_lock.acquire(blocking=False):
+        print("  Sync already running, skipping")
+        return
+    try:
+        _sync_pool_inner()
+    finally:
+        _sync_lock.release()
+
+def _sync_pool_inner():
     cache_dir = _get_cache_dir()
     image_paths = _list_images()
     current_paths = set()
@@ -656,11 +710,7 @@ def serve_binary():
             return "No images available", 404
 
         entry = _pool[key]
-        _last_served["key"] = key
-        _last_served["name"] = Path(key).name
-        _last_served["binary"] = entry["binary"]
-        _last_served["preview_png"] = entry["preview_png"]
-        _last_served["served_at"] = datetime.now().isoformat(timespec="seconds")
+        content_hash = entry["hash"]
 
         # Track the calling screen
         screen_name = request.headers.get("X-Screen-Name", "unnamed")
@@ -676,10 +726,20 @@ def serve_binary():
 
         _save_database(_get_cache_dir(), _database)
 
-    sleep_seconds = _calculate_sleep_seconds(_config)
-    print(f"  Serving: {_last_served['name']} to {screen_name} (sleep_seconds={sleep_seconds})")
+    # Load binary from disk cache outside the lock
+    binary = _read_cached_binary(Path(key), content_hash)
+    if binary is None:
+        return "Cached binary missing, try again shortly", 503
 
-    response = make_response(entry["binary"])
+    # Update _last_served for the UI preview (no need to hold the binary here)
+    _last_served["key"] = key
+    _last_served["name"] = Path(key).name
+    _last_served["served_at"] = datetime.now().isoformat(timespec="seconds")
+
+    sleep_seconds = _calculate_sleep_seconds(_config)
+    print(f"  Serving: {Path(key).name} to {screen_name} (sleep_seconds={sleep_seconds})")
+
+    response = make_response(binary)
     response.headers["Content-Type"] = "application/octet-stream"
     response.headers["X-Sleep-Seconds"] = str(sleep_seconds)
     response.headers["Content-Disposition"] = "attachment; filename=hokku.bin"
@@ -738,48 +798,87 @@ def api_status():
                 "refresh_image_at_time": _config["refresh_image_at_time"],
                 "port": _config["port"],
                 "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
+                "orientation": _config.get("orientation", "landscape"),
                 "upload_dir": str(_get_upload_dir()),
                 "cache_dir": str(_get_cache_dir()),
             },
         })
 
 
+# Formats browsers can display natively — everything else gets converted to JPEG
+_BROWSER_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif"}
+
 @app.route("/hokku/api/original/<filename>")
 def api_original(filename):
-    """Serve the original uploaded image."""
+    """Serve the original uploaded image, converting to JPEG if the browser can't display it."""
     img_path = _get_upload_dir() / filename
     if not img_path.exists() or not img_path.is_file():
         abort(404)
-    return send_file(img_path)
-
-
-@app.route("/hokku/api/thumbnail/<filename>")
-def api_thumbnail(filename):
-    """Serve a thumbnail of the original image (~300px wide)."""
-    img_path = _get_upload_dir() / filename
-    if not img_path.exists() or not img_path.is_file():
-        abort(404)
+    if img_path.suffix.lower() in _BROWSER_IMAGE_EXTS:
+        return send_file(img_path)
+    # Convert non-browser formats (HEIC, TIFF, etc.) to JPEG
     try:
         from PIL import ImageOps
         img = Image.open(img_path)
         img = ImageOps.exif_transpose(img)
-        img.thumbnail((300, 300), Image.LANCZOS)
+        img = img.convert("RGB")
         buf = BytesIO()
-        img.save(buf, format="JPEG", quality=80)
+        img.save(buf, format="JPEG", quality=92)
         buf.seek(0)
         return send_file(buf, mimetype="image/jpeg")
     except Exception:
-        abort(500)
+        # Fall back to serving the raw file
+        return send_file(img_path)
+
+
+_thumb_lock = threading.Lock()
+
+@app.route("/hokku/api/thumbnail/<filename>")
+def api_thumbnail(filename):
+    """Serve a cached thumbnail of the original image (~300px wide)."""
+    img_path = _get_upload_dir() / filename
+    if not img_path.exists() or not img_path.is_file():
+        abort(404)
+
+    # Serve from disk cache if available
+    thumb_dir = _get_cache_dir() / "thumbs"
+    thumb_path = thumb_dir / (img_path.stem + "_thumb.jpg")
+    if thumb_path.exists() and thumb_path.stat().st_mtime >= img_path.stat().st_mtime:
+        return send_file(thumb_path, mimetype="image/jpeg")
+
+    # Generate and cache — serialize to avoid memory spikes from parallel decodes
+    with _thumb_lock:
+        # Re-check after acquiring lock (another request may have generated it)
+        if thumb_path.exists() and thumb_path.stat().st_mtime >= img_path.stat().st_mtime:
+            return send_file(thumb_path, mimetype="image/jpeg")
+        try:
+            from PIL import ImageOps
+            thumb_dir.mkdir(parents=True, exist_ok=True)
+            img = Image.open(img_path)
+            img = ImageOps.exif_transpose(img)
+            img.thumbnail((300, 300), Image.LANCZOS)
+            img.save(thumb_path, format="JPEG", quality=80)
+            return send_file(thumb_path, mimetype="image/jpeg")
+        except Exception:
+            abort(500)
 
 
 @app.route("/hokku/api/dithered/<filename>")
 def api_dithered(filename):
-    """Serve the dithered preview PNG for an image."""
+    """Serve the dithered preview PNG for an image (loaded from disk cache on demand)."""
     with _lock:
+        match = None
         for key, entry in _pool.items():
             if Path(key).name == filename:
-                return send_file(BytesIO(entry["preview_png"]), mimetype="image/png")
-    abort(404)
+                match = (key, entry["hash"])
+                break
+    if match is None:
+        abort(404)
+    key, content_hash = match
+    preview = _read_cached_preview(Path(key), content_hash)
+    if preview is None:
+        abort(404)
+    return send_file(BytesIO(preview), mimetype="image/png")
 
 
 @app.route("/hokku/api/show_next/<filename>", methods=["POST"])
@@ -820,13 +919,30 @@ def api_config():
             _config["poll_interval_seconds"] = val
             changed = True
 
+    orientation_changed = False
+    if "orientation" in data:
+        val = data["orientation"]
+        if val in ("landscape", "portrait"):
+            if _config.get("orientation", "landscape") != val:
+                orientation_changed = True
+            _config["orientation"] = val
+            changed = True
+
     if changed:
         _save_config(_config)
+
+    if orientation_changed:
+        # Orientation affects image processing, so clear cache and re-convert
+        _clear_cache_files(_get_cache_dir())
+        with _lock:
+            _pool.clear()
+        threading.Thread(target=_sync_pool, daemon=True).start()
 
     return jsonify({"status": "ok", "config": {
         "timezone": _config["timezone"],
         "refresh_image_at_time": _config["refresh_image_at_time"],
         "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
+        "orientation": _config.get("orientation", "landscape"),
     }})
 
 
@@ -883,9 +999,7 @@ def main():
 
     images = _list_images()
     if images:
-        print(f"  Found {len(images)} image(s), loading...")
-        _sync_pool()
-        print(f"  Pool ready: {len(_pool)} image(s)")
+        print(f"  Found {len(images)} image(s), converting in background...")
     else:
         print(f"  No images found yet, waiting for uploads...")
 

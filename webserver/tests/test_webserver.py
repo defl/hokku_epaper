@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+from PIL import Image
 import pytest
 
 import sys
@@ -113,7 +115,7 @@ class TestFormatDuration:
 
 class TestFairDistribution:
     def _make_pool(self, names):
-        return {f"/images/{n}": {"binary": b"x", "preview_png": b"x", "hash": "abc"} for n in names}
+        return {f"/images/{n}": {"hash": "abc"} for n in names}
 
     def _make_entry(self, show_index=0, total_show_count=0, total_show_minutes=0.0):
         return {"show_index": show_index, "last_request": None,
@@ -127,7 +129,7 @@ class TestFairDistribution:
             "c.jpg": self._make_entry(show_index=5),
         }}
         # Reset _last_served to avoid time tracking issues
-        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._last_served = {"key": None, "name": None, "served_at": None}
         key = webserver._pick_next_image(pool, db)
         assert Path(key).name == "b.jpg"
         assert db["serve_data"]["b.jpg"]["show_index"] == 2
@@ -138,7 +140,7 @@ class TestFairDistribution:
             "a.jpg": self._make_entry(show_index=5),
             "b.jpg": self._make_entry(show_index=3),
         }}
-        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._last_served = {"key": None, "name": None, "served_at": None}
         key = webserver._pick_next_image(pool, db)
         assert Path(key).name == "new.jpg"
         assert db["serve_data"]["a.jpg"]["show_index"] == 1
@@ -151,7 +153,7 @@ class TestFairDistribution:
             "a.jpg": self._make_entry(show_index=2),
             "deleted.jpg": self._make_entry(show_index=10),
         }}
-        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._last_served = {"key": None, "name": None, "served_at": None}
         webserver._pick_next_image(pool, db)
         assert "deleted.jpg" not in db["serve_data"]
 
@@ -169,7 +171,7 @@ class TestFairDistribution:
                 "b.jpg": self._make_entry(),
                 "c.jpg": self._make_entry(),
             }}
-            webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+            webserver._last_served = {"key": None, "name": None, "served_at": None}
             key = webserver._pick_next_image(pool, db)
             seen.add(Path(key).name)
         assert len(seen) >= 2
@@ -181,21 +183,21 @@ class TestFairDistribution:
             "a.jpg": self._make_entry(show_index=-1),
             "b.jpg": self._make_entry(show_index=3),
         }}
-        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._last_served = {"key": None, "name": None, "served_at": None}
         key = webserver._pick_next_image(pool, db)
         assert Path(key).name == "a.jpg"
 
     def test_total_show_count_increments(self):
         pool = self._make_pool(["a.jpg"])
         db = {"serve_data": {"a.jpg": self._make_entry(total_show_count=5)}}
-        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._last_served = {"key": None, "name": None, "served_at": None}
         webserver._pick_next_image(pool, db)
         assert db["serve_data"]["a.jpg"]["total_show_count"] == 6
 
     def test_updates_last_request(self):
         pool = self._make_pool(["a.jpg"])
         db = {"serve_data": {"a.jpg": self._make_entry()}}
-        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._last_served = {"key": None, "name": None, "served_at": None}
         before = datetime.now().isoformat(timespec="seconds")
         webserver._pick_next_image(pool, db)
         after = datetime.now().isoformat(timespec="seconds")
@@ -270,7 +272,7 @@ class TestFlaskEndpoints:
              patch.object(webserver, "_converting_count", 0), \
              patch.object(webserver, "_converting_name", None), \
              patch.object(webserver, "_last_served",
-                         {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}):
+                         {"key": None, "name": None, "served_at": None}):
             resp = client.get("/hokku/api/status")
             assert resp.status_code == 200
             data = resp.get_json()
@@ -280,7 +282,7 @@ class TestFlaskEndpoints:
 
     def test_screen_tracking(self, client):
         """X-Screen-Name header is tracked in database."""
-        pool = {"/images/a.jpg": {"binary": b"x" * 960000, "preview_png": b"png", "hash": "abc"}}
+        pool = {"/images/a.jpg": {"hash": "abc"}}
         db = {"serve_data": {"a.jpg": {"show_index": 0, "last_request": None,
               "total_show_count": 0, "total_show_minutes": 0.0}}}
         with patch.object(webserver, "_pool", pool), \
@@ -288,7 +290,8 @@ class TestFlaskEndpoints:
              patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
              patch.object(webserver, "_converting_count", 0), \
              patch.object(webserver, "_last_served",
-                         {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}), \
+                         {"key": None, "name": None, "served_at": None}), \
+             patch("webserver._read_cached_binary", return_value=b"x" * 960000), \
              patch("webserver._save_database"):
             resp = client.get("/hokku/screen/", headers={"X-Screen-Name": "Living Room"})
             assert resp.status_code == 200
@@ -312,3 +315,110 @@ class TestFlaskEndpoints:
         resp = client.get("/hokku/ui")
         assert resp.status_code == 200
         assert b"Hokku" in resp.data
+
+
+# ── Orientation and padding mask tests ────────────────────────────
+
+class TestOrientation:
+    """Test _prepare_canvas produces correct dimensions and masks for both orientations."""
+
+    def _make_image(self, w, h, color=(128, 64, 32)):
+        """Create a solid-color test image."""
+        return Image.new("RGB", (w, h), color)
+
+    def test_landscape_canvas_dimensions(self):
+        """Landscape mode: canvas should be 1200x1600 (native format) after rotation."""
+        img = self._make_image(800, 600)
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "landscape"}):
+            canvas, mask = webserver._prepare_canvas(img)
+        # PIL size is (width, height), numpy shape is (height, width)
+        assert canvas.size == (webserver.FULL_W, webserver.PANEL_H)  # (1200, 1600)
+        assert mask.shape == (webserver.PANEL_H, webserver.FULL_W)   # (1600, 1200)
+
+    def test_portrait_canvas_dimensions(self):
+        """Portrait mode: canvas should be 1200x1600 (native format) without rotation."""
+        img = self._make_image(600, 800)
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "portrait"}):
+            canvas, mask = webserver._prepare_canvas(img)
+        assert canvas.size == (webserver.FULL_W, webserver.PANEL_H)  # (1200, 1600)
+        assert mask.shape == (webserver.PANEL_H, webserver.FULL_W)   # (1600, 1200)
+
+    def test_landscape_padding_mask_pillarbox(self):
+        """Landscape: tall image gets pillarbox padding on left and right."""
+        # 600x800 image is taller than 4:3, so it gets pillarboxed in 1600x1200
+        img = self._make_image(600, 800)
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "landscape"}):
+            canvas, mask = webserver._prepare_canvas(img)
+        # After rotation to 1200x1600: mask should have True (padding) and False (image) regions
+        assert mask.any(), "Should have some padding pixels"
+        assert not mask.all(), "Should have some image pixels"
+
+    def test_portrait_padding_mask_letterbox(self):
+        """Portrait: wide image gets letterbox padding on top and bottom."""
+        # 800x600 image is wider than 3:4 portrait, so it gets letterboxed in 1200x1600
+        img = self._make_image(800, 600)
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "portrait"}):
+            canvas, mask = webserver._prepare_canvas(img)
+        assert mask.any(), "Should have some padding pixels"
+        assert not mask.all(), "Should have some image pixels"
+
+    def test_landscape_exact_fit_no_padding(self):
+        """Landscape: 4:3 image fills the canvas exactly — no padding."""
+        img = self._make_image(1600, 1200)
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "landscape"}):
+            canvas, mask = webserver._prepare_canvas(img)
+        assert not mask.any(), "Exact 4:3 landscape should have no padding"
+
+    def test_portrait_exact_fit_no_padding(self):
+        """Portrait: 3:4 image fills the canvas exactly — no padding."""
+        img = self._make_image(1200, 1600)
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "portrait"}):
+            canvas, mask = webserver._prepare_canvas(img)
+        assert not mask.any(), "Exact 3:4 portrait should have no padding"
+
+    def test_padding_forced_white_landscape(self):
+        """Landscape: padding pixels in dithered output should be white (palette index 1)."""
+        # Use a small non-4:3 image so there IS padding
+        img = self._make_image(100, 100, color=(50, 50, 50))
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "landscape"}):
+            canvas, mask = webserver._prepare_canvas(img)
+            canvas_array = webserver._compress_dynamic_range(np.array(canvas, dtype=np.float32))
+            canvas_img = Image.fromarray(canvas_array.astype(np.uint8))
+            result_idx = webserver._floyd_steinberg_dither(canvas_img)
+            result_idx[mask] = 1  # This is what _convert_image does
+        # All padding pixels must be palette index 1 (white)
+        assert (result_idx[mask] == 1).all(), "All padding pixels should be white in landscape"
+
+    def test_padding_forced_white_portrait(self):
+        """Portrait: padding pixels in dithered output should be white (palette index 1)."""
+        img = self._make_image(100, 100, color=(50, 50, 50))
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "portrait"}):
+            canvas, mask = webserver._prepare_canvas(img)
+            canvas_array = webserver._compress_dynamic_range(np.array(canvas, dtype=np.float32))
+            canvas_img = Image.fromarray(canvas_array.astype(np.uint8))
+            result_idx = webserver._floyd_steinberg_dither(canvas_img)
+            result_idx[mask] = 1
+        assert (result_idx[mask] == 1).all(), "All padding pixels should be white in portrait"
+
+    def test_pool_entries_are_metadata_only(self):
+        """Pool entries should only hold metadata (hash), not the 960KB binary or preview PNG.
+
+        Guards against regression to in-memory caching which OOM-killed the server.
+        """
+        # Simulate a pool entry as produced by _convert_and_store
+        entry = {"hash": "abc123"}
+        # Should not contain the heavy bytes
+        assert "binary" not in entry
+        assert "preview_png" not in entry
+
+    def test_cache_key_differs_by_orientation(self):
+        """Cache keys must differ between landscape and portrait for same file."""
+        path = Path("/images/test.jpg")
+        content_hash = "abcdef123456"
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "landscape"}):
+            key_l = webserver._cache_key(path, content_hash)
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "portrait"}):
+            key_p = webserver._cache_key(path, content_hash)
+        assert key_l != key_p, "Cache keys must differ between orientations"
+        assert key_l.endswith("_l")
+        assert key_p.endswith("_p")

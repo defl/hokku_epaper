@@ -113,6 +113,15 @@
   </div>
 
   <div class="config-row">
+    <label>Orientation:</label>
+    <select id="orientation">
+      <option value="landscape">Landscape</option>
+      <option value="portrait">Portrait</option>
+    </select>
+    <span class="info">changing orientation re-converts all images</span>
+  </div>
+
+  <div class="config-row">
     <label>Poll interval:</label>
     <input type="number" id="poll-interval" min="1" max="3600"> <span class="info">seconds between image directory checks</span>
   </div>
@@ -206,6 +215,7 @@ async function saveConfig() {
     timezone: document.getElementById('timezone').value,
     refresh_image_at_time: refreshTimes,
     poll_interval_seconds: parseInt(document.getElementById('poll-interval').value) || 10,
+    orientation: document.getElementById('orientation').value,
   };
   try {
     const resp = await fetch('/hokku/api/config', {
@@ -272,8 +282,9 @@ function renderImageGrid(poolFiles, serveData) {
     const card = document.createElement('div');
     card.className = 'image-card';
     card.innerHTML = `
-      <img src="/hokku/api/dithered/${encodeURIComponent(fname)}" alt="${fname}"
-           onclick="window.open('/hokku/api/dithered/${encodeURIComponent(fname)}')">
+      <img src="/hokku/api/thumbnail/${encodeURIComponent(fname)}" alt="${fname}"
+           onclick="window.open('/hokku/api/original/${encodeURIComponent(fname)}')"
+           style="cursor:pointer" title="Click to view original">
       <div class="card-body">
         <div class="filename">${fname}</div>
         <div class="stats">
@@ -315,6 +326,7 @@ async function refreshStatus() {
     refreshTimes = cfg.refresh_image_at_time || [];
     renderRefreshTimes();
     document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
+    document.getElementById('orientation').value = cfg.orientation || 'landscape';
     document.getElementById('server-address').textContent = `${location.hostname}:${cfg.port}`;
     document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
 
