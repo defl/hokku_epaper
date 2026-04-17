@@ -1,8 +1,11 @@
-hokku-server (1.0.0-1) unstable; urgency=low
+hokku-server (2.0.1-1) unstable; urgency=low
 
-  * Initial release.
-  * Config file support with refresh scheduling.
-  * Fair image distribution with persistent tracking.
-  * X-Sleep-Seconds header for firmware sleep control.
+  * Web GUI with config editor, image grid, screen tracking
+  * Multi-screen support with X-Screen-Name header
+  * Server-driven sleep schedule (X-Sleep-Seconds header)
+  * Fair image distribution with show_index ranking
+  * Configurable orientation (landscape/portrait)
+  * EXIF orientation support
+  * Debian packaging with systemd service
 
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 14 Apr 2026 00:00:00 +0000
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 17 Apr 2026 00:00:00 +0000
