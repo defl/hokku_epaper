@@ -68,6 +68,15 @@ Images are served by `show_index` ranking — lowest index is served next, with 
 
 Total show count and display time are tracked per image in `database.json`.
 
+## Database
+
+The server stores all persistent state in `database.json` in the cache directory. This file is updated automatically and should not normally be edited by hand. It contains:
+
+- **serve_data** — per-image tracking: `show_index` (rotation ranking), `total_show_count`, `total_show_minutes`, `last_request` timestamp
+- **screens** — per-screen tracking: `ip`, `request_count`, `last_seen` timestamp
+
+If you delete `database.json`, the server starts fresh — all images get equal priority and screen history is lost. The file is small and safe to back up.
+
 ## API endpoints
 
 | Endpoint | Method | Description |
