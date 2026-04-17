@@ -11,21 +11,34 @@ You need two things:
 1. **The image server** running on a computer on your network — serves and dithers your photos
 2. **The firmware** flashed to the frame via USB — connects to WiFi and downloads images from the server
 
-### Quick setup
+### 1. Install the image server
 
+**Debian/Ubuntu** (recommended):
 ```bash
-# 1. Start the server
+# Download the .deb from the latest release
+apt install ./hokku-server_2.0.1-1_all.deb
+apt install python3-pil python3-numpy
+pip3 install --break-system-packages pillow-heif
+# Starts automatically via systemd, web GUI at http://server:8080/
+# Drop your photos into /var/lib/hokku/upload/
+```
+
+**Any platform** (from source):
+```bash
 cd webserver
 pip install flask pillow numpy pillow-heif
 python webserver.py
 # Drop your photos into /images/upload/
 # Web GUI at http://localhost:8080/
+```
 
-# 2. Flash and configure the frame
+### 2. Flash and configure the frame
+
+```bash
 cd tools
 pip install pyserial esptool
 python hokku_setup.py
-# Follow the prompts: WiFi, server URL, screen name
+# Follow the prompts: WiFi, server IP:port, screen name
 ```
 
 The setup tool detects your frame over USB, flashes the firmware, and writes your WiFi credentials — no toolchain or compilation needed. On Windows, you can also run `hokku_setup.bat` from the root directory for a one-shot setup.
