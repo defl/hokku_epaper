@@ -1,0 +1,6 @@
+Metadata-Version: 2.1
+Name: hokku-server
+Version: 1.0.0
+Summary: Spectra 6 e-ink image server for Hokku EL133UF1 display
+License: GPL-3.0 (non-commercial)
+Requires-Python: >=3.9
