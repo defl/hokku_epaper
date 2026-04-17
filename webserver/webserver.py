@@ -183,7 +183,13 @@ def format_duration_human(minutes):
     return f"{years}y {mo}mo" if mo > 0 else f"{years}y"
 
 
-app = Flask(__name__)
+# Look for templates in: ./templates/ (dev), or /usr/share/hokku-server/templates/ (deb install)
+_template_dirs = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates"),
+    "/usr/share/hokku-server/templates",
+]
+_template_folder = next((d for d in _template_dirs if os.path.isdir(d)), "templates")
+app = Flask(__name__, template_folder=_template_folder)
 
 # ── CIE Lab conversion for perceptual color matching ─────────────────
 
