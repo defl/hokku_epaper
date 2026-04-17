@@ -1,0 +1,20 @@
+Source: hokku-server
+Section: net
+Priority: optional
+Maintainer: Dennis Fleurbaaij <mail@dennisfleurbaaij.com>
+Build-Depends: debhelper-compat (= 13), python3, dh-python, python3-setuptools
+Standards-Version: 4.6.0
+
+Package: hokku-server
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends},
+ python3-flask,
+ python3-pil,
+ python3-numpy,
+ python3-pip,
+ libheif-dev
+Description: Spectra 6 e-ink image server for Hokku/Huessen frames
+ Converts and serves images for Hokku e-paper frames using
+ Floyd-Steinberg dithering to the 6-color Spectra 6 palette.
+ Supports JPEG, PNG, WebP, HEIC, and other image formats.
+ Includes fair image rotation and server-driven sleep scheduling.

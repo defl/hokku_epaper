@@ -30,6 +30,7 @@
 - **Flash data bug**: embedded binary data at large offsets shows as noise — must use heap_caps_malloc(SPIRAM) + memcpy
 - **Refresh time**: ~19 seconds during DRF command
 - **BUSY pin pull-up**: GPIO7 MUST NOT have internal pull-up enabled — it masks the display controller's BUSY LOW signal, causing epaper_wait_busy() to return immediately and display never refreshes
+- **BUSY pin has external pull-up on PCB**: The board has a physical pull-up resistor on GPIO7 (BUSY). When the display controller is powered off or disconnected, GPIO7 reads HIGH. Confirmed by driving GPIO7 LOW as output (reads 0), then releasing as input with internal pull-up disabled (reads 1 even with display power off). The display controller must actively pull BUSY LOW to overcome this external pull-up. If BUSY is stuck HIGH during display operations, the display flex cable is likely disconnected or the controller is not powered. Do NOT use gpio_reset_pin() on GPIO7 — it enables the internal pull-up which stacks with the external one, making it even harder for the controller to pull LOW.
 
 ## Image Preparation
 - Full image is 1200×1600 (960K at 4bpp), split into two 480K panels

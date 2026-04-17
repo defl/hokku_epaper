@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hokku-server"
+version = "1.0.0"
+description = "Spectra 6 e-ink image server for Hokku EL133UF1 display"
+requires-python = ">=3.9"
+license = {text = "GPL-3.0 (non-commercial)"}
+dependencies = [
+    "flask>=2.0",
+    "pillow>=9.0",
+    "numpy>=1.20",
+    "pillow-heif>=0.10",
+]
+
+[project.scripts]
+hokku-server = "webserver:main"
+
+[tool.setuptools]
+py-modules = ["webserver"]
