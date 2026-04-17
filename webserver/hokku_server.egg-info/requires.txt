@@ -1,4 +1,0 @@
-flask>=2.0
-numpy>=1.20
-pillow-heif>=0.10
-pillow>=9.0

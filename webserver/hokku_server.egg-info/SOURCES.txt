@@ -1,9 +1,0 @@
-README.md
-pyproject.toml
-webserver.py
-hokku_server.egg-info/PKG-INFO
-hokku_server.egg-info/SOURCES.txt
-hokku_server.egg-info/dependency_links.txt
-hokku_server.egg-info/entry_points.txt
-hokku_server.egg-info/requires.txt
-hokku_server.egg-info/top_level.txt
