@@ -94,6 +94,10 @@ JPEG, PNG, BMP, TIFF, WebP, GIF, HEIC/HEIF, and AVIF. Drop any of these into the
 4. Deep sleep until the server-specified time
 5. On button press: wake and fetch next image
 
+### Buttons
+
+The right-hand button (in landscape) or lower button (in portrait) triggers showing the next image. This works during the first 60 seconds after boot — press it to cycle through images manually.
+
 ### LEDs
 
 **Red LED** — solid while awake, blinks at 1Hz while charging, off during sleep
