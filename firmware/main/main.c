@@ -955,6 +955,12 @@ static void enter_deep_sleep(int64_t sleep_us)
     rtc_gpio_init(PIN_PWR_BUTTON);
     rtc_gpio_pullup_en(PIN_PWR_BUTTON);
 
+    /* Mark RTC state BEFORE the USB polling loop — esp_restart() in the
+     * loop must see valid rtc_magic and was_sleeping on the next boot,
+     * otherwise every restart looks like a fresh first boot. */
+    was_sleeping = true;
+    rtc_magic = RTC_MAGIC;
+
     /* If USB is connected (charger active), deep sleep will immediately
      * cause a USB disconnect → host reset → reboot loop. Instead, wait
      * in a light sleep polling loop until the timer expires, then restart.
@@ -991,8 +997,6 @@ static void enter_deep_sleep(int64_t sleep_us)
         ESP_LOGI(TAG, "Entering deep sleep (no timer, button wake only)");
     }
 
-    was_sleeping = true;
-    rtc_magic = RTC_MAGIC;
     esp_deep_sleep_start();
     /* Never returns */
 }
