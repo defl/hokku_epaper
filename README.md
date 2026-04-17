@@ -17,8 +17,6 @@ You need two things:
 ```bash
 # Download the .deb from the latest release
 apt install ./hokku-server_2.0.1-1_all.deb
-apt install python3-pil python3-numpy
-pip3 install --break-system-packages pillow-heif
 # Starts automatically via systemd, web GUI at http://server:8080/
 # Drop your photos into /var/lib/hokku/upload/
 ```
