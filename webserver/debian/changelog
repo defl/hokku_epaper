@@ -5,4 +5,4 @@ hokku-server (1.0.0-1) unstable; urgency=low
   * Fair image distribution with persistent tracking.
   * X-Sleep-Seconds header for firmware sleep control.
 
- -- Hokku Project <hokku@example.com>  Mon, 14 Apr 2026 00:00:00 +0000
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 14 Apr 2026 00:00:00 +0000

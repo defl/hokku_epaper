@@ -1,4 +1,4 @@
-# Huessen/Hokku 13.3" E-Ink Frame open source firmware and image server
+# Hokku/Huessen 13.3" E-Ink Frame open source firmware and image server
 
 Open source firmware and image server for the Hokku / Huessen 13.3" six-color e-ink photo frame.
 
@@ -28,7 +28,7 @@ python hokku_setup.py
 # Follow the prompts: WiFi, server URL, screen name
 ```
 
-The setup tool detects your frame over USB, flashes the firmware, and writes your WiFi credentials — no toolchain or compilation needed.
+The setup tool detects your frame over USB, flashes the firmware, and writes your WiFi credentials — no toolchain or compilation needed. On Windows, you can also run `hokku_setup.bat` from the root directory for a one-shot setup.
 
 ### How to Flash
 

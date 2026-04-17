@@ -7,7 +7,7 @@ name = "hokku-config"
 version = "1.0.0"
 description = "Configuration tool for Hokku e-paper frame"
 requires-python = ">=3.8"
-license = {text = "GPL-3.0"}
+license = {text = "GPL-3.0 (non-commercial)"}
 dependencies = [
     "pyserial>=3.5",
     "esptool>=4.0",

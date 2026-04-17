@@ -10,9 +10,7 @@
  *   - Battery voltage monitoring
  *   - On-screen error messages for misconfiguration
  *
- * Configuration stored in NVS (no compile-time secrets.h needed).
- * Use the hokku-config tool to flash WiFi SSID, password, and server
- * URL to the NVS partition via esptool (works any time USB is connected).
+ * Configuration stored in NVS, flashed via hokku-setup tool over USB.
  */
 
 #include <string.h>
@@ -74,6 +72,9 @@ static const char *TAG = "epaper";
 #define ROW_BYTES       (DISPLAY_W / 2)   /* 600 bytes per row (4bpp) */
 #define ROWS_PER_CHUNK  (SPI_CHUNK_SIZE / ROW_BYTES)  /* 8 rows per chunk */
 #define NUM_CHUNKS      (DISPLAY_H / ROWS_PER_CHUNK)  /* 100 chunks per panel */
+
+/* ── Display colors (4bpp nibbles, packed two per byte) ─────────── */
+#define COLOR_WHITE_BYTE   0x11  /* two white pixels per byte */
 
 /* ── Network config ──────────────────────────────────────────────── */
 #define WIFI_CONNECT_TIMEOUT_MS  15000
@@ -254,8 +255,7 @@ static const uint8_t font5x7[][5] = {
     {0x08,0x08,0x2A,0x1C,0x08}, /* ~ */
 };
 
-/* Draw a single character at (x, y) in the 4bpp framebuffer.
- * The framebuffer is in portrait orientation: 1200 wide, 1600 tall.
+/* Draw a single character at (x, y) in a 4bpp framebuffer of size fb_w x fb_h.
  * color is a 4-bit nibble value (0=black, 1=white). */
 static void draw_char(uint8_t *fb, int fb_w, int fb_h, int x, int y,
                        char ch, uint8_t color, int scale)
@@ -327,7 +327,7 @@ static void display_message(const char *msg)
     }
 
     /* Fill entire 960K with white (both panels) */
-    memset(fb, 0x11, TOTAL_IMAGE_SIZE);
+    memset(fb, COLOR_WHITE_BYTE, TOTAL_IMAGE_SIZE);
 
     /* Draw text into panel 1 (first 480K, 600 pixels wide, 1600 rows) */
     int panel_h = PANEL_SIZE / (PANEL_W / 2);  /* 480000 / 300 = 1600 rows */
