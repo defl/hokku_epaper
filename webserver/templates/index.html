@@ -129,6 +129,7 @@
   <div class="config-row">
     <label>Server address:</label>
     <span class="info" id="server-address"></span>
+    <span class="info">(screens connect to http://&lt;ip&gt;:&lt;port&gt;/hokku/screen/)</span>
   </div>
 
   <div class="config-row">
@@ -156,6 +157,8 @@
 <!-- Image Grid -->
 <h2>Images</h2>
 <div class="image-grid" id="image-grid"></div>
+
+<div id="processing-banner" style="display:none; background:#fef3c7; color:#92400e; border-radius:8px; padding:20px; margin-top:20px; text-align:center; font-size:1.1em; font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,0.1);"></div>
 
 <div class="toast" id="toast"></div>
 
@@ -335,12 +338,23 @@ async function refreshStatus() {
     document.getElementById('stat-last-served').textContent = data.last_served || '-';
 
     const proc = document.getElementById('processing-indicator');
-    if (data.converting > 0) {
+    const banner = document.getElementById('processing-banner');
+    if (data.converting > 0 || data.converting_total > 0) {
+      const done = data.converting_done || 0;
+      const total = data.converting_total || 0;
+      const remaining = total - done;
       proc.className = 'processing-indicator';
-      proc.textContent = `Dithering ${data.converting_name || '...'}`;
+      proc.textContent = `Dithering ${data.converting_name || '...'} (${done + 1} of ${total})`;
+      if (remaining > 0) {
+        banner.style.display = 'block';
+        banner.textContent = `${remaining} more image${remaining > 1 ? 's' : ''} being converted...`;
+      } else {
+        banner.style.display = 'none';
+      }
     } else {
       proc.className = 'processing-indicator idle';
       proc.textContent = 'Idle';
+      banner.style.display = 'none';
     }
 
     // Screens

@@ -448,6 +448,8 @@ _pool = {}
 _last_served = {"key": None, "name": None, "served_at": None}
 _converting_count = 0
 _converting_name = None  # name of currently converting image
+_converting_total = 0    # total images needing conversion in current batch
+_converting_done = 0     # images completed in current batch
 _config = dict(DEFAULT_CONFIG)
 _database = {"serve_data": {}}
 
@@ -657,10 +659,13 @@ def _sync_pool():
         _sync_lock.release()
 
 def _sync_pool_inner():
+    global _converting_total, _converting_done
     cache_dir = _get_cache_dir()
     image_paths = _list_images()
     current_paths = set()
 
+    # Count how many need conversion
+    to_convert = []
     for img_path in image_paths:
         key = str(img_path)
         current_paths.add(key)
@@ -669,8 +674,21 @@ def _sync_pool_inner():
             existing = _pool.get(key)
             if existing and existing["hash"] == content_hash:
                 continue
+        to_convert.append((img_path, content_hash))
+
+    with _lock:
+        _converting_total = len(to_convert)
+        _converting_done = 0
+
+    for img_path, content_hash in to_convert:
         print(f"  Processing: {img_path.name}")
         _convert_and_store(img_path, content_hash)
+        with _lock:
+            _converting_done += 1
+
+    with _lock:
+        _converting_total = 0
+        _converting_done = 0
 
     with _lock:
         for key in list(_pool.keys()):
@@ -792,6 +810,8 @@ def api_status():
             "last_served": _last_served["name"],
             "converting": _converting_count,
             "converting_name": _converting_name,
+            "converting_total": _converting_total,
+            "converting_done": _converting_done,
             "server_time": now_str,
             "config": {
                 "timezone": _config["timezone"],

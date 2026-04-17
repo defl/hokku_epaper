@@ -68,6 +68,8 @@ def scan_devices():
             device["has_hokku_firmware"] = state["has_hokku_firmware"]
             device["config_version_ok"] = state["config_version_ok"]
             device["firmware_current"] = state["firmware_current"]
+            device["device_version"] = state.get("device_version")
+            device["release_version"] = state.get("release_version")
 
         devices.append(device)
 
@@ -136,16 +138,32 @@ def parse_device_state(nvs_data, app_header):
         "has_hokku_firmware": False,
         "config_version_ok": False,
         "firmware_current": None,
+        "device_version": None,
+        "release_version": None,
     }
 
     # Check for Hokku firmware: project name "hokku_epaper" in app header
     if app_header and b"hokku_epaper" in app_header:
         result["has_hokku_firmware"] = True
 
+    # Extract version strings (bytes 48-79 of app binary, null-terminated)
+    if app_header and len(app_header) >= 80:
+        ver = app_header[48:80].split(b"\x00")[0].decode("ascii", errors="replace")
+        if ver:
+            result["device_version"] = ver
+
+    app_bin = FIRMWARE_DIR / "hokku_epaper.bin"
+    if app_bin.exists():
+        with open(app_bin, "rb") as f:
+            release_header = f.read(160)
+        if len(release_header) >= 80:
+            ver = release_header[48:80].split(b"\x00")[0].decode("ascii", errors="replace")
+            if ver:
+                result["release_version"] = ver
+
     # Compare firmware with release binary
     # Skip first 24 bytes (esp_image_header_t) which esptool modifies during flash
     # (flash mode, freq, size, SHA digest fields are updated by esptool)
-    app_bin = FIRMWARE_DIR / "hokku_epaper.bin"
     if app_header and app_bin.exists():
         with open(app_bin, "rb") as f:
             release_header = f.read(256)
@@ -430,7 +448,7 @@ def _refresh_device_state(port):
     """Re-read NVS config and firmware status from device."""
     nvs_data, app_header = read_device_flash(port)
     state = parse_device_state(nvs_data, app_header)
-    return state["config"], state["firmware_current"]
+    return state["config"], state["firmware_current"], state.get("device_version"), state.get("release_version")
 
 
 def main_menu(device):
@@ -438,18 +456,24 @@ def main_menu(device):
     port = device["port"]
     config = device.get("config") or {}
     firmware_current = device.get("firmware_current")
+    device_version = device.get("device_version")
+    release_version = device.get("release_version")
 
     while True:
         print()
         show_current_config(config)
 
-        # Show firmware status
+        # Show firmware version and status
+        if device_version:
+            print(f"  Firmware on device:  {device_version}")
+        if release_version:
+            print(f"  Firmware available:  {release_version}")
         if firmware_current is True:
-            print("  Firmware: up to date")
+            print("  Status: up to date")
         elif firmware_current is False:
-            print("  Firmware: UPDATE AVAILABLE")
+            print("  Status: UPDATE AVAILABLE")
         else:
-            print("  Firmware: unknown (no release binaries or unreadable)")
+            print("  Status: unknown")
         print()
 
         # Determine default option
@@ -464,7 +488,7 @@ def main_menu(device):
 
         print("  What would you like to do?")
         for num, label in [("1", "Update configuration"),
-                           ("2", "Flash firmware + configure"),
+                           ("2", "Configure + flash firmware"),
                            ("3", "Flash firmware only" + (" (keep existing config)" if config else "")),
                            ("4", "Exit")]:
             marker = " <-- default" if num == default else ""
@@ -483,25 +507,29 @@ def main_menu(device):
                     print("  Device will restart with new configuration.")
 
         elif choice == "2":
-            if flash_firmware(port):
+            # Configure FIRST, then flash — config is written to NVS,
+            # then firmware is flashed on top. This way the device boots
+            # with valid config immediately after the flash reset.
+            print()
+            print("  First, let's configure the device.")
+            print()
+            new_config = prompt_config(config)
+            if new_config:
+                write_config(port, new_config)
+                config = new_config
                 print()
-                print("  Now let's configure the device.")
-                print()
-                new_config = prompt_config(config)
-                if new_config:
-                    write_config(port, new_config)
-                    config = new_config
+                if flash_firmware(port):
                     print("  Setup complete! Device will restart.")
             # Re-read device state after flashing
             print("  Re-reading device state...")
-            config, firmware_current = _refresh_device_state(port)
+            config, firmware_current, device_version, release_version = _refresh_device_state(port)
             config = config or {}
 
         elif choice == "3":
             if flash_firmware(port):
                 # Re-read device state after flashing
                 print("  Re-reading device state...")
-                config, firmware_current = _refresh_device_state(port)
+                config, firmware_current, device_version, release_version = _refresh_device_state(port)
                 config = config or {}
 
         elif choice == "4":
