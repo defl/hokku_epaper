@@ -12,20 +12,22 @@ Complete rewrite of the release and deployment model. The firmware is now shippe
 
 - Interactive console installer — detects devices, flashes firmware, writes config
 - No ESP-IDF toolchain needed — ships pre-built firmware binaries
+- `hokku_setup.bat` for one-shot Windows setup
 - Auto-detects ESP32-S3 via USB (VID:PID 303a:1001)
 - Reads device state in a single flash read (NVS + app header)
 - Identifies Hokku firmware by project name in app binary
-- Compares on-device firmware against release binaries
+- Shows firmware version comparison (device vs release build timestamps)
+- Configure-before-flash: NVS config written first so device boots ready
 - Auto-backup of existing config before every write
 - NVS partition generated via ESP-IDF's `nvs_partition_gen.py` for guaranteed format compatibility
 
 ### New: Web GUI
 
 - Accessible at `http://server:port/` (redirects to `/hokku/ui`)
-- **Configuration panel**: timezone picker with live server time, refresh schedule (HHMM format), poll interval
+- **Configuration panel**: timezone picker with live server time, refresh schedule (HHMM format), orientation (landscape/portrait), poll interval
 - **Connected screens table**: tracks every screen that calls in (name, IP, request count, last seen)
 - **Image grid**: thumbnails of all images with original/dithered view links, show count, total display time (human-formatted), "Show Next" button
-- **Processing indicator**: shows which image is being dithered and progress
+- **Processing indicator**: shows which image is being dithered, batch progress (e.g. "2 of 5"), and a banner showing remaining count
 - **Clear cache** button for full re-conversion
 - Config changes saved to disk via POST API
 
@@ -69,6 +71,7 @@ Complete rewrite of the release and deployment model. The firmware is now shippe
 
 ### Firmware changes
 
+- Build timestamp version (YYYYMMDDHHMMSSZ) embedded at fixed offset in app binary
 - Removed NTP sync, timezone handling, and schedule calculation
 - Removed embedded calibration image (moved to `resources/`)
 - RTC magic value validates stale RTC memory after flash
@@ -79,6 +82,7 @@ Complete rewrite of the release and deployment model. The firmware is now shippe
 
 ### Webserver changes
 
+- Configurable orientation: landscape or portrait
 - Configurable poll interval (`poll_interval_seconds`)
 - Config file loaded from `HOKKU_CONFIG` env, `./config.json`, or `/etc/hokku/config.json`
 - Config saveable from web GUI
