@@ -508,8 +508,10 @@ def main_menu(device):
             print("  Status: up to date")
         elif firmware_current is False:
             print("  Status: UPDATE AVAILABLE")
+        elif device_version:
+            print("  Status: installed")
         else:
-            print("  Status: unknown")
+            print("  Status: not detected")
         print()
 
         # Determine default option
@@ -560,6 +562,11 @@ def main_menu(device):
             print("  Re-reading device state...")
             config, firmware_current, device_version, release_version = _refresh_device_state(port)
             config = config or {}
+            # If we just flashed successfully but can't read the device
+            # (it rebooted), we know the firmware matches the release
+            if firmware_current is None:
+                firmware_current = True
+                device_version = release_version
 
         elif choice == "3":
             if flash_firmware(port):
@@ -567,6 +574,9 @@ def main_menu(device):
                 print("  Re-reading device state...")
                 config, firmware_current, device_version, release_version = _refresh_device_state(port)
                 config = config or {}
+                if firmware_current is None:
+                    firmware_current = True
+                    device_version = release_version
 
         elif choice == "4":
             print("  Bye!")
