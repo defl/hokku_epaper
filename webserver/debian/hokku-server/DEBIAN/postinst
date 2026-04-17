@@ -1,0 +1,70 @@
+#!/bin/sh
+set -e
+
+# Create config directory and default config
+mkdir -p /etc/hokku
+if [ ! -f /etc/hokku/config.json ]; then
+    cat > /etc/hokku/config.json <<'CONFEOF'
+{
+  "timezone": "America/Chicago",
+  "refresh_image_at_time": ["0600", "1200", "1800"],
+  "upload_dir": "/var/lib/hokku/upload",
+  "cache_dir": "/var/lib/hokku/cache",
+  "port": 8080,
+  "orientation": "landscape"
+}
+CONFEOF
+fi
+
+# Create data directories
+mkdir -p /var/lib/hokku/upload /var/lib/hokku/cache
+
+# Install pillow-heif via pip if not available as system package
+if ! python3 -c "import pillow_heif" 2>/dev/null; then
+    echo "Installing pillow-heif via pip..."
+    pip3 install --break-system-packages pillow-heif 2>/dev/null || \
+    pip3 install pillow-heif 2>/dev/null || \
+    echo "Warning: Could not install pillow-heif. HEIC/HEIF support will be unavailable."
+fi
+
+
+# Automatically added by dh_python3
+if command -v py3compile >/dev/null 2>&1; then
+	py3compile -p hokku-server 
+fi
+if command -v pypy3compile >/dev/null 2>&1; then
+	pypy3compile -p hokku-server  || true
+fi
+
+# End automatically added section
+# Automatically added by dh_installsystemd/13.11.4
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+	# The following line should be removed in trixie or trixie+1
+	deb-systemd-helper unmask 'hokku-server.service' >/dev/null || true
+
+	# was-enabled defaults to true, so new installations run enable.
+	if deb-systemd-helper --quiet was-enabled 'hokku-server.service'; then
+		# Enables the unit on first installation, creates new
+		# symlinks on upgrades if the unit file has changed.
+		deb-systemd-helper enable 'hokku-server.service' >/dev/null || true
+	else
+		# Update the statefile to add new symlinks (if any), which need to be
+		# cleaned up on purge. Also remove old symlinks.
+		deb-systemd-helper update-state 'hokku-server.service' >/dev/null || true
+	fi
+fi
+# End automatically added section
+# Automatically added by dh_installsystemd/13.11.4
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+	if [ -d /run/systemd/system ]; then
+		systemctl --system daemon-reload >/dev/null || true
+		if [ -n "$2" ]; then
+			_dh_action=restart
+		else
+			_dh_action=start
+		fi
+		deb-systemd-invoke $_dh_action 'hokku-server.service' >/dev/null || true
+	fi
+fi
+# End automatically added section
+

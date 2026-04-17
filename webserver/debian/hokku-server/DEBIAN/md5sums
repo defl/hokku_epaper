@@ -1,0 +1,9 @@
+960dad54e7b2fc671ba3f95cb93e46d6  lib/systemd/system/hokku-server.service
+6a8b2afd3412b9f6f3ad906f201a5d43  usr/bin/hokku-server
+fcf9ad882167b39a303702b8798bc318  usr/lib/python3/dist-packages/hokku_server-1.0.0.dist-info/METADATA
+4e5cee9cf8d2e1c9e76c35b9f8ce8ec2  usr/lib/python3/dist-packages/hokku_server-1.0.0.dist-info/RECORD
+88f09a0ec874fd86abcb9bc4e265b874  usr/lib/python3/dist-packages/hokku_server-1.0.0.dist-info/WHEEL
+5284d2b2d9ec0222e8f5073a067ea252  usr/lib/python3/dist-packages/hokku_server-1.0.0.dist-info/entry_points.txt
+ffb217a26846d9be2be924c799df8a83  usr/lib/python3/dist-packages/hokku_server-1.0.0.dist-info/top_level.txt
+4833d8cc972f629a06bb5ebb4208e489  usr/lib/python3/dist-packages/webserver.py
+143f30eabfc6b31e99f2979a8e3c35df  usr/share/doc/hokku-server/changelog.Debian.gz

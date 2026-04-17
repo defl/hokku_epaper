@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+# Automatically added by dh_installsystemd/13.11.4
+if [ -z "${DPKG_ROOT:-}" ] && [ "$1" = remove ] && [ -d /run/systemd/system ] ; then
+	deb-systemd-invoke stop 'hokku-server.service' >/dev/null || true
+fi
+# End automatically added section
+
+# Automatically added by dh_python3
+if command -v py3clean >/dev/null 2>&1; then
+	py3clean -p hokku-server 
+else
+	dpkg -L hokku-server | sed -En -e '/^(.*)\/(.+)\.py$/s,,rm "\1/__pycache__/\2".*,e'
+	find /usr/lib/python3/dist-packages/ -type d -name __pycache__ -empty -print0 | xargs --null --no-run-if-empty rmdir
+fi
+
+# End automatically added section

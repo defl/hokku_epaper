@@ -1,0 +1,2 @@
+[console_scripts]
+hokku-server = webserver:main
