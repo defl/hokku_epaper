@@ -96,7 +96,7 @@ JPEG, PNG, BMP, TIFF, WebP, GIF, HEIC/HEIF, and AVIF. Drop any of these into the
 
 ### Buttons
 
-The right-hand button (in landscape) or lower button (in portrait) triggers showing the next image. This works during the first 60 seconds after boot — press it to cycle through images manually.
+Press the right-hand button (in landscape) or lower button (in portrait) to wake the frame and fetch the next image.
 
 ### LEDs
 
