@@ -272,16 +272,29 @@ def select_device(devices):
         print("  Invalid choice, try again.")
 
 
+def _parse_server_url(url):
+    """Extract IP and port from image_url like http://1.2.3.4:8080/hokku/screen/"""
+    if not url:
+        return None, None
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        return p.hostname, p.port or 8080
+    except Exception:
+        return None, None
+
+
 def show_current_config(config):
     """Display current device configuration."""
     if not config:
         print("  No configuration found on device.")
         return
 
+    ip, port = _parse_server_url(config.get("image_url", ""))
     print("  Current configuration:")
     print(f"    WiFi SSID:     {config.get('wifi_ssid', '(not set)')}")
     print(f"    WiFi Password: {'****' if config.get('wifi_pass') else '(not set)'}")
-    print(f"    Server URL:    {config.get('image_url', '(not set)')}")
+    print(f"    Server:        {ip or '(not set)'}:{port or 8080}")
     print(f"    Screen Name:   {config.get('screen_name', '(not set)')}")
     print()
 
@@ -314,21 +327,29 @@ def prompt_config(existing_config=None):
     if val:
         cfg["wifi_pass"] = val
 
-    # Server URL
-    current = cfg.get("image_url", "")
-    prompt = f"  Server URL [{current}]: " if current else "  Server URL (e.g. http://192.168.1.10:8080/hokku/screen/): "
+    # Server IP and Port (builds http://<ip>:<port>/hokku/screen/ internally)
+    current_ip, current_port = _parse_server_url(cfg.get("image_url", ""))
+
+    prompt = f"  Server IP [{current_ip}]: " if current_ip else "  Server IP (e.g. 192.168.1.10): "
     val = input(prompt).strip()
     if val:
-        if not val.startswith("http://") and not val.startswith("https://"):
-            print("  WARNING: URL should start with http://")
-        cfg["image_url"] = val
-    elif not current:
-        print("  Server URL is required.")
-        val = input("  Server URL: ").strip()
+        current_ip = val
+    elif not current_ip:
+        print("  Server IP is required.")
+        val = input("  Server IP: ").strip()
         if not val:
             print("  Aborted.")
             return None
-        cfg["image_url"] = val
+        current_ip = val
+
+    prompt = f"  Server Port [{current_port or 8080}]: " if current_port else "  Server Port [8080]: "
+    val = input(prompt).strip()
+    if val:
+        current_port = int(val)
+    elif not current_port:
+        current_port = 8080
+
+    cfg["image_url"] = f"http://{current_ip}:{current_port}/hokku/screen/"
 
     # Screen Name
     current = cfg.get("screen_name", "")
