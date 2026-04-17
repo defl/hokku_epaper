@@ -2,7 +2,16 @@
 
 Open source firmware and image server for the Hokku / Huessen 13.3" six-color e-ink photo frame.
 
-**Your photos stay on your network.** The stock firmware sends your pictures to servers on the other side of the world — and there's no way to know what happens to them there. These are photos of your family, your home, your life. They deserve better than that. This project replaces the stock firmware completely. Your photos go straight from your computer to the frame, never leaving your home network. No cloud, no accounts, no data collection. Just your photos on your wall.
+## Features
+
+- **Web GUI** — configure the server, browse images, manage screens at `http://server:port/`
+- **Multi-screen support** — name each frame, track which images they've shown
+- **Fair image rotation** — least-shown image served next, new images get priority
+- **Server-driven schedule** — configure refresh times on the server, firmware just sleeps
+- **EXIF-aware** — phone photos displayed in correct orientation
+- **Landscape or portrait** — pick your mounting orientation, server rotates for you
+- **Spectra 6 dithering** — Floyd-Steinberg with measured palette values and dynamic range compression - sigificantly better than the factory firmware
+- **No cloud, no accounts** — everything runs on your local network
 
 ## Getting Started
 
@@ -67,17 +76,6 @@ The web GUI lets you manage your image library, configure refresh times, and mon
 For more details see:
 - **[Image Server documentation](webserver/README.md)** — configuration, web GUI, API endpoints, color correction, systemd service
 - **[Firmware documentation](firmware/README.md)** — building from source, manual flashing, developer notes
-
-## Features
-
-- **Web GUI** — configure the server, browse images, manage screens at `http://server:port/`
-- **Multi-screen support** — name each frame, track which images they've shown
-- **Fair image rotation** — least-shown image served next, new images get priority
-- **Server-driven schedule** — configure refresh times on the server, firmware just sleeps
-- **EXIF-aware** — phone photos displayed in correct orientation
-- **Landscape or portrait** — pick your mounting orientation, server rotates for you
-- **Spectra 6 dithering** — Floyd-Steinberg with measured palette values and dynamic range compression
-- **No cloud, no accounts** — everything runs on your local network
 
 ## Supported Image Formats
 
