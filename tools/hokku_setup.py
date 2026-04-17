@@ -351,6 +351,21 @@ def prompt_config(existing_config=None):
 
     cfg["image_url"] = f"http://{current_ip}:{current_port}/hokku/screen/"
 
+    # Check if server is reachable
+    print(f"  Checking server at {current_ip}:{current_port}...", end=" ", flush=True)
+    try:
+        import urllib.request
+        urllib.request.urlopen(f"http://{current_ip}:{current_port}/hokku/api/time", timeout=5)
+        print("OK")
+    except Exception:
+        print("NOT REACHABLE")
+        print(f"  WARNING: Could not connect to {current_ip}:{current_port}")
+        print("  Make sure the webserver is running before the frame tries to connect.")
+        val = input("  Continue anyway? [Y/n]: ").strip().lower()
+        if val == "n":
+            print("  Aborted.")
+            return None
+
     # Screen Name
     current = cfg.get("screen_name", "")
     prompt = f"  Screen Name [{current}]: " if current else "  Screen Name (optional, e.g. Living Room): "
