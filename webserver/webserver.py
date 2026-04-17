@@ -290,6 +290,25 @@ def _save_to_cache(cache_dir, img_path, content_hash, raw_bytes, preview_bytes):
     (cache_dir / f"{key}.bin").write_bytes(raw_bytes)
     (cache_dir / f"{key}.png").write_bytes(preview_bytes)
 
+def _read_cached_binary(img_path, content_hash):
+    """Load binary bytes for an image from the disk cache. Returns None if missing."""
+    key = _cache_key(img_path, content_hash)
+    bin_path = _get_cache_dir() / f"{key}.bin"
+    if not bin_path.exists():
+        return None
+    data = bin_path.read_bytes()
+    if len(data) != TOTAL_BYTES:
+        return None
+    return data
+
+def _read_cached_preview(img_path, content_hash):
+    """Load preview PNG bytes for an image from the disk cache. Returns None if missing."""
+    key = _cache_key(img_path, content_hash)
+    png_path = _get_cache_dir() / f"{key}.png"
+    if not png_path.exists():
+        return None
+    return png_path.read_bytes()
+
 def _purge_stale_cache(cache_dir, valid_keys):
     if not cache_dir.exists():
         return
@@ -426,7 +445,7 @@ def _track_display_time(serve_data):
 # ── Image pool (protected by lock) ──────────────────────────────────
 _lock = threading.Lock()
 _pool = {}
-_last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+_last_served = {"key": None, "name": None, "served_at": None}
 _converting_count = 0
 _converting_name = None  # name of currently converting image
 _config = dict(DEFAULT_CONFIG)
@@ -618,11 +637,9 @@ def _convert_and_store(img_path, content_hash):
                         _converting_name = None
 
         with _lock:
-            _pool[str(img_path)] = {
-                "binary": raw_bytes,
-                "preview_png": preview_bytes,
-                "hash": content_hash,
-            }
+            # Only store metadata in RAM; actual bytes live on disk.
+            # This keeps memory flat regardless of pool size.
+            _pool[str(img_path)] = {"hash": content_hash}
         print(f"  Pool: {img_path.name} ready ({len(_pool)} total)")
     except Exception as e:
         print(f"  Error converting {img_path.name}: {e}")
@@ -693,11 +710,7 @@ def serve_binary():
             return "No images available", 404
 
         entry = _pool[key]
-        _last_served["key"] = key
-        _last_served["name"] = Path(key).name
-        _last_served["binary"] = entry["binary"]
-        _last_served["preview_png"] = entry["preview_png"]
-        _last_served["served_at"] = datetime.now().isoformat(timespec="seconds")
+        content_hash = entry["hash"]
 
         # Track the calling screen
         screen_name = request.headers.get("X-Screen-Name", "unnamed")
@@ -713,10 +726,20 @@ def serve_binary():
 
         _save_database(_get_cache_dir(), _database)
 
-    sleep_seconds = _calculate_sleep_seconds(_config)
-    print(f"  Serving: {_last_served['name']} to {screen_name} (sleep_seconds={sleep_seconds})")
+    # Load binary from disk cache outside the lock
+    binary = _read_cached_binary(Path(key), content_hash)
+    if binary is None:
+        return "Cached binary missing, try again shortly", 503
 
-    response = make_response(entry["binary"])
+    # Update _last_served for the UI preview (no need to hold the binary here)
+    _last_served["key"] = key
+    _last_served["name"] = Path(key).name
+    _last_served["served_at"] = datetime.now().isoformat(timespec="seconds")
+
+    sleep_seconds = _calculate_sleep_seconds(_config)
+    print(f"  Serving: {Path(key).name} to {screen_name} (sleep_seconds={sleep_seconds})")
+
+    response = make_response(binary)
     response.headers["Content-Type"] = "application/octet-stream"
     response.headers["X-Sleep-Seconds"] = str(sleep_seconds)
     response.headers["Content-Disposition"] = "attachment; filename=hokku.bin"
@@ -842,12 +865,20 @@ def api_thumbnail(filename):
 
 @app.route("/hokku/api/dithered/<filename>")
 def api_dithered(filename):
-    """Serve the dithered preview PNG for an image."""
+    """Serve the dithered preview PNG for an image (loaded from disk cache on demand)."""
     with _lock:
+        match = None
         for key, entry in _pool.items():
             if Path(key).name == filename:
-                return send_file(BytesIO(entry["preview_png"]), mimetype="image/png")
-    abort(404)
+                match = (key, entry["hash"])
+                break
+    if match is None:
+        abort(404)
+    key, content_hash = match
+    preview = _read_cached_preview(Path(key), content_hash)
+    if preview is None:
+        abort(404)
+    return send_file(BytesIO(preview), mimetype="image/png")
 
 
 @app.route("/hokku/api/show_next/<filename>", methods=["POST"])

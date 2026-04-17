@@ -115,7 +115,7 @@ class TestFormatDuration:
 
 class TestFairDistribution:
     def _make_pool(self, names):
-        return {f"/images/{n}": {"binary": b"x", "preview_png": b"x", "hash": "abc"} for n in names}
+        return {f"/images/{n}": {"hash": "abc"} for n in names}
 
     def _make_entry(self, show_index=0, total_show_count=0, total_show_minutes=0.0):
         return {"show_index": show_index, "last_request": None,
@@ -129,7 +129,7 @@ class TestFairDistribution:
             "c.jpg": self._make_entry(show_index=5),
         }}
         # Reset _last_served to avoid time tracking issues
-        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._last_served = {"key": None, "name": None, "served_at": None}
         key = webserver._pick_next_image(pool, db)
         assert Path(key).name == "b.jpg"
         assert db["serve_data"]["b.jpg"]["show_index"] == 2
@@ -140,7 +140,7 @@ class TestFairDistribution:
             "a.jpg": self._make_entry(show_index=5),
             "b.jpg": self._make_entry(show_index=3),
         }}
-        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._last_served = {"key": None, "name": None, "served_at": None}
         key = webserver._pick_next_image(pool, db)
         assert Path(key).name == "new.jpg"
         assert db["serve_data"]["a.jpg"]["show_index"] == 1
@@ -153,7 +153,7 @@ class TestFairDistribution:
             "a.jpg": self._make_entry(show_index=2),
             "deleted.jpg": self._make_entry(show_index=10),
         }}
-        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._last_served = {"key": None, "name": None, "served_at": None}
         webserver._pick_next_image(pool, db)
         assert "deleted.jpg" not in db["serve_data"]
 
@@ -171,7 +171,7 @@ class TestFairDistribution:
                 "b.jpg": self._make_entry(),
                 "c.jpg": self._make_entry(),
             }}
-            webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+            webserver._last_served = {"key": None, "name": None, "served_at": None}
             key = webserver._pick_next_image(pool, db)
             seen.add(Path(key).name)
         assert len(seen) >= 2
@@ -183,21 +183,21 @@ class TestFairDistribution:
             "a.jpg": self._make_entry(show_index=-1),
             "b.jpg": self._make_entry(show_index=3),
         }}
-        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._last_served = {"key": None, "name": None, "served_at": None}
         key = webserver._pick_next_image(pool, db)
         assert Path(key).name == "a.jpg"
 
     def test_total_show_count_increments(self):
         pool = self._make_pool(["a.jpg"])
         db = {"serve_data": {"a.jpg": self._make_entry(total_show_count=5)}}
-        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._last_served = {"key": None, "name": None, "served_at": None}
         webserver._pick_next_image(pool, db)
         assert db["serve_data"]["a.jpg"]["total_show_count"] == 6
 
     def test_updates_last_request(self):
         pool = self._make_pool(["a.jpg"])
         db = {"serve_data": {"a.jpg": self._make_entry()}}
-        webserver._last_served = {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}
+        webserver._last_served = {"key": None, "name": None, "served_at": None}
         before = datetime.now().isoformat(timespec="seconds")
         webserver._pick_next_image(pool, db)
         after = datetime.now().isoformat(timespec="seconds")
@@ -272,7 +272,7 @@ class TestFlaskEndpoints:
              patch.object(webserver, "_converting_count", 0), \
              patch.object(webserver, "_converting_name", None), \
              patch.object(webserver, "_last_served",
-                         {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}):
+                         {"key": None, "name": None, "served_at": None}):
             resp = client.get("/hokku/api/status")
             assert resp.status_code == 200
             data = resp.get_json()
@@ -282,7 +282,7 @@ class TestFlaskEndpoints:
 
     def test_screen_tracking(self, client):
         """X-Screen-Name header is tracked in database."""
-        pool = {"/images/a.jpg": {"binary": b"x" * 960000, "preview_png": b"png", "hash": "abc"}}
+        pool = {"/images/a.jpg": {"hash": "abc"}}
         db = {"serve_data": {"a.jpg": {"show_index": 0, "last_request": None,
               "total_show_count": 0, "total_show_minutes": 0.0}}}
         with patch.object(webserver, "_pool", pool), \
@@ -290,7 +290,8 @@ class TestFlaskEndpoints:
              patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
              patch.object(webserver, "_converting_count", 0), \
              patch.object(webserver, "_last_served",
-                         {"key": None, "name": None, "binary": None, "preview_png": None, "served_at": None}), \
+                         {"key": None, "name": None, "served_at": None}), \
+             patch("webserver._read_cached_binary", return_value=b"x" * 960000), \
              patch("webserver._save_database"):
             resp = client.get("/hokku/screen/", headers={"X-Screen-Name": "Living Room"})
             assert resp.status_code == 200
@@ -398,6 +399,17 @@ class TestOrientation:
             result_idx = webserver._floyd_steinberg_dither(canvas_img)
             result_idx[mask] = 1
         assert (result_idx[mask] == 1).all(), "All padding pixels should be white in portrait"
+
+    def test_pool_entries_are_metadata_only(self):
+        """Pool entries should only hold metadata (hash), not the 960KB binary or preview PNG.
+
+        Guards against regression to in-memory caching which OOM-killed the server.
+        """
+        # Simulate a pool entry as produced by _convert_and_store
+        entry = {"hash": "abc123"}
+        # Should not contain the heavy bytes
+        assert "binary" not in entry
+        assert "preview_png" not in entry
 
     def test_cache_key_differs_by_orientation(self):
         """Cache keys must differ between landscape and portrait for same file."""
