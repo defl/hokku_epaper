@@ -33,14 +33,20 @@ python webserver.py
 
 ### 2. Flash and configure the frame
 
+**Windows** (easiest — requires [Python 3](https://www.python.org/downloads/)):
+```
+hokku_setup.bat
+```
+Double-click or run from the command line. It installs dependencies automatically and walks you through WiFi, server address, and screen name.
+
+**Any platform**:
 ```bash
 cd tools
 pip install pyserial esptool
 python hokku_setup.py
-# Follow the prompts: WiFi, server IP:port, screen name
 ```
 
-The setup tool detects your frame over USB, flashes the firmware, and writes your WiFi credentials — no toolchain or compilation needed. On Windows, you can also run `hokku_setup.bat` from the root directory for a one-shot setup.
+The setup tool detects your frame over USB, flashes the firmware, and writes your WiFi credentials — no toolchain or compilation needed.
 
 ### How to Flash
 
