@@ -815,21 +815,56 @@ typedef struct {
     uint8_t *buf;
     size_t   received;
     size_t   capacity;
+    /* Response-header captures, populated from HTTP_EVENT_ON_HEADER in
+     * http_event_handler and read by download_image after perform().
+     *
+     * HISTORY: this used to be done via esp_http_client_get_header() after
+     * perform() returned. That was always wrong — that function reads
+     * REQUEST headers, not response headers, so we silently ignored every
+     * X-Sleep-Seconds / X-Server-Time-Epoch the server sent. Scheduled
+     * wakes relied on last_sleep_seconds fallback or 3h default; the user-
+     * visible symptom was "scheduled refresh didn't happen". Fixed by
+     * capturing directly from the event stream. */
+    char     sleep_seconds_hdr[32];
+    char     server_epoch_hdr[32];
 } http_download_ctx_t;
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 {
     http_download_ctx_t *ctx = (http_download_ctx_t *)evt->user_data;
-    if (evt->event_id == HTTP_EVENT_ON_CONNECTED) {
-        /* Reset buffer on each new connection (handles redirects).
-         * Without this, a 308 redirect's body accumulates before the
-         * real image data, causing a size mismatch. */
-        ctx->received = 0;
-    } else if (evt->event_id == HTTP_EVENT_ON_DATA) {
-        if (ctx->received + evt->data_len <= ctx->capacity) {
-            memcpy(ctx->buf + ctx->received, evt->data, evt->data_len);
-            ctx->received += evt->data_len;
-        }
+    if (!ctx) return ESP_OK;
+
+    switch (evt->event_id) {
+        case HTTP_EVENT_ON_CONNECTED:
+            /* Reset buffer on each new connection (handles redirects).
+             * Without this, a 308 redirect's body accumulates before the
+             * real image data, causing a size mismatch. Header captures
+             * reset too so we only see the final response's values. */
+            ctx->received = 0;
+            ctx->sleep_seconds_hdr[0] = '\0';
+            ctx->server_epoch_hdr[0]  = '\0';
+            break;
+        case HTTP_EVENT_ON_HEADER:
+            if (evt->header_key && evt->header_value) {
+                if (strcasecmp(evt->header_key, "X-Sleep-Seconds") == 0) {
+                    strncpy(ctx->sleep_seconds_hdr, evt->header_value,
+                            sizeof(ctx->sleep_seconds_hdr) - 1);
+                    ctx->sleep_seconds_hdr[sizeof(ctx->sleep_seconds_hdr) - 1] = '\0';
+                } else if (strcasecmp(evt->header_key, "X-Server-Time-Epoch") == 0) {
+                    strncpy(ctx->server_epoch_hdr, evt->header_value,
+                            sizeof(ctx->server_epoch_hdr) - 1);
+                    ctx->server_epoch_hdr[sizeof(ctx->server_epoch_hdr) - 1] = '\0';
+                }
+            }
+            break;
+        case HTTP_EVENT_ON_DATA:
+            if (ctx->received + evt->data_len <= ctx->capacity) {
+                memcpy(ctx->buf + ctx->received, evt->data, evt->data_len);
+                ctx->received += evt->data_len;
+            }
+            break;
+        default:
+            break;
     }
     return ESP_OK;
 }
@@ -952,29 +987,23 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
 
-    /* Read both headers before cleanup destroys the header storage */
-    char *sleep_hdr = NULL;
-    char *epoch_hdr = NULL;
-    if (err == ESP_OK) {
-        esp_http_client_get_header(client, "X-Sleep-Seconds", &sleep_hdr);
-        esp_http_client_get_header(client, "X-Server-Time-Epoch", &epoch_hdr);
-    }
-
-    if (sleep_hdr != NULL && sleep_hdr[0] != '\0' && out_sleep_seconds != NULL) {
-        int32_t secs = atoi(sleep_hdr);
+    /* Headers captured by http_event_handler during the response. Reading
+     * them here (after perform() completes) is safe because we copied
+     * into ctx, not stored pointers into esp_http_client's internals. */
+    if (ctx.sleep_seconds_hdr[0] != '\0' && out_sleep_seconds != NULL) {
+        int32_t secs = atoi(ctx.sleep_seconds_hdr);
         if (secs > 0) {
             *out_sleep_seconds = secs;
             ESP_LOGI(TAG, "X-Sleep-Seconds: %d", secs);
         } else {
             ESP_LOGW(TAG, "X-Sleep-Seconds present but non-positive: '%s' (parsed=%d)",
-                     sleep_hdr, (int)secs);
+                     ctx.sleep_seconds_hdr, (int)secs);
         }
     } else {
-        ESP_LOGW(TAG, "X-Sleep-Seconds header missing from response (status=%d, hdr=%s)",
-                 status, sleep_hdr ? "empty" : "null");
+        ESP_LOGW(TAG, "X-Sleep-Seconds header missing from response (status=%d)", status);
     }
-    if (epoch_hdr != NULL && epoch_hdr[0] != '\0' && out_server_epoch != NULL) {
-        int64_t epoch = atoll(epoch_hdr);
+    if (ctx.server_epoch_hdr[0] != '\0' && out_server_epoch != NULL) {
+        int64_t epoch = atoll(ctx.server_epoch_hdr);
         if (epoch > 0) {
             *out_server_epoch = epoch;
             /* Set the firmware's system clock to server time. Backed by the
@@ -993,11 +1022,10 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
             ESP_LOGI(TAG, "X-Server-Time-Epoch: %lld — system clock set to %s",
                      epoch, buf);
         } else {
-            ESP_LOGW(TAG, "X-Server-Time-Epoch present but non-positive: '%s'", epoch_hdr);
+            ESP_LOGW(TAG, "X-Server-Time-Epoch present but non-positive: '%s'", ctx.server_epoch_hdr);
         }
     } else {
-        ESP_LOGW(TAG, "X-Server-Time-Epoch header missing from response (hdr=%s)",
-                 epoch_hdr ? "empty" : "null");
+        ESP_LOGW(TAG, "X-Server-Time-Epoch header missing from response (status=%d)", status);
     }
 
     esp_http_client_cleanup(client);
