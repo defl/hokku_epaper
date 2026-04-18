@@ -473,12 +473,17 @@ static void spi_init(void)
 
 static void epaper_reset(void)
 {
-    gpio_set_level(PIN_EPAPER_RST, 1);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    /* Match the original firmware's hardware_reset at IROM 0x4200b984:
+     *   RST=LOW 100ms, RST=HIGH 100ms, then wait for BUSY before any cmd.
+     * Our old sequence (HIGH 20 / LOW 20 / HIGH 200, no BUSY wait) is the
+     * leading candidate for why the display gets stuck in bad states that
+     * only flashing the original firmware reliably clears. See
+     * .private/boot_analysis/FINAL_FINDINGS.md. */
     gpio_set_level(PIN_EPAPER_RST, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(100));
     gpio_set_level(PIN_EPAPER_RST, 1);
-    vTaskDelay(pdMS_TO_TICKS(200));
+    vTaskDelay(pdMS_TO_TICKS(100));
+    epaper_wait_busy();
 }
 
 /* ── Init sequence (18 commands from IROM disassembly) ───────────── */
