@@ -78,7 +78,15 @@ DEFAULT_CONFIG = {
     "port": 8080,
     "poll_interval_seconds": 10,
     "orientation": "landscape",
+    # Debug-mode flag: when true, every HTTP response to /hokku/screen/
+    # sets X-Sleep-Seconds to DEBUG_FAST_REFRESH_SECONDS regardless of
+    # the configured refresh schedule. Screens cycle through images
+    # fast for visual testing of the dithering pipeline. Drains battery
+    # hard — not for production use. Toggled from the web GUI.
+    "debug_fast_refresh": False,
 }
+
+DEBUG_FAST_REFRESH_SECONDS = 180
 
 _config_file_path = None  # set during load, used for saving
 
@@ -115,7 +123,7 @@ def _save_config(config):
     """Save config to the file it was loaded from (or ./config.json)."""
     path = _config_file_path or Path("./config.json")
     # Only save user-facing config keys
-    save_keys = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir", "port", "poll_interval_seconds", "orientation"]
+    save_keys = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir", "port", "poll_interval_seconds", "orientation", "debug_fast_refresh"]
     save_data = {k: config[k] for k in save_keys if k in config}
     with open(path, "w") as f:
         json.dump(save_data, f, indent=2)
@@ -123,7 +131,15 @@ def _save_config(config):
 
 
 def _calculate_sleep_seconds(config):
-    """Calculate seconds until next refresh_image_at_time based on server's clock and timezone."""
+    """Calculate seconds until next refresh_image_at_time based on server's clock and timezone.
+
+    Debug Fast Refresh: if config["debug_fast_refresh"] is true we short-
+    circuit to DEBUG_FAST_REFRESH_SECONDS regardless of schedule. Screens
+    then cycle through images fast for visual testing; don't leave enabled
+    long — it drains battery hard."""
+    if config.get("debug_fast_refresh"):
+        return DEBUG_FAST_REFRESH_SECONDS
+
     try:
         import zoneinfo
         tz = zoneinfo.ZoneInfo(config["timezone"])
@@ -784,13 +800,15 @@ def _record_screen_call(screen_name, screen_ip, sleep_seconds, served_name=None,
 
     if frame_state:
         # Store the whole dict so new firmware keys surface automatically.
-        # Also compute clk_drift_s by comparing the frame's clk_est to
-        # our own wall clock — positive = firmware thinks it's later
-        # than it actually is.
+        # Compute clk_drift_s by comparing the firmware's reported clock
+        # (clk_now — set from the previous X-Server-Time-Epoch and then
+        # free-running across deep sleep) to our own wall clock. Positive
+        # = firmware thinks it's later than it actually is. Gives us a
+        # direct measurement of RTC-slow-clock drift over the sleep period.
         state_with_meta = dict(frame_state)
-        clk_est = frame_state.get("clk_est")
-        if isinstance(clk_est, (int, float)) and clk_est > 0:
-            state_with_meta["clk_drift_s"] = int(clk_est - time.time())
+        clk_now = frame_state.get("clk_now")
+        if isinstance(clk_now, (int, float)) and clk_now > 0:
+            state_with_meta["clk_drift_s"] = int(clk_now - time.time())
         state_with_meta["seen_at"] = now.isoformat(timespec="seconds")
         screens[screen_name]["state"] = state_with_meta
 
@@ -994,6 +1012,8 @@ def api_status():
                 "port": _config["port"],
                 "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
                 "orientation": _config.get("orientation", "landscape"),
+                "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
+                "debug_fast_refresh_seconds": DEBUG_FAST_REFRESH_SECONDS,
                 "upload_dir": str(_get_upload_dir()),
                 "cache_dir": str(_get_cache_dir()),
             },
@@ -1143,6 +1163,10 @@ def api_config():
             _config["orientation"] = val
             changed = True
 
+    if "debug_fast_refresh" in data:
+        _config["debug_fast_refresh"] = bool(data["debug_fast_refresh"])
+        changed = True
+
     if changed:
         _save_config(_config)
 
@@ -1158,6 +1182,7 @@ def api_config():
         "refresh_image_at_time": _config["refresh_image_at_time"],
         "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
         "orientation": _config.get("orientation", "landscape"),
+        "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
     }})
 
 

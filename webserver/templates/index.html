@@ -29,6 +29,11 @@
   .btn-danger:hover { background: #b91c1c; }
   .btn-small { padding: 4px 10px; font-size: 0.8em; }
   .server-time { font-size: 0.9em; color: #666; margin-left: 8px; }
+  .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9em; cursor: pointer; user-select: none; }
+  .toggle input[type="checkbox"] { width: 16px; height: 16px; accent-color: #dc2626; cursor: pointer; }
+  .info-btn { width: 22px; height: 22px; border-radius: 50%; border: 1px solid #ccc; background: #fff; color: #555; font-weight: 700; font-size: 0.85em; cursor: pointer; line-height: 1; padding: 0; }
+  .info-btn:hover { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .debug-active-banner { background: #fee2e2; border: 1px solid #ef4444; color: #7f1d1d; border-radius: 6px; padding: 8px 12px; margin: 0 0 12px 0; font-size: 0.85em; }
 
   /* Status bar */
   .status-bar { background: #fff; border-radius: 8px; padding: 12px 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
@@ -181,9 +186,12 @@
   </div>
 
   <div class="config-row">
-    <label>Server address:</label>
-    <span class="info" id="server-address"></span>
-    <span class="info">(screens connect to http://&lt;ip&gt;:&lt;port&gt;/hokku/screen/)</span>
+    <label>Debug screen:</label>
+    <label class="toggle">
+      <input type="checkbox" id="debug-fast-refresh">
+      <span id="debug-fast-refresh-label">Off</span>
+    </label>
+    <button type="button" class="info-btn" onclick="showDebugInfo()" title="What does this do?" aria-label="Debug screen info">?</button>
   </div>
 
   <div class="config-row">
@@ -191,6 +199,12 @@
     <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
     <button class="btn btn-danger" onclick="clearCache()">Clear Cache &amp; Re-convert</button>
   </div>
+</div>
+
+<!-- Debug-mode banner (shown only when debug_fast_refresh is on) -->
+<div id="debug-active-banner" class="debug-active-banner" style="display:none">
+  <strong>⚠ Debug Screen mode is ON.</strong>
+  All screens are being told to refresh every <span id="debug-secs">180</span> s regardless of schedule. Turn off for normal use — this drains battery fast.
 </div>
 
 <!-- Status Bar -->
@@ -305,6 +319,7 @@ async function saveConfig() {
     refresh_image_at_time: refreshTimes,
     poll_interval_seconds: parseInt(document.getElementById('poll-interval').value) || 10,
     orientation: document.getElementById('orientation').value,
+    debug_fast_refresh: document.getElementById('debug-fast-refresh').checked,
   };
   try {
     const resp = await fetch('/hokku/api/config', {
@@ -474,7 +489,7 @@ let lastScreens = {};
 // Pretty-print a single state value.
 function formatStateValue(key, v) {
   if (v == null) return '<span style="color:#999">-</span>';
-  if (key === 'clk_est' && typeof v === 'number' && v > 0) {
+  if (key === 'clk_now' && typeof v === 'number' && v > 0) {
     const dt = new Date(v * 1000);
     return `${dt.toLocaleString(undefined, {hour12: false})} (${v})`;
   }
@@ -515,7 +530,7 @@ async function showScreenDetails(name) {
   // recognise still appears, at the end, so new firmware fields auto-surface.
   const ordered = ['fw','boot','wake','caller','uptime_s','bat_mv','chg',
                    'last_sleep','rssi','heap_kb','spurious','cfg_ver',
-                   'sleep_err_s','clk_est','clk_drift_s','seen_at'];
+                   'sleep_err_s','clk_now','clk_drift_s','seen_at'];
   const extras = Object.keys(s.state).filter(k => !ordered.includes(k));
   const keys = ordered.filter(k => k in s.state).concat(extras);
 
@@ -604,8 +619,16 @@ async function refreshStatus() {
     renderRefreshTimes();
     document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
     document.getElementById('orientation').value = cfg.orientation || 'landscape';
-    document.getElementById('server-address').textContent = `${location.hostname}:${cfg.port}`;
     document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
+
+    // Debug Fast Refresh toggle state + banner
+    const debugOn = !!cfg.debug_fast_refresh;
+    const debugSecs = cfg.debug_fast_refresh_seconds || 180;
+    document.getElementById('debug-fast-refresh').checked = debugOn;
+    document.getElementById('debug-fast-refresh-label').textContent = debugOn
+      ? `On — ${debugSecs}s cycle` : 'Off';
+    document.getElementById('debug-active-banner').style.display = debugOn ? 'block' : 'none';
+    document.getElementById('debug-secs').textContent = debugSecs;
 
     // Status bar — show both total uploaded and how many are dithered & ready
     const uploaded = data.upload_size != null ? data.upload_size : data.pool_size;
@@ -644,6 +667,19 @@ async function refreshStatus() {
   } catch (e) {
     console.error('Status refresh failed:', e);
   }
+}
+
+function showDebugInfo() {
+  showConfirm({
+    title: 'Debug Screen — what is this?',
+    message: 'When enabled, the server tells every screen to refresh every ' +
+             '180 seconds regardless of the configured schedule. Useful for ' +
+             'iterating on images or dithering tweaks without waiting hours. ' +
+             '\n\nDownsides: the screen wakes/fetches/refreshes constantly, ' +
+             'so it drains the battery fast and wears the e-paper. Turn off ' +
+             'for normal use.',
+    okLabel: 'OK',
+  });
 }
 
 function showConfirm({title, message, okLabel}) {

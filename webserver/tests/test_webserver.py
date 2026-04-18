@@ -502,6 +502,78 @@ class TestBatteryReporting:
             assert resp.status_code in (404, 503)
 
 
+# ── Debug Fast Refresh mode ───────────────────────────────────────
+#
+# When debug_fast_refresh is enabled, every response's X-Sleep-Seconds
+# is DEBUG_FAST_REFRESH_SECONDS (180 s) regardless of the refresh schedule.
+# For visual iteration on dithering/images without hours of waiting.
+
+class TestDebugFastRefresh:
+    def test_calculate_sleep_seconds_bypasses_schedule(self):
+        config = {"timezone": "UTC", "refresh_image_at_time": ["0600"],
+                  "debug_fast_refresh": True}
+        assert webserver._calculate_sleep_seconds(config) == webserver.DEBUG_FAST_REFRESH_SECONDS
+
+    def test_calculate_sleep_seconds_normal_when_disabled(self):
+        config = {"timezone": "UTC", "refresh_image_at_time": ["0600"],
+                  "debug_fast_refresh": False}
+        val = webserver._calculate_sleep_seconds(config)
+        assert val != webserver.DEBUG_FAST_REFRESH_SECONDS
+        assert val >= 60
+
+    def test_api_config_accepts_debug_toggle(self):
+        """POST /hokku/api/config with {debug_fast_refresh: true} must
+        persist the flag and have it immediately affect sleep_seconds."""
+        webserver.app.config["TESTING"] = True
+        cfg = {**webserver.DEFAULT_CONFIG, "debug_fast_refresh": False}
+        with webserver.app.test_client() as client, \
+             patch.object(webserver, "_config", cfg), \
+             patch("webserver._save_config"):
+            resp = client.post("/hokku/api/config",
+                               json={"debug_fast_refresh": True})
+            assert resp.status_code == 200
+            assert cfg["debug_fast_refresh"] is True
+            assert resp.get_json()["config"]["debug_fast_refresh"] is True
+
+    def test_api_status_exposes_debug_flag(self):
+        webserver.app.config["TESTING"] = True
+        cfg = {**webserver.DEFAULT_CONFIG, "debug_fast_refresh": True}
+        with webserver.app.test_client() as client, \
+             patch.object(webserver, "_config", cfg), \
+             patch.object(webserver, "_pool", {}), \
+             patch.object(webserver, "_database", {"serve_data": {}}), \
+             patch.object(webserver, "_converting_count", 0), \
+             patch.object(webserver, "_converting_name", None), \
+             patch.object(webserver, "_last_served",
+                         {"key": None, "name": None, "served_at": None}):
+            resp = client.get("/hokku/api/status")
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data["config"]["debug_fast_refresh"] is True
+            assert data["config"]["debug_fast_refresh_seconds"] == webserver.DEBUG_FAST_REFRESH_SECONDS
+
+    def test_serve_binary_uses_debug_sleep_seconds(self):
+        """End-to-end: with debug mode on, the X-Sleep-Seconds header on
+        successful responses is DEBUG_FAST_REFRESH_SECONDS."""
+        webserver.app.config["TESTING"] = True
+        pool = {"/images/a.jpg": {"hash": "abc"}}
+        db = {"serve_data": {"a.jpg": {"show_index": 0, "last_request": None,
+              "total_show_count": 0, "total_show_minutes": 0.0}}}
+        cfg = {**webserver.DEFAULT_CONFIG, "debug_fast_refresh": True}
+        with webserver.app.test_client() as client, \
+             patch.object(webserver, "_pool", pool), \
+             patch.object(webserver, "_database", db), \
+             patch.object(webserver, "_config", cfg), \
+             patch.object(webserver, "_converting_count", 0), \
+             patch.object(webserver, "_last_served",
+                         {"key": None, "name": None, "served_at": None}), \
+             patch("webserver._read_cached_binary", return_value=b"x" * 960000), \
+             patch("webserver._save_database"):
+            resp = client.get("/hokku/screen/", headers={"X-Screen-Name": "A"})
+            assert resp.status_code == 200
+            assert int(resp.headers["X-Sleep-Seconds"]) == webserver.DEBUG_FAST_REFRESH_SECONDS
+
+
 # ── X-Frame-State JSON header ─────────────────────────────────────
 #
 # Replaces X-Battery-mV in current firmware. Server parses, stores
@@ -560,19 +632,26 @@ class TestFrameState:
         assert entry["battery_percent"] == webserver._battery_percent(3950)
 
     def test_record_state_includes_clk_drift(self):
-        """Server computes clk_drift_s = frame's clk_est - server's now."""
+        """Server computes clk_drift_s = frame's clk_now - server's now.
+
+        Firmware sets its system clock from X-Server-Time-Epoch each call,
+        then the clock free-runs (RTC-backed) until the next call. clk_now
+        is the firmware's time at THIS call's moment — drift measures how
+        much the RTC slow clock ran fast/slow over the sleep."""
         db = {"serve_data": {}}
         import time as _time
-        frame_clk = int(_time.time()) + 15  # frame thinks it's 15s in our future
-        state = {"fw": "abc", "clk_est": frame_clk}
+        frame_clk = int(_time.time()) + 15  # frame thinks it's 15s ahead of server
+        state = {"fw": "abc", "clk_now": frame_clk}
         with patch.object(webserver, "_database", db):
             webserver._record_screen_call("Foo", "1.2.3.4", 60, frame_state=state)
         drift = db["screens"]["Foo"]["state"]["clk_drift_s"]
         assert 10 <= drift <= 20  # some tolerance for test timing
 
-    def test_record_state_omits_drift_without_clk_est(self):
+    def test_record_state_omits_drift_without_clk_now(self):
+        """Frame that's never received a server epoch (brand-new, first
+        boot) omits clk_now — we shouldn't fabricate a drift reading."""
         db = {"serve_data": {}}
-        state = {"fw": "abc"}  # no clk_est
+        state = {"fw": "abc"}  # no clk_now
         with patch.object(webserver, "_database", db):
             webserver._record_screen_call("Foo", "1.2.3.4", 60, frame_state=state)
         assert "clk_drift_s" not in db["screens"]["Foo"]["state"]
@@ -586,7 +665,7 @@ class TestFrameState:
         header_json = ('{"fw":"20260418012020Z","boot":3,"wake":"timer",'
                        '"caller":"wake","bat_mv":4100,"chg":"charging",'
                        '"last_sleep":"deep_sleep","rssi":-57,"heap_kb":240,'
-                       '"spurious":0,"cfg_ver":1,"clk_est":1776500000}')
+                       '"spurious":0,"cfg_ver":1,"clk_now":1776500000}')
         with webserver.app.test_client() as client, \
              patch.object(webserver, "_pool", pool), \
              patch.object(webserver, "_database", db), \

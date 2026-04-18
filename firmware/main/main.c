@@ -16,6 +16,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <time.h>
+#include <sys/time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -137,12 +139,14 @@ RTC_DATA_ATTR static uint8_t  consecutive_spurious_resets = 0;
  * recorded (don't run the sleep check on next boot). */
 RTC_DATA_ATTR static int64_t  pre_sleep_server_epoch = 0;
 
-/* Last X-Server-Time-Epoch value received from the server, plus the
- * RTC-clock reading at the moment we received it. Used to compute a
- * clk_est field in X-Frame-State so the server can see how much the
- * frame's estimate has drifted from its own clock. 0 = never received. */
-RTC_DATA_ATTR static int64_t  last_server_epoch = 0;
-RTC_DATA_ATTR static uint64_t last_server_epoch_rtc_us = 0;
+/* Every successful HTTP response carries X-Server-Time-Epoch; on receipt
+ * we call settimeofday() so the firmware's system clock holds real UTC.
+ * The system clock is backed by the RTC slow clock on ESP32-S3 and keeps
+ * ticking through deep sleep + esp_restart, so subsequent time(NULL) calls
+ * (even days later) give us an accurate "now" we can report back to the
+ * server in X-Frame-State.clk_now — server then computes drift as the
+ * difference between our reported clock and its own. No RTC anchor needed:
+ * the system clock IS the anchor. */
 
 /* Last measured sleep error (actual_slept - expected_slept) in seconds,
  * persisted so the next fetch can report it via X-Frame-State. Set inside
@@ -853,17 +857,15 @@ static void build_frame_state_json(char *buf, size_t buflen,
 
     int chg_low = (gpio_get_level(PIN_CHG_STATUS) == 0);
 
-    /* Firmware's best estimate of current wall-clock seconds, based on
-     * the last X-Server-Time-Epoch we received plus the RTC-clock delta
-     * since then. RTC slow clock spans deep sleep + esp_restart so this
-     * survives across boots. 0 = never received a server epoch. */
-    int64_t clk_est = 0;
-    if (last_server_epoch > 0) {
-        uint64_t now_rtc_us = esp_clk_rtc_time();
-        if (now_rtc_us >= last_server_epoch_rtc_us) {
-            int64_t delta_s = (int64_t)((now_rtc_us - last_server_epoch_rtc_us) / 1000000ULL);
-            clk_est = last_server_epoch + delta_s;
-        }
+    /* Firmware's current wall-clock time from its system clock. The clock
+     * was set via settimeofday() on the most recent X-Server-Time-Epoch
+     * response, and keeps ticking through deep sleep + esp_restart (system
+     * time is RTC-backed on ESP32-S3). Omit if the clock has never been
+     * set (epoch < 2020-01-01 — we're in 2026, so any time < that means
+     * uninitialised / first boot). */
+    time_t clk_now = time(NULL);
+    if (clk_now < 1577836800) {
+        clk_now = 0;  /* signals "not set" to the server */
     }
 
     const char *last_sleep_str =
@@ -881,27 +883,27 @@ static void build_frame_state_json(char *buf, size_t buflen,
             "{\"fw\":\"%s\",\"boot\":%d,\"wake\":\"%s\",\"caller\":\"%s\","
             "\"uptime_s\":%lld,\"bat_mv\":%d,\"chg\":\"%s\","
             "\"last_sleep\":\"%s\",\"rssi\":%d,\"heap_kb\":%u,"
-            "\"spurious\":%u,\"cfg_ver\":%u,\"clk_est\":%lld,"
+            "\"spurious\":%u,\"cfg_ver\":%u,\"clk_now\":%lld,"
             "\"sleep_err_s\":%d}",
             fw, boot_count, wake_label, caller,
             (long long)uptime_s, (int)last_battery_mv,
             chg_low ? "charging" : "idle",
             last_sleep_str, rssi, (unsigned)(free_heap / 1024u),
             (unsigned)consecutive_spurious_resets,
-            (unsigned)config.cfg_ver, (long long)clk_est,
+            (unsigned)config.cfg_ver, (long long)clk_now,
             (int)last_sleep_err_s);
     } else {
         snprintf(buf, buflen,
             "{\"fw\":\"%s\",\"boot\":%d,\"wake\":\"%s\",\"caller\":\"%s\","
             "\"uptime_s\":%lld,\"bat_mv\":%d,\"chg\":\"%s\","
             "\"last_sleep\":\"%s\",\"rssi\":%d,\"heap_kb\":%u,"
-            "\"spurious\":%u,\"cfg_ver\":%u,\"clk_est\":%lld}",
+            "\"spurious\":%u,\"cfg_ver\":%u,\"clk_now\":%lld}",
             fw, boot_count, wake_label, caller,
             (long long)uptime_s, (int)last_battery_mv,
             chg_low ? "charging" : "idle",
             last_sleep_str, rssi, (unsigned)(free_heap / 1024u),
             (unsigned)consecutive_spurious_resets,
-            (unsigned)config.cfg_ver, (long long)clk_est);
+            (unsigned)config.cfg_ver, (long long)clk_now);
     }
 }
 
@@ -969,12 +971,13 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
         int64_t epoch = atoll(epoch_hdr);
         if (epoch > 0) {
             *out_server_epoch = epoch;
-            ESP_LOGI(TAG, "X-Server-Time-Epoch: %lld", epoch);
-            /* Cache for the X-Frame-State clk_est field on future calls.
-             * Anchor against esp_clk_rtc_time so we can add the delta
-             * across deep sleep + esp_restart without needing wallclock. */
-            last_server_epoch = epoch;
-            last_server_epoch_rtc_us = esp_clk_rtc_time();
+            /* Set the firmware's system clock to server time. Backed by the
+             * RTC slow clock — survives deep sleep + esp_restart. On the
+             * next X-Frame-State we report time(NULL) directly and the
+             * server sees actual drift. */
+            struct timeval tv = { .tv_sec = (time_t)epoch, .tv_usec = 0 };
+            settimeofday(&tv, NULL);
+            ESP_LOGI(TAG, "X-Server-Time-Epoch: %lld (system clock set)", epoch);
         }
     }
 
@@ -1378,8 +1381,6 @@ void app_main(void)
         scheduled_wake_rtc_us = 0;
         consecutive_spurious_resets = 0;
         pre_sleep_server_epoch = 0;
-        last_server_epoch = 0;
-        last_server_epoch_rtc_us = 0;
         last_sleep_err_s = 0;
         last_sleep_err_valid = false;
         last_sleep_mode = LAST_SLEEP_MODE_NONE;
