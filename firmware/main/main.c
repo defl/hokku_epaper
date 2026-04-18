@@ -983,8 +983,21 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
              * server sees actual drift. */
             struct timeval tv = { .tv_sec = (time_t)epoch, .tv_usec = 0 };
             settimeofday(&tv, NULL);
-            ESP_LOGI(TAG, "X-Server-Time-Epoch: %lld (system clock set)", epoch);
+            /* Log the absolute wallclock we just set (human-readable) so
+             * it's obvious in serial output what time the chip now thinks
+             * it is. */
+            struct tm t;
+            gmtime_r(&tv.tv_sec, &t);
+            char buf[40];
+            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S UTC", &t);
+            ESP_LOGI(TAG, "X-Server-Time-Epoch: %lld — system clock set to %s",
+                     epoch, buf);
+        } else {
+            ESP_LOGW(TAG, "X-Server-Time-Epoch present but non-positive: '%s'", epoch_hdr);
         }
+    } else {
+        ESP_LOGW(TAG, "X-Server-Time-Epoch header missing from response (hdr=%s)",
+                 epoch_hdr ? "empty" : "null");
     }
 
     esp_http_client_cleanup(client);
@@ -1413,6 +1426,16 @@ void app_main(void)
         last_sleep_err_s = 0;
         last_sleep_err_valid = false;
         last_sleep_mode = LAST_SLEEP_MODE_NONE;
+        /* Also reset the system clock. ESP-IDF stores its wallclock
+         * offset in a separate RTC variable (s_boot_time) that isn't
+         * zeroed by our rtc_magic check and also survives esp_restart
+         * + DTR/RTS chip reset (only a real POR wipes it). Without this,
+         * a freshly-flashed frame inherits whatever time the previous
+         * firmware synced, reports misleading clk_drift on its very
+         * first call, and makes log timestamps confusing. Clear so our
+         * first clk_now reading only appears AFTER a fresh server sync. */
+        struct timeval tv = {0, 0};
+        settimeofday(&tv, NULL);
     }
 
     boot_count++;

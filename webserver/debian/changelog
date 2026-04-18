@@ -1,3 +1,11 @@
+hokku-server (2.1.12-1) unstable; urgency=low
+
+  * Web UI: Connected Screens Battery column shows percentage only
+    (coloured red below 20%); voltage available on hover and in the
+    Details modal.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 18 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.11-1) unstable; urgency=low
 
   * X-Frame-State header replaces X-Battery-mV: firmware sends a single

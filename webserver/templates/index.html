@@ -418,15 +418,16 @@ function formatMinutesLate(m) {
 }
 
 function formatBattery(s) {
-  // Last-known battery reading from the frame (via X-Battery-mV on the
-  // most recent call-in). Voltage with 2-decimal precision + percentage;
-  // colour the percentage red when < 20% so "low battery" jumps out.
+  // Last-known battery reading from the frame. Show percentage only in
+  // the main table — the precise voltage is available in the Details
+  // modal for anyone who wants it. Red <20% so "low" jumps out. The
+  // title attribute reveals the voltage on hover as a compromise.
   if (!s || s.battery_mv == null) return '<span style="color:#999">-</span>';
-  const volts = (s.battery_mv / 1000).toFixed(2);
   const pct = s.battery_percent;
-  const colour = pct != null && pct < 20 ? '#b91c1c' : '#555';
-  const pctStr = pct != null ? `<span style="color:${colour};font-weight:600">${pct}%</span>` : '';
-  return `${volts} V ${pctStr}`;
+  if (pct == null) return '<span style="color:#999">-</span>';
+  const colour = pct < 20 ? '#b91c1c' : '#333';
+  const volts = (s.battery_mv / 1000).toFixed(2);
+  return `<span style="color:${colour};font-weight:600" title="${volts} V (${s.battery_mv} mV)">${pct}%</span>`;
 }
 
 function renderScreens(screens) {
