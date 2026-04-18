@@ -58,6 +58,19 @@
 
   .toast { position: fixed; bottom: 20px; right: 20px; background: #333; color: #fff; padding: 10px 20px; border-radius: 6px; font-size: 0.9em; z-index: 1000; opacity: 0; transition: opacity 0.3s; }
   .toast.show { opacity: 1; }
+
+  /* Help icon + popover */
+  .help-icon { width: 22px; height: 22px; border-radius: 50%; border: 1px solid #ccc; background: #fff; color: #555; font-size: 0.85em; font-weight: 700; cursor: pointer; padding: 0; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+  .help-icon:hover { background: #f0f0f0; border-color: #999; color: #333; }
+  .help-icon[aria-expanded="true"] { background: #2563eb; border-color: #2563eb; color: #fff; }
+  .help-popover { position: absolute; z-index: 100; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 14px 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 480px; font-size: 0.88em; line-height: 1.45; margin-top: 6px; }
+  .help-popover[hidden] { display: none; }
+  .help-popover h3 { font-size: 0.95em; margin-bottom: 8px; color: #333; }
+  .help-popover p { margin-bottom: 8px; color: #444; }
+  .help-popover p:last-child { margin-bottom: 0; }
+  .help-popover strong { color: #1d4ed8; }
+  .help-popover em { color: #666; font-style: italic; }
+  .help-popover-note { padding-top: 8px; border-top: 1px solid #eee; color: #666 !important; font-size: 0.92em; }
 </style>
 </head>
 <body>
@@ -119,6 +132,23 @@
       <option value="portrait">Portrait</option>
     </select>
     <span class="info">changing orientation re-converts all images</span>
+  </div>
+
+  <div class="config-row">
+    <label>Dither algorithm:</label>
+    <select id="dither-algorithm">
+      <option value="atkinson_hue_aware">Atkinson + hue-aware (warmer skin)</option>
+      <option value="atkinson">Atkinson (softer)</option>
+      <option value="floyd_steinberg">Floyd–Steinberg (classic)</option>
+    </select>
+    <button type="button" class="help-icon" id="dither-help-btn" aria-label="Dither algorithm help" aria-expanded="false">?</button>
+    <div id="dither-help-popover" class="help-popover" role="dialog" aria-label="Dither algorithm explanation" hidden>
+      <h3>Dither algorithms</h3>
+      <p><strong>Floyd–Steinberg (classic)</strong> — Original error-diffusion algorithm. Distributes the full quantization error to 4 neighboring pixels. Highest contrast, but warm skin tones can pick up visible blue speckles.</p>
+      <p><strong>Atkinson (softer)</strong> — Distributes only 6/8 of the error across 6 neighbors. Smoother gradients and less color bleed, but slightly lower maximum contrast.</p>
+      <p><strong>Atkinson + hue-aware</strong> — Atkinson diffusion plus a palette-selection rule that forbids large hue jumps (e.g. picking Blue for a warm pixel). Best for photos of people. <em>Default.</em></p>
+      <p class="help-popover-note">Switching triggers re-conversion of every image for the new algorithm — can take several seconds per image. Cached renders for the other algorithms are preserved, so switching back is instant.</p>
+    </div>
   </div>
 
   <div class="config-row">
@@ -219,6 +249,7 @@ async function saveConfig() {
     refresh_image_at_time: refreshTimes,
     poll_interval_seconds: parseInt(document.getElementById('poll-interval').value) || 10,
     orientation: document.getElementById('orientation').value,
+    dither_algorithm: document.getElementById('dither-algorithm').value,
   };
   try {
     const resp = await fetch('/hokku/api/config', {
@@ -330,6 +361,7 @@ async function refreshStatus() {
     renderRefreshTimes();
     document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
     document.getElementById('orientation').value = cfg.orientation || 'landscape';
+    document.getElementById('dither-algorithm').value = cfg.dither_algorithm || 'atkinson_hue_aware';
     document.getElementById('server-address').textContent = `${location.hostname}:${cfg.port}`;
     document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
 
@@ -367,6 +399,32 @@ async function refreshStatus() {
     console.error('Status refresh failed:', e);
   }
 }
+
+// Dither help popover toggle (click icon to open, Esc or click-outside to close)
+(function() {
+  const btn = document.getElementById('dither-help-btn');
+  const pop = document.getElementById('dither-help-popover');
+  if (!btn || !pop) return;
+
+  function open() {
+    pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+  }
+  function close() {
+    pop.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+  }
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    pop.hidden ? open() : close();
+  });
+  document.addEventListener('click', (e) => {
+    if (!pop.hidden && !pop.contains(e.target) && e.target !== btn) close();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !pop.hidden) close();
+  });
+})();
 
 // Initial load + auto-refresh every 5 seconds
 refreshStatus();

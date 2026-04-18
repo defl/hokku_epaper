@@ -69,6 +69,8 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif", "
 
 # ── Configuration ──────────────────────────────────────────────────
 
+VALID_DITHER_ALGORITHMS = ("floyd_steinberg", "atkinson", "atkinson_hue_aware")
+
 DEFAULT_CONFIG = {
     "timezone": "America/Chicago",
     "refresh_image_at_time": ["0600", "1200", "1800"],
@@ -77,6 +79,7 @@ DEFAULT_CONFIG = {
     "port": 8080,
     "poll_interval_seconds": 10,
     "orientation": "landscape",
+    "dither_algorithm": "atkinson_hue_aware",
 }
 
 _config_file_path = None  # set during load, used for saving
@@ -114,7 +117,7 @@ def _save_config(config):
     """Save config to the file it was loaded from (or ./config.json)."""
     path = _config_file_path or Path("./config.json")
     # Only save user-facing config keys
-    save_keys = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir", "port", "poll_interval_seconds", "orientation"]
+    save_keys = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir", "port", "poll_interval_seconds", "orientation", "dither_algorithm"]
     save_data = {k: config[k] for k in save_keys if k in config}
     with open(path, "w") as f:
         json.dump(save_data, f, indent=2)
@@ -275,9 +278,11 @@ def _hash_file(img_path):
             h.update(chunk)
     return h.hexdigest()
 
-def _cache_key(img_path, content_hash):
+def _cache_key(img_path, content_hash, algorithm=None):
     orientation = _config.get("orientation", "landscape")
-    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}"
+    if algorithm is None:
+        algorithm = _config.get("dither_algorithm", "atkinson_hue_aware")
+    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}_{algorithm}"
 
 def _load_from_cache(cache_dir, img_path, content_hash):
     key = _cache_key(img_path, content_hash)
@@ -474,7 +479,7 @@ def _list_images():
             if f.suffix.lower() in IMAGE_EXTENSIONS and f.is_file()]
 
 
-def _prepare_canvas(img):
+def _prepare_canvas(img, color_enhance=1.2):
     """Scale image to fit display, enhance for e-ink, produce 1200x1600 native buffer.
 
     In landscape mode: composites on 1600x1200 canvas, then rotates -90° to 1200x1600.
@@ -482,6 +487,11 @@ def _prepare_canvas(img):
 
     Returns (canvas, padding_mask) where padding_mask is a boolean numpy array
     (True = padding pixel, should be forced to white after dithering).
+
+    color_enhance is the PIL ImageEnhance.Color factor. Hue-aware dithering
+    benefits from a lower saturation boost (~1.05) because it can reproduce warm
+    mid-tones without residual error; classic FS needs the full 1.2 to compensate
+    for the dithering's tendency to mute color.
     """
     from PIL import ImageEnhance, ImageOps
     orientation = _config.get("orientation", "landscape")
@@ -511,7 +521,7 @@ def _prepare_canvas(img):
     canvas = ImageEnhance.Brightness(canvas).enhance(1.0)
     canvas = ImageEnhance.Contrast(canvas).enhance(1.1)
     canvas = ImageEnhance.Sharpness(canvas).enhance(1.3)
-    canvas = ImageEnhance.Color(canvas).enhance(1.2)
+    canvas = ImageEnhance.Color(canvas).enhance(color_enhance)
 
     if not portrait:
         # Landscape: rotate -90° CW to get 1200x1600 native format
@@ -522,6 +532,7 @@ def _prepare_canvas(img):
 
 
 def _build_rgb_lut():
+    """Nearest-palette LUT by Lab-Euclidean distance (classic)."""
     steps = 32
     scale = 256 / steps
     r_vals = np.arange(steps) * scale + scale / 2
@@ -534,17 +545,66 @@ def _build_rgb_lut():
     lut = np.argmin(dists, axis=1).astype(np.uint8).reshape(steps, steps, steps)
     return lut, scale
 
-_RGB_LUT, _LUT_SCALE = _build_rgb_lut()
+
+def _build_rgb_lut_hue_aware(hue_cutoff_deg=95.0, neutral_chroma=8.0):
+    """Nearest-palette LUT that forbids palette picks whose hue differs by more
+    than hue_cutoff_deg from the source pixel. Neutrals (palette or pixel with
+    chroma < neutral_chroma) are always allowed — black/white stay candidates
+    for every pixel.
+
+    Fixes the common failure mode where error diffusion overshoots Red for warm
+    skin tones and cascades into Blue picks on neighboring pixels.
+    """
+    steps = 32
+    scale = 256 / steps
+    r_vals = np.arange(steps) * scale + scale / 2
+    rr, gg, bb = np.meshgrid(r_vals, r_vals, r_vals, indexing='ij')
+    rgb_grid = np.stack([rr, gg, bb], axis=-1).reshape(-1, 3)
+    lab_grid = _rgb_to_lab(rgb_grid)
+
+    pal_a = PALETTE_LAB[:, 1]
+    pal_b = PALETTE_LAB[:, 2]
+    pal_chroma = np.sqrt(pal_a ** 2 + pal_b ** 2)
+    pal_hue = np.arctan2(pal_b, pal_a)
+    neutral_pal = pal_chroma < neutral_chroma
+
+    pix_a = lab_grid[:, 1]
+    pix_b = lab_grid[:, 2]
+    pix_chroma = np.sqrt(pix_a ** 2 + pix_b ** 2)
+    pix_hue = np.arctan2(pix_b, pix_a)
+
+    dh = pix_hue[:, None] - pal_hue[None, :]
+    dh = np.arctan2(np.sin(dh), np.cos(dh))
+    dh_deg = np.abs(np.degrees(dh))
+
+    forbidden = (
+        (pix_chroma[:, None] > neutral_chroma) &
+        (~neutral_pal[None, :]) &
+        (dh_deg > hue_cutoff_deg)
+    )
+
+    dists = np.sum((lab_grid[:, None, :] - PALETTE_LAB[None, :, :]) ** 2, axis=2)
+    dists = np.where(forbidden, np.inf, dists)
+    lut = np.argmin(dists, axis=1).astype(np.uint8).reshape(steps, steps, steps)
+    return lut, scale
 
 
-def _floyd_steinberg_dither(canvas):
+_RGB_LUT_EUCLID, _LUT_SCALE = _build_rgb_lut()
+_RGB_LUT_HUE_AWARE, _ = _build_rgb_lut_hue_aware()
+
+
+def _floyd_steinberg_dither(canvas, lut=None, lut_scale=None):
+    """Floyd–Steinberg error diffusion. Full error distributed to 4 neighbors
+    (7/16 right, 3/16 down-left, 5/16 down, 1/16 down-right)."""
+    if lut is None:
+        lut = _RGB_LUT_EUCLID
+    if lut_scale is None:
+        lut_scale = _LUT_SCALE
     pixels = np.array(canvas, dtype=np.float32)
     h, w, _ = pixels.shape
     result_idx = np.zeros((h, w), dtype=np.uint8)
     pal_rgb = PALETTE_MEASURED_RGB
-    lut = _RGB_LUT
     lut_max = lut.shape[0] - 1
-    lut_scale = _LUT_SCALE
 
     for y in range(h):
         for x in range(w):
@@ -580,6 +640,59 @@ def _floyd_steinberg_dither(canvas):
     return result_idx
 
 
+def _atkinson_dither(canvas, lut=None, lut_scale=None):
+    """Atkinson dither. Distributes only 6/8 of the quantization error, 1/8 each
+    into 6 neighbors: (+1,0), (+2,0), (-1,+1), (0,+1), (+1,+1), (0,+2). Softer
+    gradients, less hue-shift cascade, slightly lower max contrast than FS."""
+    if lut is None:
+        lut = _RGB_LUT_EUCLID
+    if lut_scale is None:
+        lut_scale = _LUT_SCALE
+    pixels = np.array(canvas, dtype=np.float32)
+    h, w, _ = pixels.shape
+    result_idx = np.zeros((h, w), dtype=np.uint8)
+    pal_rgb = PALETTE_MEASURED_RGB
+    lut_max = lut.shape[0] - 1
+    # (dx, dy)
+    offsets = ((1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2))
+    w_coef = 1.0 / 8.0
+
+    for y in range(h):
+        for x in range(w):
+            r = min(max(pixels[y, x, 0], 0.0), 255.0)
+            g = min(max(pixels[y, x, 1], 0.0), 255.0)
+            b = min(max(pixels[y, x, 2], 0.0), 255.0)
+            ri = min(int(r / lut_scale), lut_max)
+            gi = min(int(g / lut_scale), lut_max)
+            bi = min(int(b / lut_scale), lut_max)
+            idx = int(lut[ri, gi, bi])
+            result_idx[y, x] = idx
+            er = (r - pal_rgb[idx, 0]) * w_coef
+            eg = (g - pal_rgb[idx, 1]) * w_coef
+            eb = (b - pal_rgb[idx, 2]) * w_coef
+            for dx, dy in offsets:
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < w and 0 <= ny < h:
+                    pixels[ny, nx, 0] += er
+                    pixels[ny, nx, 1] += eg
+                    pixels[ny, nx, 2] += eb
+        if y % 200 == 0:
+            print(f"  Dithering: {y}/{h}")
+    return result_idx
+
+
+def _dither_for_algorithm(algorithm):
+    """Return (dither_fn, lut, color_enhance) for the configured algorithm."""
+    if algorithm == "floyd_steinberg":
+        return _floyd_steinberg_dither, _RGB_LUT_EUCLID, 1.2
+    if algorithm == "atkinson":
+        return _atkinson_dither, _RGB_LUT_EUCLID, 1.2
+    if algorithm == "atkinson_hue_aware":
+        return _atkinson_dither, _RGB_LUT_HUE_AWARE, 1.05
+    # Fallback matches new default so unknown config values don't hard-fail.
+    return _atkinson_dither, _RGB_LUT_HUE_AWARE, 1.05
+
+
 def _convert_image(img_path):
     print(f"Converting: {img_path.name}")
     t0 = time.time()
@@ -591,10 +704,15 @@ def _convert_image(img_path):
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
     print(f"  {img_path.name}: {img.size[0]}x{img.size[1]}")
-    canvas, padding_mask = _prepare_canvas(img)
+
+    algorithm = _config.get("dither_algorithm", "atkinson_hue_aware")
+    dither_fn, lut, color_enhance = _dither_for_algorithm(algorithm)
+    print(f"  {img_path.name}: algorithm={algorithm}")
+
+    canvas, padding_mask = _prepare_canvas(img, color_enhance=color_enhance)
     canvas_array = _compress_dynamic_range(np.array(canvas, dtype=np.float32))
     canvas = Image.fromarray(canvas_array.astype(np.uint8))
-    result_idx = _floyd_steinberg_dither(canvas)
+    result_idx = dither_fn(canvas, lut, _LUT_SCALE)
 
     # Force padding areas to pure white (palette index 1) — without this,
     # the enhancement + dithering pipeline turns pure white into a slightly
@@ -705,7 +823,10 @@ def _sync_pool_inner():
     with _lock:
         valid_cache_keys = set()
         for key, entry in _pool.items():
-            valid_cache_keys.add(_cache_key(Path(key), entry["hash"]))
+            # Keep cached renders for every algorithm, not just the active one,
+            # so toggling the dither dropdown is instant on a re-visit.
+            for algo in VALID_DITHER_ALGORITHMS:
+                valid_cache_keys.add(_cache_key(Path(key), entry["hash"], algorithm=algo))
     _purge_stale_cache(cache_dir, valid_cache_keys)
 
 
@@ -825,6 +946,7 @@ def api_status():
                 "port": _config["port"],
                 "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
                 "orientation": _config.get("orientation", "landscape"),
+                "dither_algorithm": _config.get("dither_algorithm", "atkinson_hue_aware"),
                 "upload_dir": str(_get_upload_dir()),
                 "cache_dir": str(_get_cache_dir()),
             },
@@ -954,6 +1076,16 @@ def api_config():
             _config["orientation"] = val
             changed = True
 
+    algorithm_changed = False
+    if "dither_algorithm" in data:
+        val = data["dither_algorithm"]
+        if val not in VALID_DITHER_ALGORITHMS:
+            return jsonify({"error": f"Unknown dither_algorithm: {val}"}), 400
+        if _config.get("dither_algorithm", "atkinson_hue_aware") != val:
+            algorithm_changed = True
+        _config["dither_algorithm"] = val
+        changed = True
+
     if changed:
         _save_config(_config)
 
@@ -963,12 +1095,21 @@ def api_config():
         with _lock:
             _pool.clear()
         threading.Thread(target=_sync_pool, daemon=True).start()
+    elif algorithm_changed:
+        # Algorithm change: cache key changes so pool entries won't find matching
+        # renders. Drop the pool to force _sync_pool to re-run _convert_and_store,
+        # which hits cache for algorithms we've rendered before (instant) and
+        # falls through to _convert_image for new ones.
+        with _lock:
+            _pool.clear()
+        threading.Thread(target=_sync_pool, daemon=True).start()
 
     return jsonify({"status": "ok", "config": {
         "timezone": _config["timezone"],
         "refresh_image_at_time": _config["refresh_image_at_time"],
         "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
         "orientation": _config.get("orientation", "landscape"),
+        "dither_algorithm": _config.get("dither_algorithm", "atkinson_hue_aware"),
     }})
 
 
