@@ -1,3 +1,12 @@
+hokku-server (2.1.6-1) unstable; urgency=low
+
+  * Version bump to align with firmware 2.1.6 (spurious-reset wake path
+    skips display init to save battery; polished wakeup-classifier log
+    label; defensive clock read in USB polling loop). No webserver code
+    changes.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 17 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.5-1) unstable; urgency=low
 
   * Version bump to align with firmware 2.1.5 (deep-sleep refresh follow-up

@@ -998,8 +998,15 @@ static void enter_deep_sleep(int64_t sleep_us)
     if (usb_connected && remaining_us > 0) {
         ESP_LOGI(TAG, "USB connected — waiting %.1f hours instead of deep sleep",
                  remaining_us / 3600000000.0);
-        while (esp_clk_rtc_time() < deadline_rtc_us) {
-            uint64_t left_us = deadline_rtc_us - esp_clk_rtc_time();
+        while (1) {
+            /* Single read per iteration: the while-condition + later
+             * subtraction were two separate clock reads, so a context
+             * switch in between could push `now` past the deadline and
+             * make `deadline - now` underflow uint64_t to a huge value
+             * (then chunk_ms = 1000, one wasted second of vTaskDelay). */
+            uint64_t now_rtc_us = esp_clk_rtc_time();
+            if (now_rtc_us >= deadline_rtc_us) break;
+            uint64_t left_us = deadline_rtc_us - now_rtc_us;
             int chunk_ms = (left_us > 1000000ULL) ? 1000 : (int)(left_us / 1000);
             if (chunk_ms < 1) chunk_ms = 1;
             vTaskDelay(pdMS_TO_TICKS(chunk_ms));
@@ -1028,9 +1035,14 @@ static void enter_deep_sleep(int64_t sleep_us)
     gpio_set_level(PIN_SYS_POWER, 0);
     gpio_set_level(PIN_WORK_LED, 0);
 
-    /* Shut down SPI bus */
-    spi_bus_remove_device(spi_handle);
-    spi_bus_free(SPI2_HOST);
+    /* Shut down SPI bus — guarded because enter_deep_sleep can be called
+     * on the is_usb_reset_after_sleep path BEFORE spi_init(), in which case
+     * spi_handle is still NULL. spi_bus_remove_device(NULL) is undefined. */
+    if (spi_handle != NULL) {
+        spi_bus_remove_device(spi_handle);
+        spi_bus_free(SPI2_HOST);
+        spi_handle = NULL;
+    }
 
     /* Configure timer wakeup for the actual remaining time, not the
      * original caller-requested sleep_us. */
@@ -1174,15 +1186,49 @@ void app_main(void)
     was_sleeping = false;
 
     bool is_true_first_boot = (!is_scheduled_wake && !is_usb_reset_after_sleep && !had_prior_sleep);
+    /* "Misclassified wake" = we came from a sleep we started, wakeup cause
+     * came back as something other than TIMER/EXT1, AND the RTC clock says
+     * we're at/past the deadline (or no valid deadline to compare). We'll
+     * fetch like a scheduled wake, but label it distinctly in the log. */
+    bool is_misclassified_wake = (!is_scheduled_wake && !is_usb_reset_after_sleep && had_prior_sleep);
 
     ESP_LOGI(TAG, "Boot #%d, wakeup=%d%s", boot_count, wakeup,
              is_true_first_boot ? " (first boot)" :
              is_usb_reset_after_sleep ? " (USB reset after sleep)" :
-             (wakeup == ESP_SLEEP_WAKEUP_TIMER ? " (timer)" : " (button)"));
+             is_misclassified_wake ? " (misclassified wake)" :
+             (wakeup == ESP_SLEEP_WAKEUP_TIMER ? " (timer)" :
+              wakeup == ESP_SLEEP_WAKEUP_EXT1 ? " (button)" :
+              " (other)"));
+    /* NOTE: only TIMER + EXT1 are enabled as wake sources; other values
+     * from esp_sleep_get_wakeup_cause() (EXT0, ULP, GPIO, UART, TOUCHPAD)
+     * shouldn't occur under our configuration. If one does, the classifier
+     * above treats it as !is_scheduled_wake, so it falls through to the
+     * deadline-based analysis like any other unexplained wake. */
 
-    /* Hardware init */
+    /* Early-exit for "spurious reset before deadline" — skip display/SPI/WiFi
+     * init entirely and go straight back to sleep. Saves the ~600ms of
+     * display-rail warmup + spi_init + battery read plus 120s of display-
+     * powered reflash window on the is_usb_reset_after_sleep branch.
+     * enter_deep_sleep's teardown is safe on uninitialised peripherals
+     * (guarded spi_bus_remove_device, guarded chg_monitor_stop). */
+    if (is_usb_reset_after_sleep) {
+        ESP_LOGI(TAG, "Early wake (no scheduled cause) — skipping display init, image already on display.");
+        uint64_t now_rtc_us = esp_clk_rtc_time();
+        int64_t sleep_us = (now_rtc_us < scheduled_wake_rtc_us)
+            ? (int64_t)(scheduled_wake_rtc_us - now_rtc_us)
+            : 60LL * 1000000LL;
+        /* NOTE: each spurious-reset cycle re-reads the clock inside
+         * enter_deep_sleep, so the stored scheduled_wake_rtc_us drifts
+         * ~microseconds later per cycle. Negligible in practice (would
+         * take ~10^6 cycles to move the deadline one second). */
+        enter_deep_sleep(sleep_us);
+        /* Never returns */
+    }
+
+    /* Hardware init — only runs on paths that actually need the display */
     hw_gpio_init();
-    gpio_set_level(PIN_SYS_POWER, 1);
+    /* hw_gpio_init already drives SYS_POWER HIGH; only EPAPER_PWR_EN and
+     * the LEDs need driving here. */
     gpio_set_level(PIN_EPAPER_PWR_EN, 1);
     gpio_set_level(PIN_WORK_LED, 1);
     gpio_set_level(PIN_WIFI_LED, 0);
@@ -1243,19 +1289,7 @@ void app_main(void)
        fetch and sleep only the time remaining to the original deadline.
        enter_deep_sleep honors its sleep_us contract (reflash window is
        internal, not additive), so the deadline doesn't drift. */
-    if (is_usb_reset_after_sleep) {
-        /* Invariant on this branch: the classifier above only sets
-         * is_usb_reset_after_sleep = true when scheduled_wake_rtc_us > 0
-         * AND the gap is within [SLACK, SANE_MAX]. No other case reaches
-         * here, so we don't need a last_sleep_seconds fallback. */
-        ESP_LOGI(TAG, "Early wake (no scheduled cause) — image already on display.");
-        uint64_t now_rtc_us = esp_clk_rtc_time();
-        int64_t sleep_us = (now_rtc_us < scheduled_wake_rtc_us)
-            ? (int64_t)(scheduled_wake_rtc_us - now_rtc_us)
-            : 60LL * 1000000LL;  /* already past — wake soon to re-evaluate */
-        enter_deep_sleep(sleep_us);
-        /* Never returns */
-    }
+    /* (is_usb_reset_after_sleep branch is handled earlier, before display init) */
 
     /* ── Normal boot path: WiFi → download (with sleep header) → display ── */
 

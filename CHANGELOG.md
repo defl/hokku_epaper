@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.1.6
+
+Firmware battery-life tightening + review-driven polish. Webserver unchanged.
+
+### Firmware
+
+- **Spurious-reset wake path no longer powers up the display**. On a wake classified as `is_usb_reset_after_sleep` (pre-deadline, screen already showing the right image), we now skip `hw_gpio_init`, `EPAPER_PWR_EN` drive, `chg_monitor_start`, the 500 ms display-controller warm-up, `spi_init`, and the battery read — and go directly to `enter_deep_sleep`. Saves ~600 ms of active-mode CPU plus 120 s of display-rail power per spurious reset.
+- **`enter_deep_sleep` teardown is now safe on uninitialised SPI.** Guarded `spi_bus_remove_device`/`spi_bus_free` with a NULL check + pointer clear, enabling the pre-init early-exit path above.
+- **New `is_misclassified_wake` log label** for wakes where `esp_sleep_get_wakeup_cause()` came back as UNDEFINED but the RTC clock says we're at/past the deadline (previously logged as "(button)", which was misleading).
+- **Defensive single-read of `esp_clk_rtc_time()` per USB polling-loop iteration.** Previously the while-check and the subtraction were two separate clock reads; a context switch between them could push `now` past the deadline and underflow `deadline - now` to a huge value, costing one unnecessary 1 s `vTaskDelay` before the loop exited.
+- **Removed duplicate `gpio_set_level(PIN_SYS_POWER, 1)`** in app_main — `hw_gpio_init` already drives it HIGH.
+- **Documented** that only TIMER + EXT1 are enabled as wake sources; any other value from `esp_sleep_get_wakeup_cause()` falls through to the deadline-based analysis.
+
 ## 2.1.5
 
 Firmware follow-up after adversarial review of 2.1.4. Webserver unchanged.
