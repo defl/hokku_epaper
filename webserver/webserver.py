@@ -91,43 +91,91 @@ DEBUG_FAST_REFRESH_SECONDS = 180
 _config_file_path = None  # set during load, used for saving
 
 
+_SAVE_KEYS = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir",
+              "port", "poll_interval_seconds", "orientation", "debug_fast_refresh"]
+
+
 def _load_config():
-    """Load config from file. Check HOKKU_CONFIG env, then ./config.json,
-    then /var/lib/hokku/config.json (the current Debian-install path),
-    then /etc/hokku/config.json (legacy pre-2.1.14 path)."""
+    """Load config and ensure the write destination is owned by us.
+
+    Search order for loading existing config:
+      1. HOKKU_CONFIG env var (set by the Debian service unit)
+      2. ./config.json (dev runs)
+      3. /var/lib/hokku/config.json (current Debian install path)
+      4. /etc/hokku/config.json (legacy pre-2.1.14 install path)
+
+    Write destination: HOKKU_CONFIG if set, else the path we loaded from,
+    else ./config.json.
+
+    If the write destination is missing OR not writable by us (common
+    after a Debian install where postinst created config.json as root
+    before systemd chowned StateDirectory to the DynamicUser), rewrite
+    it from the loaded content so it ends up owned by the service user.
+    This is what makes saves from the web UI actually work without
+    requiring the admin to manually chown anything."""
     global _config_file_path
     config = dict(DEFAULT_CONFIG)
 
-    candidates = []
     env_path = os.environ.get("HOKKU_CONFIG")
+    candidates = []
     if env_path:
         candidates.append(Path(env_path))
     candidates.append(Path("./config.json"))
     candidates.append(Path("/var/lib/hokku/config.json"))
     candidates.append(Path("/etc/hokku/config.json"))
 
+    loaded_path = None
     for path in candidates:
         if path.exists():
             try:
                 with open(path) as f:
                     user_config = json.load(f)
                 config.update(user_config)
-                _config_file_path = path
+                loaded_path = path
                 print(f"  Config loaded from: {path}")
-                return config
+                break
             except (json.JSONDecodeError, OSError) as e:
                 print(f"  Warning: failed to load config from {path}: {e}")
 
-    print("  No config file found, using defaults")
+    if loaded_path is None:
+        print("  No config file found, using defaults")
+
+    # Pick where we're going to save. Prefer HOKKU_CONFIG so upgrades
+    # migrate legacy /etc/hokku/config.json into the new location.
+    if env_path:
+        write_path = Path(env_path)
+    elif loaded_path is not None:
+        write_path = loaded_path
+    else:
+        write_path = Path("./config.json")
+
+    # Heal ownership / create if missing. os.access follows POSIX perms
+    # which is what we care about here (the service's own dynamic UID).
+    need_rewrite = (not write_path.exists()) or (not os.access(write_path, os.W_OK))
+    if need_rewrite:
+        save_data = {k: config[k] for k in _SAVE_KEYS if k in config}
+        try:
+            write_path.parent.mkdir(parents=True, exist_ok=True)
+            if write_path.exists():
+                # Root-owned legacy file — unlinking works because the parent
+                # (/var/lib/hokku) is the StateDirectory, owned by our UID.
+                write_path.unlink()
+            with open(write_path, "w") as f:
+                json.dump(save_data, f, indent=2)
+            action = "created" if loaded_path is None else "rewritten (ownership fix)"
+            print(f"  Config {action} at: {write_path}")
+        except OSError as e:
+            print(f"  Warning: couldn't make config writable at {write_path}: {e}")
+            # Fall through — _save_config will surface the real error on first write.
+
+    _config_file_path = write_path
     return config
 
 
 def _save_config(config):
-    """Save config to the file it was loaded from (or ./config.json)."""
+    """Save config to the file chosen during _load_config."""
     path = _config_file_path or Path("./config.json")
-    # Only save user-facing config keys
-    save_keys = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir", "port", "poll_interval_seconds", "orientation", "debug_fast_refresh"]
-    save_data = {k: config[k] for k in save_keys if k in config}
+    save_data = {k: config[k] for k in _SAVE_KEYS if k in config}
     with open(path, "w") as f:
         json.dump(save_data, f, indent=2)
     print(f"  Config saved to: {path}")

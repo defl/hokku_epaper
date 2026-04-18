@@ -1,3 +1,23 @@
+hokku-server (2.1.15-1) unstable; urgency=low
+
+  * Fix (third try — config save): 2.1.14 moved the config to
+    /var/lib/hokku/ on the theory that StateDirectory would chown it
+    to the DynamicUser. StateDirectory chowns the top-level dir it
+    creates but not files subsequently seeded by postinst, so the
+    root-owned config.json still wasn't writable by the service.
+  * Real fix: the webserver itself creates /var/lib/hokku/config.json
+    on first load (and thus owns it with the right UID). On upgrade,
+    if postinst finds a stale root-owned config.json, it stashes the
+    content to /etc/hokku/config.json so the webserver's legacy-path
+    migration picks it up — settings aren't lost. The webserver also
+    defensively rewrites any non-writable config it finds at its
+    chosen destination, so the upgrade self-heals even on oddball
+    systems where stat-based detection didn't trigger.
+  * Postinst no longer writes config.json directly; just creates the
+    /var/lib/hokku/ subdirs.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 18 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.14-1) unstable; urgency=low
 
   * Fix: saving config from the web UI still failed after 2.1.13
