@@ -2,7 +2,9 @@
 import json
 import os
 import tempfile
+import threading
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -315,6 +317,533 @@ class TestFlaskEndpoints:
         resp = client.get("/hokku/ui")
         assert resp.status_code == 200
         assert b"Hokku" in resp.data
+
+
+# ── Response-header contracts on /hokku/screen/ ───────────────────
+#
+# Firmware relies on these headers to schedule the next wake and to
+# measure sleep accuracy. Regressions here silently break the frame's
+# scheduling behaviour, so lock them in.
+
+class TestScreenHeaders:
+    @pytest.fixture
+    def client(self):
+        webserver.app.config["TESTING"] = True
+        with webserver.app.test_client() as client:
+            yield client
+
+    def _serve_success_context(self):
+        """Context that makes a normal 200 response possible."""
+        pool = {"/images/a.jpg": {"hash": "abc"}}
+        db = {"serve_data": {"a.jpg": {"show_index": 0, "last_request": None,
+              "total_show_count": 0, "total_show_minutes": 0.0}}}
+        return pool, db
+
+    def test_success_has_sleep_seconds_and_server_time_epoch(self, client):
+        pool, db = self._serve_success_context()
+        with patch.object(webserver, "_pool", pool), \
+             patch.object(webserver, "_database", db), \
+             patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
+             patch.object(webserver, "_converting_count", 0), \
+             patch.object(webserver, "_last_served",
+                         {"key": None, "name": None, "served_at": None}), \
+             patch("webserver._read_cached_binary", return_value=b"x" * 960000), \
+             patch("webserver._save_database"):
+            resp = client.get("/hokku/screen/", headers={"X-Screen-Name": "A"})
+            assert resp.status_code == 200
+            assert "X-Sleep-Seconds" in resp.headers
+            assert int(resp.headers["X-Sleep-Seconds"]) > 0
+            assert "X-Server-Time-Epoch" in resp.headers
+            # Server epoch should be "now" within a reasonable window
+            epoch = int(resp.headers["X-Server-Time-Epoch"])
+            assert abs(epoch - int(datetime.now().timestamp())) < 30
+
+    def test_busy_503_still_has_sleep_seconds(self, client):
+        """Firmware falls back to its 3h default if X-Sleep-Seconds is
+        missing on a busy response. Must always be present."""
+        with patch.object(webserver, "_pool", {}), \
+             patch.object(webserver, "_database", {"serve_data": {}}), \
+             patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
+             patch.object(webserver, "_converting_count", 1), \
+             patch("webserver._save_database"):
+            resp = client.get("/hokku/screen/", headers={"X-Screen-Name": "A"})
+            assert resp.status_code == 503
+            assert "X-Sleep-Seconds" in resp.headers
+            assert int(resp.headers["X-Sleep-Seconds"]) > 0
+
+    def test_empty_pool_404_still_has_sleep_seconds(self, client):
+        with patch.object(webserver, "_pool", {}), \
+             patch.object(webserver, "_database", {"serve_data": {}}), \
+             patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
+             patch.object(webserver, "_converting_count", 0), \
+             patch("webserver._save_database"):
+            resp = client.get("/hokku/screen/", headers={"X-Screen-Name": "A"})
+            assert resp.status_code == 404
+            assert "X-Sleep-Seconds" in resp.headers
+            assert int(resp.headers["X-Sleep-Seconds"]) > 0
+
+    def test_cached_binary_missing_503_still_has_sleep_seconds(self, client):
+        """If _read_cached_binary returns None after the pool lookup (cache
+        purged between lock-release and read), firmware needs a retry hint."""
+        pool, db = self._serve_success_context()
+        with patch.object(webserver, "_pool", pool), \
+             patch.object(webserver, "_database", db), \
+             patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
+             patch.object(webserver, "_converting_count", 0), \
+             patch.object(webserver, "_last_served",
+                         {"key": None, "name": None, "served_at": None}), \
+             patch("webserver._read_cached_binary", return_value=None), \
+             patch("webserver._save_database"):
+            resp = client.get("/hokku/screen/", headers={"X-Screen-Name": "A"})
+            assert resp.status_code == 503
+            assert "X-Sleep-Seconds" in resp.headers
+
+
+# ── Screen-call accounting ────────────────────────────────────────
+
+class TestRecordScreenCall:
+    def test_first_call_creates_entry(self):
+        db = {"serve_data": {}}
+        with patch.object(webserver, "_database", db):
+            webserver._record_screen_call("Foyer", "192.168.1.5", 3600,
+                                          served_name="a.jpg")
+        entry = db["screens"]["Foyer"]
+        assert entry["ip"] == "192.168.1.5"
+        assert entry["request_count"] == 1
+        assert entry["last_seen"] is not None
+        assert entry["last_sleep_seconds"] == 3600
+        assert entry["next_update_at"] is not None
+        assert entry["last_served"] == "a.jpg"
+
+    def test_repeat_call_increments_count_and_updates_next_update(self):
+        db = {"serve_data": {}}
+        with patch.object(webserver, "_database", db):
+            webserver._record_screen_call("Foyer", "192.168.1.5", 60)
+            first_next = db["screens"]["Foyer"]["next_update_at"]
+            import time as _time
+            _time.sleep(1.1)  # ensure the second ISO timestamp differs
+            webserver._record_screen_call("Foyer", "192.168.1.5", 120)
+        entry = db["screens"]["Foyer"]
+        assert entry["request_count"] == 2
+        assert entry["last_sleep_seconds"] == 120
+        assert entry["next_update_at"] != first_next
+
+    def test_ip_updated_on_new_network(self):
+        """Laptop-style screen with DHCP that hops IPs should be tracked at
+        its most recent address, not the first one seen."""
+        db = {"serve_data": {}}
+        with patch.object(webserver, "_database", db):
+            webserver._record_screen_call("Bed", "10.0.0.5", 600)
+            webserver._record_screen_call("Bed", "10.0.0.77", 600)
+        assert db["screens"]["Bed"]["ip"] == "10.0.0.77"
+
+    def test_served_name_optional(self):
+        """_record_screen_call is also used on the busy path where no image
+        is served yet — must not crash and must not set last_served."""
+        db = {"serve_data": {}}
+        with patch.object(webserver, "_database", db):
+            webserver._record_screen_call("A", "1.2.3.4", 60)
+        assert "last_served" not in db["screens"]["A"]
+
+
+# ── Busy-retry sleep hint ─────────────────────────────────────────
+
+class TestBusyRetrySeconds:
+    def test_caps_at_five_minutes(self):
+        """Server-computed next refresh far in the future (e.g. 6h away)
+        must still return at most 300s so the screen comes back soon
+        when conversion finishes."""
+        # 300s cap is min(300, delta-to-next-refresh). Use a far-future schedule.
+        config = {"timezone": "UTC", "refresh_image_at_time": ["0600"]}
+        with patch.object(webserver, "_config", config):
+            val = webserver._busy_retry_seconds()
+        assert 60 <= val <= 300
+
+    def test_honours_next_scheduled_refresh_when_closer(self):
+        """If the next scheduled refresh is in 90s, we return something near
+        90s (not 300s) so the screen doesn't overshoot its schedule."""
+        # Hack: set refresh_at a minute in the future relative to now.
+        # Use a schedule that's only a minute or two away via the UTC now.
+        # Easier: verify val never exceeds _calculate_sleep_seconds.
+        config = {"timezone": "UTC", "refresh_image_at_time": ["0600", "1200", "1800"]}
+        with patch.object(webserver, "_config", config):
+            normal = webserver._calculate_sleep_seconds(config)
+            busy = webserver._busy_retry_seconds()
+        assert busy == min(300, normal)
+
+
+# ── Upload endpoint ───────────────────────────────────────────────
+#
+# Added in v2.1 — replaces the "drop a file into the upload dir over
+# Samba" workflow with a drag-and-drop POST. Needs to sanitize names,
+# reject unsupported extensions, and avoid clobbering existing files.
+
+class TestUpload:
+    @pytest.fixture
+    def client_with_upload_dir(self, tmp_path):
+        # Source files live in a sibling dir so they don't pre-populate
+        # the upload dir and trigger spurious collision-suffixing.
+        webserver.app.config["TESTING"] = True
+        upload_dir = tmp_path / "upload"; upload_dir.mkdir()
+        src_dir = tmp_path / "src"; src_dir.mkdir()
+        cfg = {**webserver.DEFAULT_CONFIG,
+               "upload_dir": str(upload_dir),
+               "cache_dir": str(tmp_path / "cache")}
+        with patch.object(webserver, "_config", cfg), \
+             patch("webserver._sync_pool"), \
+             webserver.app.test_client() as client:
+            yield client, upload_dir, src_dir
+
+    def _make_jpeg(self, path):
+        Image.new("RGB", (32, 32), (10, 20, 30)).save(path, "JPEG")
+        return path.read_bytes()
+
+    def test_upload_single_jpeg_success(self, client_with_upload_dir):
+        client, upload_dir, src_dir = client_with_upload_dir
+        src = src_dir / "src.jpg"
+        data = self._make_jpeg(src)
+        resp = client.post("/hokku/api/upload",
+                           data={"files": (src.open("rb"), "holiday.jpg")},
+                           content_type="multipart/form-data")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["saved"] == ["holiday.jpg"]
+        assert (upload_dir / "holiday.jpg").read_bytes() == data
+
+    def test_upload_rejects_unsupported_extension(self, client_with_upload_dir):
+        client, upload_dir, _ = client_with_upload_dir
+        resp = client.post("/hokku/api/upload",
+                           data={"files": (BytesIO(b"not an image"), "virus.exe")},
+                           content_type="multipart/form-data")
+        assert resp.status_code == 200  # 200 with skipped[], not 4xx
+        body = resp.get_json()
+        assert body["saved"] == []
+        assert len(body["skipped"]) == 1
+        assert "unsupported type" in body["skipped"][0]["reason"]
+        assert not (upload_dir / "virus.exe").exists()
+
+    def test_upload_collision_suffix(self, client_with_upload_dir):
+        client, upload_dir, src_dir = client_with_upload_dir
+        # Pre-seed a file with the same name
+        existing = upload_dir / "clash.jpg"
+        self._make_jpeg(existing)
+        src = src_dir / "src.jpg"
+        self._make_jpeg(src)
+        resp = client.post("/hokku/api/upload",
+                           data={"files": (src.open("rb"), "clash.jpg")},
+                           content_type="multipart/form-data")
+        assert resp.status_code == 200
+        saved = resp.get_json()["saved"]
+        assert saved == ["clash_1.jpg"]
+        assert (upload_dir / "clash.jpg").exists()
+        assert (upload_dir / "clash_1.jpg").exists()
+
+    def test_upload_multiple_files(self, client_with_upload_dir):
+        client, upload_dir, src_dir = client_with_upload_dir
+        a = src_dir / "a.jpg"; self._make_jpeg(a)
+        b = src_dir / "b.png"
+        Image.new("RGB", (16, 16), (1, 2, 3)).save(b, "PNG")
+        resp = client.post("/hokku/api/upload", content_type="multipart/form-data",
+                           data={"files": [(a.open("rb"), "a.jpg"), (b.open("rb"), "b.png")]})
+        assert resp.status_code == 200
+        assert set(resp.get_json()["saved"]) == {"a.jpg", "b.png"}
+
+    def test_upload_no_files_returns_400(self, client_with_upload_dir):
+        client, _, _ = client_with_upload_dir
+        resp = client.post("/hokku/api/upload", content_type="multipart/form-data", data={})
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+    def test_upload_path_traversal_rejected(self, client_with_upload_dir):
+        """secure_filename should strip directory components from the uploaded
+        filename — no writing outside the upload_dir."""
+        client, upload_dir, src_dir = client_with_upload_dir
+        src = src_dir / "src.jpg"
+        self._make_jpeg(src)
+        resp = client.post("/hokku/api/upload", content_type="multipart/form-data",
+                           data={"files": (src.open("rb"), "../../../etc/passwd.jpg")})
+        assert resp.status_code == 200
+        # Whatever name it landed under, it must be inside upload_dir and not
+        # match the relative-path traversal attempt.
+        escaped = (upload_dir / ".." / ".." / ".." / "etc" / "passwd.jpg").resolve()
+        assert not escaped.exists()
+
+    def test_upload_filesystem_readonly_returns_json_error(self, client_with_upload_dir):
+        """The whole reason v2.1.1 added OSError handling here. Simulate an
+        OSError on mkdir and verify we get a JSON body (not an HTML 500 page
+        that the web UI would fail to parse)."""
+        client, _, src_dir = client_with_upload_dir
+        src = src_dir / "src.jpg"; self._make_jpeg(src)
+        from pathlib import Path as _Path
+        with patch.object(_Path, "mkdir", side_effect=OSError(30, "Read-only file system")):
+            resp = client.post("/hokku/api/upload", content_type="multipart/form-data",
+                               data={"files": (src.open("rb"), "x.jpg")})
+        assert resp.status_code == 500
+        assert "error" in resp.get_json()
+        # The old behaviour was a Flask HTML error page — verify JSON, not HTML
+        assert resp.is_json
+
+
+# ── Delete endpoint ───────────────────────────────────────────────
+
+class TestDeleteImage:
+    @pytest.fixture
+    def client_with_image(self, tmp_path):
+        webserver.app.config["TESTING"] = True
+        upload_dir = tmp_path / "upload"; upload_dir.mkdir()
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        (cache_dir / "thumbs").mkdir()
+        # Seed an upload + its thumbnail
+        (upload_dir / "victim.jpg").write_bytes(b"fake-image")
+        (cache_dir / "thumbs" / "victim_thumb.jpg").write_bytes(b"fake-thumb")
+        cfg = {**webserver.DEFAULT_CONFIG,
+               "upload_dir": str(upload_dir), "cache_dir": str(cache_dir)}
+        with patch.object(webserver, "_config", cfg), \
+             patch("webserver._sync_pool"), \
+             webserver.app.test_client() as client:
+            yield client, upload_dir, cache_dir
+
+    def test_delete_removes_original_and_thumbnail(self, client_with_image):
+        client, upload_dir, cache_dir = client_with_image
+        resp = client.delete("/hokku/api/image/victim.jpg")
+        assert resp.status_code == 200
+        assert resp.get_json()["deleted"] == "victim.jpg"
+        assert not (upload_dir / "victim.jpg").exists()
+        assert not (cache_dir / "thumbs" / "victim_thumb.jpg").exists()
+
+    def test_delete_missing_file_returns_404(self, client_with_image):
+        client, _, _ = client_with_image
+        resp = client.delete("/hokku/api/image/does-not-exist.jpg")
+        assert resp.status_code == 404
+        assert "error" in resp.get_json()
+
+    def test_delete_triggers_sync(self, client_with_image):
+        """After deletion the background _sync_pool should run so the web
+        UI's image grid refreshes without waiting for the watcher."""
+        client, _, _ = client_with_image
+        with patch("webserver.threading.Thread") as mock_thread:
+            resp = client.delete("/hokku/api/image/victim.jpg")
+            assert resp.status_code == 200
+            # Exactly one Thread(target=_sync_pool) spawned
+            assert mock_thread.called
+            kwargs = mock_thread.call_args.kwargs
+            assert kwargs.get("target") is webserver._sync_pool
+
+    def test_delete_preserves_other_files(self, client_with_image):
+        client, upload_dir, _ = client_with_image
+        (upload_dir / "keep.jpg").write_bytes(b"other")
+        resp = client.delete("/hokku/api/image/victim.jpg")
+        assert resp.status_code == 200
+        assert (upload_dir / "keep.jpg").exists()
+
+
+# ── Config + clear-cache + time endpoints ─────────────────────────
+
+class TestConfigEndpoints:
+    @pytest.fixture
+    def client(self, tmp_path):
+        webserver.app.config["TESTING"] = True
+        cfg = {**webserver.DEFAULT_CONFIG,
+               "upload_dir": str(tmp_path / "upload"),
+               "cache_dir": str(tmp_path / "cache")}
+        (tmp_path / "upload").mkdir()
+        (tmp_path / "cache").mkdir()
+        with patch.object(webserver, "_config", cfg), \
+             patch("webserver._save_config"), \
+             patch("webserver._sync_pool"), \
+             webserver.app.test_client() as client:
+            yield client, cfg
+
+    def test_config_update_timezone(self, client):
+        client_, cfg = client
+        resp = client_.post("/hokku/api/config", json={"timezone": "Asia/Tokyo"})
+        assert resp.status_code == 200
+        assert cfg["timezone"] == "Asia/Tokyo"
+
+    def test_config_update_refresh_times(self, client):
+        client_, cfg = client
+        resp = client_.post("/hokku/api/config",
+                            json={"refresh_image_at_time": ["0700", "1930"]})
+        assert resp.status_code == 200
+        assert cfg["refresh_image_at_time"] == ["0700", "1930"]
+
+    def test_config_update_poll_interval_minimum(self, client):
+        client_, cfg = client
+        # poll_interval_seconds < 1 should be rejected (silently ignored)
+        client_.post("/hokku/api/config", json={"poll_interval_seconds": 0})
+        assert cfg["poll_interval_seconds"] != 0
+
+    def test_config_update_rejects_invalid_orientation(self, client):
+        client_, cfg = client
+        before = cfg.get("orientation", "landscape")
+        client_.post("/hokku/api/config", json={"orientation": "diagonal"})
+        assert cfg["orientation"] == before
+
+    def test_config_update_empty_body_400(self, client):
+        client_, _ = client
+        resp = client_.post("/hokku/api/config", data="", content_type="application/json")
+        assert resp.status_code == 400
+
+    def test_config_update_orientation_change_clears_cache(self, client, tmp_path):
+        """Orientation change invalidates every dithered binary. The endpoint
+        should wipe the cache and re-trigger _sync_pool."""
+        client_, cfg = client
+        cfg["orientation"] = "landscape"
+        with patch("webserver._clear_cache_files") as mock_clear:
+            resp = client_.post("/hokku/api/config", json={"orientation": "portrait"})
+            assert resp.status_code == 200
+            mock_clear.assert_called_once()
+        assert cfg["orientation"] == "portrait"
+
+    def test_clear_cache_endpoint(self, client):
+        client_, _ = client
+        with patch("webserver._clear_cache_files") as mock_clear:
+            resp = client_.post("/hokku/api/clear_cache")
+            assert resp.status_code == 200
+            mock_clear.assert_called_once()
+
+    def test_time_endpoint(self, client):
+        client_, _ = client
+        resp = client_.get("/hokku/api/time")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "time" in data
+        assert "timezone" in data
+
+
+# ── Image-serving endpoints (thumbnail / original / dithered) ─────
+
+class TestImageServingEndpoints:
+    @pytest.fixture
+    def client(self, tmp_path):
+        webserver.app.config["TESTING"] = True
+        upload = tmp_path / "upload"; upload.mkdir()
+        cache = tmp_path / "cache"; cache.mkdir()
+        cfg = {**webserver.DEFAULT_CONFIG,
+               "upload_dir": str(upload), "cache_dir": str(cache)}
+        with patch.object(webserver, "_config", cfg), \
+             webserver.app.test_client() as client:
+            yield client, upload, cache
+
+    def test_thumbnail_404_for_missing_file(self, client):
+        client_, _, _ = client
+        resp = client_.get("/hokku/api/thumbnail/nope.jpg")
+        assert resp.status_code == 404
+
+    def test_original_404_for_missing_file(self, client):
+        client_, _, _ = client
+        resp = client_.get("/hokku/api/original/nope.jpg")
+        assert resp.status_code == 404
+
+    def test_dithered_404_for_missing_file(self, client):
+        client_, _, _ = client
+        # dithered requires the file to be in _pool — empty pool → 404
+        with patch.object(webserver, "_pool", {}):
+            resp = client_.get("/hokku/api/dithered/nope.jpg")
+        assert resp.status_code == 404
+
+    def test_original_jpeg_served_directly(self, client):
+        client_, upload, _ = client
+        p = upload / "pic.jpg"
+        Image.new("RGB", (100, 100), (200, 100, 50)).save(p, "JPEG")
+        resp = client_.get("/hokku/api/original/pic.jpg")
+        assert resp.status_code == 200
+        assert resp.headers["Content-Type"].startswith("image/jpeg")
+
+    def test_original_converts_non_browser_formats_to_jpeg(self, client):
+        """HEIC/TIFF aren't browser-safe — the endpoint transcodes to JPEG
+        so <img src=...> works from any client."""
+        client_, upload, _ = client
+        p = upload / "scan.tiff"
+        Image.new("RGB", (100, 100), (200, 100, 50)).save(p, "TIFF")
+        resp = client_.get("/hokku/api/original/scan.tiff")
+        assert resp.status_code == 200
+        # Served as JPEG regardless of source format
+        assert resp.headers["Content-Type"] == "image/jpeg"
+
+    def test_thumbnail_generated_on_demand(self, client):
+        client_, upload, cache = client
+        p = upload / "big.jpg"
+        Image.new("RGB", (2000, 1500), (10, 20, 30)).save(p, "JPEG")
+        resp = client_.get("/hokku/api/thumbnail/big.jpg")
+        assert resp.status_code == 200
+        # Thumbnail should be ≤ 300 px on the longest side
+        img = Image.open(BytesIO(resp.data))
+        assert max(img.size) <= 300
+
+
+# ── _sync_pool coalescing ─────────────────────────────────────────
+#
+# v2.1.0 added a rerun-pending flag so changes arriving during a
+# running sync are never dropped. This test is a bit clever: we
+# patch _sync_pool_inner with something slow-ish, fire a second
+# _sync_pool() call mid-execution, and verify _sync_pool_inner
+# ran twice.
+
+class TestSyncPoolCoalescing:
+    def test_trigger_during_sync_causes_rerun(self):
+        """If _sync_pool() is called while another is running, the second
+        call should mark _sync_pending and the first should loop once more."""
+        call_log = []
+        call_started = threading.Event()
+        release_first = threading.Event()
+
+        def slow_inner():
+            call_log.append("start")
+            if len(call_log) == 1:
+                # First call: wait for the external trigger before returning
+                call_started.set()
+                release_first.wait(timeout=5)
+            call_log.append("done")
+
+        with patch("webserver._sync_pool_inner", side_effect=slow_inner), \
+             patch.object(webserver, "_sync_pending", False), \
+             patch.object(webserver, "_sync_lock", threading.Lock()), \
+             patch.object(webserver, "_sync_state_lock", threading.Lock()):
+
+            t1 = threading.Thread(target=webserver._sync_pool)
+            t1.start()
+
+            assert call_started.wait(timeout=5)
+            # First sync is running; trigger a second call
+            t2 = threading.Thread(target=webserver._sync_pool)
+            t2.start()
+
+            # Let the first one finish; the outer while-loop should re-run
+            release_first.set()
+            t1.join(timeout=5)
+            t2.join(timeout=5)
+
+        # Expected: start → done (first, with pending set) → start → done (rerun)
+        # The second external _sync_pool call is a no-op because the lock is held.
+        assert call_log.count("start") == 2
+        assert call_log.count("done") == 2
+
+    def test_no_concurrent_syncs(self):
+        """Two threads calling _sync_pool() simultaneously must serialize —
+        _sync_pool_inner must never run twice in parallel."""
+        max_concurrent = [0]
+        current = [0]
+        lock = threading.Lock()
+
+        def tracking_inner():
+            with lock:
+                current[0] += 1
+                max_concurrent[0] = max(max_concurrent[0], current[0])
+            import time as _time
+            _time.sleep(0.05)
+            with lock:
+                current[0] -= 1
+
+        with patch("webserver._sync_pool_inner", side_effect=tracking_inner), \
+             patch.object(webserver, "_sync_pending", False), \
+             patch.object(webserver, "_sync_lock", threading.Lock()), \
+             patch.object(webserver, "_sync_state_lock", threading.Lock()):
+            threads = [threading.Thread(target=webserver._sync_pool) for _ in range(5)]
+            for t in threads: t.start()
+            for t in threads: t.join(timeout=5)
+
+        assert max_concurrent[0] == 1
 
 
 # ── Thumbnail mode-conversion tests ───────────────────────────────
