@@ -455,6 +455,37 @@ static void epaper_cmd_data(uint8_t cmd, const uint8_t *data, size_t len)
     if (ret != ESP_OK) ESP_LOGE(TAG, "SPI cmd_data 0x%02X FAILED: %s", cmd, esp_err_to_name(ret));
 }
 
+/* Read the UC8179C internal temperature sensor.  Send cmd 0x40 (TSC), wait
+ * for BUSY, then do a raw 2-byte SPI read (no cmd prefix) while CTRL1 holds
+ * the bus selected.  Matches the June 2025 original's read_tsc() at IROM
+ * 0x4200bdb0 — it runs once per panel-data transfer.  The returned bytes
+ * are always 0x00 on this board (internal temp sensor disabled; no
+ * external RTD wired) and are purely diagnostic, but the act of issuing
+ * the command + BUSY wait + read is part of the original's per-refresh
+ * flow that we are matching as closely as possible. */
+static uint16_t epaper_read_tsc(void)
+{
+    gpio_set_level(PIN_CTRL1, 0);                /* select panel 1 only */
+    epaper_cmd(0x40);
+    epaper_wait_busy();
+
+    uint8_t rx[2] = {0};
+    spi_transaction_t t = {
+        .cmd       = 0,
+        .length    = 0,
+        .rxlength  = 16,
+        .rx_buffer = rx,
+    };
+    esp_err_t ret = spi_device_polling_transmit(spi_handle, &t);
+    gpio_set_level(PIN_CTRL1, 1);
+
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "TSR read FAILED: %s", esp_err_to_name(ret));
+        return 0xFFFF;
+    }
+    return ((uint16_t)rx[0] << 8) | rx[1];
+}
+
 /* ── Hardware init ───────────────────────────────────────────────── */
 
 static void hw_gpio_init(void)
@@ -576,56 +607,69 @@ static void epaper_reset(void)
 
 static void epaper_init_panel(void)
 {
+    /* Init sequence matches the June 2025 E_Frame v2.0.26 firmware (IROM
+     * 0x4200b9e8), extracted by Ghidra decompilation of the factory dump
+     * currently running on the device. See .private/ANALYSIS_FINAL.md.
+     *
+     * Differences from the April 2025 v2.0.19 sequence we used previously:
+     *   - cmd_00 (PANEL_SETTING):        0xDF 0x69 -> 0xDF 0x6B  (bit flip)
+     *   - cmd_06 (BOOSTER_SOFT_START):   0xE8 0x28 -> 0xD8 0x18  (diff timing)
+     *   - cmd_05 (POWER_ON_MEASURE):     0xE8 0x28 -> 0xD8 0x18  (diff timing)
+     *   - cmd_30 (PLL_CONTROL):          (not sent) -> 0x08       (NEW)
+     *   - cmd_A4 (CASCADE_SETTING):      0x83 ...  -> removed
+     *   - cmd_76 (undocumented):         0x00 ...  -> removed
+     * The June values appear to be a vendor bug-fix of the init sequence
+     * (booster/PLL/PSR programming) that we'd been missing. */
+
     static const uint8_t cmd_74[] = {0xC0,0x1C,0x1C,0xCC,0xCC,0xCC,0x15,0x15,0x55};
     static const uint8_t cmd_F0[] = {0x49,0x55,0x13,0x5D,0x05,0x10};
-    static const uint8_t cmd_00[] = {0xDF,0x69};
+    static const uint8_t cmd_00[] = {0xDF,0x6B};
+    static const uint8_t cmd_30[] = {0x08};
     static const uint8_t cmd_50[] = {0xF7};
     static const uint8_t cmd_60[] = {0x03,0x03};
     static const uint8_t cmd_86[] = {0x10};
     static const uint8_t cmd_E3[] = {0x22};
     static const uint8_t cmd_E0[] = {0x01};
     static const uint8_t cmd_61[] = {0x04,0xB0,0x03,0x20};
+
     static const uint8_t cmd_01[] = {0x0F,0x00,0x28,0x2C,0x28,0x38};
     static const uint8_t cmd_B6[] = {0x07};
-    static const uint8_t cmd_06[] = {0xE8,0x28};
-
+    static const uint8_t cmd_06[] = {0xD8,0x18};
     static const uint8_t cmd_B7[] = {0x01};
-    static const uint8_t cmd_05[] = {0xE8,0x28};
+    static const uint8_t cmd_05[] = {0xD8,0x18};
     static const uint8_t cmd_B0[] = {0x01};
     static const uint8_t cmd_B1[] = {0x02};
-    static const uint8_t cmd_A4[] = {0x83,0x00,0x02,0x00,0x00,0x00,0x00,0x00,0x00};
-    static const uint8_t cmd_76[] = {0x00,0x00,0x00,0x00,0x04,0x00,0x00,0x00,0x83};
 
-    struct { uint8_t cmd; const uint8_t *data; size_t len; } group1[] = {
+    /* Phase A: broadcast to both panels (CTRL1=0, CTRL2=0). */
+    struct { uint8_t cmd; const uint8_t *data; size_t len; } phase_a[] = {
         {0x74, cmd_74, sizeof(cmd_74)}, {0xF0, cmd_F0, sizeof(cmd_F0)},
-        {0x00, cmd_00, sizeof(cmd_00)}, {0x50, cmd_50, sizeof(cmd_50)},
-        {0x60, cmd_60, sizeof(cmd_60)}, {0x86, cmd_86, sizeof(cmd_86)},
-        {0xE3, cmd_E3, sizeof(cmd_E3)}, {0xE0, cmd_E0, sizeof(cmd_E0)},
-        {0x61, cmd_61, sizeof(cmd_61)}, {0x01, cmd_01, sizeof(cmd_01)},
-        {0xB6, cmd_B6, sizeof(cmd_B6)}, {0x06, cmd_06, sizeof(cmd_06)},
+        {0x00, cmd_00, sizeof(cmd_00)}, {0x30, cmd_30, sizeof(cmd_30)},
+        {0x50, cmd_50, sizeof(cmd_50)}, {0x60, cmd_60, sizeof(cmd_60)},
+        {0x86, cmd_86, sizeof(cmd_86)}, {0xE3, cmd_E3, sizeof(cmd_E3)},
+        {0xE0, cmd_E0, sizeof(cmd_E0)}, {0x61, cmd_61, sizeof(cmd_61)},
     };
-    struct { uint8_t cmd; const uint8_t *data; size_t len; } group2[] = {
-        {0xB7, cmd_B7, sizeof(cmd_B7)}, {0x05, cmd_05, sizeof(cmd_05)},
-        {0xB0, cmd_B0, sizeof(cmd_B0)}, {0xB1, cmd_B1, sizeof(cmd_B1)},
-        {0xA4, cmd_A4, sizeof(cmd_A4)}, {0x76, cmd_76, sizeof(cmd_76)},
+    /* Phase B: to CTRL1 only (CTRL1=0, CTRL2 stays HIGH). */
+    struct { uint8_t cmd; const uint8_t *data; size_t len; } phase_b[] = {
+        {0x01, cmd_01, sizeof(cmd_01)}, {0xB6, cmd_B6, sizeof(cmd_B6)},
+        {0x06, cmd_06, sizeof(cmd_06)}, {0xB7, cmd_B7, sizeof(cmd_B7)},
+        {0x05, cmd_05, sizeof(cmd_05)}, {0xB0, cmd_B0, sizeof(cmd_B0)},
+        {0xB1, cmd_B1, sizeof(cmd_B1)},
     };
 
-    for (int i = 0; i < (int)(sizeof(group1)/sizeof(group1[0])); i++) {
-        ctrl_low();
-        epaper_cmd_data(group1[i].cmd, group1[i].data, group1[i].len);
-        ctrl_high();
+    for (int i = 0; i < (int)(sizeof(phase_a)/sizeof(phase_a[0])); i++) {
+        ctrl_low();  /* both CTRL LOW -> both panels selected */
+        epaper_cmd_data(phase_a[i].cmd, phase_a[i].data, phase_a[i].len);
+        ctrl_high(); /* deselect both */
     }
-    for (int i = 0; i < (int)(sizeof(group2)/sizeof(group2[0])); i++) {
+    for (int i = 0; i < (int)(sizeof(phase_b)/sizeof(phase_b[0])); i++) {
+        /* between phase B commands the original sets both CTRL HIGH then
+         * drops only CTRL1; CTRL2 stays HIGH throughout phase B. */
+        gpio_set_level(PIN_CTRL2, 1);
         gpio_set_level(PIN_CTRL1, 0);
-        epaper_cmd_data(group2[i].cmd, group2[i].data, group2[i].len);
-        ctrl_high();
+        epaper_cmd_data(phase_b[i].cmd, phase_b[i].data, phase_b[i].len);
+        gpio_set_level(PIN_CTRL1, 1);
     }
-    /* Send Group 2 to CTRL2 as well so both panels are fully initialized */
-    for (int i = 0; i < (int)(sizeof(group2)/sizeof(group2[0])); i++) {
-        gpio_set_level(PIN_CTRL2, 0);
-        epaper_cmd_data(group2[i].cmd, group2[i].data, group2[i].len);
-        ctrl_high();
-    }
+    /* Leave both CTRL HIGH (deselected) when init returns. */
 }
 
 /* ── Full display update ─────────────────────────────────────────── */
@@ -633,6 +677,12 @@ static void epaper_init_panel(void)
 /* Send 480K to a specific panel via DTM (0x10). ctrl_pin selects the panel. */
 static void epaper_send_panel(int ctrl_pin, const uint8_t *image)
 {
+    /* Read TSC before each panel — the original firmware does this inside
+     * its send_panel() per panel (IROM 0x4200be0c calls read_tsc() at
+     * entry).  Value is logged for diagnostics. */
+    uint16_t tsc = epaper_read_tsc();
+    ESP_LOGI(TAG, "TSC Data = 0x%02X, 0x%02X", (tsc >> 8) & 0xFF, tsc & 0xFF);
+
     gpio_set_level(ctrl_pin, 0);
     static uint8_t buf[SPI_CHUNK_SIZE];
 
@@ -771,12 +821,34 @@ static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_
     ctrl_high();
     epaper_wait_busy();
 
-    /* Step 7: drop the display rail. Matches original firmware which
-     * sets GPIO 17 LOW at the end of every display_update(). This is
-     * what guarantees the UC8179C starts from cold on the next update:
-     * no internal state can survive a power-off. */
-    vTaskDelay(pdMS_TO_TICKS(10));
-    gpio_set_level(PIN_SYS_POWER, 0);
+    /* Step 7: post-refresh shutdown sequence.  Matches the June 2025
+     * original firmware's display_update() at IROM 0x4200acb0 byte-for-
+     * byte (Ghidra decompilation, .private/ANALYSIS_FINAL.md).
+     *
+     * First drive all SPI / button / indicator pins LOW so there is no
+     * residual voltage on MOSI/SCLK that could back-bias the UC8179C
+     * through its ESD diodes when we drop SYS_POWER.  Hold for 1 second
+     * so the controller's internal charge-pump / booster stages settle.
+     * Then put the display into hardware reset (RST LOW) BEFORE cutting
+     * the power rail — this prevents the controller latching up during
+     * the brown-out when SYS_POWER goes away.
+     *
+     * Our previous shorter teardown (just POF + 10 ms + SYS_POWER LOW)
+     * cut power while the signal lines were still driven, which is the
+     * leading candidate for why the display occasionally ended up wedged
+     * in a state only a factory-firmware reflash could clear. */
+    gpio_set_level(PIN_EPAPER_SCLK, 0);
+    gpio_set_level(PIN_EPAPER_BUSY, 0);
+    gpio_set_level(PIN_EPAPER_MOSI, 0);
+    gpio_set_level(PIN_BUTTON_2,    0);
+    gpio_set_level(PIN_BUTTON_3,    0);
+    gpio_set_level(PIN_WIFI_LED,    0);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    gpio_set_level(PIN_CTRL1,       0);
+    gpio_set_level(PIN_CTRL2,       0);
+    gpio_set_level(PIN_EPAPER_RST,  0);
+    gpio_set_level(PIN_SYS_POWER,   0);
 
     ESP_LOGI(TAG, "Display done");
 }
