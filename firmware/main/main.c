@@ -128,6 +128,14 @@ RTC_DATA_ATTR static uint64_t scheduled_wake_rtc_us = 0;
 RTC_DATA_ATTR static uint8_t  consecutive_spurious_resets = 0;
 #define MAX_SPURIOUS_RESETS 3
 
+/* Server epoch (seconds) at the moment we entered deep sleep, computed
+ * from the X-Server-Time-Epoch response header plus the local elapsed
+ * time between download and sleep entry. The next boot uses this and a
+ * fresh epoch from the new download to compute actual_slept vs
+ * expected_slept and log the error. 0 = no valid pre-sleep epoch
+ * recorded (don't run the sleep check on next boot). */
+RTC_DATA_ATTR static int64_t  pre_sleep_server_epoch = 0;
+
 /* Slack (µs) for the deadline comparison. Absorbs calibration drift of
  * the RTC slow clock between when sleep started and when we re-read the
  * counter on wake. 5 min is comfortably above typical few-percent drift
@@ -799,10 +807,11 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-/* Download image and extract X-Sleep-Seconds header.
+/* Download image and extract X-Sleep-Seconds + X-Server-Time-Epoch headers.
  * Returns image buffer (caller frees) or NULL on failure.
- * *out_sleep_seconds is set if header present, otherwise unchanged. */
-static uint8_t *download_image(int32_t *out_sleep_seconds)
+ * *out_sleep_seconds and *out_server_epoch are set if their headers are
+ * present, otherwise unchanged. Either pointer may be NULL. */
+static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_epoch)
 {
     uint8_t *buf = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
     if (!buf) {
@@ -830,18 +839,26 @@ static uint8_t *download_image(int32_t *out_sleep_seconds)
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
 
-    /* Read X-Sleep-Seconds header before cleanup */
+    /* Read both headers before cleanup destroys the header storage */
     char *sleep_hdr = NULL;
+    char *epoch_hdr = NULL;
     if (err == ESP_OK) {
         esp_http_client_get_header(client, "X-Sleep-Seconds", &sleep_hdr);
+        esp_http_client_get_header(client, "X-Server-Time-Epoch", &epoch_hdr);
     }
 
-    /* Parse sleep seconds before cleanup destroys the header data */
-    if (sleep_hdr != NULL && sleep_hdr[0] != '\0') {
+    if (sleep_hdr != NULL && sleep_hdr[0] != '\0' && out_sleep_seconds != NULL) {
         int32_t secs = atoi(sleep_hdr);
         if (secs > 0) {
             *out_sleep_seconds = secs;
             ESP_LOGI(TAG, "X-Sleep-Seconds: %d", secs);
+        }
+    }
+    if (epoch_hdr != NULL && epoch_hdr[0] != '\0' && out_server_epoch != NULL) {
+        int64_t epoch = atoll(epoch_hdr);
+        if (epoch > 0) {
+            *out_server_epoch = epoch;
+            ESP_LOGI(TAG, "X-Server-Time-Epoch: %lld", epoch);
         }
     }
 
@@ -870,16 +887,23 @@ static void split_and_display(const uint8_t *img)
     epaper_display_dual(img, img + PANEL_SIZE);
 }
 
-/* WiFi + download + display one image. Updates *sleep_seconds from the
- * server's X-Sleep-Seconds response header if present. On success returns
- * true and last_sleep_seconds is refreshed. On failure triple-blinks the
- * WIFI_LED for user feedback and returns false (current image unchanged). */
-static bool fetch_and_display_image(int32_t *sleep_seconds)
+/* WiFi + download + display one image. Updates *sleep_seconds and
+ * *server_epoch from the server's response headers (when present), and
+ * stamps *local_time_at_download_us with esp_timer_get_time() at the
+ * moment download completed — together those let the next boot compute
+ * "actual slept" vs "expected slept" against the server's wall clock.
+ * On success returns true and last_sleep_seconds is refreshed.
+ * On failure triple-blinks WIFI_LED and returns false (current image
+ * unchanged; out-params untouched). */
+static bool fetch_and_display_image(int32_t *sleep_seconds,
+                                    int64_t *server_epoch,
+                                    int64_t *local_time_at_download_us)
 {
     uint8_t *img = NULL;
     if (wifi_connect()) {
         gpio_set_level(PIN_WIFI_LED, 1);
-        img = download_image(sleep_seconds);
+        img = download_image(sleep_seconds, server_epoch);
+        if (local_time_at_download_us) *local_time_at_download_us = esp_timer_get_time();
         wifi_shutdown();
         gpio_set_level(PIN_WIFI_LED, 0);
     }
@@ -908,7 +932,9 @@ static bool fetch_and_display_image(int32_t *sleep_seconds)
  * The window also doubles as the reflash-via-esptool opportunity — the
  * chip stays active throughout, so a hardware reset from the host will
  * drop it into the ROM bootloader. */
-static void stay_awake_with_buttons(int32_t *sleep_seconds)
+static void stay_awake_with_buttons(int32_t *sleep_seconds,
+                                    int64_t *server_epoch,
+                                    int64_t *local_time_at_download_us)
 {
     /* Bring the buttons out of any RTC-peripheral mode before configuring
      * them as digital inputs. Needed because:
@@ -963,7 +989,7 @@ static void stay_awake_with_buttons(int32_t *sleep_seconds)
                        gpio_get_level(PIN_PWR_BUTTON) == 0) {
                     vTaskDelay(pdMS_TO_TICKS(50));
                 }
-                fetch_and_display_image(sleep_seconds);
+                fetch_and_display_image(sleep_seconds, server_epoch, local_time_at_download_us);
                 /* Reset the window so user gets a fresh 60s after the
                  * new image (or after the error-blink on failure). */
                 deadline = esp_timer_get_time() + AWAKE_WINDOW_US;
@@ -1064,6 +1090,21 @@ static void chg_monitor_stop(void)
 /* ═══════════════════════════════════════════════════════════════════
  *  Deep Sleep
  * ═══════════════════════════════════════════════════════════════════ */
+
+/* Compute and store an estimate of the server epoch at the moment we're
+ * about to enter deep sleep, by adjusting the most-recent server_epoch
+ * forward by the local time elapsed since download. Pass server_epoch=0
+ * to clear (e.g. after a download failure or on the spurious-reset path —
+ * any next-boot sleep-error log would be meaningless). */
+static void save_pre_sleep_epoch(int64_t server_epoch, int64_t local_time_at_download_us)
+{
+    if (server_epoch > 0) {
+        int64_t delta_s = (esp_timer_get_time() - local_time_at_download_us) / 1000000LL;
+        pre_sleep_server_epoch = server_epoch + delta_s;
+    } else {
+        pre_sleep_server_epoch = 0;
+    }
+}
 
 /* Contract: sleep for `sleep_us` microseconds from the call site (actual
  * sleep may be slightly shorter if a USB-connected polling loop recomputes
@@ -1208,6 +1249,7 @@ void app_main(void)
         last_sleep_seconds = 0;
         scheduled_wake_rtc_us = 0;
         consecutive_spurious_resets = 0;
+        pre_sleep_server_epoch = 0;
     }
 
     boot_count++;
@@ -1297,6 +1339,9 @@ void app_main(void)
             int64_t sleep_us = (now_rtc_us < scheduled_wake_rtc_us)
                 ? (int64_t)(scheduled_wake_rtc_us - now_rtc_us)
                 : 60LL * 1000000LL;
+            /* No fresh download → no fresh epoch. Disable next-boot sleep
+             * check so we don't log a misleading actual-vs-expected. */
+            pre_sleep_server_epoch = 0;
             enter_deep_sleep(sleep_us);
             /* Never returns */
         }
@@ -1350,7 +1395,10 @@ void app_main(void)
          * (config is broken), but pressing one will trigger a fetch attempt
          * that fails with the LED-blink feedback — harmless. */
         int32_t dummy_sleep = 0;
-        stay_awake_with_buttons(&dummy_sleep);
+        int64_t dummy_epoch = 0;
+        int64_t dummy_local_us = 0;
+        stay_awake_with_buttons(&dummy_sleep, &dummy_epoch, &dummy_local_us);
+        pre_sleep_server_epoch = 0;
         enter_deep_sleep(0);
         /* Never returns */
     }
@@ -1370,7 +1418,10 @@ void app_main(void)
             "try again."
         );
         int32_t dummy_sleep = 0;
-        stay_awake_with_buttons(&dummy_sleep);
+        int64_t dummy_epoch = 0;
+        int64_t dummy_local_us = 0;
+        stay_awake_with_buttons(&dummy_sleep, &dummy_epoch, &dummy_local_us);
+        pre_sleep_server_epoch = 0;
         enter_deep_sleep(0);
         /* Never returns */
     }
@@ -1385,13 +1436,33 @@ void app_main(void)
     /* ── Normal boot path: WiFi → download (with sleep header) → display ── */
 
     int32_t sleep_seconds = 0;
+    int64_t server_epoch = 0;
+    int64_t local_time_at_download_us = 0;
     uint8_t *img = NULL;
 
     if (wifi_connect()) {
         gpio_set_level(PIN_WIFI_LED, 1);
-        img = download_image(&sleep_seconds);
+        img = download_image(&sleep_seconds, &server_epoch);
+        local_time_at_download_us = esp_timer_get_time();
         wifi_shutdown();
         gpio_set_level(PIN_WIFI_LED, 0);
+    }
+
+    /* Sleep-accuracy check: only meaningful on a real timer wake where we
+     * have both a pre-sleep epoch from the previous run and a fresh epoch
+     * from this run. Compares server-wall-clock elapsed (since pre-sleep
+     * snapshot) minus this boot's awake-before-download time against the
+     * sleep_seconds we asked for last time. Negative = woke early,
+     * positive = overslept. */
+    if (wakeup == ESP_SLEEP_WAKEUP_TIMER && pre_sleep_server_epoch > 0 &&
+        server_epoch > 0 && last_sleep_seconds > 0) {
+        int64_t time_awake_s = local_time_at_download_us / 1000000LL;
+        int64_t wall_elapsed_s = server_epoch - pre_sleep_server_epoch;
+        int64_t actual_slept_s = wall_elapsed_s - time_awake_s;
+        int64_t expected_slept_s = last_sleep_seconds;
+        int64_t error_s = actual_slept_s - expected_slept_s;
+        ESP_LOGI(TAG, "Sleep check: expected=%llds actual=%llds error=%+llds",
+                 expected_slept_s, actual_slept_s, error_s);
     }
 
     /* Download failed — show error on screen */
@@ -1415,11 +1486,13 @@ void app_main(void)
         display_message(msg);
         /* Awake window so the user can reflash OR press a button to retry
          * the fetch. If a retry succeeds inside stay_awake, sleep_seconds
-         * gets updated from the server response; otherwise fall back to 3h. */
-        stay_awake_with_buttons(&sleep_seconds);
+         * + server_epoch + local_time_at_download_us all get updated from
+         * the server response; otherwise fall back to 3h. */
+        stay_awake_with_buttons(&sleep_seconds, &server_epoch, &local_time_at_download_us);
         int64_t fail_sleep_us = (sleep_seconds > 0)
             ? (int64_t)sleep_seconds * 1000000LL
             : SLEEP_3H_US;
+        save_pre_sleep_epoch(server_epoch, local_time_at_download_us);
         enter_deep_sleep(fail_sleep_us);
         /* Never returns */
     }
@@ -1439,9 +1512,10 @@ void app_main(void)
      * button wakes, and misclassified-but-at-deadline wakes. Gives the
      * user 60s to press a button for the next image, and serves as the
      * reflash-via-esptool opportunity. Button presses extend the window. */
-    stay_awake_with_buttons(&sleep_seconds);
+    stay_awake_with_buttons(&sleep_seconds, &server_epoch, &local_time_at_download_us);
 
     int64_t sleep_us = (int64_t)sleep_seconds * 1000000LL;
+    save_pre_sleep_epoch(server_epoch, local_time_at_download_us);
     enter_deep_sleep(sleep_us);
     /* Never returns */
 }

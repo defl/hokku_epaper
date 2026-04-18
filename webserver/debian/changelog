@@ -1,3 +1,11 @@
+hokku-server (2.1.10-1) unstable; urgency=low
+
+  * Add X-Server-Time-Epoch response header on /hokku/screen/, used by
+    firmware to log sleep-accuracy (actual vs expected sleep duration).
+    Originally implemented on a parallel branch; ported into mainline.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 17 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.9-1) unstable; urgency=low
 
   * Version bump to align with firmware 2.1.9 (button polling now

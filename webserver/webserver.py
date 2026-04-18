@@ -828,6 +828,7 @@ def serve_binary():
     response = make_response(binary)
     response.headers["Content-Type"] = "application/octet-stream"
     response.headers["X-Sleep-Seconds"] = str(sleep_seconds)
+    response.headers["X-Server-Time-Epoch"] = str(int(time.time()))
     response.headers["Content-Disposition"] = "attachment; filename=hokku.bin"
     return response
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.1.10
+
+Port of the server-epoch + sleep-accuracy feature from a parallel branch (commit `79b8057` based on v2.1.4) that never merged into the v2.1.5+ line.
+
+### Webserver
+
+- `/hokku/screen/` response now also carries `X-Server-Time-Epoch: <unix-seconds>`. One-liner in `serve_binary`.
+
+### Firmware
+
+- `download_image` now also extracts `X-Server-Time-Epoch` and logs it.
+- New RTC variable `pre_sleep_server_epoch` records the server epoch as it would be at the moment we enter deep sleep (server epoch from the response + local elapsed since the download). Cleared on paths where there's no fresh download (spurious-reset shortcut, config errors, download failure).
+- New `save_pre_sleep_epoch()` helper called immediately before `enter_deep_sleep` on the success path and on the download-failure-with-retry path.
+- On wake from `ESP_SLEEP_WAKEUP_TIMER`, after a successful download with a fresh epoch, log `Sleep check: expected=Ns actual=Ms error=±Ks`. Only fires when both pre-sleep and current epochs are valid AND `last_sleep_seconds > 0` AND wakeup cause was specifically `TIMER` (not button, not misclassified, not first boot).
+- `download_image`, `fetch_and_display_image`, and `stay_awake_with_buttons` signatures all extended to thread the new outputs through. NULL-tolerant.
+
 ## 2.1.9
 
 Firmware bug fix. Webserver unchanged.
