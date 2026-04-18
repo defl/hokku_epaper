@@ -6,14 +6,10 @@ After=network.target
 Type=simple
 ExecStart=/usr/bin/hokku-server
 Environment="PYTHONUNBUFFERED=1"
-Environment="HOKKU_CONFIG=/etc/hokku/config.json"
+Environment="HOKKU_CONFIG=/var/lib/hokku/config.json"
 DynamicUser=yes
 StateDirectory=hokku
 CacheDirectory=hokku
-# DynamicUser implicitly sets ProtectSystem=strict, which makes /etc
-# read-only. The web UI saves config edits back to /etc/hokku/config.json,
-# so whitelist that directory for writes.
-ReadWritePaths=/etc/hokku
 Restart=on-failure
 RestartSec=5
 

@@ -1,10 +1,25 @@
+hokku-server (2.1.14-1) unstable; urgency=low
+
+  * Fix: saving config from the web UI still failed after 2.1.13
+    (PermissionError: /etc/hokku/config.json). DynamicUser runs as a
+    transient UID that doesn't own the root-created config file;
+    ReadWritePaths alone wasn't enough.
+  * Config moved to /var/lib/hokku/config.json so StateDirectory's
+    automatic chown-to-dynamic-user makes it writable. Existing
+    configs at /etc/hokku/config.json are auto-migrated by the
+    postinst on upgrade (old file left as backup).
+  * HOKKU_CONFIG env var updated accordingly; the load path search
+    now prefers /var/lib/hokku/config.json and falls back to
+    /etc/hokku/config.json for backward compat.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 18 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.13-1) unstable; urgency=low
 
-  * Fix: saving config from the web UI failed with "OSError [Errno 30]
-    Read-only file system: /etc/hokku/config.json". DynamicUser=yes in
-    the systemd unit implicitly enables ProtectSystem=strict which makes
-    /etc read-only; added ReadWritePaths=/etc/hokku to whitelist the
-    config directory for writes.
+  * Fix (incomplete — superseded by 2.1.14): attempted to fix config
+    save by adding ReadWritePaths=/etc/hokku to the systemd unit.
+    Solved the read-only-FS error but exposed a second problem
+    (dynamic user can't write to root-owned file).
 
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 18 Apr 2026 00:00:00 +0000
 

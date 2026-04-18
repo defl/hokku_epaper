@@ -1,10 +1,22 @@
 #!/bin/sh
 set -e
 
-# Create config directory and default config
-mkdir -p /etc/hokku
-if [ ! -f /etc/hokku/config.json ]; then
-    cat > /etc/hokku/config.json <<'CONFEOF'
+# Create data directories. /var/lib/hokku is StateDirectory for the service;
+# systemd will chown it (recursively) to the DynamicUser at service start,
+# so the service can read/write anything we seed here.
+mkdir -p /var/lib/hokku/upload /var/lib/hokku/cache
+
+# Config lives at /var/lib/hokku/config.json so the service (DynamicUser)
+# can write it when the user saves edits from the web UI. Earlier versions
+# (<= 2.1.13) stored it at /etc/hokku/config.json — migrate automatically
+# so admin-edited settings aren't lost on upgrade.
+if [ ! -f /var/lib/hokku/config.json ]; then
+    if [ -f /etc/hokku/config.json ]; then
+        echo "Migrating config from /etc/hokku/config.json to /var/lib/hokku/config.json"
+        cp /etc/hokku/config.json /var/lib/hokku/config.json
+        # Leave the old file in place as a backup; admin can delete /etc/hokku/ manually.
+    else
+        cat > /var/lib/hokku/config.json <<'CONFEOF'
 {
   "timezone": "America/Chicago",
   "refresh_image_at_time": ["0600", "1200", "1800"],
@@ -14,10 +26,8 @@ if [ ! -f /etc/hokku/config.json ]; then
   "orientation": "landscape"
 }
 CONFEOF
+    fi
 fi
-
-# Create data directories
-mkdir -p /var/lib/hokku/upload /var/lib/hokku/cache
 
 # Install pillow-heif via pip if not available as system package
 if ! python3 -c "import pillow_heif" 2>/dev/null; then

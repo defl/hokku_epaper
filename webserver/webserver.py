@@ -92,7 +92,9 @@ _config_file_path = None  # set during load, used for saving
 
 
 def _load_config():
-    """Load config from file. Check HOKKU_CONFIG env, then ./config.json, then /etc/hokku/config.json."""
+    """Load config from file. Check HOKKU_CONFIG env, then ./config.json,
+    then /var/lib/hokku/config.json (the current Debian-install path),
+    then /etc/hokku/config.json (legacy pre-2.1.14 path)."""
     global _config_file_path
     config = dict(DEFAULT_CONFIG)
 
@@ -101,6 +103,7 @@ def _load_config():
     if env_path:
         candidates.append(Path(env_path))
     candidates.append(Path("./config.json"))
+    candidates.append(Path("/var/lib/hokku/config.json"))
     candidates.append(Path("/etc/hokku/config.json"))
 
     for path in candidates:
