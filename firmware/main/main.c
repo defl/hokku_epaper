@@ -557,20 +557,18 @@ static void spi_init(void)
     ESP_ERROR_CHECK(ret);
 }
 
+/* Matches the original firmware's hardware_reset at IROM 0x4200b984:
+ *   RST LOW 100ms, RST HIGH 100ms, then wait for BUSY before any cmd.
+ * See .private/boot_analysis/FINAL_FINDINGS.md. Our previous
+ * 20ms / 20ms / 200ms (no BUSY wait) sequence was the leading suspect
+ * for why the display got stuck in half-rendered states that only
+ * reflashing the original firmware reliably cleared. */
 static void epaper_reset(void)
 {
-    gpio_set_level(PIN_EPAPER_RST, 1);
-    vTaskDelay(pdMS_TO_TICKS(20));
     gpio_set_level(PIN_EPAPER_RST, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(100));
     gpio_set_level(PIN_EPAPER_RST, 1);
-    vTaskDelay(pdMS_TO_TICKS(200));
-    /* After RST deasserts the UC8179C drives BUSY LOW briefly while it
-     * initialises, then releases it HIGH when ready for commands. The
-     * original 200ms fixed delay was not always sufficient when the
-     * controller was in a half-wedged state from a prior failed update;
-     * waiting on BUSY here guarantees the controller is actually ready
-     * before epaper_init_panel() starts pushing commands. */
+    vTaskDelay(pdMS_TO_TICKS(100));
     epaper_wait_busy();
 }
 
@@ -657,23 +655,57 @@ static void epaper_send_panel(int ctrl_pin, const uint8_t *image)
     gpio_set_level(PIN_CTRL2, 1);
 }
 
-/* Send 480K per panel and refresh. ctrl1_data and ctrl2_data are each 480K. */
+/* Send 480K per panel and refresh. ctrl1_data and ctrl2_data are each 480K.
+ *
+ * Structure mirrors display_update() from the original firmware
+ * (IROM 0x4200acac, disassembled in .private/boot_analysis/FINAL_FINDINGS.md):
+ *
+ *   gpio_set_level(17, 1)       ; raise display rail
+ *   vTaskDelay(10ms)
+ *   hardware_reset()            ; first RST: LOW 100 HIGH 100 + BUSY wait
+ *   ctrl_high()                 ; deselect both panels
+ *   display_init():
+ *     gpio_set_level(17, 1)     ; (redundant — already HIGH)
+ *     vTaskDelay(1000ms)        ; DC-DC booster stabilisation
+ *     hardware_reset()          ; second RST: LOW 100 HIGH 100 + BUSY wait
+ *     ... 18 init commands
+ *   send_panel(0, ...)
+ *   send_panel(1, ...)
+ *   display_refresh()           ; PON / DRF / POF with BUSY waits
+ *   vTaskDelay(10ms)
+ *   gpio_set_level(17, 0)       ; drop display rail between updates
+ *
+ * Crucially: two hardware resets, a 1000 ms settle between them, and a
+ * BUSY wait before init commands. And GPIO 17 is cycled around the
+ * update so the UC8179C starts from cold on every refresh — that's
+ * what prevents bad internal controller state from persisting across
+ * updates. Our previous "warm" path (single RST, no BUSY wait, GPIO 17
+ * held HIGH forever) let wedged state survive from one update to the
+ * next, which matches the observed symptom. */
 static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_data)
 {
-    /* Cold-boot the UC8179C by cycling SYS_POWER (GPIO 17 — the display
-     * rail / booster enable). When the controller gets wedged (DRF ignored,
-     * BUSY stuck LOW) an RST pulse alone is not always enough to recover
-     * because the booster/charge-pump state is still live. Dropping the
-     * rail for 200ms and letting it re-stabilise for 1s forces a fresh
-     * power-on sequence every update — matches what the factory firmware
-     * does and what finally got the display reliably out of half-rendered
-     * states during testing. */
+    /* Step 1: power up the display rail from cold. SYS_POWER may already
+     * be HIGH from boot init — force a LOW pulse first so the UC8179C's
+     * charge-pump and booster state is definitively reset. */
     gpio_set_level(PIN_SYS_POWER, 0);
     vTaskDelay(pdMS_TO_TICKS(200));
     gpio_set_level(PIN_SYS_POWER, 1);
-    vTaskDelay(pdMS_TO_TICKS(1000));  /* booster/rail stabilisation */
+    vTaskDelay(pdMS_TO_TICKS(10));
 
+    /* Step 2: deselect both panels before touching anything else */
+    ctrl_high();
+
+    /* Step 3: first hardware reset */
     epaper_reset();
+
+    /* Step 4: let the DC-DC booster fully stabilise before the second
+     * reset. Matches original firmware's 1000 ms wait inside display_init. */
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    /* Step 5: second hardware reset (belt-and-suspenders, matches original) */
+    epaper_reset();
+
+    /* Step 6: init + image + refresh */
     epaper_init_panel();
 
     ESP_LOGI(TAG, "SYS=%d PWR_EN=%d RST=%d BUSY=%d",
@@ -709,6 +741,13 @@ static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_
     epaper_cmd_data(0x02, pof, 1);
     ctrl_high();
     epaper_wait_busy();
+
+    /* Step 7: drop the display rail. Matches original firmware which
+     * sets GPIO 17 LOW at the end of every display_update(). This is
+     * what guarantees the UC8179C starts from cold on the next update:
+     * no internal state can survive a power-off. */
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(PIN_SYS_POWER, 0);
 
     ESP_LOGI(TAG, "Display done");
 }
@@ -1225,33 +1264,49 @@ static void stay_awake_with_buttons(int32_t *sleep_seconds,
      * plausible external load. */
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    /* Snapshot the initial state right after the settle delay. Logged
-     * so we can tell from the serial output which pin (if any) is
-     * stuck LOW — GPIO 1 vs GPIO 12 often point at different root
-     * causes (external wiring vs factory-firmware RTC hold state). */
+    /* Snapshot the initial state right after the settle delay. A pin
+     * that reads LOW here is stuck (external hardware latched it LOW,
+     * RTC isolation the de-init call didn't clear, board-level quirk),
+     * and polling it for 0-as-press will fire immediately every cycle.
+     *
+     * Observed 2026-04-18: GPIO 12 reads LOW on first boot after flashing
+     * factory firmware even with rtc_gpio_deinit + gpio_reset_pin +
+     * pull-up + 100ms settle. We disable press-detection on any pin that
+     * isn't HIGH at settle — user never pressed anything, so a pin
+     * reading LOW here cannot be a real press. The pin is still a valid
+     * deep-sleep wake source (EXT1 config in enter_deep_sleep); this
+     * only suppresses the false "held = pressed" reading while awake. */
     int initial_btn1 = gpio_get_level(PIN_BUTTON_1);
     int initial_pwr  = gpio_get_level(PIN_PWR_BUTTON);
+    bool btn1_pollable = (initial_btn1 == 1);
+    bool pwr_pollable  = (initial_pwr  == 1);
     ESP_LOGI(TAG, "Awake for %ds — press button for next image (also: reflash window) "
-                  "[initial: GPIO1=%d GPIO12=%d]",
-             (int)(AWAKE_WINDOW_US / 1000000), initial_btn1, initial_pwr);
+                  "[initial: GPIO1=%d%s GPIO12=%d%s]",
+             (int)(AWAKE_WINDOW_US / 1000000),
+             initial_btn1, btn1_pollable ? "" : " STUCK-IGNORED",
+             initial_pwr,  pwr_pollable  ? "" : " STUCK-IGNORED");
 
     int64_t deadline = esp_timer_get_time() + AWAKE_WINDOW_US;
 
     while (esp_timer_get_time() < deadline) {
         int btn1 = gpio_get_level(PIN_BUTTON_1);
         int pwr  = gpio_get_level(PIN_PWR_BUTTON);
-        bool pressed = (btn1 == 0) || (pwr == 0);
+        bool pressed = (btn1_pollable && btn1 == 0) ||
+                       (pwr_pollable  && pwr  == 0);
         if (pressed) {
             vTaskDelay(pdMS_TO_TICKS(50));  /* debounce */
             int btn1b = gpio_get_level(PIN_BUTTON_1);
             int pwrb  = gpio_get_level(PIN_PWR_BUTTON);
-            pressed = (btn1b == 0) || (pwrb == 0);
+            pressed = (btn1_pollable && btn1b == 0) ||
+                      (pwr_pollable  && pwrb  == 0);
             if (pressed) {
                 ESP_LOGI(TAG, "Button pressed — fetching next image "
                               "[GPIO1=%d GPIO12=%d]", btn1b, pwrb);
-                /* Wait for release so a held button doesn't re-trigger */
-                while (gpio_get_level(PIN_BUTTON_1) == 0 ||
-                       gpio_get_level(PIN_PWR_BUTTON) == 0) {
+                /* Wait for release so a held button doesn't re-trigger.
+                 * Only wait on pollable pins — a stuck-LOW pin would
+                 * never release. */
+                while ((btn1_pollable && gpio_get_level(PIN_BUTTON_1) == 0) ||
+                       (pwr_pollable  && gpio_get_level(PIN_PWR_BUTTON) == 0)) {
                     vTaskDelay(pdMS_TO_TICKS(50));
                 }
                 fetch_and_display_image(sleep_seconds, server_epoch, local_time_at_download_us,
