@@ -1,3 +1,13 @@
+hokku-server (2.1.13-1) unstable; urgency=low
+
+  * Fix: saving config from the web UI failed with "OSError [Errno 30]
+    Read-only file system: /etc/hokku/config.json". DynamicUser=yes in
+    the systemd unit implicitly enables ProtectSystem=strict which makes
+    /etc read-only; added ReadWritePaths=/etc/hokku to whitelist the
+    config directory for writes.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 18 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.12-1) unstable; urgency=low
 
   * Web UI: Connected Screens Battery column shows percentage only

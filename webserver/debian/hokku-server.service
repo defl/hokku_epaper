@@ -10,6 +10,10 @@ Environment="HOKKU_CONFIG=/etc/hokku/config.json"
 DynamicUser=yes
 StateDirectory=hokku
 CacheDirectory=hokku
+# DynamicUser implicitly sets ProtectSystem=strict, which makes /etc
+# read-only. The web UI saves config edits back to /etc/hokku/config.json,
+# so whitelist that directory for writes.
+ReadWritePaths=/etc/hokku
 Restart=on-failure
 RestartSec=5
 
