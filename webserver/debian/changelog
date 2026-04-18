@@ -1,3 +1,16 @@
+hokku-server (2.1.16-1) unstable; urgency=low
+
+  * Merge main (PR #3): selectable dither algorithms. New "Dither
+    algorithm" dropdown in the web UI with Floyd-Steinberg,
+    Atkinson, and Atkinson + hue-aware (new default). Hue-aware
+    variant forbids >95 degree hue swings during palette selection
+    so warm skin tones no longer cascade into blue speckles via
+    error-diffusion overshoot. Cache keys include the algorithm
+    so switching between previously-rendered variants is instant;
+    the stale-cache purge preserves renders for all algorithms.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 18 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.15-1) unstable; urgency=low
 
   * Fix (third try — config save): 2.1.14 moved the config to
