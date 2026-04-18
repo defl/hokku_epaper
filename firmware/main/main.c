@@ -745,33 +745,23 @@ static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_
     ESP_LOGI(TAG, "DRF done (%lldms elapsed)", drf_elapsed_ms);
 
     /* Sanity check: a healthy dual-panel Spectra 6 refresh takes ~19s.
-     * If DRF returned in under 5s, the controller did NOT actually do
-     * a refresh — it's wedged, not responding to SPI commands, and
-     * epaper_wait_busy exited immediately because BUSY is held HIGH
-     * by the external pull-up on GPIO 7 (HARDWARE_FACTS) rather than
-     * actually being driven HIGH by a finished controller.
+     * A sub-5s DRF means the controller did NOT actually refresh — it's
+     * wedged / not responding to SPI, and epaper_wait_busy exited
+     * immediately because the external pull-up on GPIO 7 (HARDWARE_FACTS)
+     * holds BUSY HIGH when nothing is driving it.
      *
-     * The existing check_display_busy_or_reboot() post-check misses
-     * this case because it reads BUSY (HIGH → "healthy"). Hook into
-     * the same RTC-persisted counter + esp_restart path here so the
-     * failure triggers the bounded recovery loop. */
+     * We log loudly but do NOT reboot here. An earlier version of this
+     * check called esp_restart() and produced an infinite boot loop on
+     * a genuinely-dead controller: the reboot doesn't unstick the
+     * UC8179C (only physical power-cycle or a factory-firmware reflash
+     * does), so every retry DRFs in 0ms and triggers another reboot.
+     * Recovery is a user-level action, not a firmware-level one. */
     if (drf_elapsed_ms < 5000) {
-        if (consecutive_busy_timeouts < MAX_BUSY_RECOVERY_REBOOTS) {
-            consecutive_busy_timeouts++;
-            ESP_LOGW(TAG, "DRF completed suspiciously fast (%lldms < 5000ms) — "
-                          "controller likely wedged, rebooting to recover "
-                          "(attempt %d/%d)",
-                     drf_elapsed_ms, (int)consecutive_busy_timeouts,
-                     MAX_BUSY_RECOVERY_REBOOTS);
-            vTaskDelay(pdMS_TO_TICKS(100));  /* flush serial */
-            esp_restart();
-            /* Never returns */
-        } else {
-            ESP_LOGE(TAG, "DRF completed suspiciously fast (%lldms) after %d "
-                          "recovery reboot(s) — giving up",
-                     drf_elapsed_ms, (int)consecutive_busy_timeouts);
-            consecutive_busy_timeouts = 0;
-        }
+        ESP_LOGE(TAG, "DRF completed in %lldms (< 5000ms) — display "
+                      "controller is not responding to SPI commands. "
+                      "Screen was not refreshed. Physical power-cycle or "
+                      "factory-firmware reflash may be required to recover.",
+                 drf_elapsed_ms);
     }
 
     /* POF */
@@ -1654,6 +1644,19 @@ void app_main(void)
         struct timeval tv = {0, 0};
         settimeofday(&tv, NULL);
     }
+
+    /* Mark RTC memory as valid for subsequent esp_restart() paths. Previously
+     * we only set this inside enter_deep_sleep(), which meant an esp_restart
+     * from the display-recovery or spurious-reset valves before ever reaching
+     * deep sleep would boot with rtc_magic still stale — the validation
+     * block above would then zero out every persisted counter on every
+     * retry, defeating the MAX_BUSY_RECOVERY_REBOOTS / spurious-reset caps
+     * and producing an infinite boot loop (observed 2026-04-18 with the
+     * DRF-timing reboot valve). Setting magic here makes the counters
+     * genuinely survive esp_restart, so the caps actually cap. Power-cycle
+     * / flash-erase still lands on uninit RTC memory → rtc_magic != RTC_MAGIC
+     * → fresh state, which is the only reset path we want. */
+    rtc_magic = RTC_MAGIC;
 
     boot_count++;
     int64_t boot_time = esp_timer_get_time();
