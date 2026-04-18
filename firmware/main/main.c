@@ -686,9 +686,16 @@ static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_
 {
     /* Step 1: power up the display rail from cold. SYS_POWER may already
      * be HIGH from boot init — force a LOW pulse first so the UC8179C's
-     * charge-pump and booster state is definitively reset. */
+     * charge-pump and booster state is definitively reset.
+     *
+     * 1000ms LOW (extended from 200ms 2026-04-18): a 15V boost rail
+     * with a big bulk cap and light leakage load can take hundreds of
+     * ms to fully decay — 200ms was observed to leave the controller
+     * wedged in exactly the same half-rendered state across reboots.
+     * 1 second is conservative; the original firmware holds it LOW
+     * between updates (potentially hours), so any duration is fine. */
     gpio_set_level(PIN_SYS_POWER, 0);
-    vTaskDelay(pdMS_TO_TICKS(200));
+    vTaskDelay(pdMS_TO_TICKS(1000));
     gpio_set_level(PIN_SYS_POWER, 1);
     vTaskDelay(pdMS_TO_TICKS(10));
 
@@ -732,8 +739,40 @@ static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_
     epaper_cmd_data(0x12, drf, 1);
     ctrl_high();
     ESP_LOGI(TAG, "DRF sent, waiting for refresh (~19s)...");
+    int64_t drf_start_us = esp_timer_get_time();
     epaper_wait_busy();
-    ESP_LOGI(TAG, "DRF done");
+    int64_t drf_elapsed_ms = (esp_timer_get_time() - drf_start_us) / 1000;
+    ESP_LOGI(TAG, "DRF done (%lldms elapsed)", drf_elapsed_ms);
+
+    /* Sanity check: a healthy dual-panel Spectra 6 refresh takes ~19s.
+     * If DRF returned in under 5s, the controller did NOT actually do
+     * a refresh — it's wedged, not responding to SPI commands, and
+     * epaper_wait_busy exited immediately because BUSY is held HIGH
+     * by the external pull-up on GPIO 7 (HARDWARE_FACTS) rather than
+     * actually being driven HIGH by a finished controller.
+     *
+     * The existing check_display_busy_or_reboot() post-check misses
+     * this case because it reads BUSY (HIGH → "healthy"). Hook into
+     * the same RTC-persisted counter + esp_restart path here so the
+     * failure triggers the bounded recovery loop. */
+    if (drf_elapsed_ms < 5000) {
+        if (consecutive_busy_timeouts < MAX_BUSY_RECOVERY_REBOOTS) {
+            consecutive_busy_timeouts++;
+            ESP_LOGW(TAG, "DRF completed suspiciously fast (%lldms < 5000ms) — "
+                          "controller likely wedged, rebooting to recover "
+                          "(attempt %d/%d)",
+                     drf_elapsed_ms, (int)consecutive_busy_timeouts,
+                     MAX_BUSY_RECOVERY_REBOOTS);
+            vTaskDelay(pdMS_TO_TICKS(100));  /* flush serial */
+            esp_restart();
+            /* Never returns */
+        } else {
+            ESP_LOGE(TAG, "DRF completed suspiciously fast (%lldms) after %d "
+                          "recovery reboot(s) — giving up",
+                     drf_elapsed_ms, (int)consecutive_busy_timeouts);
+            consecutive_busy_timeouts = 0;
+        }
+    }
 
     /* POF */
     ctrl_low();
@@ -1724,9 +1763,17 @@ void app_main(void)
 
     /* Hardware init — only runs on paths that actually need the display */
     hw_gpio_init();
-    /* hw_gpio_init already drives SYS_POWER HIGH; only EPAPER_PWR_EN and
-     * the LEDs need driving here. */
-    gpio_set_level(PIN_EPAPER_PWR_EN, 1);
+    /* hw_gpio_init already drives SYS_POWER HIGH. Previously we also drove
+     * EPAPER_PWR_EN (GPIO 3) HIGH here. Dropped on 2026-04-18 after
+     * .private/boot_analysis/FINAL_FINDINGS.md confirmed the original
+     * factory firmware *never* drives GPIO 3 HIGH anywhere in the binary
+     * (zero calls across both gpio_set_level entry points after fixing
+     * the disassembly alignment bug). If GPIO 3 is an active-LOW enable
+     * or should stay floating, driving it HIGH would silently disable
+     * the display rail — matching our "controller is dead, BUSY never
+     * goes LOW in response to commands" symptom. Drive it LOW explicitly
+     * so behaviour is well-defined. */
+    gpio_set_level(PIN_EPAPER_PWR_EN, 0);
     gpio_set_level(PIN_WORK_LED, 1);
     gpio_set_level(PIN_WIFI_LED, 0);
 
