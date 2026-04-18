@@ -1,3 +1,22 @@
+hokku-server (2.1.11-1) unstable; urgency=low
+
+  * X-Frame-State header replaces X-Battery-mV: firmware sends a single
+    JSON object per request (fw, boot, wake, caller, uptime_s, bat_mv,
+    chg, last_sleep, rssi, heap_kb, spurious, cfg_ver, clk_now,
+    sleep_err_s); server stores the whole dict.
+  * Web UI: Connected Screens table adds Battery column and per-row
+    Details button (modal shows the full device-state dict formatted).
+  * Overdue-screen warning: yellow banner + row shading when a screen
+    is >1h past its scheduled next_update_at.
+  * Debug Screen mode: new config toggle that forces every response to
+    X-Sleep-Seconds=180 for fast image iteration; red banner while on.
+  * Removed the "Server address" row from the config section.
+  * Clock-drift measurement: firmware sets its system clock from
+    X-Server-Time-Epoch on every response; server compares returned
+    clk_now to its own time() for direct RTC drift measurement.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 18 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.10-1) unstable; urgency=low
 
   * Add X-Server-Time-Epoch response header on /hokku/screen/, used by
