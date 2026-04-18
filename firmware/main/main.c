@@ -94,6 +94,13 @@ static const char *TAG = "epaper";
 #define SLEEP_3H_US        (3LL * 3600 * 1000000LL)
 #define SLEEP_1H_US        (1LL * 3600 * 1000000LL)
 
+/* How long the device stays awake after any displayed image, polling the
+ * buttons for a "next image" request. Also serves as the reflash window:
+ * esptool-triggered resets work during this time (the chip is active), and
+ * deep sleep takes over when it expires. Any button press resets the window
+ * so the user gets a fresh 60s after each image change. */
+#define AWAKE_WINDOW_US    (60LL * 1000000LL)
+
 /* ── RTC memory (survives deep sleep) ────────────────────────────── */
 #define RTC_MAGIC 0x484F4B55  /* "HOKU" — validates RTC memory isn't stale after flash */
 RTC_DATA_ATTR static uint32_t rtc_magic = 0;
@@ -854,6 +861,88 @@ static void split_and_display(const uint8_t *img)
     epaper_display_dual(img, img + PANEL_SIZE);
 }
 
+/* WiFi + download + display one image. Updates *sleep_seconds from the
+ * server's X-Sleep-Seconds response header if present. On success returns
+ * true and last_sleep_seconds is refreshed. On failure triple-blinks the
+ * WIFI_LED for user feedback and returns false (current image unchanged). */
+static bool fetch_and_display_image(int32_t *sleep_seconds)
+{
+    uint8_t *img = NULL;
+    if (wifi_connect()) {
+        gpio_set_level(PIN_WIFI_LED, 1);
+        img = download_image(sleep_seconds);
+        wifi_shutdown();
+        gpio_set_level(PIN_WIFI_LED, 0);
+    }
+    if (!img) {
+        ESP_LOGW(TAG, "Fetch failed, keeping current image");
+        for (int i = 0; i < 3; i++) {
+            gpio_set_level(PIN_WIFI_LED, 1);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            gpio_set_level(PIN_WIFI_LED, 0);
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        return false;
+    }
+    if (*sleep_seconds > 0) last_sleep_seconds = *sleep_seconds;
+    split_and_display(img);
+    free(img);
+    return true;
+}
+
+/* Single awake window used after every displayed image (normal boot, error
+ * screen, or button-triggered refresh). Polls the two wake-capable buttons
+ * (GPIO 1 and GPIO 12); on any press we fetch + display the next image and
+ * extend the window for another full AWAKE_WINDOW_US so the user can keep
+ * tapping through images. When the window expires with no press, return.
+ *
+ * The window also doubles as the reflash-via-esptool opportunity — the
+ * chip stays active throughout, so a hardware reset from the host will
+ * drop it into the ROM bootloader. */
+static void stay_awake_with_buttons(int32_t *sleep_seconds)
+{
+    /* Configure the two wake-capable buttons as polled inputs. PWR_BUTTON
+     * (GPIO 12) doesn't have an internal pull — the PCB has one. BUTTON_1
+     * (GPIO 1) needs the internal pull to read as HIGH when idle.
+     * GPIO 40 (the legacy "switch photo" button) isn't wake-capable on
+     * ESP32-S3 and is deliberately ignored. */
+    gpio_config_t btn_cfg = {
+        .pin_bit_mask = (1ULL << PIN_BUTTON_1) | (1ULL << PIN_PWR_BUTTON),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+    };
+    gpio_config(&btn_cfg);
+
+    int64_t deadline = esp_timer_get_time() + AWAKE_WINDOW_US;
+    ESP_LOGI(TAG, "Awake for %ds — press button for next image (also: reflash window)",
+             (int)(AWAKE_WINDOW_US / 1000000));
+
+    while (esp_timer_get_time() < deadline) {
+        bool pressed = (gpio_get_level(PIN_BUTTON_1) == 0) ||
+                       (gpio_get_level(PIN_PWR_BUTTON) == 0);
+        if (pressed) {
+            vTaskDelay(pdMS_TO_TICKS(50));  /* debounce */
+            pressed = (gpio_get_level(PIN_BUTTON_1) == 0) ||
+                      (gpio_get_level(PIN_PWR_BUTTON) == 0);
+            if (pressed) {
+                ESP_LOGI(TAG, "Button pressed — fetching next image");
+                /* Wait for release so a held button doesn't re-trigger */
+                while (gpio_get_level(PIN_BUTTON_1) == 0 ||
+                       gpio_get_level(PIN_PWR_BUTTON) == 0) {
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                }
+                fetch_and_display_image(sleep_seconds);
+                /* Reset the window so user gets a fresh 60s after the
+                 * new image (or after the error-blink on failure). */
+                deadline = esp_timer_get_time() + AWAKE_WINDOW_US;
+                continue;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    ESP_LOGI(TAG, "Awake window expired — entering deep sleep");
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  *  Battery Monitoring
  * ═══════════════════════════════════════════════════════════════════ */
@@ -944,47 +1033,29 @@ static void chg_monitor_stop(void)
  *  Deep Sleep
  * ═══════════════════════════════════════════════════════════════════ */
 
-/* Contract: be back (either via timer wake, USB polling loop restart, or
- * the caller having to reset) after `sleep_us` microseconds. The 120s
- * reflash window and any other pre-sleep work are accounted for inside
- * the function, NOT added on top of sleep_us. sleep_us == 0 means
- * button-only wake (no timer, no deadline stored). */
+/* Contract: sleep for `sleep_us` microseconds from the call site (actual
+ * sleep may be slightly shorter if a USB-connected polling loop recomputes
+ * the remaining time). The reflash / UI awake window is the caller's
+ * responsibility — this function goes to sleep right away.
+ * sleep_us == 0 means button-only wake (no timer, no deadline stored). */
 static void enter_deep_sleep(int64_t sleep_us)
 {
-    /* Step 1 — capture the deadline at entry, in the RTC clock's frame.
-     * Persist it and was_sleeping BEFORE any delays so if something
-     * resets us during the reflash window, the next boot still sees a
-     * valid deadline. */
+    /* Capture the deadline at entry, in the RTC clock's frame, and persist
+     * it + was_sleeping to RTC memory. Survives both real deep sleep and
+     * esp_restart (including the USB polling loop's restart), letting the
+     * next boot distinguish "scheduled wake" from "spurious early reset". */
     uint64_t entry_rtc_us = esp_clk_rtc_time();
     uint64_t deadline_rtc_us = (sleep_us > 0) ? entry_rtc_us + (uint64_t)sleep_us : 0;
     was_sleeping = true;
     rtc_magic = RTC_MAGIC;
     scheduled_wake_rtc_us = deadline_rtc_us;
 
-    /* Step 2 — 120s reflash window. chg_monitor keeps running so the LED
-     * still blinks while charging. */
-    ESP_LOGI(TAG, "Waiting 120s before deep sleep (reflash window)...");
-    vTaskDelay(pdMS_TO_TICKS(120000));
+    int64_t remaining_us = (sleep_us > 0) ? sleep_us : 0;
 
-    /* Step 3 — compute the actual remaining time, based on the real clock
-     * (not the nominal 120s). If we already overshot the deadline during
-     * the reflash window, just restart — the next boot will fetch. */
-    int64_t remaining_us = 0;
-    if (deadline_rtc_us > 0) {
-        uint64_t now_rtc_us = esp_clk_rtc_time();
-        if (now_rtc_us >= deadline_rtc_us) {
-            ESP_LOGI(TAG, "Deadline passed during reflash window — restarting");
-            chg_monitor_stop();
-            esp_restart();
-            /* Never returns */
-        }
-        remaining_us = (int64_t)(deadline_rtc_us - now_rtc_us);
-    }
-
-    /* Step 4 — USB polling loop. chg_monitor stays running so the LED
-     * blinks throughout. On USB with power, deep_sleep_start would
-     * immediately cause a USB disconnect → host reset → reboot loop;
-     * polling in light sleep keeps the device reachable for reflashing.
+    /* USB polling loop — only applies when USB power is connected. On USB,
+     * deep_sleep_start would immediately cause a USB disconnect → host reset
+     * → reboot loop; polling in light sleep keeps the device reachable for
+     * reflashing. chg_monitor stays running so the LED blinks throughout.
      *
      * Exit condition is the RTC clock, NOT an accumulator of
      * vTaskDelay() durations: pdMS_TO_TICKS rounds down to the nearest
@@ -1029,8 +1100,8 @@ static void enter_deep_sleep(int64_t sleep_us)
                        : 0;
     }
 
-    /* Step 5 — real deep sleep prep. Stop chg_monitor last so the LED
-     * keeps blinking until the moment the chip powers down. */
+    /* Real deep sleep prep. Stop chg_monitor last so the LED keeps
+     * blinking until the moment the chip powers down. */
     chg_monitor_stop();
     gpio_set_level(PIN_SYS_POWER, 0);
     gpio_set_level(PIN_WORK_LED, 0);
@@ -1262,6 +1333,11 @@ void app_main(void)
                  "try again.",
                  CONFIG_VERSION, config.cfg_ver);
         display_message(msg);
+        /* Awake window so the user can reflash. Buttons won't help here
+         * (config is broken), but pressing one will trigger a fetch attempt
+         * that fails with the LED-blink feedback — harmless. */
+        int32_t dummy_sleep = 0;
+        stay_awake_with_buttons(&dummy_sleep);
         enter_deep_sleep(0);
         /* Never returns */
     }
@@ -1280,6 +1356,8 @@ void app_main(void)
             "Press reset to\n"
             "try again."
         );
+        int32_t dummy_sleep = 0;
+        stay_awake_with_buttons(&dummy_sleep);
         enter_deep_sleep(0);
         /* Never returns */
     }
@@ -1322,7 +1400,14 @@ void app_main(void)
 
         ESP_LOGE(TAG, "Download failed, displaying error message.");
         display_message(msg);
-        enter_deep_sleep(SLEEP_3H_US);
+        /* Awake window so the user can reflash OR press a button to retry
+         * the fetch. If a retry succeeds inside stay_awake, sleep_seconds
+         * gets updated from the server response; otherwise fall back to 3h. */
+        stay_awake_with_buttons(&sleep_seconds);
+        int64_t fail_sleep_us = (sleep_seconds > 0)
+            ? (int64_t)sleep_seconds * 1000000LL
+            : SLEEP_3H_US;
+        enter_deep_sleep(fail_sleep_us);
         /* Never returns */
     }
 
@@ -1337,102 +1422,12 @@ void app_main(void)
     free(img);
     ESP_LOGI(TAG, "Image displayed.");
 
-    /* Any wake that came from a prior sleep — whether the cause was
-     * correctly reported (TIMER/EXT1) or mis-reported as UNDEFINED at/past
-     * the deadline — should take the quick-sleep-again path. Only a true
-     * first boot (no prior sleep) falls through to the 60 s button-polling
-     * window below. */
-    if (is_scheduled_wake || had_prior_sleep) {
-        /* Woke from deep sleep — wait 30s then sleep again */
-        int64_t elapsed_us = esp_timer_get_time() - boot_time;
-        int64_t remaining_us = 30000000LL - elapsed_us;
-        if (remaining_us > 0) {
-            ESP_LOGI(TAG, "Staying awake for %d more seconds (30s boot window)...",
-                     (int)(remaining_us / 1000000));
-            vTaskDelay(pdMS_TO_TICKS(remaining_us / 1000));
-        }
+    /* Unified awake window: same path for true first boot, scheduled wakes,
+     * button wakes, and misclassified-but-at-deadline wakes. Gives the
+     * user 60s to press a button for the next image, and serves as the
+     * reflash-via-esptool opportunity. Button presses extend the window. */
+    stay_awake_with_buttons(&sleep_seconds);
 
-        int64_t sleep_us = (int64_t)sleep_seconds * 1000000LL;
-        enter_deep_sleep(sleep_us);
-        /* Never returns */
-    }
-
-    /* ── True first boot: button polling for 60s, then auto deep sleep ── */
-
-    ESP_LOGI(TAG, "First boot: 60s awake window. Press BUTTON_2 (GPIO%d) for next image.",
-             PIN_BUTTON_2);
-
-    /* Configure buttons as inputs */
-    gpio_config_t btn1_cfg = {
-        .pin_bit_mask = (1ULL << PIN_BUTTON_1),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-    };
-    gpio_config(&btn1_cfg);
-
-    /* GPIO40: no internal pull — the PCB has an external pull-up */
-    gpio_config_t btn2_cfg = {
-        .pin_bit_mask = (1ULL << PIN_BUTTON_2),
-        .mode = GPIO_MODE_INPUT,
-    };
-    gpio_config(&btn2_cfg);
-
-    int64_t deadline_us = boot_time + 60000000LL;  /* 60s from boot */
-
-    while (esp_timer_get_time() < deadline_us) {
-        /* Check BUTTON_1 (GPIO1) — enter deep sleep immediately */
-        if (gpio_get_level(PIN_BUTTON_1) == 0) {
-            vTaskDelay(pdMS_TO_TICKS(50));
-            if (gpio_get_level(PIN_BUTTON_1) == 0) {
-                ESP_LOGI(TAG, "Button 1 pressed — entering deep sleep.");
-                while (gpio_get_level(PIN_BUTTON_1) == 0)
-                    vTaskDelay(pdMS_TO_TICKS(50));
-                int64_t sleep_us = (int64_t)sleep_seconds * 1000000LL;
-                enter_deep_sleep(sleep_us);
-            }
-        }
-
-        /* Check BUTTON_2 (GPIO40) — next image */
-        if (gpio_get_level(PIN_BUTTON_2) == 0) {
-            vTaskDelay(pdMS_TO_TICKS(50));
-            if (gpio_get_level(PIN_BUTTON_2) == 0) {
-                ESP_LOGI(TAG, "Button pressed! Fetching next image...");
-                while (gpio_get_level(PIN_BUTTON_2) == 0)
-                    vTaskDelay(pdMS_TO_TICKS(50));
-
-                uint8_t *next = NULL;
-                if (wifi_connect()) {
-                    gpio_set_level(PIN_WIFI_LED, 1);
-                    next = download_image(&sleep_seconds);
-                    wifi_shutdown();
-                    gpio_set_level(PIN_WIFI_LED, 0);
-                }
-                if (next) {
-                    split_and_display(next);
-                    free(next);
-                    if (sleep_seconds > 0) last_sleep_seconds = sleep_seconds;
-                    ESP_LOGI(TAG, "Done. Press button for next image.");
-                } else {
-                    ESP_LOGW(TAG, "Download failed, keeping current image.");
-                    /* Triple-blink WIFI_LED so the user gets visual confirmation
-                     * that the button press was registered but the fetch failed.
-                     * Uses WIFI_LED (not WORK_LED) to avoid racing chg_monitor. */
-                    for (int i = 0; i < 3; i++) {
-                        gpio_set_level(PIN_WIFI_LED, 1);
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                        gpio_set_level(PIN_WIFI_LED, 0);
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                    }
-                }
-                /* Reset deadline — give another 60s after manual refresh */
-                deadline_us = esp_timer_get_time() + 60000000LL;
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-
-    ESP_LOGI(TAG, "60s timeout — entering deep sleep.");
     int64_t sleep_us = (int64_t)sleep_seconds * 1000000LL;
     enter_deep_sleep(sleep_us);
     /* Never returns */

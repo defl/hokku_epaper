@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.1.7
+
+Major firmware simplification: unified awake-window model. Webserver unchanged.
+
+### Firmware
+
+- **Single `stay_awake_with_buttons()` after every displayed image** — replaces three separate stages (30 s "scheduled wake" wait, 60 s first-boot button polling, 120 s `enter_deep_sleep` reflash window). One 60 s window with continuous button polling. Pressing the button fetches the next image and resets the window for another full 60 s.
+- **`enter_deep_sleep` no longer does any awake-time wait** — it goes to sleep right away. The reflash window is now a property of the awake period (managed by the caller via `stay_awake_with_buttons`), not a property of the sleep transition.
+- **Button polling now uses GPIO 1 + GPIO 12** (the two RTC-capable wake buttons; either one can wake from deep sleep AND trigger next-image while awake). GPIO 40 (legacy "switch photo") is dropped — it isn't wake-capable on ESP32-S3, so polling it gave half-broken UX (worked while awake, did nothing from sleep).
+- **Removed BUTTON_1 force-sleep behavior** — only one user button matters, and the awake window expires on its own.
+- **Error paths (config-version mismatch, missing config, download failure) also enter `stay_awake_with_buttons`** so the reflash window applies uniformly. Download-failure additionally lets the user retry by pressing the button.
+- **Fixed user-facing log timing**: previous "First boot: 60s awake window" was actually only ~30 s in practice (deadline was relative to boot, not to display-done). New log honestly says "Awake for 60s" and the 60 s is from when polling actually starts.
+- **`is_usb_reset_after_sleep` shortcut preserved** — spurious early resets still skip display init and go straight back to sleep, no awake window. Once asleep, normal button-wake works.
+
 ## 2.1.6
 
 Firmware battery-life tightening + review-driven polish. Webserver unchanged.

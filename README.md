@@ -25,7 +25,7 @@ You need two things:
 **Debian/Ubuntu** (recommended):
 ```bash
 # Download the .deb from the latest release
-apt install ./hokku-server_2.1.6-1_all.deb
+apt install ./hokku-server_2.1.7-1_all.deb
 # Starts automatically via systemd, web GUI at http://server:8080/
 # Drop your photos into /var/lib/hokku/upload/ or install samba
 # and make it very easy to manage them from any machine in your network
@@ -96,13 +96,13 @@ JPEG, PNG, BMP, TIFF, WebP, GIF, HEIC/HEIF, and AVIF. Drop any of these into the
 
 ### Buttons
 
-Press the right-hand button (in landscape) or lower button (in portrait) to wake the frame and fetch the next image.
+Press the right-hand button (in landscape) or lower button (in portrait) to wake the frame and fetch the next image. The button works both ways: it wakes the frame from deep sleep AND, while the frame is awake (the 60 s window after every image), pressing it fetches the next image and resets the window for another 60 s.
 
 ### LEDs
 
-**Red LED** — solid while awake, blinks at 1Hz while charging (including during the reflash window and any on-USB wait before deep sleep), off once the chip enters real deep sleep
+**Red LED** — solid while awake (including the 60 s post-display window), blinks at 1 Hz while charging, off once the chip enters real deep sleep.
 
-**Green LED** — solid while WiFi is connected. Triple-blinks rapidly if you press the next-image button but the download fails (the current image is kept, the button is not broken)
+**Green LED** — solid while WiFi is connected. Triple-blinks rapidly if you press the button to fetch a new image but the download fails (the current image is kept, the button is not broken).
 
 ## Background
 
