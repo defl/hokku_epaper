@@ -965,7 +965,13 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
         if (secs > 0) {
             *out_sleep_seconds = secs;
             ESP_LOGI(TAG, "X-Sleep-Seconds: %d", secs);
+        } else {
+            ESP_LOGW(TAG, "X-Sleep-Seconds present but non-positive: '%s' (parsed=%d)",
+                     sleep_hdr, (int)secs);
         }
+    } else {
+        ESP_LOGW(TAG, "X-Sleep-Seconds header missing from response (status=%d, hdr=%s)",
+                 status, sleep_hdr ? "empty" : "null");
     }
     if (epoch_hdr != NULL && epoch_hdr[0] != '\0' && out_server_epoch != NULL) {
         int64_t epoch = atoll(epoch_hdr);
