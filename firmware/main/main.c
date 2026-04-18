@@ -131,6 +131,16 @@ RTC_DATA_ATTR static uint64_t scheduled_wake_rtc_us = 0;
 RTC_DATA_ATTR static uint8_t  consecutive_spurious_resets = 0;
 #define MAX_SPURIOUS_RESETS 3
 
+/* Display-recovery counter. If BUSY is stuck LOW after split_and_display
+ * returns (UC8179C wedged — observed on real hardware, image half-
+ * rendered), we esp_restart to give the controller a fresh cold boot.
+ * Capped at MAX_BUSY_RECOVERY_REBOOTS to prevent a permanently-broken
+ * display from keeping the chip in a reboot loop draining the battery.
+ * Reset on any successful display (BUSY reads HIGH post-refresh) and on
+ * rtc_magic invalidation. */
+RTC_DATA_ATTR static uint8_t  consecutive_busy_timeouts = 0;
+#define MAX_BUSY_RECOVERY_REBOOTS 3
+
 /* Server epoch (seconds) at the moment we entered deep sleep, computed
  * from the X-Server-Time-Epoch response header plus the local elapsed
  * time between download and sleep entry. The next boot uses this and a
@@ -1053,6 +1063,54 @@ static void split_and_display(const uint8_t *img)
     epaper_display_dual(img, img + PANEL_SIZE);
 }
 
+/* Called after split_and_display() returns. If BUSY is still LOW the
+ * display controller is wedged (image half-rendered, UC8179C stuck
+ * mid-refresh). Normally recovers after an esp_restart cold boot —
+ * the display re-initialises from scratch on the next attempt.
+ *
+ * Capped at MAX_BUSY_RECOVERY_REBOOTS consecutive attempts so a
+ * permanently-broken display doesn't keep the chip in a reboot loop.
+ * If we hit the cap, we log loudly and fall through to normal sleep
+ * flow with whatever image state the screen is in — user will notice
+ * and can intervene (factory-dump reflash etc.).
+ *
+ * Returns true if BUSY is healthy (HIGH / idle) so the caller knows
+ * it's safe to proceed. On a reboot-triggered recovery this function
+ * never returns.
+ *
+ * The counter also resets to 0 on a successful display, restoring
+ * the full recovery budget for the next future failure. */
+static bool check_display_busy_or_reboot(const char *context)
+{
+    int busy = gpio_get_level(PIN_EPAPER_BUSY);
+    if (busy != 0) {
+        /* BUSY HIGH — display idle and healthy. */
+        if (consecutive_busy_timeouts > 0) {
+            ESP_LOGI(TAG, "[%s] display recovered after %d reboot(s)",
+                     context, (int)consecutive_busy_timeouts);
+        }
+        consecutive_busy_timeouts = 0;
+        return true;
+    }
+
+    /* BUSY stuck LOW — something went wrong during display_dual. */
+    if (consecutive_busy_timeouts < MAX_BUSY_RECOVERY_REBOOTS) {
+        consecutive_busy_timeouts++;
+        ESP_LOGW(TAG, "[%s] BUSY stuck LOW after display — rebooting to recover (attempt %d/%d)",
+                 context, (int)consecutive_busy_timeouts, MAX_BUSY_RECOVERY_REBOOTS);
+        /* Flush serial output before restart so the warning actually lands. */
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_restart();
+        /* Never returns */
+    }
+
+    ESP_LOGE(TAG, "[%s] BUSY stuck LOW after %d recovery reboot(s) — giving up",
+             context, (int)consecutive_busy_timeouts);
+    /* Reset so a future successful cycle re-enables the mechanism. */
+    consecutive_busy_timeouts = 0;
+    return false;
+}
+
 /* WiFi + download + display one image. Updates *sleep_seconds and
  * *server_epoch from the server's response headers (when present), and
  * stamps *local_time_at_download_us with esp_timer_get_time() at the
@@ -1450,6 +1508,7 @@ void app_main(void)
         last_sleep_seconds = 0;
         scheduled_wake_rtc_us = 0;
         consecutive_spurious_resets = 0;
+        consecutive_busy_timeouts = 0;
         pre_sleep_server_epoch = 0;
         last_sleep_err_s = 0;
         last_sleep_err_valid = false;
@@ -1740,6 +1799,15 @@ void app_main(void)
     split_and_display(img);
     free(img);
     ESP_LOGI(TAG, "Image displayed.");
+
+    /* Recover from a wedged display controller by rebooting. If BUSY is
+     * still LOW here, epaper_display_dual hit one or more BUSY timeouts
+     * and the screen is in a half-rendered state. A fresh cold-boot of
+     * the controller (via esp_restart, which re-runs hw_gpio_init +
+     * spi_init + epaper_reset from scratch) almost always un-sticks it.
+     * Capped so a permanently-broken display doesn't drain the battery
+     * in a reboot loop. This function may not return. */
+    check_display_busy_or_reboot("main fetch");
 
     /* Unified awake window: same path for true first boot, scheduled wakes,
      * button wakes, and misclassified-but-at-deadline wakes. Gives the
