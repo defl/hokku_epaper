@@ -1356,5 +1356,31 @@ class TestOrientation:
         with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "portrait"}):
             key_p = webserver._cache_key(path, content_hash)
         assert key_l != key_p, "Cache keys must differ between orientations"
-        assert key_l.endswith("_l")
-        assert key_p.endswith("_p")
+        # Orientation letter is embedded in the key (landscape = "l", portrait = "p")
+        assert "_l_" in key_l
+        assert "_p_" in key_p
+
+    def test_cache_key_differs_by_dither_algorithm(self):
+        """Cache keys must differ per algorithm so switching preserves prior renders."""
+        path = Path("/images/test.jpg")
+        content_hash = "abcdef123456"
+        keys = {}
+        for algo in webserver.VALID_DITHER_ALGORITHMS:
+            with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "dither_algorithm": algo}):
+                keys[algo] = webserver._cache_key(path, content_hash)
+        # All three must be distinct
+        assert len(set(keys.values())) == len(keys), f"Cache keys collided: {keys}"
+        # Algorithm name must appear in each key
+        for algo, key in keys.items():
+            assert algo in key, f"Algorithm {algo} missing from cache key {key}"
+
+    def test_cache_key_algorithm_override(self):
+        """_cache_key must accept an explicit algorithm parameter that overrides _config."""
+        path = Path("/images/test.jpg")
+        content_hash = "abcdef123456"
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "dither_algorithm": "floyd_steinberg"}):
+            key_active = webserver._cache_key(path, content_hash)
+            key_other = webserver._cache_key(path, content_hash, algorithm="atkinson")
+        assert "floyd_steinberg" in key_active
+        assert "atkinson" in key_other
+        assert key_active != key_other
