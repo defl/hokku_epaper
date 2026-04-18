@@ -1196,23 +1196,39 @@ static void stay_awake_with_buttons(int32_t *sleep_seconds,
     };
     gpio_config(&btn_cfg);
 
-    /* Let the internal pull-up settle before the first read; the pin's
-     * capacitance + 45 kΩ pull-up can take a few ms to reach logic HIGH. */
-    vTaskDelay(pdMS_TO_TICKS(20));
+    /* Let the internal pull-up settle before the first read. Bumped from
+     * 20 ms → 100 ms after seeing "button always pressed" still happen
+     * occasionally on first-boot-after-factory-firmware-flash despite
+     * the RTC-GPIO de-isolation above. The pin has board-level
+     * capacitance to overcome AND the internal pull-up is a relatively
+     * weak 45 kΩ; 100 ms is well outside the RC time constant of any
+     * plausible external load. */
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    /* Snapshot the initial state right after the settle delay. Logged
+     * so we can tell from the serial output which pin (if any) is
+     * stuck LOW — GPIO 1 vs GPIO 12 often point at different root
+     * causes (external wiring vs factory-firmware RTC hold state). */
+    int initial_btn1 = gpio_get_level(PIN_BUTTON_1);
+    int initial_pwr  = gpio_get_level(PIN_PWR_BUTTON);
+    ESP_LOGI(TAG, "Awake for %ds — press button for next image (also: reflash window) "
+                  "[initial: GPIO1=%d GPIO12=%d]",
+             (int)(AWAKE_WINDOW_US / 1000000), initial_btn1, initial_pwr);
 
     int64_t deadline = esp_timer_get_time() + AWAKE_WINDOW_US;
-    ESP_LOGI(TAG, "Awake for %ds — press button for next image (also: reflash window)",
-             (int)(AWAKE_WINDOW_US / 1000000));
 
     while (esp_timer_get_time() < deadline) {
-        bool pressed = (gpio_get_level(PIN_BUTTON_1) == 0) ||
-                       (gpio_get_level(PIN_PWR_BUTTON) == 0);
+        int btn1 = gpio_get_level(PIN_BUTTON_1);
+        int pwr  = gpio_get_level(PIN_PWR_BUTTON);
+        bool pressed = (btn1 == 0) || (pwr == 0);
         if (pressed) {
             vTaskDelay(pdMS_TO_TICKS(50));  /* debounce */
-            pressed = (gpio_get_level(PIN_BUTTON_1) == 0) ||
-                      (gpio_get_level(PIN_PWR_BUTTON) == 0);
+            int btn1b = gpio_get_level(PIN_BUTTON_1);
+            int pwrb  = gpio_get_level(PIN_PWR_BUTTON);
+            pressed = (btn1b == 0) || (pwrb == 0);
             if (pressed) {
-                ESP_LOGI(TAG, "Button pressed — fetching next image");
+                ESP_LOGI(TAG, "Button pressed — fetching next image "
+                              "[GPIO1=%d GPIO12=%d]", btn1b, pwrb);
                 /* Wait for release so a held button doesn't re-trigger */
                 while (gpio_get_level(PIN_BUTTON_1) == 0 ||
                        gpio_get_level(PIN_PWR_BUTTON) == 0) {
