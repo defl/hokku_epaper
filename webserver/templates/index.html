@@ -384,6 +384,18 @@ function formatMinutesLate(m) {
   return rem ? `${h}h ${rem}m late` : `${h}h late`;
 }
 
+function formatBattery(s) {
+  // Last-known battery reading from the frame (via X-Battery-mV on the
+  // most recent call-in). Voltage with 2-decimal precision + percentage;
+  // colour the percentage red when < 20% so "low battery" jumps out.
+  if (!s || s.battery_mv == null) return '<span style="color:#999">-</span>';
+  const volts = (s.battery_mv / 1000).toFixed(2);
+  const pct = s.battery_percent;
+  const colour = pct != null && pct < 20 ? '#b91c1c' : '#555';
+  const pctStr = pct != null ? `<span style="color:${colour};font-weight:600">${pct}%</span>` : '';
+  return `${volts} V ${pctStr}`;
+}
+
 function renderScreens(screens) {
   const container = document.getElementById('screens-container');
   const names = Object.keys(screens || {});
@@ -396,7 +408,7 @@ function renderScreens(screens) {
 
   // Collect overdue screens for a warning banner at the top.
   const overdue = names
-    .map(n => ({name: n, late: overdueMinutes(screens[n])}))
+    .map(n => ({name: n, late: overdueMinutes(screens[n]), battery_mv: screens[n].battery_mv}))
     .filter(s => s.late > 0);
 
   let html = '';
@@ -406,17 +418,28 @@ function renderScreens(screens) {
     html += 'Likely causes: battery depleted, WiFi / router outage, or the frame has been unplugged.';
     html += '<ul>';
     overdue.forEach(s => {
-      html += `<li><strong>${s.name}</strong> — ${formatMinutesLate(s.late)}</li>`;
+      let line = `<strong>${s.name}</strong> — ${formatMinutesLate(s.late)}`;
+      if (s.battery_mv != null) {
+        line += ` (last battery: ${(s.battery_mv/1000).toFixed(2)} V)`;
+      }
+      html += `<li>${line}</li>`;
     });
     html += '</ul></div>';
   }
 
-  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Requests</th><th>Last Seen</th><th>Next Update</th></tr>';
+  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Requests</th><th>Last Seen</th><th>Next Update</th></tr>';
   names.forEach(name => {
     const s = screens[name];
     const late = overdueMinutes(s);
     const rowClass = late > 0 ? ' class="overdue"' : '';
-    html += `<tr${rowClass}><td>${name}</td><td>${s.ip || '-'}</td><td>${s.request_count || 0}</td><td>${s.last_seen || '-'}</td><td>${formatNextUpdate(s.next_update_at)}</td></tr>`;
+    html += `<tr${rowClass}>
+      <td>${name}</td>
+      <td>${s.ip || '-'}</td>
+      <td>${formatBattery(s)}</td>
+      <td>${s.request_count || 0}</td>
+      <td>${s.last_seen || '-'}</td>
+      <td>${formatNextUpdate(s.next_update_at)}</td>
+    </tr>`;
   });
   html += '</table>';
   container.innerHTML = html;

@@ -836,6 +836,16 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
         esp_http_client_set_header(client, "X-Screen-Name", config.screen_name);
     }
 
+    /* Report last-measured battery voltage so the web UI can show it per
+     * screen. last_battery_mv is populated in app_main just before we get
+     * here, so it reflects this boot's reading. Skip on zero (uncalibrated
+     * / read failure) so the server doesn't get a meaningless 0 mV entry. */
+    if (last_battery_mv > 0) {
+        char batt_hdr[16];
+        snprintf(batt_hdr, sizeof(batt_hdr), "%d", (int)last_battery_mv);
+        esp_http_client_set_header(client, "X-Battery-mV", batt_hdr);
+    }
+
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
 
@@ -1514,6 +1524,17 @@ void app_main(void)
      * reflash-via-esptool opportunity. Button presses extend the window. */
     stay_awake_with_buttons(&sleep_seconds, &server_epoch, &local_time_at_download_us);
 
+    /* Safety net: if we somehow reach here with sleep_seconds <= 0 (missing
+     * or zero X-Sleep-Seconds header, parser glitch, whatever), never arm
+     * a zero-length timer — that would leave the chip in button-only-wake
+     * state, which is how one frame in the wild missed its 06:00 refresh
+     * entirely and needed a physical button press to come back. Prefer the
+     * last-known-good sleep duration; fall back to 3h so the chip retries
+     * instead of sleeping forever. */
+    if (sleep_seconds <= 0) {
+        ESP_LOGW(TAG, "sleep_seconds <= 0 — falling back (last=%d)", (int)last_sleep_seconds);
+        sleep_seconds = (last_sleep_seconds > 0) ? last_sleep_seconds : (int32_t)(SLEEP_3H_US / 1000000LL);
+    }
     int64_t sleep_us = (int64_t)sleep_seconds * 1000000LL;
     save_pre_sleep_epoch(server_epoch, local_time_at_download_us);
     enter_deep_sleep(sleep_us);

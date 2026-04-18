@@ -399,6 +399,109 @@ class TestScreenHeaders:
             assert "X-Sleep-Seconds" in resp.headers
 
 
+# ── Battery voltage reporting ─────────────────────────────────────
+#
+# Firmware sends X-Battery-mV with every request; the server captures
+# it, computes a percentage against Li-ion anchors, and exposes both
+# in /hokku/api/status so the web UI can show "is my battery OK".
+
+class TestBatteryReporting:
+    def test_parse_valid_mv(self):
+        assert webserver._parse_battery_header("4100") == 4100
+        assert webserver._parse_battery_header(" 3800 ") == 3800  # whitespace tolerant
+        assert webserver._parse_battery_header("3400") == 3400
+
+    def test_parse_rejects_garbage(self):
+        assert webserver._parse_battery_header(None) is None
+        assert webserver._parse_battery_header("") is None
+        assert webserver._parse_battery_header("nope") is None
+
+    def test_parse_rejects_out_of_range(self):
+        """Uninitialised / broken ADC readings shouldn't poison the database."""
+        assert webserver._parse_battery_header("0") is None
+        assert webserver._parse_battery_header("500") is None  # impossibly low
+        assert webserver._parse_battery_header("10000") is None  # impossibly high
+
+    def test_percent_at_anchors(self):
+        assert webserver._battery_percent(webserver.BATTERY_MV_FULL) == 100
+        assert webserver._battery_percent(webserver.BATTERY_MV_EMPTY) == 0
+
+    def test_percent_linear_midpoint(self):
+        # 3400 → 0%, 4100 → 100%. Midpoint 3750 → 50%
+        assert webserver._battery_percent(3750) == 50
+
+    def test_percent_clamped_above_full(self):
+        """A frame on a higher-than-expected charger (or mis-cal) shouldn't
+        show 110%. Clamp to 100."""
+        assert webserver._battery_percent(4200) == 100
+
+    def test_percent_clamped_below_empty(self):
+        """Below our 0% anchor (3400), clamp to 0 instead of going negative."""
+        assert webserver._battery_percent(3200) == 0
+
+    def test_percent_handles_none(self):
+        assert webserver._battery_percent(None) is None
+        assert webserver._battery_percent(0) is None
+
+    def test_record_screen_call_stores_battery(self):
+        db = {"serve_data": {}}
+        with patch.object(webserver, "_database", db):
+            webserver._record_screen_call("Foyer", "1.2.3.4", 3600, battery_mv=3950)
+        entry = db["screens"]["Foyer"]
+        assert entry["battery_mv"] == 3950
+        assert entry["battery_percent"] == webserver._battery_percent(3950)
+        assert entry["battery_seen_at"] is not None
+
+    def test_record_screen_call_without_battery_omits_fields(self):
+        """Older firmware that doesn't send the header shouldn't write any
+        stale/misleading battery field."""
+        db = {"serve_data": {}}
+        with patch.object(webserver, "_database", db):
+            webserver._record_screen_call("Old", "1.2.3.4", 3600)
+        entry = db["screens"]["Old"]
+        assert "battery_mv" not in entry
+        assert "battery_percent" not in entry
+
+    def test_serve_binary_captures_battery_header(self):
+        """End-to-end: X-Battery-mV on the request ends up in the database."""
+        webserver.app.config["TESTING"] = True
+        pool = {"/images/a.jpg": {"hash": "abc"}}
+        db = {"serve_data": {"a.jpg": {"show_index": 0, "last_request": None,
+              "total_show_count": 0, "total_show_minutes": 0.0}}}
+        with webserver.app.test_client() as client, \
+             patch.object(webserver, "_pool", pool), \
+             patch.object(webserver, "_database", db), \
+             patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
+             patch.object(webserver, "_converting_count", 0), \
+             patch.object(webserver, "_last_served",
+                         {"key": None, "name": None, "served_at": None}), \
+             patch("webserver._read_cached_binary", return_value=b"x" * 960000), \
+             patch("webserver._save_database"):
+            resp = client.get("/hokku/screen/", headers={
+                "X-Screen-Name": "Foyer",
+                "X-Battery-mV": "3912",
+            })
+            assert resp.status_code == 200
+            assert db["screens"]["Foyer"]["battery_mv"] == 3912
+            assert db["screens"]["Foyer"]["battery_percent"] is not None
+
+    def test_serve_binary_ignores_bogus_battery_header(self):
+        """Garbage header doesn't crash the request."""
+        webserver.app.config["TESTING"] = True
+        with webserver.app.test_client() as client, \
+             patch.object(webserver, "_pool", {}), \
+             patch.object(webserver, "_database", {"serve_data": {}}), \
+             patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
+             patch.object(webserver, "_converting_count", 0), \
+             patch("webserver._save_database"):
+            resp = client.get("/hokku/screen/", headers={
+                "X-Screen-Name": "Foyer",
+                "X-Battery-mV": "not a number",
+            })
+            # Still a valid (busy) response; no 500
+            assert resp.status_code in (404, 503)
+
+
 # ── Screen-call accounting ────────────────────────────────────────
 
 class TestRecordScreenCall:

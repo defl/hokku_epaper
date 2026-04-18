@@ -743,7 +743,8 @@ def _background_watcher():
 
 # ── Flask routes: device endpoints ─────────────────────────────────
 
-def _record_screen_call(screen_name, screen_ip, sleep_seconds, served_name=None):
+def _record_screen_call(screen_name, screen_ip, sleep_seconds, served_name=None,
+                        battery_mv=None):
     """Track a call from a screen: IP, count, last_seen, and the next update
     time implied by the sleep_seconds we just handed it. Caller must hold _lock."""
     if "screens" not in _database:
@@ -762,6 +763,45 @@ def _record_screen_call(screen_name, screen_ip, sleep_seconds, served_name=None)
     screens[screen_name]["next_update_at"] = (now + timedelta(seconds=int(sleep_seconds))).isoformat(timespec="seconds")
     if served_name is not None:
         screens[screen_name]["last_served"] = served_name
+    if battery_mv is not None and battery_mv > 0:
+        screens[screen_name]["battery_mv"] = int(battery_mv)
+        screens[screen_name]["battery_percent"] = _battery_percent(battery_mv)
+        screens[screen_name]["battery_seen_at"] = now.isoformat(timespec="seconds")
+
+
+# Li-ion voltage → percentage mapping. Chosen without a discharge
+# experiment, based on two known anchors:
+#   - 3400 mV: firmware's BATT_LOW_MV — below this the display refresh
+#     draws enough current to risk brownout, so we call it "0%"
+#   - 4100 mV: HARDWARE_FACTS ADC calibration reference ("battery is 4.1V");
+#     conservative full-charge target for longevity
+# Linear in between. Li-ion discharge is actually S-shaped (flat middle,
+# steep ends), so this over-reports near full and under-reports near empty
+# by ~10–20 pp mid-range, which is a fine trade-off for a user-facing
+# "is my battery OK" indicator. The absolute mV is also shown for anyone
+# who wants the precise value.
+BATTERY_MV_EMPTY = 3400
+BATTERY_MV_FULL = 4100
+
+def _battery_percent(mv):
+    if mv is None or mv <= 0:
+        return None
+    pct = round((mv - BATTERY_MV_EMPTY) * 100 / (BATTERY_MV_FULL - BATTERY_MV_EMPTY))
+    return max(0, min(100, pct))
+
+
+def _parse_battery_header(raw):
+    """Tolerant parse of the X-Battery-mV header. Returns int mV or None."""
+    if not raw:
+        return None
+    try:
+        v = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    # Reasonable sanity bounds: anything outside [2000, 5000] is garbage.
+    if v < 2000 or v > 5000:
+        return None
+    return v
 
 
 def _busy_retry_seconds():
@@ -777,6 +817,7 @@ def serve_binary():
     global _database
     screen_name = request.headers.get("X-Screen-Name", "unnamed")
     screen_ip = request.remote_addr or "unknown"
+    battery_mv = _parse_battery_header(request.headers.get("X-Battery-mV"))
 
     with _lock:
         if not _pool:
@@ -784,7 +825,7 @@ def serve_binary():
             # sensible retry hint so the firmware doesn't fall back to its
             # 3h hard-coded default (which drifts off the refresh schedule).
             sleep_seconds = _busy_retry_seconds()
-            _record_screen_call(screen_name, screen_ip, sleep_seconds)
+            _record_screen_call(screen_name, screen_ip, sleep_seconds, battery_mv=battery_mv)
             _save_database(_get_cache_dir(), _database)
             status = 503 if _converting_count > 0 else 404
             msg = "Converting images, try again shortly" if status == 503 else "No images in upload directory"
@@ -796,7 +837,7 @@ def serve_binary():
         key = _pick_next_image(_pool, _database)
         if key is None:
             sleep_seconds = _busy_retry_seconds()
-            _record_screen_call(screen_name, screen_ip, sleep_seconds)
+            _record_screen_call(screen_name, screen_ip, sleep_seconds, battery_mv=battery_mv)
             _save_database(_get_cache_dir(), _database)
             resp = make_response("No images available", 404)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
@@ -806,7 +847,8 @@ def serve_binary():
         content_hash = entry["hash"]
 
         sleep_seconds = _calculate_sleep_seconds(_config)
-        _record_screen_call(screen_name, screen_ip, sleep_seconds, served_name=Path(key).name)
+        _record_screen_call(screen_name, screen_ip, sleep_seconds,
+                            served_name=Path(key).name, battery_mv=battery_mv)
         _save_database(_get_cache_dir(), _database)
 
     # Load binary from disk cache outside the lock
