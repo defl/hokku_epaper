@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.5
+
+Firmware follow-up after adversarial review of 2.1.4. Webserver unchanged.
+
+### Firmware
+
+- **Fix: USB polling loop used vTaskDelay-accumulated time to decide when to exit, drifting ~1% short per chunk.** For a 12 h refresh interval that's ~7 min of under-count, triggering `esp_restart()` well before the deadline. The next boot's classifier then saw `gap > SLACK` and incorrectly skipped the fetch. Now the loop checks `esp_clk_rtc_time() < deadline_rtc_us` directly, so tick-rounding can't exit early.
+- **Fix: misclassified-but-at-deadline wakes fell into the 60 s first-boot button-polling window.** When `esp_sleep_get_wakeup_cause()` returns `UNDEFINED` at/past the deadline, we correctly fetch — but then the `if (is_scheduled_wake)` gate after display didn't match, so control fell through to the first-boot button-polling loop (60 s extra awake per scheduled refresh). Snapshot `was_sleeping` before clearing it and extend the gate to `is_scheduled_wake || had_prior_sleep` so any post-sleep wake takes the quick-sleep-again path.
+- **Cleanup: removed unreachable `else` fallback in `is_usb_reset_after_sleep` branch.** The classifier guarantees `scheduled_wake_rtc_us > 0` when reaching this branch; the `last_sleep_seconds` fallback was dead code.
+
 ## 2.1.4
 
 Firmware correctness fix. Webserver unchanged.

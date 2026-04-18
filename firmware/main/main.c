@@ -984,22 +984,31 @@ static void enter_deep_sleep(int64_t sleep_us)
     /* Step 4 — USB polling loop. chg_monitor stays running so the LED
      * blinks throughout. On USB with power, deep_sleep_start would
      * immediately cause a USB disconnect → host reset → reboot loop;
-     * polling in light sleep keeps the device reachable for reflashing. */
+     * polling in light sleep keeps the device reachable for reflashing.
+     *
+     * Exit condition is the RTC clock, NOT an accumulator of
+     * vTaskDelay() durations: pdMS_TO_TICKS rounds down to the nearest
+     * tick (10 ms at 100 Hz), so summing nominal-1-second chunks
+     * under-counts real time by ~1 % per chunk. Over a 12-hour refresh
+     * interval that drift reaches ~7 minutes — enough to exit the loop
+     * and esp_restart() well BEFORE the deadline, after which the next
+     * boot's classifier would see "gap > SLACK" and skip the fetch.
+     * Checking esp_clk_rtc_time() directly sidesteps the drift entirely. */
     bool usb_connected = (gpio_get_level(PIN_CHG_STATUS) == 0);
     if (usb_connected && remaining_us > 0) {
         ESP_LOGI(TAG, "USB connected — waiting %.1f hours instead of deep sleep",
                  remaining_us / 3600000000.0);
-        int64_t wait_us = remaining_us;
-        while (wait_us > 0) {
-            int64_t chunk = wait_us > 1000000 ? 1000000 : wait_us;
-            vTaskDelay(pdMS_TO_TICKS(chunk / 1000));
-            wait_us -= chunk;
+        while (esp_clk_rtc_time() < deadline_rtc_us) {
+            uint64_t left_us = deadline_rtc_us - esp_clk_rtc_time();
+            int chunk_ms = (left_us > 1000000ULL) ? 1000 : (int)(left_us / 1000);
+            if (chunk_ms < 1) chunk_ms = 1;
+            vTaskDelay(pdMS_TO_TICKS(chunk_ms));
             if (gpio_get_level(PIN_CHG_STATUS) != 0) {
                 ESP_LOGI(TAG, "USB disconnected — switching to deep sleep");
                 break;
             }
         }
-        if (wait_us <= 0) {
+        if (esp_clk_rtc_time() >= deadline_rtc_us) {
             ESP_LOGI(TAG, "Wait complete — restarting");
             chg_monitor_stop();
             esp_restart();
@@ -1121,6 +1130,13 @@ void app_main(void)
      * esp_clk_rtc_time() keeps ticking through deep sleep and esp_restart,
      * and the deep-sleep timer uses the same RTC slow clock, so drift
      * between them cancels out to first order. */
+    /* Snapshot was_sleeping before clearing it — used below to correctly
+     * classify "wake from a sleep we started, but wakeup cause got reported
+     * as UNDEFINED at-or-past the deadline" as non-first-boot, so we don't
+     * fall into the 60 s button-polling window meant only for a true cold
+     * start. */
+    const bool had_prior_sleep = was_sleeping;
+
     bool is_usb_reset_after_sleep = false;
     if (!is_scheduled_wake && was_sleeping) {
         if (scheduled_wake_rtc_us == 0) {
@@ -1157,7 +1173,7 @@ void app_main(void)
     }
     was_sleeping = false;
 
-    bool is_true_first_boot = (!is_scheduled_wake && !is_usb_reset_after_sleep);
+    bool is_true_first_boot = (!is_scheduled_wake && !is_usb_reset_after_sleep && !had_prior_sleep);
 
     ESP_LOGI(TAG, "Boot #%d, wakeup=%d%s", boot_count, wakeup,
              is_true_first_boot ? " (first boot)" :
@@ -1228,18 +1244,15 @@ void app_main(void)
        enter_deep_sleep honors its sleep_us contract (reflash window is
        internal, not additive), so the deadline doesn't drift. */
     if (is_usb_reset_after_sleep) {
+        /* Invariant on this branch: the classifier above only sets
+         * is_usb_reset_after_sleep = true when scheduled_wake_rtc_us > 0
+         * AND the gap is within [SLACK, SANE_MAX]. No other case reaches
+         * here, so we don't need a last_sleep_seconds fallback. */
         ESP_LOGI(TAG, "Early wake (no scheduled cause) — image already on display.");
-        int64_t sleep_us;
-        if (scheduled_wake_rtc_us > 0) {
-            uint64_t now_rtc_us = esp_clk_rtc_time();
-            sleep_us = (now_rtc_us < scheduled_wake_rtc_us)
-                ? (int64_t)(scheduled_wake_rtc_us - now_rtc_us)
-                : 60LL * 1000000LL;  /* already past — wake soon to re-evaluate */
-        } else {
-            sleep_us = last_sleep_seconds > 0
-                ? (int64_t)last_sleep_seconds * 1000000LL
-                : SLEEP_3H_US;
-        }
+        uint64_t now_rtc_us = esp_clk_rtc_time();
+        int64_t sleep_us = (now_rtc_us < scheduled_wake_rtc_us)
+            ? (int64_t)(scheduled_wake_rtc_us - now_rtc_us)
+            : 60LL * 1000000LL;  /* already past — wake soon to re-evaluate */
         enter_deep_sleep(sleep_us);
         /* Never returns */
     }
@@ -1290,8 +1303,13 @@ void app_main(void)
     free(img);
     ESP_LOGI(TAG, "Image displayed.");
 
-    if (is_scheduled_wake) {
-        /* Woke from deep sleep (timer or button) — wait 30s then sleep again */
+    /* Any wake that came from a prior sleep — whether the cause was
+     * correctly reported (TIMER/EXT1) or mis-reported as UNDEFINED at/past
+     * the deadline — should take the quick-sleep-again path. Only a true
+     * first boot (no prior sleep) falls through to the 60 s button-polling
+     * window below. */
+    if (is_scheduled_wake || had_prior_sleep) {
+        /* Woke from deep sleep — wait 30s then sleep again */
         int64_t elapsed_us = esp_timer_get_time() - boot_time;
         int64_t remaining_us = 30000000LL - elapsed_us;
         if (remaining_us > 0) {

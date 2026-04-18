@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hokku-server"
-version = "2.1.4"
+version = "2.1.5"
 description = "Spectra 6 e-ink image server for Hokku EL133UF1 display"
 requires-python = ">=3.9"
 license = {text = "GPL-3.0 (non-commercial)"}
