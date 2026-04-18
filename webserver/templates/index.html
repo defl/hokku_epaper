@@ -54,7 +54,13 @@
   .screens-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
   .screens-table th { text-align: left; padding: 6px 12px; border-bottom: 2px solid #e5e7eb; color: #555; font-weight: 600; }
   .screens-table td { padding: 6px 12px; border-bottom: 1px solid #f0f0f0; }
+  .screens-table tr.overdue td { background: #fef3c7; }
   .screens-empty { color: #999; font-style: italic; padding: 12px 0; font-size: 0.9em; }
+
+  /* Overdue-screen warning banner */
+  .screen-warning { background: #fef3c7; border: 1px solid #fbbf24; color: #92400e; border-radius: 6px; padding: 10px 14px; margin: 0 0 12px 0; font-size: 0.9em; line-height: 1.45; }
+  .screen-warning strong { color: #78350f; }
+  .screen-warning ul { margin: 6px 0 0 20px; padding: 0; }
 
   .toast { position: fixed; bottom: 20px; right: 20px; background: #333; color: #fff; padding: 10px 20px; border-radius: 6px; font-size: 0.9em; z-index: 1000; opacity: 0; transition: opacity 0.3s; }
   .toast.show { opacity: 1; }
@@ -358,6 +364,26 @@ function formatNextUpdate(iso) {
   return `<span title="${wall}">${wall} <span style="color:#888">(${rel})</span></span>`;
 }
 
+// Screens more than an hour past their scheduled wake are flagged as
+// "overdue" — common causes are dead battery, WiFi outage, or being
+// physically unplugged. Surface it so the user doesn't have to
+// eyeball the Next Update column themselves.
+const OVERDUE_THRESHOLD_MS = 60 * 60 * 1000;
+
+function overdueMinutes(screen) {
+  if (!screen || !screen.next_update_at) return 0;
+  const t = new Date(screen.next_update_at);
+  if (isNaN(t.getTime())) return 0;
+  const ageMs = new Date() - t;
+  return ageMs > OVERDUE_THRESHOLD_MS ? Math.round(ageMs / 60000) : 0;
+}
+
+function formatMinutesLate(m) {
+  if (m < 60) return `${m} min late`;
+  const h = Math.floor(m / 60), rem = m % 60;
+  return rem ? `${h}h ${rem}m late` : `${h}h late`;
+}
+
 function renderScreens(screens) {
   const container = document.getElementById('screens-container');
   const names = Object.keys(screens || {});
@@ -365,11 +391,32 @@ function renderScreens(screens) {
     container.innerHTML = '<div class="screens-empty">No screens have connected yet.</div>';
     return;
   }
-  let html = '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Requests</th><th>Last Seen</th><th>Next Update</th></tr>';
+
   names.sort();
+
+  // Collect overdue screens for a warning banner at the top.
+  const overdue = names
+    .map(n => ({name: n, late: overdueMinutes(screens[n])}))
+    .filter(s => s.late > 0);
+
+  let html = '';
+  if (overdue.length > 0) {
+    html += '<div class="screen-warning">';
+    html += '<strong>⚠ Screen' + (overdue.length > 1 ? 's are' : ' is') + ' overdue for an update.</strong> ';
+    html += 'Likely causes: battery depleted, WiFi / router outage, or the frame has been unplugged.';
+    html += '<ul>';
+    overdue.forEach(s => {
+      html += `<li><strong>${s.name}</strong> — ${formatMinutesLate(s.late)}</li>`;
+    });
+    html += '</ul></div>';
+  }
+
+  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Requests</th><th>Last Seen</th><th>Next Update</th></tr>';
   names.forEach(name => {
     const s = screens[name];
-    html += `<tr><td>${name}</td><td>${s.ip || '-'}</td><td>${s.request_count || 0}</td><td>${s.last_seen || '-'}</td><td>${formatNextUpdate(s.next_update_at)}</td></tr>`;
+    const late = overdueMinutes(s);
+    const rowClass = late > 0 ? ' class="overdue"' : '';
+    html += `<tr${rowClass}><td>${name}</td><td>${s.ip || '-'}</td><td>${s.request_count || 0}</td><td>${s.last_seen || '-'}</td><td>${formatNextUpdate(s.next_update_at)}</td></tr>`;
   });
   html += '</table>';
   container.innerHTML = html;
