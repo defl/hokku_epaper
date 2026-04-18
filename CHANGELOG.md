@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.1.8
+
+Firmware safety + cleanup. Webserver unchanged.
+
+### Firmware
+
+- **Spurious-reset safety valve.** The `is_usb_reset_after_sleep` shortcut (skip display init, immediate sleep) now caps at `MAX_SPURIOUS_RESETS = 3` consecutive triggers via a new RTC counter. After that many short-paths in a row, the next wake takes the full path with `stay_awake_with_buttons` so the user always gets a 60 s reflash window — even if something keeps spurious-resetting the chip (brownout-during-sleep, persistent silicon misclassification). Counter resets to 0 on any non-spurious wake. Battery cost: at most one full 60 s awake window per 3 spurious-reset cycles.
+- **Wakeup classifier cleanup.** Removed the `is_true_first_boot` and `is_misclassified_wake` named booleans — they were used only for the log label. Inlined into the `ESP_LOGI` ternary chain and renamed `had_prior_sleep` → `prior_sleep`. Net change: ~25 fewer lines, same behavior.
+
 ## 2.1.7
 
 Major firmware simplification: unified awake-window model. Webserver unchanged.

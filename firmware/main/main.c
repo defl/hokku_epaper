@@ -119,6 +119,15 @@ RTC_DATA_ATTR static int32_t  last_sleep_seconds = 0;  /* fallback if server unr
  * as UNDEFINED". 0 = no deadline set (first boot or unknown). */
 RTC_DATA_ATTR static uint64_t scheduled_wake_rtc_us = 0;
 
+/* How many spurious-reset shortcuts we've taken in a row. The shortcut
+ * (skip display init, immediate sleep) saves battery on legitimate USB-
+ * host-reset cases, but if something keeps spuriously resetting the chip
+ * the device would never give the user a reflash window. After
+ * MAX_SPURIOUS_RESETS in a row, we force a full awake window. Reset to 0
+ * on any non-spurious wake. */
+RTC_DATA_ATTR static uint8_t  consecutive_spurious_resets = 0;
+#define MAX_SPURIOUS_RESETS 3
+
 /* Slack (µs) for the deadline comparison. Absorbs calibration drift of
  * the RTC slow clock between when sleep started and when we re-read the
  * counter on wake. 5 min is comfortably above typical few-percent drift
@@ -1175,6 +1184,7 @@ void app_main(void)
         was_sleeping = false;
         last_sleep_seconds = 0;
         scheduled_wake_rtc_us = 0;
+        consecutive_spurious_resets = 0;
     }
 
     boot_count++;
@@ -1202,74 +1212,43 @@ void app_main(void)
     /* An "unexplained" wake is anything that wasn't a timer/button but
      * landed here with was_sleeping set — USB host disconnect resetting
      * the chip, brownout, or ESP32-S3 silicon quirk misreporting a timer
-     * wake as UNDEFINED. Without more info we can't tell them apart by
-     * wakeup cause alone, but the RTC slow clock can: if we're clearly
-     * before the deadline we set pre-sleep, it's really an early reset
-     * and the optimization (skip the fetch, sleep the remaining time)
-     * is correct. If we're at or past the deadline, the scheduled wake
-     * has already happened and we MUST fetch — otherwise the display
-     * gets stuck forever in a skip-fetch loop (the bug this replaces).
+     * wake as UNDEFINED. We can't tell them apart by wakeup cause alone,
+     * but the RTC slow clock can: clearly-before-deadline = real early
+     * reset (skip fetch, sleep remainder); at-or-past-deadline = timer
+     * fired but was misreported (must fetch).
      *
      * esp_clk_rtc_time() keeps ticking through deep sleep and esp_restart,
      * and the deep-sleep timer uses the same RTC slow clock, so drift
      * between them cancels out to first order. */
-    /* Snapshot was_sleeping before clearing it — used below to correctly
-     * classify "wake from a sleep we started, but wakeup cause got reported
-     * as UNDEFINED at-or-past the deadline" as non-first-boot, so we don't
-     * fall into the 60 s button-polling window meant only for a true cold
-     * start. */
-    const bool had_prior_sleep = was_sleeping;
-
-    bool is_usb_reset_after_sleep = false;
-    if (!is_scheduled_wake && was_sleeping) {
-        if (scheduled_wake_rtc_us == 0) {
-            /* No deadline recorded — e.g. we set sleep_us=0 last time. Safer
-             * to fetch than to silently skip. */
-            is_usb_reset_after_sleep = false;
-        } else {
-            uint64_t now_rtc_us = esp_clk_rtc_time();
-            if (now_rtc_us >= scheduled_wake_rtc_us) {
-                /* At or past the deadline — timer fired, misclassified.
-                 * Fetch normally. */
-                is_usb_reset_after_sleep = false;
-            } else {
-                uint64_t gap_us = scheduled_wake_rtc_us - now_rtc_us;
-                if (gap_us > SCHEDULED_WAKE_SANE_MAX_US) {
-                    /* Implausible gap → RTC counter must have been reset
-                     * while RTC memory survived. Treat the stored deadline
-                     * as garbage. */
-                    ESP_LOGW(TAG, "Implausible deadline gap (%.1fh) — discarding",
-                             gap_us / 3600000000.0);
-                    scheduled_wake_rtc_us = 0;
-                    is_usb_reset_after_sleep = false;
-                } else if (gap_us > SCHEDULED_WAKE_SLACK_US) {
-                    /* Clearly before the deadline — early reset. Skip
-                     * fetch, sleep the remainder. */
-                    is_usb_reset_after_sleep = true;
-                } else {
-                    /* Within slack of the deadline — treat as misclassified
-                     * timer wake. Fetch. */
-                    is_usb_reset_after_sleep = false;
-                }
-            }
-        }
-    }
+    const bool prior_sleep = was_sleeping;
     was_sleeping = false;
 
-    bool is_true_first_boot = (!is_scheduled_wake && !is_usb_reset_after_sleep && !had_prior_sleep);
-    /* "Misclassified wake" = we came from a sleep we started, wakeup cause
-     * came back as something other than TIMER/EXT1, AND the RTC clock says
-     * we're at/past the deadline (or no valid deadline to compare). We'll
-     * fetch like a scheduled wake, but label it distinctly in the log. */
-    bool is_misclassified_wake = (!is_scheduled_wake && !is_usb_reset_after_sleep && had_prior_sleep);
+    bool is_usb_reset_after_sleep = false;
+    if (!is_scheduled_wake && prior_sleep && scheduled_wake_rtc_us != 0) {
+        uint64_t now_rtc_us = esp_clk_rtc_time();
+        if (now_rtc_us < scheduled_wake_rtc_us) {
+            uint64_t gap_us = scheduled_wake_rtc_us - now_rtc_us;
+            if (gap_us > SCHEDULED_WAKE_SANE_MAX_US) {
+                /* Implausible gap → RTC counter reset while RTC memory
+                 * survived. Treat the stored deadline as garbage. */
+                ESP_LOGW(TAG, "Implausible deadline gap (%.1fh) — discarding",
+                         gap_us / 3600000000.0);
+                scheduled_wake_rtc_us = 0;
+            } else if (gap_us > SCHEDULED_WAKE_SLACK_US) {
+                /* Clearly before the deadline — early reset. */
+                is_usb_reset_after_sleep = true;
+            }
+            /* else: within slack of deadline → misclassified timer wake, fetch. */
+        }
+        /* else: at/past deadline → misclassified timer wake, fetch. */
+    }
 
-    ESP_LOGI(TAG, "Boot #%d, wakeup=%d%s", boot_count, wakeup,
-             is_true_first_boot ? " (first boot)" :
-             is_usb_reset_after_sleep ? " (USB reset after sleep)" :
-             is_misclassified_wake ? " (misclassified wake)" :
-             (wakeup == ESP_SLEEP_WAKEUP_TIMER ? " (timer)" :
-              wakeup == ESP_SLEEP_WAKEUP_EXT1 ? " (button)" :
-              " (other)"));
+    ESP_LOGI(TAG, "Boot #%d, wakeup=%d (%s)", boot_count, wakeup,
+             is_usb_reset_after_sleep ? "USB reset after sleep" :
+             wakeup == ESP_SLEEP_WAKEUP_TIMER ? "timer" :
+             wakeup == ESP_SLEEP_WAKEUP_EXT1 ? "button" :
+             prior_sleep ? "misclassified wake" :
+             "first boot");
     /* NOTE: only TIMER + EXT1 are enabled as wake sources; other values
      * from esp_sleep_get_wakeup_cause() (EXT0, ULP, GPIO, UART, TOUCHPAD)
      * shouldn't occur under our configuration. If one does, the classifier
@@ -1277,24 +1256,35 @@ void app_main(void)
      * deadline-based analysis like any other unexplained wake. */
 
     /* Early-exit for "spurious reset before deadline" — skip display/SPI/WiFi
-     * init entirely and go straight back to sleep. Saves the ~600ms of
-     * display-rail warmup + spi_init + battery read plus 120s of display-
-     * powered reflash window on the is_usb_reset_after_sleep branch.
-     * enter_deep_sleep's teardown is safe on uninitialised peripherals
-     * (guarded spi_bus_remove_device, guarded chg_monitor_stop). */
+     * init entirely and go straight back to sleep. Saves ~600 ms of CPU +
+     * display-rail power per spurious reset.
+     *
+     * SAFETY VALVE: if we've taken this shortcut MAX_SPURIOUS_RESETS times
+     * in a row, fall through to the full path so the user gets a 60 s
+     * awake window for reflash. Without this, a chip that keeps spurious-
+     * resetting (e.g. brownout-during-sleep, persistent silicon quirk)
+     * could be unreflashable — only ~5 s awake per cycle, none of it with
+     * peripherals initialised. */
     if (is_usb_reset_after_sleep) {
-        ESP_LOGI(TAG, "Early wake (no scheduled cause) — skipping display init, image already on display.");
-        uint64_t now_rtc_us = esp_clk_rtc_time();
-        int64_t sleep_us = (now_rtc_us < scheduled_wake_rtc_us)
-            ? (int64_t)(scheduled_wake_rtc_us - now_rtc_us)
-            : 60LL * 1000000LL;
-        /* NOTE: each spurious-reset cycle re-reads the clock inside
-         * enter_deep_sleep, so the stored scheduled_wake_rtc_us drifts
-         * ~microseconds later per cycle. Negligible in practice (would
-         * take ~10^6 cycles to move the deadline one second). */
-        enter_deep_sleep(sleep_us);
-        /* Never returns */
+        if (consecutive_spurious_resets < MAX_SPURIOUS_RESETS) {
+            consecutive_spurious_resets++;
+            ESP_LOGI(TAG, "Early wake (spurious-reset short-path #%d/%d) — image already on display",
+                     consecutive_spurious_resets, MAX_SPURIOUS_RESETS);
+            uint64_t now_rtc_us = esp_clk_rtc_time();
+            int64_t sleep_us = (now_rtc_us < scheduled_wake_rtc_us)
+                ? (int64_t)(scheduled_wake_rtc_us - now_rtc_us)
+                : 60LL * 1000000LL;
+            enter_deep_sleep(sleep_us);
+            /* Never returns */
+        }
+        /* Hit the cap — break the loop by taking the full path so the
+         * user can reflash. Counter resets below. */
+        ESP_LOGW(TAG, "Spurious-reset count hit %d — forcing full awake window for reflash",
+                 consecutive_spurious_resets);
     }
+    /* Past the shortcut: any non-spurious wake (and the cap-exceeded
+     * fall-through) resets the counter. */
+    consecutive_spurious_resets = 0;
 
     /* Hardware init — only runs on paths that actually need the display */
     hw_gpio_init();
