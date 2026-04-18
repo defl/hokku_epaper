@@ -322,6 +322,42 @@ async function showNext(filename) {
   }
 }
 
+function formatLastDisplayed(iso) {
+  if (!iso) return 'never';
+  const t = new Date(iso);
+  if (isNaN(t.getTime())) return iso;
+  // Absolute date, user's locale, 24h format. Tooltip shows the relative age.
+  const wall = t.toLocaleString(undefined, {hour12: false});
+  const delta = Math.round((new Date() - t) / 1000);
+  let rel;
+  if (delta < 60) rel = `${Math.max(0, delta)}s ago`;
+  else if (delta < 3600) rel = `${Math.round(delta/60)}m ago`;
+  else if (delta < 86400) rel = `${Math.round(delta/3600)}h ago`;
+  else rel = `${Math.round(delta/86400)}d ago`;
+  return `<span title="${rel}">${wall}</span>`;
+}
+
+function formatNextUpdate(iso) {
+  if (!iso) return '-';
+  const t = new Date(iso);
+  if (isNaN(t.getTime())) return iso;
+  const delta = Math.round((t - new Date()) / 1000);
+  const abs = Math.abs(delta);
+  let rel;
+  if (abs < 60) rel = delta >= 0 ? `in ${abs}s` : `${abs}s ago`;
+  else if (abs < 3600) rel = (delta >= 0 ? 'in ' : '') + `${Math.round(abs/60)}m` + (delta < 0 ? ' ago' : '');
+  else if (abs < 86400) {
+    const h = Math.floor(abs/3600), m = Math.round((abs%3600)/60);
+    rel = (delta >= 0 ? 'in ' : '') + (m ? `${h}h ${m}m` : `${h}h`) + (delta < 0 ? ' ago' : '');
+  } else {
+    const d = Math.floor(abs/86400), h = Math.round((abs%86400)/3600);
+    rel = (delta >= 0 ? 'in ' : '') + (h ? `${d}d ${h}h` : `${d}d`) + (delta < 0 ? ' ago' : '');
+  }
+  // Show the absolute wall-clock time too so you can spot misaligned schedules.
+  const wall = t.toLocaleString(undefined, {hour12: false});
+  return `<span title="${wall}">${wall} <span style="color:#888">(${rel})</span></span>`;
+}
+
 function renderScreens(screens) {
   const container = document.getElementById('screens-container');
   const names = Object.keys(screens || {});
@@ -329,11 +365,11 @@ function renderScreens(screens) {
     container.innerHTML = '<div class="screens-empty">No screens have connected yet.</div>';
     return;
   }
-  let html = '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Requests</th><th>Last Seen</th></tr>';
+  let html = '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Requests</th><th>Last Seen</th><th>Next Update</th></tr>';
   names.sort();
   names.forEach(name => {
     const s = screens[name];
-    html += `<tr><td>${name}</td><td>${s.ip || '-'}</td><td>${s.request_count || 0}</td><td>${s.last_seen || '-'}</td></tr>`;
+    html += `<tr><td>${name}</td><td>${s.ip || '-'}</td><td>${s.request_count || 0}</td><td>${s.last_seen || '-'}</td><td>${formatNextUpdate(s.next_update_at)}</td></tr>`;
   });
   html += '</table>';
   container.innerHTML = html;
@@ -355,6 +391,7 @@ function renderImageGrid(uploadFiles, serveData) {
          <a href="/hokku/api/dithered/${encodeURIComponent(fname)}" target="_blank">Dithered</a>
          <button class="btn btn-primary btn-small" onclick="showNext('${safeName}')">Show Next</button>`
       : `<a href="/hokku/api/original/${encodeURIComponent(fname)}" target="_blank">Original</a>`;
+    const lastDisplayed = formatLastDisplayed(data.last_request);
     card.innerHTML = `
       <button class="delete-btn" onclick="deleteImage('${safeName}')" title="Delete this image">&#x1F5D1;</button>
       ${pendingBadge}
@@ -365,6 +402,7 @@ function renderImageGrid(uploadFiles, serveData) {
         <div class="filename">${fname}</div>
         <div class="stats">
           <span>Shown: ${data.total_show_count || 0}x</span>
+          <span>Last: ${lastDisplayed}</span>
           <span>Display time: ${data.total_show_formatted || '0m'}</span>
         </div>
         <div class="actions">${actions}</div>

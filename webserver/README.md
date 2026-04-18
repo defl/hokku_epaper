@@ -6,7 +6,7 @@ Spectra 6 e-ink image server for Hokku/Huessen frames. Converts images using Flo
 
 **Debian/Ubuntu** (recommended):
 ```bash
-apt install ./hokku-server_2.1.3-1_all.deb
+apt install ./hokku-server_2.1.4-1_all.deb
 ```
 The deb installs dependencies, creates the config, and starts the service automatically.
 

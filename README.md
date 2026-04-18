@@ -25,7 +25,7 @@ You need two things:
 **Debian/Ubuntu** (recommended):
 ```bash
 # Download the .deb from the latest release
-apt install ./hokku-server_2.1.3-1_all.deb
+apt install ./hokku-server_2.1.4-1_all.deb
 # Starts automatically via systemd, web GUI at http://server:8080/
 # Drop your photos into /var/lib/hokku/upload/ or install samba
 # and make it very easy to manage them from any machine in your network
@@ -100,9 +100,9 @@ Press the right-hand button (in landscape) or lower button (in portrait) to wake
 
 ### LEDs
 
-**Red LED** — solid while awake, blinks at 1Hz while charging, off during sleep
+**Red LED** — solid while awake, blinks at 1Hz while charging (including during the reflash window and any on-USB wait before deep sleep), off once the chip enters real deep sleep
 
-**Green LED** — on while WiFi is connected
+**Green LED** — solid while WiFi is connected. Triple-blinks rapidly if you press the next-image button but the download fails (the current image is kept, the button is not broken)
 
 ## Background
 

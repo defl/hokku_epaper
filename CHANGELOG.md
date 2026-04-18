@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.1.4
+
+Firmware correctness fix. Webserver unchanged.
+
+### Firmware
+
+- **Fix: deep-sleep refresh lockout on battery.** Scheduled timer wakes that the ESP32-S3 misreported as `ESP_SLEEP_WAKEUP_UNDEFINED` were treated as "USB host reset after sleep" and skipped the fetch. On a device that kept hitting the misreport, the screen would fetch once, enter the skip-path on every subsequent wake, and never update again. Fix uses the RTC slow clock (`esp_clk_rtc_time()`) to compare the actual elapsed time against a deadline set pre-sleep: at/past deadline ⇒ fetch (timer fired, just misclassified); clearly before ⇒ skip (real USB reset). Handles silicon cases where `esp_sleep_get_wakeup_cause()` is unreliable. Backed by a 26 h sanity guard that discards a stored deadline if it points implausibly far into the future (RTC counter reset without memory wipe).
+- **`enter_deep_sleep` now honors its contract.** Internal 120 s reflash window no longer shifts the caller's deadline forward; the function computes the remaining time against the recorded deadline and arms the timer for that. Previously, repeated early-resets compounded the drift.
+- **Charger LED keeps blinking until actual deep sleep.** `chg_monitor_stop()` moved from the top of `enter_deep_sleep` to just before `esp_deep_sleep_start()`/`esp_restart()`. The red LED now blinks throughout the 120 s reflash window and any on-USB polling wait, so "device is awake and charging" stays visible all the way through.
+- **Triple green-LED blink on button-press download failure.** Previously a failed "next image" button press was silent over serial only. Now the WIFI_LED triple-blinks rapidly so a user without a serial connection gets visible feedback.
+- **`wifi_events` leak fixed.** Was creating a fresh `EventGroup` on every `wifi_connect()` call (leaked on button-press retries).
+- **`strncpy` null-termination** on `wifi_cfg.sta.ssid`/`.password` — an SSID or password exactly the buffer length could leave the WiFi stack reading past the end.
+
+### Web UI (mentioned in top-level README)
+
+- LED documentation updated to describe the new behaviors (triple-blink on green, red blinks throughout the reflash window).
+
 ## 2.1.3
 
 - Web UI: pending-dither badge renamed from "Generating preview…" to "Dithering…" with a tooltip — the thumbnail is already visible, so the previous wording suggested the wrong thing was being generated.

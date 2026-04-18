@@ -743,47 +743,86 @@ def _background_watcher():
 
 # ── Flask routes: device endpoints ─────────────────────────────────
 
+def _record_screen_call(screen_name, screen_ip, sleep_seconds, served_name=None):
+    """Track a call from a screen: IP, count, last_seen, and the next update
+    time implied by the sleep_seconds we just handed it. Caller must hold _lock."""
+    if "screens" not in _database:
+        _database["screens"] = {}
+    screens = _database["screens"]
+    if screen_name not in screens:
+        screens[screen_name] = {"ip": screen_ip, "request_count": 0, "last_seen": None}
+    now = datetime.now()
+    screens[screen_name]["ip"] = screen_ip
+    screens[screen_name]["request_count"] += 1
+    screens[screen_name]["last_seen"] = now.isoformat(timespec="seconds")
+    screens[screen_name]["last_sleep_seconds"] = int(sleep_seconds)
+    # The firmware sleeps for sleep_seconds after this call, so the next
+    # attempted fetch lands around now + sleep_seconds. Shown in the Web GUI
+    # so you can tell at a glance whether a screen is about to wake up.
+    screens[screen_name]["next_update_at"] = (now + timedelta(seconds=int(sleep_seconds))).isoformat(timespec="seconds")
+    if served_name is not None:
+        screens[screen_name]["last_served"] = served_name
+
+
+def _busy_retry_seconds():
+    """Sleep hint to return when the server can't serve an image yet (pool
+    empty while conversion is running). Short enough that the screen comes
+    back quickly once conversion finishes, but capped at the next scheduled
+    refresh so we never push a screen PAST its configured wake time."""
+    return min(300, _calculate_sleep_seconds(_config))
+
+
 @app.route("/hokku/screen/", strict_slashes=False)
 def serve_binary():
     global _database
+    screen_name = request.headers.get("X-Screen-Name", "unnamed")
+    screen_ip = request.remote_addr or "unknown"
+
     with _lock:
         if not _pool:
-            if _converting_count > 0:
-                return "Converting images, try again shortly", 503
-            return "No images in upload directory", 404
+            # No image available yet — still record the call and hand out a
+            # sensible retry hint so the firmware doesn't fall back to its
+            # 3h hard-coded default (which drifts off the refresh schedule).
+            sleep_seconds = _busy_retry_seconds()
+            _record_screen_call(screen_name, screen_ip, sleep_seconds)
+            _save_database(_get_cache_dir(), _database)
+            status = 503 if _converting_count > 0 else 404
+            msg = "Converting images, try again shortly" if status == 503 else "No images in upload directory"
+            resp = make_response(msg, status)
+            resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
+            print(f"  Busy: {screen_name} told to retry in {sleep_seconds}s (status={status})")
+            return resp
 
         key = _pick_next_image(_pool, _database)
         if key is None:
-            return "No images available", 404
+            sleep_seconds = _busy_retry_seconds()
+            _record_screen_call(screen_name, screen_ip, sleep_seconds)
+            _save_database(_get_cache_dir(), _database)
+            resp = make_response("No images available", 404)
+            resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
+            return resp
 
         entry = _pool[key]
         content_hash = entry["hash"]
 
-        # Track the calling screen
-        screen_name = request.headers.get("X-Screen-Name", "unnamed")
-        screen_ip = request.remote_addr or "unknown"
-        if "screens" not in _database:
-            _database["screens"] = {}
-        screens = _database["screens"]
-        if screen_name not in screens:
-            screens[screen_name] = {"ip": screen_ip, "request_count": 0, "last_seen": None}
-        screens[screen_name]["ip"] = screen_ip
-        screens[screen_name]["request_count"] += 1
-        screens[screen_name]["last_seen"] = datetime.now().isoformat(timespec="seconds")
-
+        sleep_seconds = _calculate_sleep_seconds(_config)
+        _record_screen_call(screen_name, screen_ip, sleep_seconds, served_name=Path(key).name)
         _save_database(_get_cache_dir(), _database)
 
     # Load binary from disk cache outside the lock
     binary = _read_cached_binary(Path(key), content_hash)
     if binary is None:
-        return "Cached binary missing, try again shortly", 503
+        # Cache was purged between _pool lookup and read — tell the screen
+        # to retry soon rather than using its 3h fallback.
+        resp = make_response("Cached binary missing, try again shortly", 503)
+        resp.headers["X-Sleep-Seconds"] = str(_busy_retry_seconds())
+        return resp
 
     # Update _last_served for the UI preview (no need to hold the binary here)
     _last_served["key"] = key
     _last_served["name"] = Path(key).name
     _last_served["served_at"] = datetime.now().isoformat(timespec="seconds")
 
-    sleep_seconds = _calculate_sleep_seconds(_config)
     print(f"  Serving: {Path(key).name} to {screen_name} (sleep_seconds={sleep_seconds})")
 
     response = make_response(binary)

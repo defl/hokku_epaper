@@ -38,6 +38,11 @@
 #include "nvs_flash.h"
 #include "esp_timer.h"
 
+/* Private IDF API — µs since last power-on, spanning deep sleep and
+ * esp_restart(). No public replacement exists in current IDF. If a
+ * future version renames it, add a compat shim here. */
+#include "esp_private/esp_clk.h"
+
 static const char *TAG = "epaper";
 
 /* ── Pin definitions ─────────────────────────────────────────────── */
@@ -99,6 +104,26 @@ RTC_DATA_ATTR static bool     has_wifi_cache = false;
 RTC_DATA_ATTR static uint16_t last_battery_mv = 0;
 RTC_DATA_ATTR static bool     was_sleeping = false;  /* detect USB reset after deep sleep */
 RTC_DATA_ATTR static int32_t  last_sleep_seconds = 0;  /* fallback if server unreachable */
+
+/* Scheduled wake deadline expressed in the RTC slow-clock frame (µs since
+ * last POR, via esp_clk_rtc_time()). Written just before we enter sleep or
+ * the USB polling loop; compared against esp_clk_rtc_time() on wake so we
+ * can tell "spurious early reset" from "timer fired but was misreported
+ * as UNDEFINED". 0 = no deadline set (first boot or unknown). */
+RTC_DATA_ATTR static uint64_t scheduled_wake_rtc_us = 0;
+
+/* Slack (µs) for the deadline comparison. Absorbs calibration drift of
+ * the RTC slow clock between when sleep started and when we re-read the
+ * counter on wake. 5 min is comfortably above typical few-percent drift
+ * even for 12-hour sleeps. */
+#define SCHEDULED_WAKE_SLACK_US (5LL * 60 * 1000000LL)
+
+/* Upper sanity bound on the gap between "now" and a stored deadline.
+ * Server-driven schedules max out at 24h; anything beyond 26h means
+ * scheduled_wake_rtc_us was written in a different RTC epoch (silicon
+ * reset of the RTC counter that didn't also wipe RTC memory) — the
+ * stored value is meaningless, so we discard it and fetch. */
+#define SCHEDULED_WAKE_SANE_MAX_US (26LL * 3600 * 1000000LL)
 
 /* ── NVS config ──────────────────────────────────────────────────── */
 /* Config version — must match the version written by hokku-config/hokku-setup.
@@ -643,7 +668,14 @@ static void wifi_init_once(void)
 
 static bool wifi_connect(void)
 {
-    wifi_events = xEventGroupCreate();
+    /* Create-once and reuse. Previously allocated a fresh EventGroup on
+     * every call, which leaked one per button-press in the first-boot
+     * window. */
+    if (wifi_events == NULL) {
+        wifi_events = xEventGroupCreate();
+    } else {
+        xEventGroupClearBits(wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
+    }
     wifi_init_once();
 
     wifi_config_t wifi_cfg = {
@@ -651,8 +683,13 @@ static bool wifi_connect(void)
             .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
-    strncpy((char *)wifi_cfg.sta.ssid, config.wifi_ssid, sizeof(wifi_cfg.sta.ssid));
-    strncpy((char *)wifi_cfg.sta.password, config.wifi_pass, sizeof(wifi_cfg.sta.password));
+    /* strncpy with n == sizeof(dst) leaves the buffer non-terminated for a
+     * source of exactly that length. Force a NUL so the WiFi stack never
+     * reads past the buffer. */
+    strncpy((char *)wifi_cfg.sta.ssid, config.wifi_ssid, sizeof(wifi_cfg.sta.ssid) - 1);
+    wifi_cfg.sta.ssid[sizeof(wifi_cfg.sta.ssid) - 1] = '\0';
+    strncpy((char *)wifi_cfg.sta.password, config.wifi_pass, sizeof(wifi_cfg.sta.password) - 1);
+    wifi_cfg.sta.password[sizeof(wifi_cfg.sta.password) - 1] = '\0';
 
     /* Use cached channel/BSSID for fast reconnect */
     if (has_wifi_cache && wifi_channel > 0) {
@@ -907,29 +944,89 @@ static void chg_monitor_stop(void)
  *  Deep Sleep
  * ═══════════════════════════════════════════════════════════════════ */
 
+/* Contract: be back (either via timer wake, USB polling loop restart, or
+ * the caller having to reset) after `sleep_us` microseconds. The 120s
+ * reflash window and any other pre-sleep work are accounted for inside
+ * the function, NOT added on top of sleep_us. sleep_us == 0 means
+ * button-only wake (no timer, no deadline stored). */
 static void enter_deep_sleep(int64_t sleep_us)
 {
-    /* Always wait 120s before sleeping — gives time to reflash via USB.
-     * esptool resets the chip into bootloader, so this window ensures
-     * the device is reachable even after errors or misconfigurations. */
+    /* Step 1 — capture the deadline at entry, in the RTC clock's frame.
+     * Persist it and was_sleeping BEFORE any delays so if something
+     * resets us during the reflash window, the next boot still sees a
+     * valid deadline. */
+    uint64_t entry_rtc_us = esp_clk_rtc_time();
+    uint64_t deadline_rtc_us = (sleep_us > 0) ? entry_rtc_us + (uint64_t)sleep_us : 0;
+    was_sleeping = true;
+    rtc_magic = RTC_MAGIC;
+    scheduled_wake_rtc_us = deadline_rtc_us;
+
+    /* Step 2 — 120s reflash window. chg_monitor keeps running so the LED
+     * still blinks while charging. */
     ESP_LOGI(TAG, "Waiting 120s before deep sleep (reflash window)...");
     vTaskDelay(pdMS_TO_TICKS(120000));
 
+    /* Step 3 — compute the actual remaining time, based on the real clock
+     * (not the nominal 120s). If we already overshot the deadline during
+     * the reflash window, just restart — the next boot will fetch. */
+    int64_t remaining_us = 0;
+    if (deadline_rtc_us > 0) {
+        uint64_t now_rtc_us = esp_clk_rtc_time();
+        if (now_rtc_us >= deadline_rtc_us) {
+            ESP_LOGI(TAG, "Deadline passed during reflash window — restarting");
+            chg_monitor_stop();
+            esp_restart();
+            /* Never returns */
+        }
+        remaining_us = (int64_t)(deadline_rtc_us - now_rtc_us);
+    }
+
+    /* Step 4 — USB polling loop. chg_monitor stays running so the LED
+     * blinks throughout. On USB with power, deep_sleep_start would
+     * immediately cause a USB disconnect → host reset → reboot loop;
+     * polling in light sleep keeps the device reachable for reflashing. */
+    bool usb_connected = (gpio_get_level(PIN_CHG_STATUS) == 0);
+    if (usb_connected && remaining_us > 0) {
+        ESP_LOGI(TAG, "USB connected — waiting %.1f hours instead of deep sleep",
+                 remaining_us / 3600000000.0);
+        int64_t wait_us = remaining_us;
+        while (wait_us > 0) {
+            int64_t chunk = wait_us > 1000000 ? 1000000 : wait_us;
+            vTaskDelay(pdMS_TO_TICKS(chunk / 1000));
+            wait_us -= chunk;
+            if (gpio_get_level(PIN_CHG_STATUS) != 0) {
+                ESP_LOGI(TAG, "USB disconnected — switching to deep sleep");
+                break;
+            }
+        }
+        if (wait_us <= 0) {
+            ESP_LOGI(TAG, "Wait complete — restarting");
+            chg_monitor_stop();
+            esp_restart();
+            /* Never returns */
+        }
+        /* Fell through: USB unplugged mid-wait. Recompute remaining based
+         * on the real clock so we sleep only the time still left. */
+        uint64_t now_rtc_us = esp_clk_rtc_time();
+        remaining_us = (now_rtc_us < deadline_rtc_us)
+                       ? (int64_t)(deadline_rtc_us - now_rtc_us)
+                       : 0;
+    }
+
+    /* Step 5 — real deep sleep prep. Stop chg_monitor last so the LED
+     * keeps blinking until the moment the chip powers down. */
     chg_monitor_stop();
-
-    /* Turn off SYS_POWER */
     gpio_set_level(PIN_SYS_POWER, 0);
-
-    /* Turn off LEDs */
     gpio_set_level(PIN_WORK_LED, 0);
 
     /* Shut down SPI bus */
     spi_bus_remove_device(spi_handle);
     spi_bus_free(SPI2_HOST);
 
-    /* Configure timer wakeup */
-    if (sleep_us > 0) {
-        esp_sleep_enable_timer_wakeup((uint64_t)sleep_us);
+    /* Configure timer wakeup for the actual remaining time, not the
+     * original caller-requested sleep_us. */
+    if (remaining_us > 0) {
+        esp_sleep_enable_timer_wakeup((uint64_t)remaining_us);
     }
 
     /* Configure button wakeup: GPIO1 + GPIO12 (active LOW) */
@@ -955,44 +1052,9 @@ static void enter_deep_sleep(int64_t sleep_us)
     rtc_gpio_init(PIN_PWR_BUTTON);
     rtc_gpio_pullup_en(PIN_PWR_BUTTON);
 
-    /* Mark RTC state BEFORE the USB polling loop — esp_restart() in the
-     * loop must see valid rtc_magic and was_sleeping on the next boot,
-     * otherwise every restart looks like a fresh first boot. */
-    was_sleeping = true;
-    rtc_magic = RTC_MAGIC;
-
-    /* If USB is connected (charger active), deep sleep will immediately
-     * cause a USB disconnect → host reset → reboot loop. Instead, wait
-     * in a light sleep polling loop until the timer expires, then restart.
-     * This keeps the device responsive for reflashing while charging. */
-    bool usb_connected = (gpio_get_level(PIN_CHG_STATUS) == 0);
-    if (usb_connected && sleep_us > 0) {
-        ESP_LOGI(TAG, "USB connected — waiting %.1f hours instead of deep sleep",
-                 sleep_us / 3600000000.0);
-        /* Poll in 1-second intervals; re-check USB in case it's unplugged */
-        int64_t remaining_us = sleep_us;
-        while (remaining_us > 0) {
-            int64_t chunk = remaining_us > 1000000 ? 1000000 : remaining_us;
-            vTaskDelay(pdMS_TO_TICKS(chunk / 1000));
-            remaining_us -= chunk;
-            /* If USB disconnected mid-wait, switch to real deep sleep */
-            if (gpio_get_level(PIN_CHG_STATUS) != 0) {
-                ESP_LOGI(TAG, "USB disconnected — switching to deep sleep");
-                break;
-            }
-        }
-        if (remaining_us <= 0) {
-            /* Timer expired while on USB — restart to refresh image */
-            ESP_LOGI(TAG, "Wait complete — restarting");
-            esp_restart();
-            /* Never returns */
-        }
-        /* Fall through to deep sleep (USB was unplugged) */
-    }
-
-    if (sleep_us > 0) {
+    if (remaining_us > 0) {
         ESP_LOGI(TAG, "Entering deep sleep for %.1f hours",
-                 sleep_us / 3600000000.0);
+                 remaining_us / 3600000000.0);
     } else {
         ESP_LOGI(TAG, "Entering deep sleep (no timer, button wake only)");
     }
@@ -1020,6 +1082,7 @@ void app_main(void)
         last_battery_mv = 0;
         was_sleeping = false;
         last_sleep_seconds = 0;
+        scheduled_wake_rtc_us = 0;
     }
 
     boot_count++;
@@ -1044,12 +1107,54 @@ void app_main(void)
     esp_sleep_wakeup_cause_t wakeup = esp_sleep_get_wakeup_cause();
     bool is_scheduled_wake = (wakeup == ESP_SLEEP_WAKEUP_TIMER || wakeup == ESP_SLEEP_WAKEUP_EXT1);
 
-    /* Detect USB reset after deep sleep: wakeup is UNDEFINED but RTC flag says
-     * we were sleeping. Deep sleep disconnects USB-Serial/JTAG on ESP32-S3,
-     * which causes the host to reset the chip — appearing as a fresh boot.
-     * The RTC magic check at the top of app_main ensures was_sleeping is only
-     * trusted when RTC memory is valid (not stale from a previous flash). */
-    bool is_usb_reset_after_sleep = (!is_scheduled_wake && was_sleeping);
+    /* An "unexplained" wake is anything that wasn't a timer/button but
+     * landed here with was_sleeping set — USB host disconnect resetting
+     * the chip, brownout, or ESP32-S3 silicon quirk misreporting a timer
+     * wake as UNDEFINED. Without more info we can't tell them apart by
+     * wakeup cause alone, but the RTC slow clock can: if we're clearly
+     * before the deadline we set pre-sleep, it's really an early reset
+     * and the optimization (skip the fetch, sleep the remaining time)
+     * is correct. If we're at or past the deadline, the scheduled wake
+     * has already happened and we MUST fetch — otherwise the display
+     * gets stuck forever in a skip-fetch loop (the bug this replaces).
+     *
+     * esp_clk_rtc_time() keeps ticking through deep sleep and esp_restart,
+     * and the deep-sleep timer uses the same RTC slow clock, so drift
+     * between them cancels out to first order. */
+    bool is_usb_reset_after_sleep = false;
+    if (!is_scheduled_wake && was_sleeping) {
+        if (scheduled_wake_rtc_us == 0) {
+            /* No deadline recorded — e.g. we set sleep_us=0 last time. Safer
+             * to fetch than to silently skip. */
+            is_usb_reset_after_sleep = false;
+        } else {
+            uint64_t now_rtc_us = esp_clk_rtc_time();
+            if (now_rtc_us >= scheduled_wake_rtc_us) {
+                /* At or past the deadline — timer fired, misclassified.
+                 * Fetch normally. */
+                is_usb_reset_after_sleep = false;
+            } else {
+                uint64_t gap_us = scheduled_wake_rtc_us - now_rtc_us;
+                if (gap_us > SCHEDULED_WAKE_SANE_MAX_US) {
+                    /* Implausible gap → RTC counter must have been reset
+                     * while RTC memory survived. Treat the stored deadline
+                     * as garbage. */
+                    ESP_LOGW(TAG, "Implausible deadline gap (%.1fh) — discarding",
+                             gap_us / 3600000000.0);
+                    scheduled_wake_rtc_us = 0;
+                    is_usb_reset_after_sleep = false;
+                } else if (gap_us > SCHEDULED_WAKE_SLACK_US) {
+                    /* Clearly before the deadline — early reset. Skip
+                     * fetch, sleep the remainder. */
+                    is_usb_reset_after_sleep = true;
+                } else {
+                    /* Within slack of the deadline — treat as misclassified
+                     * timer wake. Fetch. */
+                    is_usb_reset_after_sleep = false;
+                }
+            }
+        }
+    }
     was_sleeping = false;
 
     bool is_true_first_boot = (!is_scheduled_wake && !is_usb_reset_after_sleep);
@@ -1117,15 +1222,24 @@ void app_main(void)
         /* Never returns */
     }
 
-    /* USB reset after deep sleep: config is valid, image is already on display,
-       skip refresh. Just wait 30s (for reflashing) then go back to sleep. */
+    /* Early reset (USB host disconnect, brownout, etc.) before the scheduled
+       wake deadline: config is valid, image is already on display, skip the
+       fetch and sleep only the time remaining to the original deadline.
+       enter_deep_sleep honors its sleep_us contract (reflash window is
+       internal, not additive), so the deadline doesn't drift. */
     if (is_usb_reset_after_sleep) {
-        ESP_LOGI(TAG, "USB reset after deep sleep — image already on display.");
-        ESP_LOGI(TAG, "Waiting 30s for reflash window...");
-        vTaskDelay(pdMS_TO_TICKS(30000));
-        int64_t sleep_us = last_sleep_seconds > 0
-            ? (int64_t)last_sleep_seconds * 1000000LL
-            : SLEEP_3H_US;
+        ESP_LOGI(TAG, "Early wake (no scheduled cause) — image already on display.");
+        int64_t sleep_us;
+        if (scheduled_wake_rtc_us > 0) {
+            uint64_t now_rtc_us = esp_clk_rtc_time();
+            sleep_us = (now_rtc_us < scheduled_wake_rtc_us)
+                ? (int64_t)(scheduled_wake_rtc_us - now_rtc_us)
+                : 60LL * 1000000LL;  /* already past — wake soon to re-evaluate */
+        } else {
+            sleep_us = last_sleep_seconds > 0
+                ? (int64_t)last_sleep_seconds * 1000000LL
+                : SLEEP_3H_US;
+        }
         enter_deep_sleep(sleep_us);
         /* Never returns */
     }
@@ -1248,6 +1362,15 @@ void app_main(void)
                     ESP_LOGI(TAG, "Done. Press button for next image.");
                 } else {
                     ESP_LOGW(TAG, "Download failed, keeping current image.");
+                    /* Triple-blink WIFI_LED so the user gets visual confirmation
+                     * that the button press was registered but the fetch failed.
+                     * Uses WIFI_LED (not WORK_LED) to avoid racing chg_monitor. */
+                    for (int i = 0; i < 3; i++) {
+                        gpio_set_level(PIN_WIFI_LED, 1);
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                        gpio_set_level(PIN_WIFI_LED, 0);
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                    }
                 }
                 /* Reset deadline — give another 60s after manual refresh */
                 deadline_us = esp_timer_get_time() + 60000000LL;

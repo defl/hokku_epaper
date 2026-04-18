@@ -1,3 +1,10 @@
+hokku-server (2.1.4-1) unstable; urgency=low
+
+  * Version bump to align with firmware 2.1.4 (deep-sleep refresh lockout
+    fix). No webserver code changes.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 17 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.3-1) unstable; urgency=low
 
   * Web GUI: pending-dither badge renamed from "Generating preview…" to
