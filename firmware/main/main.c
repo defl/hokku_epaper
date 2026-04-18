@@ -1664,7 +1664,8 @@ void app_main(void)
      * button wakes, and misclassified-but-at-deadline wakes. Gives the
      * user 60s to press a button for the next image, and serves as the
      * reflash-via-esptool opportunity. Button presses extend the window. */
-    stay_awake_with_buttons(&sleep_seconds, &server_epoch, &local_time_at_download_us);
+    stay_awake_with_buttons(&sleep_seconds, &server_epoch, &local_time_at_download_us,
+                            wake_label, boot_time);
 
     /* Safety net: if we somehow reach here with sleep_seconds <= 0 (missing
      * or zero X-Sleep-Seconds header, parser glitch, whatever), never arm
