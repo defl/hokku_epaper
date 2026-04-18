@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.9
+
+Firmware bug fix. Webserver unchanged.
+
+### Firmware
+
+- **Fix: "button always pressed" loop on first boot.** `stay_awake_with_buttons` configured GPIO 1 / GPIO 12 as digital inputs with pull-up via `gpio_config`, but if the pin was still in RTC-peripheral mode (left there by factory firmware's wake config, or by a previous `enter_deep_sleep`'s `rtc_gpio_init` for ext1 wake), `gpio_config` is silently ineffective — the pin keeps reading whatever the RTC peripheral was driving (LOW in the observed case). Result: every entry into `stay_awake_with_buttons` detected a "press" 50 ms later, triggering an endless fetch loop until the battery died. Fix: same `rtc_gpio_hold_dis` + `rtc_gpio_deinit` + `gpio_reset_pin` pattern that `hw_gpio_init` already uses for the display pins. Plus a 20 ms settle delay after `gpio_config` so the pull-up has time to charge the line HIGH before the first read.
+
 ## 2.1.8
 
 Firmware safety + cleanup. Webserver unchanged.

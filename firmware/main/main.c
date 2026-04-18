@@ -910,17 +910,40 @@ static bool fetch_and_display_image(int32_t *sleep_seconds)
  * drop it into the ROM bootloader. */
 static void stay_awake_with_buttons(int32_t *sleep_seconds)
 {
-    /* Configure the two wake-capable buttons as polled inputs. PWR_BUTTON
-     * (GPIO 12) doesn't have an internal pull — the PCB has one. BUTTON_1
-     * (GPIO 1) needs the internal pull to read as HIGH when idle.
-     * GPIO 40 (the legacy "switch photo" button) isn't wake-capable on
-     * ESP32-S3 and is deliberately ignored. */
+    /* Bring the buttons out of any RTC-peripheral mode before configuring
+     * them as digital inputs. Needed because:
+     *   - factory firmware leaves GPIO 1 / GPIO 12 configured as RTC wake
+     *     sources with their hold state retained (hold survives chip reset
+     *     up to POR), which makes gpio_config() silently ineffective —
+     *     the pin keeps reading whatever the RTC peripheral is driving;
+     *   - enter_deep_sleep rtc_gpio_init()'s them to attach the wake
+     *     pull-ups, and on wake we need them back in digital mode.
+     * Observed symptom without this: "button always pressed" — stay_awake
+     * detects a press 50 ms after entry, every cycle. */
+    if (rtc_gpio_is_valid_gpio(PIN_BUTTON_1)) {
+        rtc_gpio_hold_dis(PIN_BUTTON_1);
+        rtc_gpio_deinit(PIN_BUTTON_1);
+    }
+    if (rtc_gpio_is_valid_gpio(PIN_PWR_BUTTON)) {
+        rtc_gpio_hold_dis(PIN_PWR_BUTTON);
+        rtc_gpio_deinit(PIN_PWR_BUTTON);
+    }
+    gpio_reset_pin(PIN_BUTTON_1);
+    gpio_reset_pin(PIN_PWR_BUTTON);
+
+    /* Configure the two wake-capable buttons as polled inputs with the
+     * internal pull-up engaged. GPIO 40 (legacy "switch photo" button)
+     * isn't wake-capable on ESP32-S3 and is deliberately ignored. */
     gpio_config_t btn_cfg = {
         .pin_bit_mask = (1ULL << PIN_BUTTON_1) | (1ULL << PIN_PWR_BUTTON),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
     };
     gpio_config(&btn_cfg);
+
+    /* Let the internal pull-up settle before the first read; the pin's
+     * capacitance + 45 kΩ pull-up can take a few ms to reach logic HIGH. */
+    vTaskDelay(pdMS_TO_TICKS(20));
 
     int64_t deadline = esp_timer_get_time() + AWAKE_WINDOW_US;
     ESP_LOGI(TAG, "Awake for %ds — press button for next image (also: reflash window)",
