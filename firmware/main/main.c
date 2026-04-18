@@ -565,6 +565,13 @@ static void epaper_reset(void)
     vTaskDelay(pdMS_TO_TICKS(20));
     gpio_set_level(PIN_EPAPER_RST, 1);
     vTaskDelay(pdMS_TO_TICKS(200));
+    /* After RST deasserts the UC8179C drives BUSY LOW briefly while it
+     * initialises, then releases it HIGH when ready for commands. The
+     * original 200ms fixed delay was not always sufficient when the
+     * controller was in a half-wedged state from a prior failed update;
+     * waiting on BUSY here guarantees the controller is actually ready
+     * before epaper_init_panel() starts pushing commands. */
+    epaper_wait_busy();
 }
 
 /* ── Init sequence (18 commands from IROM disassembly) ───────────── */
@@ -653,6 +660,19 @@ static void epaper_send_panel(int ctrl_pin, const uint8_t *image)
 /* Send 480K per panel and refresh. ctrl1_data and ctrl2_data are each 480K. */
 static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_data)
 {
+    /* Cold-boot the UC8179C by cycling SYS_POWER (GPIO 17 — the display
+     * rail / booster enable). When the controller gets wedged (DRF ignored,
+     * BUSY stuck LOW) an RST pulse alone is not always enough to recover
+     * because the booster/charge-pump state is still live. Dropping the
+     * rail for 200ms and letting it re-stabilise for 1s forces a fresh
+     * power-on sequence every update — matches what the factory firmware
+     * does and what finally got the display reliably out of half-rendered
+     * states during testing. */
+    gpio_set_level(PIN_SYS_POWER, 0);
+    vTaskDelay(pdMS_TO_TICKS(200));
+    gpio_set_level(PIN_SYS_POWER, 1);
+    vTaskDelay(pdMS_TO_TICKS(1000));  /* booster/rail stabilisation */
+
     epaper_reset();
     epaper_init_panel();
 
