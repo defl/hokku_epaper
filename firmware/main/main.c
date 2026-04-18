@@ -1231,6 +1231,31 @@ static void save_pre_sleep_epoch(int64_t server_epoch, int64_t local_time_at_dow
     }
 }
 
+/* Log a human-friendly "going to sleep for … / wake at …" line. Used
+ * both before real deep sleep and before the USB polling loop. Takes
+ * the duration in microseconds and the reason prefix so the same
+ * formatter can be reused for both contexts. If the system clock has
+ * been synced (post-2020 time) we also include the absolute wall-clock
+ * target so you can match serial output against the server log. */
+static void log_sleep_intent(const char *prefix, int64_t duration_us)
+{
+    int64_t secs = duration_us / 1000000LL;
+    int h = (int)(secs / 3600);
+    int m = (int)((secs % 3600) / 60);
+    int s = (int)(secs % 60);
+    time_t now_t = time(NULL);
+    if (now_t > 1577836800) {
+        time_t wake_t = now_t + (time_t)secs;
+        struct tm wake_tm;
+        gmtime_r(&wake_t, &wake_tm);
+        char buf[40];
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S UTC", &wake_tm);
+        ESP_LOGI(TAG, "%s %dh %dm %ds (wake at %s)", prefix, h, m, s, buf);
+    } else {
+        ESP_LOGI(TAG, "%s %dh %dm %ds (wall clock not synced)", prefix, h, m, s);
+    }
+}
+
 /* Contract: sleep for `sleep_us` microseconds from the call site (actual
  * sleep may be slightly shorter if a USB-connected polling loop recomputes
  * the remaining time). The reflash / UI awake window is the caller's
@@ -1265,8 +1290,7 @@ static void enter_deep_sleep(int64_t sleep_us)
      * Checking esp_clk_rtc_time() directly sidesteps the drift entirely. */
     bool usb_connected = (gpio_get_level(PIN_CHG_STATUS) == 0);
     if (usb_connected && remaining_us > 0) {
-        ESP_LOGI(TAG, "USB connected — waiting %.1f hours instead of deep sleep",
-                 remaining_us / 3600000000.0);
+        log_sleep_intent("USB connected — polling loop for", remaining_us);
         last_sleep_mode = LAST_SLEEP_MODE_USB_POLLING;
         while (1) {
             /* Single read per iteration: the while-condition + later
@@ -1346,8 +1370,7 @@ static void enter_deep_sleep(int64_t sleep_us)
     rtc_gpio_pullup_en(PIN_PWR_BUTTON);
 
     if (remaining_us > 0) {
-        ESP_LOGI(TAG, "Entering deep sleep for %.1f hours",
-                 remaining_us / 3600000000.0);
+        log_sleep_intent("Entering deep sleep for", remaining_us);
     } else {
         ESP_LOGI(TAG, "Entering deep sleep (no timer, button wake only)");
     }
