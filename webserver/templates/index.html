@@ -62,6 +62,14 @@
   .screen-warning strong { color: #78350f; }
   .screen-warning ul { margin: 6px 0 0 20px; padding: 0; }
 
+  /* Per-screen state-details modal */
+  .state-modal { max-width: 560px; }
+  .state-modal table { width: 100%; border-collapse: collapse; font-size: 0.85em; font-family: ui-monospace, 'SF Mono', Consolas, monospace; margin-top: 4px; }
+  .state-modal td { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; }
+  .state-modal td:first-child { color: #555; width: 35%; }
+  .state-modal .stale { color: #92400e; font-size: 0.85em; }
+  .state-modal .state-missing { color: #999; font-style: italic; }
+
   .toast { position: fixed; bottom: 20px; right: 20px; background: #333; color: #fff; padding: 10px 20px; border-radius: 6px; font-size: 0.9em; z-index: 1000; opacity: 0; transition: opacity 0.3s; }
   .toast.show { opacity: 1; }
 
@@ -226,6 +234,16 @@
     <div class="modal-actions">
       <button class="btn btn-secondary" id="confirm-cancel">Cancel</button>
       <button class="btn btn-danger" id="confirm-ok">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="state-modal">
+  <div class="modal state-modal">
+    <h3 id="state-title">State</h3>
+    <div id="state-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="state-close">Close</button>
     </div>
   </div>
 </div>
@@ -427,11 +445,14 @@ function renderScreens(screens) {
     html += '</ul></div>';
   }
 
-  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Requests</th><th>Last Seen</th><th>Next Update</th></tr>';
+  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Requests</th><th>Last Seen</th><th>Next Update</th><th></th></tr>';
   names.forEach(name => {
     const s = screens[name];
     const late = overdueMinutes(s);
     const rowClass = late > 0 ? ' class="overdue"' : '';
+    const detailsBtn = s.state
+      ? `<button class="btn btn-secondary btn-small" onclick="showScreenDetails('${name.replace(/'/g, "\\'")}')">Details</button>`
+      : '<span style="color:#ccc;font-size:0.8em">no state yet</span>';
     html += `<tr${rowClass}>
       <td>${name}</td>
       <td>${s.ip || '-'}</td>
@@ -439,10 +460,86 @@ function renderScreens(screens) {
       <td>${s.request_count || 0}</td>
       <td>${s.last_seen || '-'}</td>
       <td>${formatNextUpdate(s.next_update_at)}</td>
+      <td>${detailsBtn}</td>
     </tr>`;
   });
   html += '</table>';
   container.innerHTML = html;
+}
+
+// Keep the most recent /hokku/api/status screens object around so the
+// Details modal can read from it without another round-trip.
+let lastScreens = {};
+
+// Pretty-print a single state value.
+function formatStateValue(key, v) {
+  if (v == null) return '<span style="color:#999">-</span>';
+  if (key === 'clk_est' && typeof v === 'number' && v > 0) {
+    const dt = new Date(v * 1000);
+    return `${dt.toLocaleString(undefined, {hour12: false})} (${v})`;
+  }
+  if (key === 'clk_drift_s' && typeof v === 'number') {
+    const sign = v >= 0 ? '+' : '';
+    return `${sign}${v}s`;
+  }
+  if (key === 'bat_mv' && typeof v === 'number') {
+    return `${(v/1000).toFixed(2)} V (${v} mV)`;
+  }
+  if (key === 'uptime_s' && typeof v === 'number') {
+    if (v < 60) return `${v}s`;
+    if (v < 3600) return `${Math.floor(v/60)}m ${v%60}s`;
+    return `${Math.floor(v/3600)}h ${Math.floor((v%3600)/60)}m`;
+  }
+  if (key === 'sleep_err_s' && typeof v === 'number') {
+    const sign = v >= 0 ? '+' : '';
+    return `${sign}${v}s`;
+  }
+  if (key === 'seen_at') {
+    const dt = new Date(v);
+    if (!isNaN(dt.getTime())) {
+      const ageMin = Math.round((new Date() - dt) / 60000);
+      const ageStr = ageMin < 60 ? `${ageMin}m` : `${Math.floor(ageMin/60)}h ${ageMin%60}m`;
+      return `${v} <span class="stale">(${ageStr} ago)</span>`;
+    }
+  }
+  return String(v);
+}
+
+async function showScreenDetails(name) {
+  const s = lastScreens[name];
+  if (!s || !s.state) {
+    showToast(`No state yet for "${name}" — has it called in since upgrade?`);
+    return;
+  }
+  // Show keys in a deterministic, readable order. Any key we don't
+  // recognise still appears, at the end, so new firmware fields auto-surface.
+  const ordered = ['fw','boot','wake','caller','uptime_s','bat_mv','chg',
+                   'last_sleep','rssi','heap_kb','spurious','cfg_ver',
+                   'sleep_err_s','clk_est','clk_drift_s','seen_at'];
+  const extras = Object.keys(s.state).filter(k => !ordered.includes(k));
+  const keys = ordered.filter(k => k in s.state).concat(extras);
+
+  const modal = document.getElementById('state-modal');
+  document.getElementById('state-title').textContent = `State for "${name}"`;
+  let rows = '<table>';
+  keys.forEach(k => {
+    rows += `<tr><td>${k}</td><td>${formatStateValue(k, s.state[k])}</td></tr>`;
+  });
+  rows += '</table>';
+  document.getElementById('state-body').innerHTML = rows;
+
+  modal.classList.add('show');
+  const close = () => {
+    modal.classList.remove('show');
+    document.getElementById('state-close').removeEventListener('click', close);
+    modal.removeEventListener('click', onBackdrop);
+    document.removeEventListener('keydown', onKey);
+  };
+  const onBackdrop = e => { if (e.target === modal) close(); };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  document.getElementById('state-close').addEventListener('click', close);
+  modal.addEventListener('click', onBackdrop);
+  document.addEventListener('keydown', onKey);
 }
 
 function renderImageGrid(uploadFiles, serveData) {
@@ -538,6 +635,7 @@ async function refreshStatus() {
     }
 
     // Screens
+    lastScreens = data.screens || {};
     renderScreens(data.screens);
 
     // Image grid — render every uploaded file (dithered or pending)

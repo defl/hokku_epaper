@@ -37,6 +37,7 @@
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "esp_timer.h"
+#include "esp_app_desc.h"
 
 /* Private IDF API — µs since last power-on, spanning deep sleep and
  * esp_restart(). No public replacement exists in current IDF. If a
@@ -135,6 +136,28 @@ RTC_DATA_ATTR static uint8_t  consecutive_spurious_resets = 0;
  * expected_slept and log the error. 0 = no valid pre-sleep epoch
  * recorded (don't run the sleep check on next boot). */
 RTC_DATA_ATTR static int64_t  pre_sleep_server_epoch = 0;
+
+/* Last X-Server-Time-Epoch value received from the server, plus the
+ * RTC-clock reading at the moment we received it. Used to compute a
+ * clk_est field in X-Frame-State so the server can see how much the
+ * frame's estimate has drifted from its own clock. 0 = never received. */
+RTC_DATA_ATTR static int64_t  last_server_epoch = 0;
+RTC_DATA_ATTR static uint64_t last_server_epoch_rtc_us = 0;
+
+/* Last measured sleep error (actual_slept - expected_slept) in seconds,
+ * persisted so the next fetch can report it via X-Frame-State. Set inside
+ * the wake-time sleep-check block; cleared whenever pre_sleep_server_epoch
+ * is cleared (any path that would invalidate the next sleep check). */
+RTC_DATA_ATTR static int32_t  last_sleep_err_s = 0;
+RTC_DATA_ATTR static bool     last_sleep_err_valid = false;
+
+/* How the chip got from the previous HTTP call to this one. Set inside
+ * enter_deep_sleep right before committing to a sleep path, so the NEXT
+ * boot can report it via X-Frame-State. */
+#define LAST_SLEEP_MODE_NONE        0
+#define LAST_SLEEP_MODE_DEEP_SLEEP  1
+#define LAST_SLEEP_MODE_USB_POLLING 2
+RTC_DATA_ATTR static uint8_t  last_sleep_mode = LAST_SLEEP_MODE_NONE;
 
 /* Slack (µs) for the deadline comparison. Absorbs calibration drift of
  * the RTC slow clock between when sleep started and when we re-read the
@@ -807,11 +830,89 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
+/* Build a compact JSON payload describing the frame's current state.
+ * Sent as X-Frame-State on every HTTP call so the server can display
+ * full device state in the web UI without needing a serial connection.
+ * wake_label = classifier result for THIS boot; caller = what triggered
+ * THIS fetch ("wake" for the first post-boot fetch, "button" for an
+ * in-awake-window button press). */
+static void build_frame_state_json(char *buf, size_t buflen,
+                                   const char *wake_label, const char *caller,
+                                   int64_t boot_time_us)
+{
+    int rssi = 0;
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        rssi = ap.rssi;
+    }
+
+    size_t free_heap = esp_get_free_heap_size();
+
+    const esp_app_desc_t *app = esp_app_get_description();
+    const char *fw = (app && app->version[0]) ? app->version : "unknown";
+
+    int chg_low = (gpio_get_level(PIN_CHG_STATUS) == 0);
+
+    /* Firmware's best estimate of current wall-clock seconds, based on
+     * the last X-Server-Time-Epoch we received plus the RTC-clock delta
+     * since then. RTC slow clock spans deep sleep + esp_restart so this
+     * survives across boots. 0 = never received a server epoch. */
+    int64_t clk_est = 0;
+    if (last_server_epoch > 0) {
+        uint64_t now_rtc_us = esp_clk_rtc_time();
+        if (now_rtc_us >= last_server_epoch_rtc_us) {
+            int64_t delta_s = (int64_t)((now_rtc_us - last_server_epoch_rtc_us) / 1000000ULL);
+            clk_est = last_server_epoch + delta_s;
+        }
+    }
+
+    const char *last_sleep_str =
+        (last_sleep_mode == LAST_SLEEP_MODE_DEEP_SLEEP) ? "deep_sleep" :
+        (last_sleep_mode == LAST_SLEEP_MODE_USB_POLLING) ? "usb_polling" :
+        "none";
+
+    int64_t uptime_s = (esp_timer_get_time() - boot_time_us) / 1000000LL;
+
+    /* If we have a valid sleep error from the post-wake check, include it;
+     * otherwise omit to avoid sending stale values after a cold boot or
+     * any path that cleared pre_sleep_server_epoch. */
+    if (last_sleep_err_valid) {
+        snprintf(buf, buflen,
+            "{\"fw\":\"%s\",\"boot\":%d,\"wake\":\"%s\",\"caller\":\"%s\","
+            "\"uptime_s\":%lld,\"bat_mv\":%d,\"chg\":\"%s\","
+            "\"last_sleep\":\"%s\",\"rssi\":%d,\"heap_kb\":%u,"
+            "\"spurious\":%u,\"cfg_ver\":%u,\"clk_est\":%lld,"
+            "\"sleep_err_s\":%d}",
+            fw, boot_count, wake_label, caller,
+            (long long)uptime_s, (int)last_battery_mv,
+            chg_low ? "charging" : "idle",
+            last_sleep_str, rssi, (unsigned)(free_heap / 1024u),
+            (unsigned)consecutive_spurious_resets,
+            (unsigned)config.cfg_ver, (long long)clk_est,
+            (int)last_sleep_err_s);
+    } else {
+        snprintf(buf, buflen,
+            "{\"fw\":\"%s\",\"boot\":%d,\"wake\":\"%s\",\"caller\":\"%s\","
+            "\"uptime_s\":%lld,\"bat_mv\":%d,\"chg\":\"%s\","
+            "\"last_sleep\":\"%s\",\"rssi\":%d,\"heap_kb\":%u,"
+            "\"spurious\":%u,\"cfg_ver\":%u,\"clk_est\":%lld}",
+            fw, boot_count, wake_label, caller,
+            (long long)uptime_s, (int)last_battery_mv,
+            chg_low ? "charging" : "idle",
+            last_sleep_str, rssi, (unsigned)(free_heap / 1024u),
+            (unsigned)consecutive_spurious_resets,
+            (unsigned)config.cfg_ver, (long long)clk_est);
+    }
+}
+
 /* Download image and extract X-Sleep-Seconds + X-Server-Time-Epoch headers.
  * Returns image buffer (caller frees) or NULL on failure.
  * *out_sleep_seconds and *out_server_epoch are set if their headers are
- * present, otherwise unchanged. Either pointer may be NULL. */
-static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_epoch)
+ * present, otherwise unchanged. Either pointer may be NULL.
+ * wake_label and caller feed into the X-Frame-State JSON. */
+static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_epoch,
+                               const char *wake_label, const char *caller,
+                               int64_t boot_time_us)
 {
     uint8_t *buf = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
     if (!buf) {
@@ -836,15 +937,15 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
         esp_http_client_set_header(client, "X-Screen-Name", config.screen_name);
     }
 
-    /* Report last-measured battery voltage so the web UI can show it per
-     * screen. last_battery_mv is populated in app_main just before we get
-     * here, so it reflects this boot's reading. Skip on zero (uncalibrated
-     * / read failure) so the server doesn't get a meaningless 0 mV entry. */
-    if (last_battery_mv > 0) {
-        char batt_hdr[16];
-        snprintf(batt_hdr, sizeof(batt_hdr), "%d", (int)last_battery_mv);
-        esp_http_client_set_header(client, "X-Battery-mV", batt_hdr);
-    }
+    /* Full device state in a single compact JSON header. Replaces the
+     * older X-Battery-mV header — battery is now inside this dict along
+     * with firmware version, wake cause, boot count, etc. */
+    char frame_state[384];
+    build_frame_state_json(frame_state, sizeof(frame_state),
+                           wake_label ? wake_label : "unknown",
+                           caller ? caller : "wake",
+                           boot_time_us);
+    esp_http_client_set_header(client, "X-Frame-State", frame_state);
 
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
@@ -869,6 +970,11 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
         if (epoch > 0) {
             *out_server_epoch = epoch;
             ESP_LOGI(TAG, "X-Server-Time-Epoch: %lld", epoch);
+            /* Cache for the X-Frame-State clk_est field on future calls.
+             * Anchor against esp_clk_rtc_time so we can add the delta
+             * across deep sleep + esp_restart without needing wallclock. */
+            last_server_epoch = epoch;
+            last_server_epoch_rtc_us = esp_clk_rtc_time();
         }
     }
 
@@ -907,12 +1013,15 @@ static void split_and_display(const uint8_t *img)
  * unchanged; out-params untouched). */
 static bool fetch_and_display_image(int32_t *sleep_seconds,
                                     int64_t *server_epoch,
-                                    int64_t *local_time_at_download_us)
+                                    int64_t *local_time_at_download_us,
+                                    const char *wake_label,
+                                    const char *caller,
+                                    int64_t boot_time_us)
 {
     uint8_t *img = NULL;
     if (wifi_connect()) {
         gpio_set_level(PIN_WIFI_LED, 1);
-        img = download_image(sleep_seconds, server_epoch);
+        img = download_image(sleep_seconds, server_epoch, wake_label, caller, boot_time_us);
         if (local_time_at_download_us) *local_time_at_download_us = esp_timer_get_time();
         wifi_shutdown();
         gpio_set_level(PIN_WIFI_LED, 0);
@@ -944,7 +1053,9 @@ static bool fetch_and_display_image(int32_t *sleep_seconds,
  * drop it into the ROM bootloader. */
 static void stay_awake_with_buttons(int32_t *sleep_seconds,
                                     int64_t *server_epoch,
-                                    int64_t *local_time_at_download_us)
+                                    int64_t *local_time_at_download_us,
+                                    const char *wake_label,
+                                    int64_t boot_time_us)
 {
     /* Bring the buttons out of any RTC-peripheral mode before configuring
      * them as digital inputs. Needed because:
@@ -999,7 +1110,8 @@ static void stay_awake_with_buttons(int32_t *sleep_seconds,
                        gpio_get_level(PIN_PWR_BUTTON) == 0) {
                     vTaskDelay(pdMS_TO_TICKS(50));
                 }
-                fetch_and_display_image(sleep_seconds, server_epoch, local_time_at_download_us);
+                fetch_and_display_image(sleep_seconds, server_epoch, local_time_at_download_us,
+                                        wake_label, "button", boot_time_us);
                 /* Reset the window so user gets a fresh 60s after the
                  * new image (or after the error-blink on failure). */
                 deadline = esp_timer_get_time() + AWAKE_WINDOW_US;
@@ -1152,35 +1264,38 @@ static void enter_deep_sleep(int64_t sleep_us)
     if (usb_connected && remaining_us > 0) {
         ESP_LOGI(TAG, "USB connected — waiting %.1f hours instead of deep sleep",
                  remaining_us / 3600000000.0);
+        last_sleep_mode = LAST_SLEEP_MODE_USB_POLLING;
         while (1) {
             /* Single read per iteration: the while-condition + later
              * subtraction were two separate clock reads, so a context
              * switch in between could push `now` past the deadline and
              * make `deadline - now` underflow uint64_t to a huge value
-             * (then chunk_ms = 1000, one wasted second of vTaskDelay). */
+             * (then chunk_ms = 1000, one wasted second of vTaskDelay).
+             *
+             * NOTE: previously this loop also bailed out when CHG_STATUS
+             * flipped HIGH, intending to detect "USB unplugged". But
+             * CHG_STATUS means "actively charging", not "cable connected" —
+             * so a battery topping off (legitimately going HIGH while
+             * still plugged in) caused a fall-through to real deep sleep,
+             * followed by USB-host-reset, followed by spurious-reset
+             * short-path loop, hitting the safety valve every few minutes
+             * and triggering a full refresh. That's the "refreshes every
+             * few minutes on USB" bug. We now poll until the deadline
+             * regardless of CHG_STATUS. Consequence: if the user truly
+             * unplugs USB mid-sleep, the chip stays awake polling until
+             * deadline (battery drain). Acceptable trade-off vs the
+             * reset-loop. */
             uint64_t now_rtc_us = esp_clk_rtc_time();
             if (now_rtc_us >= deadline_rtc_us) break;
             uint64_t left_us = deadline_rtc_us - now_rtc_us;
             int chunk_ms = (left_us > 1000000ULL) ? 1000 : (int)(left_us / 1000);
             if (chunk_ms < 1) chunk_ms = 1;
             vTaskDelay(pdMS_TO_TICKS(chunk_ms));
-            if (gpio_get_level(PIN_CHG_STATUS) != 0) {
-                ESP_LOGI(TAG, "USB disconnected — switching to deep sleep");
-                break;
-            }
         }
-        if (esp_clk_rtc_time() >= deadline_rtc_us) {
-            ESP_LOGI(TAG, "Wait complete — restarting");
-            chg_monitor_stop();
-            esp_restart();
-            /* Never returns */
-        }
-        /* Fell through: USB unplugged mid-wait. Recompute remaining based
-         * on the real clock so we sleep only the time still left. */
-        uint64_t now_rtc_us = esp_clk_rtc_time();
-        remaining_us = (now_rtc_us < deadline_rtc_us)
-                       ? (int64_t)(deadline_rtc_us - now_rtc_us)
-                       : 0;
+        ESP_LOGI(TAG, "Wait complete — restarting");
+        chg_monitor_stop();
+        esp_restart();
+        /* Never returns */
     }
 
     /* Real deep sleep prep. Stop chg_monitor last so the LED keeps
@@ -1234,6 +1349,9 @@ static void enter_deep_sleep(int64_t sleep_us)
         ESP_LOGI(TAG, "Entering deep sleep (no timer, button wake only)");
     }
 
+    /* Mark our sleep path for the next boot's X-Frame-State report. */
+    last_sleep_mode = LAST_SLEEP_MODE_DEEP_SLEEP;
+
     esp_deep_sleep_start();
     /* Never returns */
 }
@@ -1260,6 +1378,11 @@ void app_main(void)
         scheduled_wake_rtc_us = 0;
         consecutive_spurious_resets = 0;
         pre_sleep_server_epoch = 0;
+        last_server_epoch = 0;
+        last_server_epoch_rtc_us = 0;
+        last_sleep_err_s = 0;
+        last_sleep_err_valid = false;
+        last_sleep_mode = LAST_SLEEP_MODE_NONE;
     }
 
     boot_count++;
@@ -1318,12 +1441,16 @@ void app_main(void)
         /* else: at/past deadline → misclassified timer wake, fetch. */
     }
 
-    ESP_LOGI(TAG, "Boot #%d, wakeup=%d (%s)", boot_count, wakeup,
-             is_usb_reset_after_sleep ? "USB reset after sleep" :
-             wakeup == ESP_SLEEP_WAKEUP_TIMER ? "timer" :
-             wakeup == ESP_SLEEP_WAKEUP_EXT1 ? "button" :
-             prior_sleep ? "misclassified wake" :
-             "first boot");
+    /* Short machine-readable wake label used both for the human log and
+     * the X-Frame-State JSON sent to the server. */
+    const char *wake_label =
+        is_usb_reset_after_sleep ? "spurious" :
+        wakeup == ESP_SLEEP_WAKEUP_TIMER ? "timer" :
+        wakeup == ESP_SLEEP_WAKEUP_EXT1 ? "button" :
+        prior_sleep ? "misclassified" :
+        "first_boot";
+
+    ESP_LOGI(TAG, "Boot #%d, wakeup=%d (%s)", boot_count, wakeup, wake_label);
     /* NOTE: only TIMER + EXT1 are enabled as wake sources; other values
      * from esp_sleep_get_wakeup_cause() (EXT0, ULP, GPIO, UART, TOUCHPAD)
      * shouldn't occur under our configuration. If one does, the classifier
@@ -1407,7 +1534,8 @@ void app_main(void)
         int32_t dummy_sleep = 0;
         int64_t dummy_epoch = 0;
         int64_t dummy_local_us = 0;
-        stay_awake_with_buttons(&dummy_sleep, &dummy_epoch, &dummy_local_us);
+        stay_awake_with_buttons(&dummy_sleep, &dummy_epoch, &dummy_local_us,
+                                wake_label, boot_time);
         pre_sleep_server_epoch = 0;
         enter_deep_sleep(0);
         /* Never returns */
@@ -1430,7 +1558,8 @@ void app_main(void)
         int32_t dummy_sleep = 0;
         int64_t dummy_epoch = 0;
         int64_t dummy_local_us = 0;
-        stay_awake_with_buttons(&dummy_sleep, &dummy_epoch, &dummy_local_us);
+        stay_awake_with_buttons(&dummy_sleep, &dummy_epoch, &dummy_local_us,
+                                wake_label, boot_time);
         pre_sleep_server_epoch = 0;
         enter_deep_sleep(0);
         /* Never returns */
@@ -1452,7 +1581,8 @@ void app_main(void)
 
     if (wifi_connect()) {
         gpio_set_level(PIN_WIFI_LED, 1);
-        img = download_image(&sleep_seconds, &server_epoch);
+        img = download_image(&sleep_seconds, &server_epoch,
+                             wake_label, "wake", boot_time);
         local_time_at_download_us = esp_timer_get_time();
         wifi_shutdown();
         gpio_set_level(PIN_WIFI_LED, 0);
@@ -1463,7 +1593,12 @@ void app_main(void)
      * from this run. Compares server-wall-clock elapsed (since pre-sleep
      * snapshot) minus this boot's awake-before-download time against the
      * sleep_seconds we asked for last time. Negative = woke early,
-     * positive = overslept. */
+     * positive = overslept. Also stored in RTC so the NEXT boot's
+     * X-Frame-State can include the measured error.
+     *
+     * Note we DON'T invalidate a previously-measured error on boots
+     * where we can't produce a fresh one (button wakes, etc.) — the
+     * last good measurement remains interesting info for the user. */
     if (wakeup == ESP_SLEEP_WAKEUP_TIMER && pre_sleep_server_epoch > 0 &&
         server_epoch > 0 && last_sleep_seconds > 0) {
         int64_t time_awake_s = local_time_at_download_us / 1000000LL;
@@ -1473,6 +1608,12 @@ void app_main(void)
         int64_t error_s = actual_slept_s - expected_slept_s;
         ESP_LOGI(TAG, "Sleep check: expected=%llds actual=%llds error=%+llds",
                  expected_slept_s, actual_slept_s, error_s);
+        /* Clamp to int32 range for RTC storage — sleeps over ~68 years
+         * would overflow but are obviously out of scope. */
+        if (error_s > INT32_MAX) error_s = INT32_MAX;
+        if (error_s < INT32_MIN) error_s = INT32_MIN;
+        last_sleep_err_s = (int32_t)error_s;
+        last_sleep_err_valid = true;
     }
 
     /* Download failed — show error on screen */
@@ -1498,7 +1639,8 @@ void app_main(void)
          * the fetch. If a retry succeeds inside stay_awake, sleep_seconds
          * + server_epoch + local_time_at_download_us all get updated from
          * the server response; otherwise fall back to 3h. */
-        stay_awake_with_buttons(&sleep_seconds, &server_epoch, &local_time_at_download_us);
+        stay_awake_with_buttons(&sleep_seconds, &server_epoch, &local_time_at_download_us,
+                                wake_label, boot_time);
         int64_t fail_sleep_us = (sleep_seconds > 0)
             ? (int64_t)sleep_seconds * 1000000LL
             : SLEEP_3H_US;

@@ -502,6 +502,127 @@ class TestBatteryReporting:
             assert resp.status_code in (404, 503)
 
 
+# ── X-Frame-State JSON header ─────────────────────────────────────
+#
+# Replaces X-Battery-mV in current firmware. Server parses, stores
+# whole dict so new firmware keys surface in the UI automatically,
+# preserves top-level battery fields for the existing Battery column.
+
+class TestFrameState:
+    def test_parse_valid_json(self):
+        state = webserver._parse_frame_state(
+            '{"fw":"20260418","boot":3,"wake":"timer","bat_mv":4050,"chg":"charging"}')
+        assert state["fw"] == "20260418"
+        assert state["boot"] == 3
+        assert state["wake"] == "timer"
+        assert state["bat_mv"] == 4050
+        assert state["chg"] == "charging"
+
+    def test_parse_empty_returns_none(self):
+        assert webserver._parse_frame_state(None) is None
+        assert webserver._parse_frame_state("") is None
+
+    def test_parse_malformed_json_returns_none(self):
+        """Garbage from a misbehaving frame must not crash serve_binary."""
+        assert webserver._parse_frame_state("{broken") is None
+        assert webserver._parse_frame_state("not json at all") is None
+
+    def test_parse_non_object_returns_none(self):
+        """JSON that's valid but not an object (array, number, string)
+        shouldn't be stored as-is."""
+        assert webserver._parse_frame_state("[1,2,3]") is None
+        assert webserver._parse_frame_state("42") is None
+        assert webserver._parse_frame_state('"hello"') is None
+
+    def test_record_stores_whole_state_dict(self):
+        """Forward-compat: any keys firmware adds later show up in the DB
+        without a server-side change."""
+        db = {"serve_data": {}}
+        state = {"fw": "abc", "boot": 7, "wake": "button", "new_future_key": "v2"}
+        with patch.object(webserver, "_database", db):
+            webserver._record_screen_call("Foo", "1.2.3.4", 60, frame_state=state)
+        stored = db["screens"]["Foo"]["state"]
+        assert stored["fw"] == "abc"
+        assert stored["boot"] == 7
+        assert stored["new_future_key"] == "v2"
+        assert "seen_at" in stored
+
+    def test_record_pulls_battery_from_state(self):
+        """When X-Battery-mV is absent but bat_mv is in X-Frame-State, the
+        top-level battery_mv/battery_percent still populate."""
+        db = {"serve_data": {}}
+        state = {"fw": "abc", "bat_mv": 3950}
+        with patch.object(webserver, "_database", db):
+            webserver._record_screen_call("Foo", "1.2.3.4", 60,
+                                          battery_mv=None, frame_state=state)
+        entry = db["screens"]["Foo"]
+        assert entry["battery_mv"] == 3950
+        assert entry["battery_percent"] == webserver._battery_percent(3950)
+
+    def test_record_state_includes_clk_drift(self):
+        """Server computes clk_drift_s = frame's clk_est - server's now."""
+        db = {"serve_data": {}}
+        import time as _time
+        frame_clk = int(_time.time()) + 15  # frame thinks it's 15s in our future
+        state = {"fw": "abc", "clk_est": frame_clk}
+        with patch.object(webserver, "_database", db):
+            webserver._record_screen_call("Foo", "1.2.3.4", 60, frame_state=state)
+        drift = db["screens"]["Foo"]["state"]["clk_drift_s"]
+        assert 10 <= drift <= 20  # some tolerance for test timing
+
+    def test_record_state_omits_drift_without_clk_est(self):
+        db = {"serve_data": {}}
+        state = {"fw": "abc"}  # no clk_est
+        with patch.object(webserver, "_database", db):
+            webserver._record_screen_call("Foo", "1.2.3.4", 60, frame_state=state)
+        assert "clk_drift_s" not in db["screens"]["Foo"]["state"]
+
+    def test_serve_binary_captures_frame_state(self):
+        """End-to-end: X-Frame-State on the request ends up in the DB."""
+        webserver.app.config["TESTING"] = True
+        pool = {"/images/a.jpg": {"hash": "abc"}}
+        db = {"serve_data": {"a.jpg": {"show_index": 0, "last_request": None,
+              "total_show_count": 0, "total_show_minutes": 0.0}}}
+        header_json = ('{"fw":"20260418012020Z","boot":3,"wake":"timer",'
+                       '"caller":"wake","bat_mv":4100,"chg":"charging",'
+                       '"last_sleep":"deep_sleep","rssi":-57,"heap_kb":240,'
+                       '"spurious":0,"cfg_ver":1,"clk_est":1776500000}')
+        with webserver.app.test_client() as client, \
+             patch.object(webserver, "_pool", pool), \
+             patch.object(webserver, "_database", db), \
+             patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
+             patch.object(webserver, "_converting_count", 0), \
+             patch.object(webserver, "_last_served",
+                         {"key": None, "name": None, "served_at": None}), \
+             patch("webserver._read_cached_binary", return_value=b"x" * 960000), \
+             patch("webserver._save_database"):
+            resp = client.get("/hokku/screen/", headers={
+                "X-Screen-Name": "Foyer",
+                "X-Frame-State": header_json,
+            })
+            assert resp.status_code == 200
+            state = db["screens"]["Foyer"]["state"]
+            assert state["fw"] == "20260418012020Z"
+            assert state["wake"] == "timer"
+            assert state["rssi"] == -57
+            assert db["screens"]["Foyer"]["battery_mv"] == 4100
+
+    def test_serve_binary_tolerates_bogus_frame_state(self):
+        """A frame sending garbage JSON must not 500."""
+        webserver.app.config["TESTING"] = True
+        with webserver.app.test_client() as client, \
+             patch.object(webserver, "_pool", {}), \
+             patch.object(webserver, "_database", {"serve_data": {}}), \
+             patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
+             patch.object(webserver, "_converting_count", 0), \
+             patch("webserver._save_database"):
+            resp = client.get("/hokku/screen/", headers={
+                "X-Screen-Name": "Foyer",
+                "X-Frame-State": "not json {{{",
+            })
+            assert resp.status_code in (404, 503)
+
+
 # ── Screen-call accounting ────────────────────────────────────────
 
 class TestRecordScreenCall:

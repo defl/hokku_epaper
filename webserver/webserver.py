@@ -744,9 +744,15 @@ def _background_watcher():
 # ── Flask routes: device endpoints ─────────────────────────────────
 
 def _record_screen_call(screen_name, screen_ip, sleep_seconds, served_name=None,
-                        battery_mv=None):
+                        battery_mv=None, frame_state=None):
     """Track a call from a screen: IP, count, last_seen, and the next update
-    time implied by the sleep_seconds we just handed it. Caller must hold _lock."""
+    time implied by the sleep_seconds we just handed it. Caller must hold _lock.
+
+    `frame_state` is the parsed X-Frame-State dict (or None). Stored as a
+    whole-dict snapshot under screens[name]["state"] so new firmware keys
+    surface in the UI automatically. battery_mv can come in separately
+    (legacy header) or from frame_state["bat_mv"] — either way it ends up
+    in the same top-level fields used by the existing Battery column."""
     if "screens" not in _database:
         _database["screens"] = {}
     screens = _database["screens"]
@@ -763,10 +769,30 @@ def _record_screen_call(screen_name, screen_ip, sleep_seconds, served_name=None,
     screens[screen_name]["next_update_at"] = (now + timedelta(seconds=int(sleep_seconds))).isoformat(timespec="seconds")
     if served_name is not None:
         screens[screen_name]["last_served"] = served_name
+
+    # Prefer battery from frame_state (current firmware). Fall back to the
+    # legacy X-Battery-mV header if that's all we got (older firmware).
+    if frame_state and isinstance(frame_state.get("bat_mv"), (int, float)):
+        fs_mv = _parse_battery_header(str(int(frame_state["bat_mv"])))
+        if fs_mv is not None:
+            battery_mv = fs_mv
+
     if battery_mv is not None and battery_mv > 0:
         screens[screen_name]["battery_mv"] = int(battery_mv)
         screens[screen_name]["battery_percent"] = _battery_percent(battery_mv)
         screens[screen_name]["battery_seen_at"] = now.isoformat(timespec="seconds")
+
+    if frame_state:
+        # Store the whole dict so new firmware keys surface automatically.
+        # Also compute clk_drift_s by comparing the frame's clk_est to
+        # our own wall clock — positive = firmware thinks it's later
+        # than it actually is.
+        state_with_meta = dict(frame_state)
+        clk_est = frame_state.get("clk_est")
+        if isinstance(clk_est, (int, float)) and clk_est > 0:
+            state_with_meta["clk_drift_s"] = int(clk_est - time.time())
+        state_with_meta["seen_at"] = now.isoformat(timespec="seconds")
+        screens[screen_name]["state"] = state_with_meta
 
 
 # Li-ion voltage → percentage mapping. Chosen without a discharge
@@ -791,7 +817,12 @@ def _battery_percent(mv):
 
 
 def _parse_battery_header(raw):
-    """Tolerant parse of the X-Battery-mV header. Returns int mV or None."""
+    """Tolerant parse of the X-Battery-mV header. Returns int mV or None.
+
+    Kept for backwards compatibility with firmware that still sends the
+    standalone X-Battery-mV header. Current firmware folds battery into
+    the X-Frame-State JSON (bat_mv field); _parse_frame_state extracts
+    it from there. Either path populates the same screens[name] fields."""
     if not raw:
         return None
     try:
@@ -802,6 +833,26 @@ def _parse_battery_header(raw):
     if v < 2000 or v > 5000:
         return None
     return v
+
+
+def _parse_frame_state(raw):
+    """Parse the X-Frame-State JSON header from firmware.
+
+    Returns a dict of whatever keys were present (firmware may add new
+    fields over time; we just store them all). None if the header was
+    missing, empty, or not valid JSON. Malformed headers log a warning
+    rather than raising, so a misbehaving frame doesn't take down serve_binary."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError) as e:
+        print(f"  Warning: X-Frame-State not valid JSON ({e}): {str(raw)[:120]}")
+        return None
+    if not isinstance(data, dict):
+        print(f"  Warning: X-Frame-State is not a JSON object: {str(raw)[:120]}")
+        return None
+    return data
 
 
 def _busy_retry_seconds():
@@ -818,6 +869,7 @@ def serve_binary():
     screen_name = request.headers.get("X-Screen-Name", "unnamed")
     screen_ip = request.remote_addr or "unknown"
     battery_mv = _parse_battery_header(request.headers.get("X-Battery-mV"))
+    frame_state = _parse_frame_state(request.headers.get("X-Frame-State"))
 
     with _lock:
         if not _pool:
@@ -825,7 +877,8 @@ def serve_binary():
             # sensible retry hint so the firmware doesn't fall back to its
             # 3h hard-coded default (which drifts off the refresh schedule).
             sleep_seconds = _busy_retry_seconds()
-            _record_screen_call(screen_name, screen_ip, sleep_seconds, battery_mv=battery_mv)
+            _record_screen_call(screen_name, screen_ip, sleep_seconds,
+                                battery_mv=battery_mv, frame_state=frame_state)
             _save_database(_get_cache_dir(), _database)
             status = 503 if _converting_count > 0 else 404
             msg = "Converting images, try again shortly" if status == 503 else "No images in upload directory"
@@ -837,7 +890,8 @@ def serve_binary():
         key = _pick_next_image(_pool, _database)
         if key is None:
             sleep_seconds = _busy_retry_seconds()
-            _record_screen_call(screen_name, screen_ip, sleep_seconds, battery_mv=battery_mv)
+            _record_screen_call(screen_name, screen_ip, sleep_seconds,
+                                battery_mv=battery_mv, frame_state=frame_state)
             _save_database(_get_cache_dir(), _database)
             resp = make_response("No images available", 404)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
@@ -848,7 +902,8 @@ def serve_binary():
 
         sleep_seconds = _calculate_sleep_seconds(_config)
         _record_screen_call(screen_name, screen_ip, sleep_seconds,
-                            served_name=Path(key).name, battery_mv=battery_mv)
+                            served_name=Path(key).name, battery_mv=battery_mv,
+                            frame_state=frame_state)
         _save_database(_get_cache_dir(), _database)
 
     # Load binary from disk cache outside the lock
