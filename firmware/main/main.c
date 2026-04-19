@@ -1994,9 +1994,17 @@ void app_main(void)
          * the server response; otherwise fall back to 3h. */
         stay_awake_with_buttons(&sleep_seconds, &server_epoch, &local_time_at_download_us,
                                 wake_label, boot_time);
-        int64_t fail_sleep_us = (sleep_seconds > 0)
-            ? (int64_t)sleep_seconds * 1000000LL
-            : SLEEP_3H_US;
+        /* Same "subtract elapsed since last successful download" correction
+         * as the success path below. If we never got a successful download
+         * (local_time_at_download_us still 0), fall back to a flat 3h retry. */
+        int64_t fail_sleep_us;
+        if (sleep_seconds > 0 && local_time_at_download_us > 0) {
+            int64_t elapsed_us = esp_timer_get_time() - local_time_at_download_us;
+            fail_sleep_us = (int64_t)sleep_seconds * 1000000LL - elapsed_us;
+            if (fail_sleep_us < 5 * 1000000LL) fail_sleep_us = 5 * 1000000LL;
+        } else {
+            fail_sleep_us = SLEEP_3H_US;
+        }
         save_pre_sleep_epoch(server_epoch, local_time_at_download_us);
         enter_deep_sleep(fail_sleep_us);
         /* Never returns */
@@ -2012,6 +2020,26 @@ void app_main(void)
     split_and_display(img);
     free(img);
     ESP_LOGI(TAG, "Image displayed.");
+
+    /* Re-raise SYS_POWER after the display sequence.
+     *
+     * epaper_display_dual ends by driving SYS_POWER LOW (matching the June
+     * original's per-update teardown, so the UC8179C starts from cold on
+     * the next refresh). But we then spend up to 60s in the awake window
+     * and potentially another 3+ hours in the USB-polling loop while
+     * SYS_POWER stays LOW. On this board GPIO 17 is documented as the
+     * system power rail and appears to also gate RTC-slow-memory
+     * retention: counters that should survive esp_restart (boot_count,
+     * consecutive_busy_timeouts, last_sleep_err_s) and the ESP-IDF
+     * system clock were observed resetting every cycle (2026-04-18
+     * logs: Boot #1 twice across a clean esp_restart; clk_now always 0
+     * in X-Frame-State). Raising it back HIGH here keeps RTC memory
+     * alive during the wait. The next display update still cold-boots
+     * the controller via its own SYS_POWER LOW-then-HIGH sequence, so
+     * the factory-match goal of "controller POR between updates" is
+     * preserved — we just shrink the LOW window to the start of the
+     * next refresh instead of "from end-of-update until next boot". */
+    gpio_set_level(PIN_SYS_POWER, 1);
 
     /* Recover from a wedged display controller by rebooting. If BUSY is
      * still LOW here, epaper_display_dual hit one or more BUSY timeouts
@@ -2040,7 +2068,29 @@ void app_main(void)
         ESP_LOGW(TAG, "sleep_seconds <= 0 — falling back (last=%d)", (int)last_sleep_seconds);
         sleep_seconds = (last_sleep_seconds > 0) ? last_sleep_seconds : (int32_t)(SLEEP_3H_US / 1000000LL);
     }
-    int64_t sleep_us = (int64_t)sleep_seconds * 1000000LL;
+
+    /* X-Sleep-Seconds is the interval the server expects between *downloads*,
+     * computed from the server's clock to hit the next scheduled refresh_time
+     * (or DEBUG_FAST_REFRESH_SECONDS in debug mode). So we need to deduct the
+     * time already spent since the download — the ~20s display refresh, the
+     * 60s awake window, any retry button-press extensions. Without this we
+     * were oversleeping by ~(display+awake) every cycle: 180s debug mode
+     * was effectively 270s, 6h refresh drifted ~90s late per cycle.
+     *
+     * Floor at MIN_SLEEP_US so a very short server interval + a slow display
+     * refresh can't arm a zero/negative deadline (which would behave as
+     * button-only-wake — the same foot-gun the <=0 safety net above catches). */
+    int64_t elapsed_us = esp_timer_get_time() - local_time_at_download_us;
+    int64_t sleep_us = (int64_t)sleep_seconds * 1000000LL - elapsed_us;
+    const int64_t MIN_SLEEP_US = 5 * 1000000LL;
+    if (sleep_us < MIN_SLEEP_US) {
+        ESP_LOGW(TAG, "sleep_us capped at MIN: server=%ds, elapsed=%llds → %llds",
+                 (int)sleep_seconds, elapsed_us / 1000000LL, MIN_SLEEP_US / 1000000LL);
+        sleep_us = MIN_SLEEP_US;
+    } else {
+        ESP_LOGI(TAG, "sleep_us = %llds (server=%ds, elapsed=%llds since download)",
+                 sleep_us / 1000000LL, (int)sleep_seconds, elapsed_us / 1000000LL);
+    }
     save_pre_sleep_epoch(server_epoch, local_time_at_download_us);
     enter_deep_sleep(sleep_us);
     /* Never returns */
