@@ -1863,19 +1863,19 @@ void app_main(void)
     /* Hardware init — only runs on paths that actually need the display */
     hw_gpio_init();
 
-    /* PIN_EPAPER_PWR_EN (GPIO 3) gates BOTH:
-     *   - the battery voltage-divider analog front-end (needs HIGH to read)
-     *   - something on the display controller side that breaks its init
-     *     when held HIGH across the reset + init sequence (observed
-     *     2026-04-19: DRF hangs with BUSY timeout when PWR_EN stays HIGH)
+    /* PIN_EPAPER_PWR_EN (GPIO 3) — the June 2025 original firmware
+     * (Ghidra FUN_4200c224 @ IROM 0x4200c224, line 193 "FUN_42050c48(3,1)")
+     * drives this HIGH exactly once during boot init and NEVER drops it
+     * back to LOW anywhere in the binary. Counting all 22 GPIO writes in
+     * the decompiled June firmware confirms this: GPIO 3 appears once,
+     * with value 1.
      *
-     * So we can't leave it in a single static state. Sequence:
-     *   1. HIGH at boot  → battery ADC works
-     *   2. LOW before display_dual runs → controller init works cleanly
-     *
-     * This matches the original firmware's "never drive HIGH" pattern for
-     * the display path, while still giving us a valid battery reading
-     * from the brief pre-display window. */
+     * A prior analysis claimed the original "never drives GPIO 3 HIGH"
+     * and we reacted by driving it LOW before display refresh. That
+     * analysis missed literal-pool alignment and was wrong. Dropping
+     * PWR_EN to LOW across the display path is the leading candidate
+     * for why our firmware cannot unstick a wedged UC8179C while
+     * reflashing the factory firmware (which keeps PWR_EN HIGH) can. */
     gpio_set_level(PIN_EPAPER_PWR_EN, 1);
     gpio_set_level(PIN_WORK_LED, 0);  /* chg_monitor manages LED from here on */
     gpio_set_level(PIN_WIFI_LED, 0);
@@ -1890,11 +1890,8 @@ void app_main(void)
     last_battery_mv = read_battery_mv();
     ESP_LOGI(TAG, "Battery: %d mV", last_battery_mv);
 
-    /* Now drop PWR_EN back to LOW for the remainder of the boot. The
-     * display-controller init sequence in epaper_display_dual does not
-     * tolerate PWR_EN staying HIGH across its RST pulses — BUSY never
-     * releases and the refresh hangs. */
-    gpio_set_level(PIN_EPAPER_PWR_EN, 0);
+    /* PWR_EN stays HIGH for the rest of the boot — matches the original
+     * firmware, which never drives GPIO 3 LOW after the initial HIGH. */
 
     /* Check config version — do this before the USB-reset shortcut so
      * error screens are always shown even after a reset. */
