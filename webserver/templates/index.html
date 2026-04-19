@@ -137,16 +137,18 @@
   <div class="config-row">
     <label>Dither algorithm:</label>
     <select id="dither-algorithm">
-      <option value="atkinson_hue_aware">Atkinson + hue-aware (warmer skin)</option>
-      <option value="atkinson">Atkinson (softer)</option>
+      <option value="fs_hue_aware">Floyd–Steinberg + hue-aware (best for photos)</option>
+      <option value="atkinson_hue_aware">Atkinson + hue-aware (softer texture)</option>
+      <option value="atkinson">Atkinson (no hue correction)</option>
       <option value="floyd_steinberg">Floyd–Steinberg (classic)</option>
     </select>
     <button type="button" class="help-icon" id="dither-help-btn" aria-label="Dither algorithm help" aria-expanded="false">?</button>
     <div id="dither-help-popover" class="help-popover" role="dialog" aria-label="Dither algorithm explanation" hidden>
       <h3>Dither algorithms</h3>
-      <p><strong>Floyd–Steinberg (classic)</strong> — Original error-diffusion algorithm. Distributes the full quantization error to 4 neighboring pixels. Highest contrast, but warm skin tones can pick up visible blue speckles.</p>
-      <p><strong>Atkinson (softer)</strong> — Distributes only 6/8 of the error across 6 neighbors. Smoother gradients and less color bleed, but slightly lower maximum contrast.</p>
-      <p><strong>Atkinson + hue-aware</strong> — Atkinson diffusion plus a palette-selection rule that forbids large hue jumps (e.g. picking Blue for a warm pixel). Best for photos of people. <em>Default.</em></p>
+      <p><strong>Floyd–Steinberg + hue-aware</strong> — FS error diffusion combined with a palette-selection rule that forbids large hue jumps (so warm skin tones don't pick up blue speckles) and chroma-preserving dynamic-range compression (keeps small saturated features like lips and tongues from washing out). Best overall for photos. <em>Default.</em> B&amp;W inputs are auto-detected and rendered with a neutral preset to avoid pink cast.</p>
+      <p><strong>Atkinson + hue-aware</strong> — Same hue-aware palette rule, but with Atkinson's 6/8 error diffusion: softer noise texture, at the cost of slightly muted small saturated features.</p>
+      <p><strong>Atkinson (no hue correction)</strong> — Plain Atkinson against Lab-nearest palette matching. Softer, but warm tones may drift blue.</p>
+      <p><strong>Floyd–Steinberg (classic)</strong> — Full-strength error diffusion, Lab-nearest palette matching. Highest contrast but can show blue speckles on skin.</p>
       <p class="help-popover-note">Switching triggers re-conversion of every image for the new algorithm — can take several seconds per image. Cached renders for the other algorithms are preserved, so switching back is instant.</p>
     </div>
   </div>
@@ -361,7 +363,7 @@ async function refreshStatus() {
     renderRefreshTimes();
     document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
     document.getElementById('orientation').value = cfg.orientation || 'landscape';
-    document.getElementById('dither-algorithm').value = cfg.dither_algorithm || 'atkinson_hue_aware';
+    document.getElementById('dither-algorithm').value = cfg.dither_algorithm || 'fs_hue_aware';
     document.getElementById('server-address').textContent = `${location.hostname}:${cfg.port}`;
     document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
 
