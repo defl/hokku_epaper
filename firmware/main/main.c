@@ -1504,8 +1504,14 @@ static void chg_monitor_task(void *arg)
             led_on = !led_on;
             gpio_set_level(PIN_WORK_LED, led_on ? 1 : 0);
         } else {
-            gpio_set_level(PIN_WORK_LED, 1);  /* solid on when not charging */
-            led_on = true;
+            /* OFF when not charging. CHG_STATUS=HIGH covers both
+             * "fully charged on USB" and "running on battery" — we
+             * can't distinguish them, so treat them the same and
+             * don't waste battery on a solid LED through the 60s
+             * awake window. Observed 2026-04-18: red LED burning
+             * for a full minute every battery refresh cycle. */
+            gpio_set_level(PIN_WORK_LED, 0);
+            led_on = false;
         }
         int delay_ms = chg_monitor_fast ? 250 : 500;  /* 2Hz or 1Hz */
         vTaskDelay(pdMS_TO_TICKS(delay_ms));
@@ -1856,18 +1862,25 @@ void app_main(void)
 
     /* Hardware init — only runs on paths that actually need the display */
     hw_gpio_init();
-    /* hw_gpio_init already drives SYS_POWER HIGH. Previously we also drove
-     * EPAPER_PWR_EN (GPIO 3) HIGH here. Dropped on 2026-04-18 after
-     * .private/boot_analysis/FINAL_FINDINGS.md confirmed the original
-     * factory firmware *never* drives GPIO 3 HIGH anywhere in the binary
-     * (zero calls across both gpio_set_level entry points after fixing
-     * the disassembly alignment bug). If GPIO 3 is an active-LOW enable
-     * or should stay floating, driving it HIGH would silently disable
-     * the display rail — matching our "controller is dead, BUSY never
-     * goes LOW in response to commands" symptom. Drive it LOW explicitly
-     * so behaviour is well-defined. */
-    gpio_set_level(PIN_EPAPER_PWR_EN, 0);
-    gpio_set_level(PIN_WORK_LED, 1);
+    /* Drive EPAPER_PWR_EN (GPIO 3) HIGH. FINAL_FINDINGS observed the
+     * June original never drives GPIO 3 HIGH, and commit 5cfb69f
+     * speculatively drove it LOW on the theory that it might be an
+     * active-LOW enable for the display rail. That theory was wrong
+     * on two counts:
+     *   1. The display-wedging root cause was the v2.0.19 vs v2.0.26
+     *      init sequence (fixed in commit 62ed40b), not PWR_EN state.
+     *   2. PWR_EN HIGH is actually required for the battery voltage
+     *      divider / analog front-end. With PWR_EN LOW the ADC reads
+     *      floor-noise (~26 mV calibrated → 86 mV "battery"), which
+     *      matched exactly the symptom we saw once the "three-pronged
+     *      fix" landed. Restoring PWR_EN=1 brings the ADC back without
+     *      affecting the display (the display works or fails based on
+     *      the init-sequence match, independent of PWR_EN).
+     * The original firmware's quirk of never driving GPIO 3 HIGH is
+     * probably because it relies on external pull-up bias, not because
+     * HIGH is wrong. */
+    gpio_set_level(PIN_EPAPER_PWR_EN, 1);
+    gpio_set_level(PIN_WORK_LED, 0);  /* chg_monitor manages LED from here on */
     gpio_set_level(PIN_WIFI_LED, 0);
 
     /* Start charger monitor (blinks LED while charging) */
