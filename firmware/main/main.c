@@ -1862,23 +1862,20 @@ void app_main(void)
 
     /* Hardware init — only runs on paths that actually need the display */
     hw_gpio_init();
-    /* Drive EPAPER_PWR_EN (GPIO 3) HIGH. FINAL_FINDINGS observed the
-     * June original never drives GPIO 3 HIGH, and commit 5cfb69f
-     * speculatively drove it LOW on the theory that it might be an
-     * active-LOW enable for the display rail. That theory was wrong
-     * on two counts:
-     *   1. The display-wedging root cause was the v2.0.19 vs v2.0.26
-     *      init sequence (fixed in commit 62ed40b), not PWR_EN state.
-     *   2. PWR_EN HIGH is actually required for the battery voltage
-     *      divider / analog front-end. With PWR_EN LOW the ADC reads
-     *      floor-noise (~26 mV calibrated → 86 mV "battery"), which
-     *      matched exactly the symptom we saw once the "three-pronged
-     *      fix" landed. Restoring PWR_EN=1 brings the ADC back without
-     *      affecting the display (the display works or fails based on
-     *      the init-sequence match, independent of PWR_EN).
-     * The original firmware's quirk of never driving GPIO 3 HIGH is
-     * probably because it relies on external pull-up bias, not because
-     * HIGH is wrong. */
+
+    /* PIN_EPAPER_PWR_EN (GPIO 3) gates BOTH:
+     *   - the battery voltage-divider analog front-end (needs HIGH to read)
+     *   - something on the display controller side that breaks its init
+     *     when held HIGH across the reset + init sequence (observed
+     *     2026-04-19: DRF hangs with BUSY timeout when PWR_EN stays HIGH)
+     *
+     * So we can't leave it in a single static state. Sequence:
+     *   1. HIGH at boot  → battery ADC works
+     *   2. LOW before display_dual runs → controller init works cleanly
+     *
+     * This matches the original firmware's "never drive HIGH" pattern for
+     * the display path, while still giving us a valid battery reading
+     * from the brief pre-display window. */
     gpio_set_level(PIN_EPAPER_PWR_EN, 1);
     gpio_set_level(PIN_WORK_LED, 0);  /* chg_monitor manages LED from here on */
     gpio_set_level(PIN_WIFI_LED, 0);
@@ -1886,12 +1883,18 @@ void app_main(void)
     /* Start charger monitor (blinks LED while charging) */
     chg_monitor_start();
 
-    vTaskDelay(pdMS_TO_TICKS(500));  /* let display controller fully power up */
+    vTaskDelay(pdMS_TO_TICKS(500));  /* let the analog front-end settle */
     spi_init();
 
-    /* Read battery */
+    /* Read battery — requires PWR_EN HIGH (set above) */
     last_battery_mv = read_battery_mv();
     ESP_LOGI(TAG, "Battery: %d mV", last_battery_mv);
+
+    /* Now drop PWR_EN back to LOW for the remainder of the boot. The
+     * display-controller init sequence in epaper_display_dual does not
+     * tolerate PWR_EN staying HIGH across its RST pulses — BUSY never
+     * releases and the refresh hangs. */
+    gpio_set_level(PIN_EPAPER_PWR_EN, 0);
 
     /* Check config version — do this before the USB-reset shortcut so
      * error screens are always shown even after a reset. */
