@@ -104,23 +104,41 @@ static const char *TAG = "epaper";
  * so the user gets a fresh 60s after each image change. */
 #define AWAKE_WINDOW_US    (60LL * 1000000LL)
 
-/* ── RTC memory (survives deep sleep) ────────────────────────────── */
-#define RTC_MAGIC 0x484F4B55  /* "HOKU" — validates RTC memory isn't stale after flash */
-RTC_DATA_ATTR static uint32_t rtc_magic = 0;
-RTC_DATA_ATTR static int      boot_count = 0;
-RTC_DATA_ATTR static uint8_t  wifi_channel = 0;
-RTC_DATA_ATTR static uint8_t  wifi_bssid[6] = {0};
-RTC_DATA_ATTR static bool     has_wifi_cache = false;
-RTC_DATA_ATTR static uint16_t last_battery_mv = 0;
-RTC_DATA_ATTR static bool     was_sleeping = false;  /* detect USB reset after deep sleep */
-RTC_DATA_ATTR static int32_t  last_sleep_seconds = 0;  /* fallback if server unreachable */
+/* ── RTC memory (survives deep sleep + esp_restart) ──────────────────
+ *
+ * All of these must use RTC_NOINIT_ATTR (NOT RTC_DATA_ATTR). ESP-IDF
+ * header comment:
+ *   RTC_DATA_ATTR     — keeps value during a deep sleep / wake cycle
+ *   RTC_NOINIT_ATTR   — keeps value AFTER RESTART or during deep sleep
+ *
+ * RTC_DATA_ATTR vars are re-initialised from the ELF on every esp_restart,
+ * which wipes boot_count / rtc_magic / clock state / safety counters.
+ * Observed 2026-04-18: Boot #1 repeated across clean software restarts,
+ * clk_now always 0, sleep-error diagnostic always 0, spurious/busy
+ * counters never accumulating. RTC_NOINIT_ATTR skips all init and is
+ * the correct macro for state that must survive esp_restart.
+ *
+ * Note: RTC_NOINIT_ATTR initializers are not respected (the section
+ * is never loaded), so the values are garbage on a true POR. The
+ * rtc_magic check inside app_main catches this and zero-initialises
+ * every counter exactly once, then stamps rtc_magic = RTC_MAGIC so
+ * subsequent restarts skip the reset. */
+#define RTC_MAGIC 0x484F4B55  /* "HOKU" — validates RTC memory isn't stale after flash / POR */
+RTC_NOINIT_ATTR static uint32_t rtc_magic;
+RTC_NOINIT_ATTR static int      boot_count;
+RTC_NOINIT_ATTR static uint8_t  wifi_channel;
+RTC_NOINIT_ATTR static uint8_t  wifi_bssid[6];
+RTC_NOINIT_ATTR static bool     has_wifi_cache;
+RTC_NOINIT_ATTR static uint16_t last_battery_mv;
+RTC_NOINIT_ATTR static bool     was_sleeping;  /* detect USB reset after deep sleep */
+RTC_NOINIT_ATTR static int32_t  last_sleep_seconds;  /* fallback if server unreachable */
 
 /* Scheduled wake deadline expressed in the RTC slow-clock frame (µs since
  * last POR, via esp_clk_rtc_time()). Written just before we enter sleep or
  * the USB polling loop; compared against esp_clk_rtc_time() on wake so we
  * can tell "spurious early reset" from "timer fired but was misreported
  * as UNDEFINED". 0 = no deadline set (first boot or unknown). */
-RTC_DATA_ATTR static uint64_t scheduled_wake_rtc_us = 0;
+RTC_NOINIT_ATTR static uint64_t scheduled_wake_rtc_us;
 
 /* How many spurious-reset shortcuts we've taken in a row. The shortcut
  * (skip display init, immediate sleep) saves battery on legitimate USB-
@@ -128,7 +146,7 @@ RTC_DATA_ATTR static uint64_t scheduled_wake_rtc_us = 0;
  * the device would never give the user a reflash window. After
  * MAX_SPURIOUS_RESETS in a row, we force a full awake window. Reset to 0
  * on any non-spurious wake. */
-RTC_DATA_ATTR static uint8_t  consecutive_spurious_resets = 0;
+RTC_NOINIT_ATTR static uint8_t  consecutive_spurious_resets;
 #define MAX_SPURIOUS_RESETS 3
 
 /* Display-recovery counter. If BUSY is stuck LOW after split_and_display
@@ -138,7 +156,7 @@ RTC_DATA_ATTR static uint8_t  consecutive_spurious_resets = 0;
  * display from keeping the chip in a reboot loop draining the battery.
  * Reset on any successful display (BUSY reads HIGH post-refresh) and on
  * rtc_magic invalidation. */
-RTC_DATA_ATTR static uint8_t  consecutive_busy_timeouts = 0;
+RTC_NOINIT_ATTR static uint8_t  consecutive_busy_timeouts;
 #define MAX_BUSY_RECOVERY_REBOOTS 3
 
 /* Server epoch (seconds) at the moment we entered deep sleep, computed
@@ -147,7 +165,7 @@ RTC_DATA_ATTR static uint8_t  consecutive_busy_timeouts = 0;
  * fresh epoch from the new download to compute actual_slept vs
  * expected_slept and log the error. 0 = no valid pre-sleep epoch
  * recorded (don't run the sleep check on next boot). */
-RTC_DATA_ATTR static int64_t  pre_sleep_server_epoch = 0;
+RTC_NOINIT_ATTR static int64_t  pre_sleep_server_epoch;
 
 /* Every successful HTTP response carries X-Server-Time-Epoch; on receipt
  * we call settimeofday() so the firmware's system clock holds real UTC.
@@ -162,8 +180,8 @@ RTC_DATA_ATTR static int64_t  pre_sleep_server_epoch = 0;
  * persisted so the next fetch can report it via X-Frame-State. Set inside
  * the wake-time sleep-check block; cleared whenever pre_sleep_server_epoch
  * is cleared (any path that would invalidate the next sleep check). */
-RTC_DATA_ATTR static int32_t  last_sleep_err_s = 0;
-RTC_DATA_ATTR static bool     last_sleep_err_valid = false;
+RTC_NOINIT_ATTR static int32_t  last_sleep_err_s;
+RTC_NOINIT_ATTR static bool     last_sleep_err_valid;
 
 /* How the chip got from the previous HTTP call to this one. Set inside
  * enter_deep_sleep right before committing to a sleep path, so the NEXT
@@ -171,7 +189,7 @@ RTC_DATA_ATTR static bool     last_sleep_err_valid = false;
 #define LAST_SLEEP_MODE_NONE        0
 #define LAST_SLEEP_MODE_DEEP_SLEEP  1
 #define LAST_SLEEP_MODE_USB_POLLING 2
-RTC_DATA_ATTR static uint8_t  last_sleep_mode = LAST_SLEEP_MODE_NONE;
+RTC_NOINIT_ATTR static uint8_t  last_sleep_mode;
 
 /* Slack (µs) for the deadline comparison. Absorbs calibration drift of
  * the RTC slow clock between when sleep started and when we re-read the
@@ -2021,25 +2039,11 @@ void app_main(void)
     free(img);
     ESP_LOGI(TAG, "Image displayed.");
 
-    /* Re-raise SYS_POWER after the display sequence.
-     *
-     * epaper_display_dual ends by driving SYS_POWER LOW (matching the June
-     * original's per-update teardown, so the UC8179C starts from cold on
-     * the next refresh). But we then spend up to 60s in the awake window
-     * and potentially another 3+ hours in the USB-polling loop while
-     * SYS_POWER stays LOW. On this board GPIO 17 is documented as the
-     * system power rail and appears to also gate RTC-slow-memory
-     * retention: counters that should survive esp_restart (boot_count,
-     * consecutive_busy_timeouts, last_sleep_err_s) and the ESP-IDF
-     * system clock were observed resetting every cycle (2026-04-18
-     * logs: Boot #1 twice across a clean esp_restart; clk_now always 0
-     * in X-Frame-State). Raising it back HIGH here keeps RTC memory
-     * alive during the wait. The next display update still cold-boots
-     * the controller via its own SYS_POWER LOW-then-HIGH sequence, so
-     * the factory-match goal of "controller POR between updates" is
-     * preserved — we just shrink the LOW window to the start of the
-     * next refresh instead of "from end-of-update until next boot". */
-    gpio_set_level(PIN_SYS_POWER, 1);
+    /* Note: epaper_display_dual ended by driving SYS_POWER LOW to match
+     * the June original's per-update teardown. We deliberately leave it
+     * LOW through the awake window + USB polling to save power. The
+     * next refresh cold-boots the controller via display_dual's own
+     * SYS_POWER LOW-then-HIGH sequence at entry. */
 
     /* Recover from a wedged display controller by rebooting. If BUSY is
      * still LOW here, epaper_display_dual hit one or more BUSY timeouts
