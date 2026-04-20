@@ -1,3 +1,22 @@
+hokku-server (2.1.17-1) unstable; urgency=low
+
+  * X-Frame-State protocol revamp to match the redesigned firmware
+    state machine. Web UI "Details" modal updated to show the new
+    fields. New firmware sends:
+      - regime ("usb_awake" | "battery_idle" | "boot")
+      - usb ("host" | "none")            [replaces chg]
+      - next_ep (absolute epoch seconds) [scheduled next refresh]
+      - wifi_cached (bool)               [fast-reconnect hit]
+    Dropped: caller (redundant with wake). Renamed last_sleep value
+    "usb_awake" -> "usb_restart" so the name matches the semantics
+    ("was in USB_AWAKE and left via esp_restart", not "is currently
+    USB-awake").
+  * Server has no backwards-compat bridge — old firmwares will
+    still store their dicts fine (parser is schema-agnostic) but
+    the Details modal won't pretty-print the old field names.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 19 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.16-1) unstable; urgency=low
 
   * Merge main (PR #3): selectable dither algorithms. New "Dither
