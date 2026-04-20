@@ -1384,3 +1384,50 @@ class TestOrientation:
         assert "floyd_steinberg" in key_active
         assert "atkinson" in key_other
         assert key_active != key_other
+
+    def test_default_is_fs_hue_aware(self):
+        """fs_hue_aware is the new default algorithm."""
+        assert webserver.DEFAULT_CONFIG["dither_algorithm"] == "fs_hue_aware"
+        assert "fs_hue_aware" in webserver.VALID_DITHER_ALGORITHMS
+
+    def test_dither_for_algorithm_returns_four_tuple(self):
+        """_dither_for_algorithm now returns (fn, lut, color_enhance, scale_chroma)."""
+        for algo in webserver.VALID_DITHER_ALGORITHMS:
+            result = webserver._dither_for_algorithm(algo)
+            assert len(result) == 4, f"{algo}: expected 4-tuple, got {len(result)}"
+            fn, lut, enhance, scale_chroma = result
+            assert callable(fn)
+            assert isinstance(enhance, float)
+            assert isinstance(scale_chroma, bool)
+        # Only fs_hue_aware uses chroma scaling
+        _, _, _, sc_fs = webserver._dither_for_algorithm("fs_hue_aware")
+        _, _, _, sc_ahu = webserver._dither_for_algorithm("atkinson_hue_aware")
+        assert sc_fs is True
+        assert sc_ahu is False
+
+    def test_is_near_grayscale_detects_bw(self):
+        """B&W source should be flagged; colorful source should not."""
+        # Grayscale: R=G=B across a range of values
+        bw = Image.new("RGB", (400, 300))
+        pixels = bw.load()
+        for y in range(300):
+            for x in range(400):
+                v = (x * 255) // 400
+                pixels[x, y] = (v, v, v)
+        assert webserver._is_near_grayscale(bw) is True
+
+        # Saturated red + blue patches
+        color = Image.new("RGB", (400, 300), (200, 40, 40))
+        assert webserver._is_near_grayscale(color) is False
+
+    def test_compress_dynamic_range_scale_chroma_flag(self):
+        """scale_chroma=True should reduce output chroma for saturated input."""
+        img = np.full((8, 8, 3), [220, 40, 40], dtype=np.float32)  # saturated red
+        out_lonly = webserver._compress_dynamic_range(img, scale_chroma=False)
+        out_vivid = webserver._compress_dynamic_range(img, scale_chroma=True)
+        # vividness path scales chroma down in sync with L, so a/b in Lab are smaller
+        lab_lonly = webserver._rgb_to_lab(out_lonly)
+        lab_vivid = webserver._rgb_to_lab(out_vivid)
+        chroma_lonly = np.sqrt(lab_lonly[..., 1] ** 2 + lab_lonly[..., 2] ** 2).mean()
+        chroma_vivid = np.sqrt(lab_vivid[..., 1] ** 2 + lab_vivid[..., 2] ** 2).mean()
+        assert chroma_vivid < chroma_lonly, f"vivid={chroma_vivid:.1f} should be < lonly={chroma_lonly:.1f}"

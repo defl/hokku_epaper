@@ -70,7 +70,7 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif", "
 
 # ── Configuration ──────────────────────────────────────────────────
 
-VALID_DITHER_ALGORITHMS = ("floyd_steinberg", "atkinson", "atkinson_hue_aware")
+VALID_DITHER_ALGORITHMS = ("floyd_steinberg", "atkinson", "atkinson_hue_aware", "fs_hue_aware")
 
 DEFAULT_CONFIG = {
     "timezone": "America/Chicago",
@@ -86,7 +86,7 @@ DEFAULT_CONFIG = {
     # fast for visual testing of the dithering pipeline. Drains battery
     # hard — not for production use. Toggled from the web GUI.
     "debug_fast_refresh": False,
-    "dither_algorithm": "atkinson_hue_aware",
+    "dither_algorithm": "fs_hue_aware",
 }
 
 DEBUG_FAST_REFRESH_SECONDS = 180
@@ -307,13 +307,24 @@ _DISPLAY_WHITE_L = float(_rgb_to_lab(PALETTE_MEASURED_RGB[1:2])[0, 0])
 # dithering algorithm doesn't try to reproduce brightness levels the panel
 # can't show. Based on esp32-photoframe's preprocessImage approach.
 
-def _compress_dynamic_range(img_array):
-    """Compress image luminance from full [0,100] L* to display's actual range."""
+def _compress_dynamic_range(img_array, scale_chroma=False):
+    """Compress image luminance from full [0,100] L* to display's actual range.
+
+    When scale_chroma is True ("vividness-preserved" mode), a* and b* are scaled
+    by the same ratio used on L*. This keeps the chroma-to-lightness ratio of the
+    source intact, so saturated mid-tones don't drift out of the palette's
+    reachable gamut after L is pulled in. Required for fs_hue_aware; optional
+    for the other algorithms.
+    """
     rgb = np.asarray(img_array, dtype=np.float64)
     linear = _srgb_to_linear(rgb)
     xyz = _linear_to_xyz(linear)
     lab = _xyz_to_lab(xyz)
-    lab[..., 0] = _DISPLAY_BLACK_L + (lab[..., 0] / 100.0) * (_DISPLAY_WHITE_L - _DISPLAY_BLACK_L)
+    L_ratio = (_DISPLAY_WHITE_L - _DISPLAY_BLACK_L) / 100.0
+    lab[..., 0] = _DISPLAY_BLACK_L + lab[..., 0] * L_ratio
+    if scale_chroma:
+        lab[..., 1] *= L_ratio
+        lab[..., 2] *= L_ratio
     ref = np.array([0.95047, 1.00000, 1.08883])
     L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
     fy = (L + 16) / 116.0
@@ -350,7 +361,7 @@ def _hash_file(img_path):
 def _cache_key(img_path, content_hash, algorithm=None):
     orientation = _config.get("orientation", "landscape")
     if algorithm is None:
-        algorithm = _config.get("dither_algorithm", "atkinson_hue_aware")
+        algorithm = _config.get("dither_algorithm", "fs_hue_aware")
     return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}_{algorithm}"
 
 def _load_from_cache(cache_dir, img_path, content_hash):
@@ -751,15 +762,45 @@ def _atkinson_dither(canvas, lut=None, lut_scale=None):
 
 
 def _dither_for_algorithm(algorithm):
-    """Return (dither_fn, lut, color_enhance) for the configured algorithm."""
+    """Return (dither_fn, lut, color_enhance, scale_chroma) for the algorithm.
+
+    scale_chroma enables vividness-preserved dynamic-range compression (scales
+    a*/b* by the same ratio as L*). fs_hue_aware relies on this to keep
+    saturated mid-tones reachable after L compression; older algorithms keep
+    the legacy L-only behavior.
+    """
     if algorithm == "floyd_steinberg":
-        return _floyd_steinberg_dither, _RGB_LUT_EUCLID, 1.2
+        return _floyd_steinberg_dither, _RGB_LUT_EUCLID, 1.2, False
     if algorithm == "atkinson":
-        return _atkinson_dither, _RGB_LUT_EUCLID, 1.2
+        return _atkinson_dither, _RGB_LUT_EUCLID, 1.2, False
     if algorithm == "atkinson_hue_aware":
-        return _atkinson_dither, _RGB_LUT_HUE_AWARE, 1.05
+        return _atkinson_dither, _RGB_LUT_HUE_AWARE, 1.05, False
+    if algorithm == "fs_hue_aware":
+        return _floyd_steinberg_dither, _RGB_LUT_HUE_AWARE, 1.2, True
     # Fallback matches new default so unknown config values don't hard-fail.
-    return _atkinson_dither, _RGB_LUT_HUE_AWARE, 1.05
+    return _floyd_steinberg_dither, _RGB_LUT_HUE_AWARE, 1.2, True
+
+
+# Images whose max chroma stays below this threshold are treated as near-grayscale
+# and rendered with the conservative preset (no vividness scaling, modest enhance).
+# Without this, fs_hue_aware's chroma amplification gives B&W photos a pink cast.
+_GRAYSCALE_CHROMA_THRESHOLD = 8.0
+
+
+def _is_near_grayscale(img):
+    """Detect near-B&W source images by sampling Lab chroma.
+
+    Downsamples to 200px for speed, converts to Lab, and returns True if the
+    95th-percentile chroma is below _GRAYSCALE_CHROMA_THRESHOLD. Downsampling
+    rather than sampling avoids being fooled by a single chromatic pixel in
+    an otherwise grayscale image.
+    """
+    thumb = img.copy()
+    thumb.thumbnail((200, 200), Image.LANCZOS)
+    arr = np.asarray(thumb.convert("RGB"), dtype=np.float64)
+    lab = _xyz_to_lab(_linear_to_xyz(_srgb_to_linear(arr)))
+    chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
+    return float(np.percentile(chroma, 95)) < _GRAYSCALE_CHROMA_THRESHOLD
 
 
 def _convert_image(img_path):
@@ -774,12 +815,20 @@ def _convert_image(img_path):
     img = img.convert("RGB")
     print(f"  {img_path.name}: {img.size[0]}x{img.size[1]}")
 
-    algorithm = _config.get("dither_algorithm", "atkinson_hue_aware")
-    dither_fn, lut, color_enhance = _dither_for_algorithm(algorithm)
-    print(f"  {img_path.name}: algorithm={algorithm}")
+    algorithm = _config.get("dither_algorithm", "fs_hue_aware")
+    dither_fn, lut, color_enhance, scale_chroma = _dither_for_algorithm(algorithm)
+
+    # fs_hue_aware's 1.2 color enhance + vividness compression amplifies tiny
+    # chroma deviations in near-grayscale images into a visible color cast.
+    # Detect B&W inputs and fall back to the conservative preset.
+    if scale_chroma and _is_near_grayscale(img):
+        print(f"  {img_path.name}: B&W detected, using conservative preset")
+        color_enhance, scale_chroma = 1.05, False
+
+    print(f"  {img_path.name}: algorithm={algorithm} enhance={color_enhance} scale_chroma={scale_chroma}")
 
     canvas, padding_mask = _prepare_canvas(img, color_enhance=color_enhance)
-    canvas_array = _compress_dynamic_range(np.array(canvas, dtype=np.float32))
+    canvas_array = _compress_dynamic_range(np.array(canvas, dtype=np.float32), scale_chroma=scale_chroma)
     canvas = Image.fromarray(canvas_array.astype(np.uint8))
     result_idx = dither_fn(canvas, lut, _LUT_SCALE)
 
@@ -1187,7 +1236,7 @@ def api_status():
                 "orientation": _config.get("orientation", "landscape"),
                 "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
                 "debug_fast_refresh_seconds": DEBUG_FAST_REFRESH_SECONDS,
-                "dither_algorithm": _config.get("dither_algorithm", "atkinson_hue_aware"),
+                "dither_algorithm": _config.get("dither_algorithm", "fs_hue_aware"),
                 "upload_dir": str(_get_upload_dir()),
                 "cache_dir": str(_get_cache_dir()),
             },
@@ -1346,7 +1395,7 @@ def api_config():
         val = data["dither_algorithm"]
         if val not in VALID_DITHER_ALGORITHMS:
             return jsonify({"error": f"Unknown dither_algorithm: {val}"}), 400
-        if _config.get("dither_algorithm", "atkinson_hue_aware") != val:
+        if _config.get("dither_algorithm", "fs_hue_aware") != val:
             algorithm_changed = True
         _config["dither_algorithm"] = val
         changed = True
@@ -1375,7 +1424,7 @@ def api_config():
         "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
         "orientation": _config.get("orientation", "landscape"),
         "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
-        "dither_algorithm": _config.get("dither_algorithm", "atkinson_hue_aware"),
+        "dither_algorithm": _config.get("dither_algorithm", "fs_hue_aware"),
     }})
 
 
