@@ -1878,9 +1878,14 @@ void app_main(void)
     if (do_refresh) {
         const char *label =
             (wake == WAKE_FIRST_BOOT)     ? "first_boot" :
-            (wake == WAKE_PENDING_ACTION) ? "button" :
+            (wake == WAKE_PENDING_ACTION) ? "button_restart" :
             (wake == WAKE_BUTTON)         ? "button_wake" :
                                             "timer";
+        /* Report the regime we're ABOUT to enter (based on current USB
+         * state) rather than the transient "boot" string. If USB goes
+         * away during the refresh, regime_battery_idle will correct it
+         * on entry. */
+        current_regime = usb_host_present() ? "usb_awake" : "battery_idle";
         perform_refresh(label, boot_time);
         /* If we came up via timer and had a valid pre-sleep epoch,
          * compute actual-vs-expected sleep error for the next
