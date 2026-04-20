@@ -69,7 +69,13 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif", "
 
 # ── Configuration ──────────────────────────────────────────────────
 
-VALID_DITHER_ALGORITHMS = ("floyd_steinberg", "atkinson", "atkinson_hue_aware", "fs_hue_aware")
+VALID_DITHER_ALGORITHMS = ("floyd_steinberg", "atkinson", "atkinson_hue_aware")
+# Deprecated algorithms — silently migrated to DEFAULT_CONFIG["dither_algorithm"].
+# fs_hue_aware was tried as a default but had a near-neutral amplification failure
+# mode (white umbrellas, light clothing picked up pink speckle). The current
+# atkinson_hue_aware implementation uses adaptive saturation + adaptive vividness
+# which beats fs_hue_aware on every benchmark metric.
+_DEPRECATED_ALGORITHMS = ("fs_hue_aware",)
 
 DEFAULT_CONFIG = {
     "timezone": "America/Chicago",
@@ -79,7 +85,7 @@ DEFAULT_CONFIG = {
     "port": 8080,
     "poll_interval_seconds": 10,
     "orientation": "landscape",
-    "dither_algorithm": "fs_hue_aware",
+    "dither_algorithm": "atkinson_hue_aware",
 }
 
 _config_file_path = None  # set during load, used for saving
@@ -104,6 +110,11 @@ def _load_config():
                     user_config = json.load(f)
                 config.update(user_config)
                 _config_file_path = path
+                # Migrate deprecated algorithm names to the current default
+                if config.get("dither_algorithm") in _DEPRECATED_ALGORITHMS:
+                    old = config["dither_algorithm"]
+                    config["dither_algorithm"] = DEFAULT_CONFIG["dither_algorithm"]
+                    print(f"  Migrating deprecated dither_algorithm '{old}' -> '{config['dither_algorithm']}'")
                 print(f"  Config loaded from: {path}")
                 return config
             except (json.JSONDecodeError, OSError) as e:
@@ -238,14 +249,19 @@ _DISPLAY_WHITE_L = float(_rgb_to_lab(PALETTE_MEASURED_RGB[1:2])[0, 0])
 # dithering algorithm doesn't try to reproduce brightness levels the panel
 # can't show. Based on esp32-photoframe's preprocessImage approach.
 
-def _compress_dynamic_range(img_array, scale_chroma=False):
-    """Compress image luminance from full [0,100] L* to display's actual range.
+def _compress_dynamic_range(img_array, scale_chroma=False, adaptive_vivid=False,
+                             vivid_low=5.0, vivid_high=15.0):
+    """Compress image luminance from [0,100] L* into the display's actual L* range.
 
-    When scale_chroma is True ("vividness-preserved" mode), a* and b* are scaled
-    by the same ratio used on L*. This keeps the chroma-to-lightness ratio of the
-    source intact, so saturated mid-tones don't drift out of the palette's
-    reachable gamut after L is pulled in. Required for fs_hue_aware; optional
-    for the other algorithms.
+    scale_chroma: uniformly scale a*/b* by the same L_ratio (old "vividness" mode).
+        Prevents saturated mid-tones from drifting out of the palette gamut after
+        L compression, but also mutes saturated features.
+
+    adaptive_vivid: chroma-gated scaling. Near-neutral pixels (chroma<vivid_low)
+        get full L_ratio compression (keeps tiny warm tints from cascading into
+        phantom red/yellow speckle in white regions). Saturated pixels
+        (chroma>vivid_high) keep full chroma (preserves tongues, red logos).
+        Smooth ramp between. This is the "best of both" behavior.
     """
     rgb = np.asarray(img_array, dtype=np.float64)
     linear = _srgb_to_linear(rgb)
@@ -253,7 +269,13 @@ def _compress_dynamic_range(img_array, scale_chroma=False):
     lab = _xyz_to_lab(xyz)
     L_ratio = (_DISPLAY_WHITE_L - _DISPLAY_BLACK_L) / 100.0
     lab[..., 0] = _DISPLAY_BLACK_L + lab[..., 0] * L_ratio
-    if scale_chroma:
+    if adaptive_vivid:
+        chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
+        t = np.clip((chroma - vivid_low) / (vivid_high - vivid_low), 0.0, 1.0)
+        c_factor = L_ratio + (1.0 - L_ratio) * t
+        lab[..., 1] *= c_factor
+        lab[..., 2] *= c_factor
+    elif scale_chroma:
         lab[..., 1] *= L_ratio
         lab[..., 2] *= L_ratio
     ref = np.array([0.95047, 1.00000, 1.08883])
@@ -280,6 +302,49 @@ def _compress_dynamic_range(img_array, scale_chroma=False):
     return np.clip(srgb * 255, 0, 255).astype(np.float32)
 
 
+def _adaptive_saturate(img_array, max_enhance=1.25, low_thresh=5.0, high_thresh=15.0):
+    """Chroma-gated saturation boost in Lab space.
+
+    PIL's ImageEnhance.Color scales ALL chroma uniformly, which amplifies tiny
+    warm tints in near-white regions (like umbrellas, cardigans) enough that
+    error diffusion cascades them into visible phantom red/yellow speckle.
+
+    This version leaves near-neutral pixels (chroma<low_thresh) untouched and
+    only boosts pixels that already have meaningful chroma. Result: tongues
+    and red logos get the full enhance; white umbrellas stay white.
+    """
+    rgb = np.asarray(img_array, dtype=np.float64)
+    linear = _srgb_to_linear(rgb)
+    xyz = _linear_to_xyz(linear)
+    lab = _xyz_to_lab(xyz)
+    chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
+    t = np.clip((chroma - low_thresh) / (high_thresh - low_thresh), 0.0, 1.0)
+    factor = 1.0 + (max_enhance - 1.0) * t
+    lab[..., 1] *= factor
+    lab[..., 2] *= factor
+    # Convert Lab back to sRGB (same math as in _compress_dynamic_range)
+    ref = np.array([0.95047, 1.00000, 1.08883])
+    L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
+    fy = (L + 16) / 116.0
+    fx = a / 500.0 + fy
+    fz = fy - b / 200.0
+    eps = 0.008856
+    kappa = 903.3
+    xyz_out = np.zeros_like(lab)
+    xyz_out[..., 0] = np.where(fx ** 3 > eps, fx ** 3, (116 * fx - 16) / kappa) * ref[0]
+    xyz_out[..., 1] = np.where(L > kappa * eps, ((L + 16) / 116.0) ** 3, L / kappa) * ref[1]
+    xyz_out[..., 2] = np.where(fz ** 3 > eps, fz ** 3, (116 * fz - 16) / kappa) * ref[2]
+    M_inv = np.array([
+        [ 3.2404542, -1.5371385, -0.4985314],
+        [-0.9692660,  1.8760108,  0.0415560],
+        [ 0.0556434, -0.2040259,  1.0572252],
+    ])
+    linear_out = np.clip(xyz_out @ M_inv.T, 0, 1)
+    srgb = np.where(linear_out <= 0.0031308, linear_out * 12.92,
+                    1.055 * (linear_out ** (1.0 / 2.4)) - 0.055)
+    return np.clip(srgb * 255, 0, 255).astype(np.float32)
+
+
 # ── Disk cache ──────────────────────────────────────────────────────
 
 def _hash_file(img_path):
@@ -289,11 +354,15 @@ def _hash_file(img_path):
             h.update(chunk)
     return h.hexdigest()
 
+# Bump whenever algorithm implementations change in a way that affects output.
+# Old cached renders with a different version are ignored and re-rendered.
+_CACHE_VERSION = "v2"
+
 def _cache_key(img_path, content_hash, algorithm=None):
     orientation = _config.get("orientation", "landscape")
     if algorithm is None:
-        algorithm = _config.get("dither_algorithm", "fs_hue_aware")
-    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}_{algorithm}"
+        algorithm = _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"])
+    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}_{algorithm}_{_CACHE_VERSION}"
 
 def _load_from_cache(cache_dir, img_path, content_hash):
     key = _cache_key(img_path, content_hash)
@@ -490,7 +559,7 @@ def _list_images():
             if f.suffix.lower() in IMAGE_EXTENSIONS and f.is_file()]
 
 
-def _prepare_canvas(img, color_enhance=1.2):
+def _prepare_canvas(img, color_enhance=1.2, adaptive_saturate=False):
     """Scale image to fit display, enhance for e-ink, produce 1200x1600 native buffer.
 
     In landscape mode: composites on 1600x1200 canvas, then rotates -90° to 1200x1600.
@@ -499,10 +568,10 @@ def _prepare_canvas(img, color_enhance=1.2):
     Returns (canvas, padding_mask) where padding_mask is a boolean numpy array
     (True = padding pixel, should be forced to white after dithering).
 
-    color_enhance is the PIL ImageEnhance.Color factor. Hue-aware dithering
-    benefits from a lower saturation boost (~1.05) because it can reproduce warm
-    mid-tones without residual error; classic FS needs the full 1.2 to compensate
-    for the dithering's tendency to mute color.
+    color_enhance is the saturation boost factor. With adaptive_saturate=True, the
+    boost is applied only to pixels with meaningful chroma (via _adaptive_saturate),
+    preserving near-neutral regions. With adaptive_saturate=False, PIL's global
+    Color.enhance is used (back-compat with the legacy algorithms).
     """
     from PIL import ImageEnhance, ImageOps
     orientation = _config.get("orientation", "landscape")
@@ -532,7 +601,11 @@ def _prepare_canvas(img, color_enhance=1.2):
     canvas = ImageEnhance.Brightness(canvas).enhance(1.0)
     canvas = ImageEnhance.Contrast(canvas).enhance(1.1)
     canvas = ImageEnhance.Sharpness(canvas).enhance(1.3)
-    canvas = ImageEnhance.Color(canvas).enhance(color_enhance)
+    if adaptive_saturate:
+        arr = _adaptive_saturate(np.array(canvas, dtype=np.float64), max_enhance=color_enhance)
+        canvas = Image.fromarray(arr.astype(np.uint8))
+    else:
+        canvas = ImageEnhance.Color(canvas).enhance(color_enhance)
 
     if not portrait:
         # Landscape: rotate -90° CW to get 1200x1600 native format
@@ -692,29 +765,48 @@ def _atkinson_dither(canvas, lut=None, lut_scale=None):
     return result_idx
 
 
-def _dither_for_algorithm(algorithm):
-    """Return (dither_fn, lut, color_enhance, scale_chroma) for the algorithm.
+class _AlgoConfig:
+    """Bundle of per-algorithm pipeline parameters."""
+    __slots__ = ("dither_fn", "lut", "color_enhance", "scale_chroma",
+                 "adaptive_saturate", "adaptive_vivid")
+    def __init__(self, dither_fn, lut, color_enhance, scale_chroma,
+                 adaptive_saturate, adaptive_vivid):
+        self.dither_fn = dither_fn
+        self.lut = lut
+        self.color_enhance = color_enhance
+        self.scale_chroma = scale_chroma
+        self.adaptive_saturate = adaptive_saturate
+        self.adaptive_vivid = adaptive_vivid
 
-    scale_chroma enables vividness-preserved dynamic-range compression (scales
-    a*/b* by the same ratio as L*). fs_hue_aware relies on this to keep
-    saturated mid-tones reachable after L compression; older algorithms keep
-    the legacy L-only behavior.
+
+def _dither_for_algorithm(algorithm):
+    """Return an _AlgoConfig describing the full pipeline for the algorithm.
+
+    atkinson_hue_aware uses the V10 recipe (adaptive saturation + adaptive
+    vividness compression): boosts chroma only for pixels that already have
+    meaningful chroma (so near-white regions don't amplify into phantom colors)
+    and compresses chroma only for near-neutral pixels (so saturated features
+    like tongues stay vivid). Benchmarked to beat the shipped baseline on both
+    neutral-region cleanliness and saturated-feature retention.
+
+    The other algorithms preserve their legacy behavior for users who prefer
+    those noise textures.
     """
     if algorithm == "floyd_steinberg":
-        return _floyd_steinberg_dither, _RGB_LUT_EUCLID, 1.2, False
+        return _AlgoConfig(_floyd_steinberg_dither, _RGB_LUT_EUCLID, 1.2, False, False, False)
     if algorithm == "atkinson":
-        return _atkinson_dither, _RGB_LUT_EUCLID, 1.2, False
+        return _AlgoConfig(_atkinson_dither, _RGB_LUT_EUCLID, 1.2, False, False, False)
     if algorithm == "atkinson_hue_aware":
-        return _atkinson_dither, _RGB_LUT_HUE_AWARE, 1.05, False
-    if algorithm == "fs_hue_aware":
-        return _floyd_steinberg_dither, _RGB_LUT_HUE_AWARE, 1.2, True
-    # Fallback matches new default so unknown config values don't hard-fail.
-    return _floyd_steinberg_dither, _RGB_LUT_HUE_AWARE, 1.2, True
+        return _AlgoConfig(_atkinson_dither, _RGB_LUT_HUE_AWARE, 1.25, False, True, True)
+    # Unknown algorithm falls back to the default recipe so unfamiliar config
+    # values don't hard-fail the server.
+    return _AlgoConfig(_atkinson_dither, _RGB_LUT_HUE_AWARE, 1.25, False, True, True)
 
 
 # Images whose max chroma stays below this threshold are treated as near-grayscale
-# and rendered with the conservative preset (no vividness scaling, modest enhance).
-# Without this, fs_hue_aware's chroma amplification gives B&W photos a pink cast.
+# and rendered with a conservative preset (no adaptive saturation boost). Without
+# this, the adaptive saturation + vividness pipeline amplifies tiny chroma
+# deviations in B&W inputs into a visible pink cast.
 _GRAYSCALE_CHROMA_THRESHOLD = 8.0
 
 
@@ -746,22 +838,29 @@ def _convert_image(img_path):
     img = img.convert("RGB")
     print(f"  {img_path.name}: {img.size[0]}x{img.size[1]}")
 
-    algorithm = _config.get("dither_algorithm", "fs_hue_aware")
-    dither_fn, lut, color_enhance, scale_chroma = _dither_for_algorithm(algorithm)
+    algorithm = _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"])
+    cfg = _dither_for_algorithm(algorithm)
 
-    # fs_hue_aware's 1.2 color enhance + vividness compression amplifies tiny
-    # chroma deviations in near-grayscale images into a visible color cast.
-    # Detect B&W inputs and fall back to the conservative preset.
-    if scale_chroma and _is_near_grayscale(img):
+    # B&W fallback: adaptive saturation/vividness amplify tiny chroma deviations
+    # in near-grayscale images into a visible color cast. Detect and use the
+    # conservative preset (no adaptive saturation, modest enhance).
+    if (cfg.adaptive_saturate or cfg.adaptive_vivid) and _is_near_grayscale(img):
         print(f"  {img_path.name}: B&W detected, using conservative preset")
-        color_enhance, scale_chroma = 1.05, False
+        cfg = _AlgoConfig(cfg.dither_fn, cfg.lut, 1.05, False, False, False)
 
-    print(f"  {img_path.name}: algorithm={algorithm} enhance={color_enhance} scale_chroma={scale_chroma}")
+    print(f"  {img_path.name}: algorithm={algorithm} enhance={cfg.color_enhance} "
+          f"adaptive_sat={cfg.adaptive_saturate} adaptive_vivid={cfg.adaptive_vivid} "
+          f"scale_chroma={cfg.scale_chroma}")
 
-    canvas, padding_mask = _prepare_canvas(img, color_enhance=color_enhance)
-    canvas_array = _compress_dynamic_range(np.array(canvas, dtype=np.float32), scale_chroma=scale_chroma)
+    canvas, padding_mask = _prepare_canvas(img, color_enhance=cfg.color_enhance,
+                                           adaptive_saturate=cfg.adaptive_saturate)
+    canvas_array = _compress_dynamic_range(
+        np.array(canvas, dtype=np.float32),
+        scale_chroma=cfg.scale_chroma,
+        adaptive_vivid=cfg.adaptive_vivid,
+    )
     canvas = Image.fromarray(canvas_array.astype(np.uint8))
-    result_idx = dither_fn(canvas, lut, _LUT_SCALE)
+    result_idx = cfg.dither_fn(canvas, cfg.lut, _LUT_SCALE)
 
     # Force padding areas to pure white (palette index 1) — without this,
     # the enhancement + dithering pipeline turns pure white into a slightly
@@ -995,7 +1094,7 @@ def api_status():
                 "port": _config["port"],
                 "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
                 "orientation": _config.get("orientation", "landscape"),
-                "dither_algorithm": _config.get("dither_algorithm", "fs_hue_aware"),
+                "dither_algorithm": _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"]),
                 "upload_dir": str(_get_upload_dir()),
                 "cache_dir": str(_get_cache_dir()),
             },
@@ -1128,9 +1227,12 @@ def api_config():
     algorithm_changed = False
     if "dither_algorithm" in data:
         val = data["dither_algorithm"]
+        # Silently migrate deprecated names to the current default
+        if val in _DEPRECATED_ALGORITHMS:
+            val = DEFAULT_CONFIG["dither_algorithm"]
         if val not in VALID_DITHER_ALGORITHMS:
             return jsonify({"error": f"Unknown dither_algorithm: {val}"}), 400
-        if _config.get("dither_algorithm", "fs_hue_aware") != val:
+        if _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"]) != val:
             algorithm_changed = True
         _config["dither_algorithm"] = val
         changed = True
@@ -1158,7 +1260,7 @@ def api_config():
         "refresh_image_at_time": _config["refresh_image_at_time"],
         "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
         "orientation": _config.get("orientation", "landscape"),
-        "dither_algorithm": _config.get("dither_algorithm", "fs_hue_aware"),
+        "dither_algorithm": _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"]),
     }})
 
 
