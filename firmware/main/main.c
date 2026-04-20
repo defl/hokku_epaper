@@ -121,11 +121,12 @@ static const char *TAG = "hokku";
 /* Fallback sleep durations when we have no server-provided schedule */
 #define SLEEP_FALLBACK_3H_US  (3LL * 3600 * 1000000LL)
 
-/* Safety caps — prevent a single persistent fault from draining the
- * battery in a reboot / spurious-wake loop. Stored in RTC_NOINIT so they
- * persist across esp_restart. */
-#define MAX_SPURIOUS_RESETS      3
-#define MAX_BUSY_RECOVERY_RESTARTS  3
+/* Safety cap — prevent spurious wakes (USB host disconnect resetting the
+ * chip, brownouts, silicon quirks) from burning through the battery via
+ * repeated boot cycles. After MAX_SPURIOUS_RESETS in a row, fall through
+ * to the full awake window instead of short-pathing back to sleep so the
+ * user has a reflash window. */
+#define MAX_SPURIOUS_RESETS  3
 
 /* ── RTC memory (survives deep sleep + esp_restart) ──────────────────
  *
@@ -162,19 +163,19 @@ RTC_NOINIT_ATTR static int32_t  last_sleep_seconds;
 RTC_NOINIT_ATTR static int64_t  next_refresh_epoch;
 
 /* Pre-sleep server-epoch snapshot, used to compute "actual vs expected
- * sleep duration" on the next wake for sleep_err_s diagnostic. 0 = invalid. */
+ * sleep duration" on the next wake for the sleep_err_s diagnostic.
+ * 0 = not yet measured (reported as JSON null in X-Frame-State). */
 RTC_NOINIT_ATTR static int64_t  pre_sleep_server_epoch;
 RTC_NOINIT_ATTR static int32_t  last_sleep_err_s;
-RTC_NOINIT_ATTR static bool     last_sleep_err_valid;
+RTC_NOINIT_ATTR static bool     last_sleep_err_known;  /* true once we've recorded at least one error */
 
-/* Safety valve counters. */
+/* Spurious-wake safety counter. */
 RTC_NOINIT_ATTR static uint8_t  consecutive_spurious_resets;
-RTC_NOINIT_ATTR static uint8_t  consecutive_busy_restarts;
 
 /* How we got here, for the next boot's X-Frame-State last_sleep field. */
 #define LAST_SLEEP_MODE_NONE        0
 #define LAST_SLEEP_MODE_DEEP_SLEEP  1
-#define LAST_SLEEP_MODE_USB_AWAKE   2  /* left the "USB-awake" regime via button-restart */
+#define LAST_SLEEP_MODE_USB_RESTART   2  /* left the "USB-awake" regime via button-restart */
 RTC_NOINIT_ATTR static uint8_t  last_sleep_mode;
 
 /* Button-press-triggered refresh marker. Set when the poll loop in
@@ -230,6 +231,18 @@ static spi_device_handle_t spi_handle;
 static EventGroupHandle_t  wifi_events;
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
+
+/* Set by wifi_connect() on each successful connect: true iff the fast-
+ * reconnect path (cached BSSID + channel) actually worked. False if we
+ * fell through to full scan, or if this is a first-time connect. Read by
+ * build_frame_state_json to surface the hit-rate to the server. */
+static bool last_wifi_used_cache = false;
+
+/* Runtime regime string — set when entering USB_AWAKE / BATTERY_IDLE so
+ * the frame-state builder can report what state the firmware is in RIGHT
+ * NOW (the `wake` field says how we got here; this says what we're doing).
+ * "boot" during early init before regime dispatch. */
+static const char *current_regime = "boot";
 
 static const uint8_t font5x7[][5] = {
     {0x00,0x00,0x00,0x00,0x00}, /*   */
@@ -901,12 +914,15 @@ static bool wifi_connect(void)
     wifi_cfg.sta.password[sizeof(wifi_cfg.sta.password) - 1] = '\0';
 
     /* Use cached channel/BSSID for fast reconnect */
+    bool attempting_cache = false;
     if (has_wifi_cache && wifi_channel > 0) {
         wifi_cfg.sta.channel = wifi_channel;
         memcpy(wifi_cfg.sta.bssid, wifi_bssid, 6);
         wifi_cfg.sta.bssid_set = true;
+        attempting_cache = true;
         ESP_LOGI(TAG, "WiFi fast reconnect ch=%d", wifi_channel);
     }
+    last_wifi_used_cache = false;  /* flipped to true only if cache path succeeds */
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
@@ -925,6 +941,7 @@ static bool wifi_connect(void)
             memcpy(wifi_bssid, ap.bssid, 6);
             has_wifi_cache = true;
         }
+        last_wifi_used_cache = attempting_cache;
         return true;
     }
 
@@ -1030,11 +1047,32 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 /* Build a compact JSON payload describing the frame's current state.
  * Sent as X-Frame-State on every HTTP call so the server can display
  * full device state in the web UI without needing a serial connection.
- * wake_label = classifier result for THIS boot; caller = what triggered
- * THIS fetch ("wake" for the first post-boot fetch, "button" for an
- * in-awake-window button press). */
+ *
+ * Schema (see the matching client-side parse in webserver.py):
+ *   fw            firmware version string
+ *   boot          boot counter (incremented every app_main; RTC-persistent)
+ *   wake          how we got here: first_boot | button_restart | timer |
+ *                 button_wake | usb_sched
+ *   regime        what we're doing right now: usb_awake | battery_idle | boot
+ *   uptime_s      seconds since the current app_main entry
+ *   bat_mv        battery voltage in millivolts (most recent ADC read)
+ *   usb           "host" (computer USB enumerated) | "none"
+ *                 NB: NOT the same as "charging" — wall charger reads "none"
+ *                     because GPIO 14 is a USB-host-detect signal, not VBUS.
+ *   last_sleep    previous regime we came out of: deep_sleep | usb_restart |
+ *                 none (fresh boot)
+ *   rssi          WiFi signal strength of the current AP, dBm
+ *   heap_kb       free heap in KiB
+ *   spurious      consecutive spurious-reset short-paths taken (safety valve)
+ *   cfg_ver       NVS config schema version
+ *   clk_now       firmware wall-clock, Unix epoch seconds (0 if unset)
+ *   next_ep       scheduled next-refresh, Unix epoch seconds (0 if unscheduled)
+ *   sleep_err_s   actual_slept - expected_slept from the last wake (null if
+ *                 we have no prior sleep interval to compare against)
+ *   wifi_cached   true iff the most recent WiFi connect succeeded via the
+ *                 fast-reconnect cache (BSSID + channel) without a full scan */
 static void build_frame_state_json(char *buf, size_t buflen,
-                                   const char *wake_label, const char *caller,
+                                   const char *wake_label,
                                    int64_t boot_time_us)
 {
     int rssi = 0;
@@ -1048,65 +1086,53 @@ static void build_frame_state_json(char *buf, size_t buflen,
     const esp_app_desc_t *app = esp_app_get_description();
     const char *fw = (app && app->version[0]) ? app->version : "unknown";
 
-    int chg_low = (gpio_get_level(PIN_USB_DETECT) == 0);
+    const char *usb = (gpio_get_level(PIN_USB_DETECT) == 0) ? "host" : "none";
 
-    /* Firmware's current wall-clock time from its system clock. The clock
-     * was set via settimeofday() on the most recent X-Server-Time-Epoch
-     * response, and keeps ticking through deep sleep + esp_restart (system
-     * time is RTC-backed on ESP32-S3). Omit if the clock has never been
-     * set (epoch < 2020-01-01 — we're in 2026, so any time < that means
-     * uninitialised / first boot). */
-    time_t clk_now = time(NULL);
-    if (clk_now < 1577836800) {
-        clk_now = 0;  /* signals "not set" to the server */
-    }
+    /* Firmware's current wall-clock time from its system clock. Set via
+     * settimeofday() from each X-Server-Time-Epoch response; survives
+     * deep sleep + esp_restart (RTC-backed). 0 = never set. */
+    time_t clk_now_t = time(NULL);
+    int64_t clk_now = (clk_now_t < 1577836800) ? 0 : (int64_t)clk_now_t;
 
     const char *last_sleep_str =
         (last_sleep_mode == LAST_SLEEP_MODE_DEEP_SLEEP) ? "deep_sleep" :
-        (last_sleep_mode == LAST_SLEEP_MODE_USB_AWAKE) ? "usb_awake" :
+        (last_sleep_mode == LAST_SLEEP_MODE_USB_RESTART) ? "usb_restart" :
         "none";
 
     int64_t uptime_s = (esp_timer_get_time() - boot_time_us) / 1000000LL;
 
-    /* If we have a valid sleep error from the post-wake check, include it;
-     * otherwise omit to avoid sending stale values after a cold boot or
-     * any path that cleared pre_sleep_server_epoch. */
-    if (last_sleep_err_valid) {
-        snprintf(buf, buflen,
-            "{\"fw\":\"%s\",\"boot\":%u,\"wake\":\"%s\",\"caller\":\"%s\","
-            "\"uptime_s\":%lld,\"bat_mv\":%d,\"chg\":\"%s\","
-            "\"last_sleep\":\"%s\",\"rssi\":%d,\"heap_kb\":%u,"
-            "\"spurious\":%u,\"cfg_ver\":%u,\"clk_now\":%lld,"
-            "\"sleep_err_s\":%d}",
-            fw, (unsigned)boot_count, wake_label, caller,
-            (long long)uptime_s, (int)last_battery_mv,
-            chg_low ? "charging" : "idle",
-            last_sleep_str, rssi, (unsigned)(free_heap / 1024u),
-            (unsigned)consecutive_spurious_resets,
-            (unsigned)config.cfg_ver, (long long)clk_now,
-            (int)last_sleep_err_s);
+    /* sleep_err_s: always emitted, as either an int or JSON null. */
+    char sleep_err_buf[16];
+    if (last_sleep_err_known) {
+        snprintf(sleep_err_buf, sizeof(sleep_err_buf), "%d", (int)last_sleep_err_s);
     } else {
-        snprintf(buf, buflen,
-            "{\"fw\":\"%s\",\"boot\":%u,\"wake\":\"%s\",\"caller\":\"%s\","
-            "\"uptime_s\":%lld,\"bat_mv\":%d,\"chg\":\"%s\","
-            "\"last_sleep\":\"%s\",\"rssi\":%d,\"heap_kb\":%u,"
-            "\"spurious\":%u,\"cfg_ver\":%u,\"clk_now\":%lld}",
-            fw, (unsigned)boot_count, wake_label, caller,
-            (long long)uptime_s, (int)last_battery_mv,
-            chg_low ? "charging" : "idle",
-            last_sleep_str, rssi, (unsigned)(free_heap / 1024u),
-            (unsigned)consecutive_spurious_resets,
-            (unsigned)config.cfg_ver, (long long)clk_now);
+        strcpy(sleep_err_buf, "null");
     }
+
+    snprintf(buf, buflen,
+        "{\"fw\":\"%s\",\"boot\":%u,\"wake\":\"%s\",\"regime\":\"%s\","
+        "\"uptime_s\":%lld,\"bat_mv\":%d,\"usb\":\"%s\","
+        "\"last_sleep\":\"%s\",\"rssi\":%d,\"heap_kb\":%u,"
+        "\"spurious\":%u,\"cfg_ver\":%u,\"clk_now\":%lld,"
+        "\"next_ep\":%lld,\"sleep_err_s\":%s,\"wifi_cached\":%s}",
+        fw, (unsigned)boot_count, wake_label, current_regime,
+        (long long)uptime_s, (int)last_battery_mv, usb,
+        last_sleep_str, rssi, (unsigned)(free_heap / 1024u),
+        (unsigned)consecutive_spurious_resets,
+        (unsigned)config.cfg_ver, (long long)clk_now,
+        (long long)next_refresh_epoch,
+        sleep_err_buf,
+        last_wifi_used_cache ? "true" : "false");
 }
 
 /* Download image and extract X-Sleep-Seconds + X-Server-Time-Epoch headers.
  * Returns image buffer (caller frees) or NULL on failure.
  * *out_sleep_seconds and *out_server_epoch are set if their headers are
  * present, otherwise unchanged. Either pointer may be NULL.
- * wake_label and caller feed into the X-Frame-State JSON. */
+ * wake_label feeds into the X-Frame-State JSON (regime is read from
+ * current_regime global; see header comment on build_frame_state_json). */
 static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_epoch,
-                               const char *wake_label, const char *caller,
+                               const char *wake_label,
                                int64_t boot_time_us)
 {
     uint8_t *buf = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
@@ -1132,13 +1158,11 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
         esp_http_client_set_header(client, "X-Screen-Name", config.screen_name);
     }
 
-    /* Full device state in a single compact JSON header. Replaces the
-     * older X-Battery-mV header — battery is now inside this dict along
-     * with firmware version, wake cause, boot count, etc. */
+    /* Full device state in a single compact JSON header. The server
+     * stores the whole dict per screen for the dashboard Details view. */
     char frame_state[384];
     build_frame_state_json(frame_state, sizeof(frame_state),
                            wake_label ? wake_label : "unknown",
-                           caller ? caller : "wake",
                            boot_time_us);
     esp_http_client_set_header(client, "X-Frame-State", frame_state);
 
@@ -1378,7 +1402,7 @@ static void save_pre_sleep_epoch(int64_t server_epoch, int64_t local_time_at_dow
 {
     if (server_epoch <= 0) {
         pre_sleep_server_epoch = 0;
-        last_sleep_err_valid = false;
+        last_sleep_err_known = false;
         return;
     }
     int64_t delta_s = (esp_timer_get_time() - local_time_at_download_us) / 1000000LL;
@@ -1461,7 +1485,7 @@ static void enter_deep_sleep(int64_t sleep_us)
  * the prior image in place).
  *
  * wake_label and caller are for the X-Frame-State JSON. */
-static bool perform_refresh(const char *wake_label, const char *caller, int64_t boot_time_us)
+static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 {
     int32_t sleep_seconds = 0;
     int64_t server_epoch = 0;
@@ -1474,7 +1498,7 @@ static bool perform_refresh(const char *wake_label, const char *caller, int64_t 
     }
     gpio_set_level(PIN_WIFI_LED, 1);
 
-    img = download_image(&sleep_seconds, &server_epoch, wake_label, caller, boot_time_us);
+    img = download_image(&sleep_seconds, &server_epoch, wake_label, boot_time_us);
     local_time_at_download_us = esp_timer_get_time();
 
     wifi_shutdown();
@@ -1546,13 +1570,14 @@ static void button_triggered_restart(void)
     pending_action = ACTION_REFRESH_FROM_BUTTON;
     rtc_magic = RTC_MAGIC;
     /* Record how we're leaving this regime so diagnostics are clear. */
-    last_sleep_mode = LAST_SLEEP_MODE_USB_AWAKE;
+    last_sleep_mode = LAST_SLEEP_MODE_USB_RESTART;
     vTaskDelay(pdMS_TO_TICKS(50));  /* let log flush */
     esp_restart();
 }
 
 static void regime_usb_awake(int64_t boot_time_us)
 {
+    current_regime = "usb_awake";
     log_level_apply(true);
     ESP_LOGI(TAG, "Entering USB_AWAKE regime");
 
@@ -1572,7 +1597,7 @@ static void regime_usb_awake(int64_t boot_time_us)
         }
 
         if (refresh_due()) {
-            perform_refresh("usb_sched", "wake", boot_time_us);
+            perform_refresh("usb_sched", boot_time_us);
             /* next_refresh_epoch now set from server response; loop continues */
         }
     }
@@ -1584,6 +1609,7 @@ static void regime_usb_awake(int64_t boot_time_us)
 
 static void regime_battery_idle(int64_t boot_time_us)
 {
+    current_regime = "battery_idle";
     /* Keep logs on for the window — this is the reflash-reachable
      * moment, so visibility helps if someone plugs USB in right at
      * the tail of a refresh cycle. Logs go off once we commit to
@@ -1713,9 +1739,8 @@ void app_main(void)
         next_refresh_epoch = 0;
         pre_sleep_server_epoch = 0;
         last_sleep_err_s = 0;
-        last_sleep_err_valid = false;
+        last_sleep_err_known = false;
         consecutive_spurious_resets = 0;
-        consecutive_busy_restarts = 0;
         last_sleep_mode = LAST_SLEEP_MODE_NONE;
         pending_action = ACTION_NONE;
         struct timeval tv = {0, 0};
@@ -1856,7 +1881,7 @@ void app_main(void)
             (wake == WAKE_PENDING_ACTION) ? "button" :
             (wake == WAKE_BUTTON)         ? "button_wake" :
                                             "timer";
-        perform_refresh(label, "wake", boot_time);
+        perform_refresh(label, boot_time);
         /* If we came up via timer and had a valid pre-sleep epoch,
          * compute actual-vs-expected sleep error for the next
          * X-Frame-State to carry to the server. */
@@ -1868,7 +1893,7 @@ void app_main(void)
                 if (err > INT32_MAX) err = INT32_MAX;
                 if (err < INT32_MIN) err = INT32_MIN;
                 last_sleep_err_s = (int32_t)err;
-                last_sleep_err_valid = true;
+                last_sleep_err_known = true;
             }
         }
     }

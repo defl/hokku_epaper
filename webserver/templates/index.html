@@ -543,6 +543,15 @@ function formatStateValue(key, v) {
     const sign = v >= 0 ? '+' : '';
     return `${sign}${v}s`;
   }
+  if (key === 'next_ep' && typeof v === 'number' && v > 0) {
+    const dt = new Date(v * 1000);
+    const delta = v - Math.floor(Date.now() / 1000);
+    const ds = delta >= 0 ? `in ${delta}s` : `${-delta}s ago`;
+    return `${dt.toLocaleString(undefined, {hour12: false})} (${ds})`;
+  }
+  if (key === 'wifi_cached') {
+    return v ? 'fast-reconnect' : 'full-scan';
+  }
   if (key === 'seen_at') {
     const dt = new Date(v);
     if (!isNaN(dt.getTime())) {
@@ -562,9 +571,10 @@ async function showScreenDetails(name) {
   }
   // Show keys in a deterministic, readable order. Any key we don't
   // recognise still appears, at the end, so new firmware fields auto-surface.
-  const ordered = ['fw','boot','wake','caller','uptime_s','bat_mv','chg',
-                   'last_sleep','rssi','heap_kb','spurious','cfg_ver',
-                   'sleep_err_s','clk_now','clk_drift_s','seen_at'];
+  const ordered = ['fw','boot','wake','regime','uptime_s','bat_mv','usb',
+                   'wifi_cached','last_sleep','rssi','heap_kb','spurious',
+                   'cfg_ver','clk_now','clk_drift_s','next_ep','sleep_err_s',
+                   'seen_at'];
   const extras = Object.keys(s.state).filter(k => !ordered.includes(k));
   const keys = ordered.filter(k => k in s.state).concat(extras);
 
