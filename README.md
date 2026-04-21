@@ -65,7 +65,7 @@ You need two things running:
 **Debian / Ubuntu** (recommended):
 ```bash
 # Download the .deb from the latest release, then:
-apt install ./hokku-server_2.1.19-1_all.deb
+apt install ./hokku-server_2.1.20-1_all.deb
 ```
 Starts automatically via systemd. Web GUI at `http://<your-server>:8080/`. Use web upload, drop photos into `/var/lib/hokku/upload/` — or install Samba so you can manage that folder from any machine on your network.
 

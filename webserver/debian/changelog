@@ -1,3 +1,15 @@
+hokku-server (2.1.20-1) unstable; urgency=low
+
+  * Documentation restructure: README rewritten for end users
+    (grouped feature sections, system requirements, buttons/LEDs).
+    New docs/tech_details.md collects the architecture / protocol
+    / API reference; docs/firmware_design.md trimmed to rationale
+    only. No functional server changes.
+  * New docs/reverse_engineering_overview.md plus per-version
+    writeups of the stock firmware.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 21 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.19-1) unstable; urgency=low
 
   * Dither: fs_hue_aware retired; atkinson_hue_aware upgraded to V10
