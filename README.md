@@ -30,7 +30,7 @@ A self-hosted photo frame that actually works — no cloud, no accounts, no mont
 - **Schedule-driven refreshes** (e.g. 06:00, 12:00, 18:00) with timezone support; the frame sleeps between refreshes and wakes on its own.
 - **Clock-synced** — every refresh carries the server's wall-clock, and the dashboard shows drift in seconds for every frame.
 - **Per-frame diagnostics modal** — one click opens the frame's self-reported state (firmware version, boot count, wake cause, WiFi cache hit, free heap, etc.) without a serial cable.
-- **Button on the back** forces an immediate refresh regardless of schedule.
+- **Button on the side** forces an immediate refresh regardless of schedule.
 
 **Easy to run**
 - **Upload, download and manage everything from the web app.** No extra servers, no Linux config, no Samba share to mount. Just works out of the box.
@@ -40,7 +40,7 @@ A self-hosted photo frame that actually works — no cloud, no accounts, no mont
 - **Configuration lives on the server** (timezone, schedule, orientation, dither choice) — change it once in the web app, every frame picks it up on its next refresh.
 - **Clear Cache & Re-convert** one-click button for when you change orientation, dither algorithm, or want to re-render everything from scratch.
 
-### System requirements
+## System Requirements
 
 **Server side** — where you host the image server:
 - Any Linux, macOS, Windows, or Raspberry Pi host with Python 3.9+.
