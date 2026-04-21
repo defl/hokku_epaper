@@ -2031,18 +2031,34 @@ void app_main(void)
          * away during the refresh, regime_battery_idle will correct it
          * on entry. */
         current_regime = usb_host_present() ? "usb_awake" : "battery_idle";
+
+        /* Snapshot the PREVIOUS sleep's anchor BEFORE perform_refresh
+         * overwrites pre_sleep_server_epoch and last_sleep_seconds with
+         * THIS boot's response. Without this snapshot the sleep-error
+         * check compares "time since this boot's download" against
+         * "this boot's requested sleep duration" — two unrelated
+         * numbers that always yield a meaningless value near
+         * -last_sleep_seconds (observed 2026-04-20: sleep_err_s=-157s
+         * on a clean timer wake where the real error was ~3 s). */
+        int64_t prior_sleep_entry_epoch = pre_sleep_server_epoch;
+        int32_t prior_sleep_duration    = last_sleep_seconds;
+
         perform_refresh(label, boot_time);
-        /* If we came up via timer and had a valid pre-sleep epoch,
-         * compute actual-vs-expected sleep error for the next
-         * X-Frame-State to carry to the server. */
-        if (wake == WAKE_TIMER && pre_sleep_server_epoch > 0) {
+
+        /* Sleep-error diagnostic: only meaningful on timer wakes where
+         * we have BOTH a prior sleep anchor AND a prior duration to
+         * compare against. `now` is post-refresh wall-clock, which
+         * bakes in ~20 s of this boot's WiFi+download+display time —
+         * inherent ±display-granular precision. Good enough to flag
+         * "is my frame waking minutes late" vs "seconds late". */
+        if (wake == WAKE_TIMER && prior_sleep_entry_epoch > 0 && prior_sleep_duration > 0) {
             time_t now = now_epoch();
-            if (now > 0 && last_sleep_seconds > 0) {
-                int64_t actual_slept_s = (int64_t)now - pre_sleep_server_epoch;
-                int64_t err = actual_slept_s - last_sleep_seconds;
+            if (now > 0) {
+                int64_t actual_slept_s = (int64_t)now - prior_sleep_entry_epoch;
+                int64_t err            = actual_slept_s - prior_sleep_duration;
                 if (err > INT32_MAX) err = INT32_MAX;
                 if (err < INT32_MIN) err = INT32_MIN;
-                last_sleep_err_s = (int32_t)err;
+                last_sleep_err_s     = (int32_t)err;
                 last_sleep_err_known = true;
             }
         }
