@@ -51,7 +51,9 @@ All configuration (WiFi SSID/password, server URL, screen name) is stored in the
 
 ### Important notes
 
-- **Do not modify the display driver code** (SPI init, CS, BUSY polling, GPIO init, epaper_reset, epaper_init_panel, epaper_send_panel, epaper_display_dual). See `CLAUDE.md` for details.
-- The firmware has a 120-second reflash window before every deep sleep.
-- When USB is connected (charging), the firmware stays awake instead of deep sleeping to avoid boot loops.
-- After flashing, restore the factory firmware dump first for a clean display state (the setup tool handles this).
+- **Do not modify the display driver code** (SPI init, CS, BUSY polling, GPIO init, `epaper_reset`, `epaper_init_panel`, `epaper_send_panel`, `epaper_display_dual`). See `CLAUDE.md` for details.
+- **State-machine architecture** — the firmware's top-level behaviour is a 4-state machine (USB_AWAKE / BATTERY_IDLE / DEEP_SLEEP / REFRESH). Design spec is in the repo root as `firmware.md`; don't change the semantics without updating the spec first.
+- **Boot is never a refresh trigger.** The image changes only on: a scheduled refresh time fires, a button press, or the very first install after a clean flash. Plugging USB in / out does not change the image.
+- **RTC state survival** — all persistent counters use `RTC_NOINIT_ATTR`, not `RTC_DATA_ATTR`. RTC_DATA_ATTR re-runs its initialiser on every `esp_restart`, which silently wipes counters. If you add new persistent state, use RTC_NOINIT_ATTR and zero-init it in the `rtc_magic` validation block at the top of `app_main`.
+- **Reflash reachability** — USB_AWAKE never deep-sleeps so the chip is always reachable while the cable is plugged in. BATTERY_IDLE has only a 5 s awake window; to reflash a battery-only frame, plug in USB which transitions to USB_AWAKE.
+- **After flashing**, restore the factory firmware dump first for a clean display state (the setup tool handles this).
