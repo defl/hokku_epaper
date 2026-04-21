@@ -57,7 +57,7 @@ Full pin map (confirmed — matches both stock firmware's `gpio_config` masks an
 | 40 | BUTTON_2 | input | User button 2. (Not wake-capable in our firmware.) |
 | 41 | EPAPER_MOSI | output (SPI) | SPI MOSI. |
 
-A more rigorous version of the above with register-level references lives in [`../HARDWARE_FACTS.md`](../HARDWARE_FACTS.md). That file is still the authoritative pin map; this table is just a refresher. The "facts" in that file that still carry a caveat are re-documented here, below.
+A more rigorous version of the above with register-level references lives in [`hardware_facts.md`](hardware_facts.md). That file is still the authoritative pin map; this table is just a refresher. The "facts" in that file that still carry a caveat are re-documented here, below.
 
 ### GPIO 3 (EPAPER_PWR_EN) mystery — status
 

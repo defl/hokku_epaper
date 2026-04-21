@@ -46,7 +46,7 @@ reverse-engineering of the original factory firmware, using Ghidra
 decompilation + disassembly of a flash dump of a frame the author
 physically owns. The display-controller init sequence, post-refresh
 shutdown sequence, and SPI timing were derived from that analysis.
-See `docs/HARDWARE_FACTS.md` for the confirmed facts and the open
+See `docs/hardware_facts.md` for the confirmed facts and the open
 questions. The authors believe this constitutes lawful
 interoperability research under DMCA Section 1201(f) (US) and the EU
 Software Directive Article 6 — we're making compatible software for

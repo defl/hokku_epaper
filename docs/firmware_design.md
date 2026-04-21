@@ -47,7 +47,7 @@ USB <-> no USB
 DESIGN — State Machine (added 2026-04-19, ties spec to verified hardware)
 ================================================================================
 
-Hardware reality from probe testing (see HARDWARE_FACTS.md "USB Detection"):
+Hardware reality from probe testing (see hardware_facts.md "USB Detection"):
   - "USB connected" is detectable ONLY for COMPUTER-class hosts via GPIO 14.
   - Wall chargers / USB battery packs / dumb power-only sources are
     INVISIBLE to the firmware — they look exactly like "running on battery".

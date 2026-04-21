@@ -2,7 +2,7 @@ This is a project where you're writing firmware for an ESP32 that drives an e-in
 
 Hardware
 ========
-- The known facts are in docs/HARDWARE_FACTS.md, though this might be wrong so treat with caution
+- The known facts are in docs/hardware_facts.md, though this might be wrong so treat with caution
 
 NVS Config Version
 ==================
