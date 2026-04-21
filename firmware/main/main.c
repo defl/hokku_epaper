@@ -121,6 +121,11 @@ static const char *TAG = "hokku";
 /* Fallback sleep durations when we have no server-provided schedule */
 #define SLEEP_FALLBACK_3H_US  (3LL * 3600 * 1000000LL)
 
+/* Retry delay when a refresh attempt fails (WiFi down, server unreachable,
+ * server returned nonsense sleep_seconds). Applied as the next
+ * next_refresh_epoch so the regime loops don't hot-retry at 100 ms. */
+#define REFRESH_RETRY_SECONDS  60
+
 /* Safety cap — prevent spurious wakes (USB host disconnect resetting the
  * chip, brownouts, silicon quirks) from burning through the battery via
  * repeated boot cycles. After MAX_SPURIOUS_RESETS in a row, fall through
@@ -173,9 +178,10 @@ RTC_NOINIT_ATTR static bool     last_sleep_err_known;  /* true once we've record
 RTC_NOINIT_ATTR static uint8_t  consecutive_spurious_resets;
 
 /* How we got here, for the next boot's X-Frame-State last_sleep field. */
-#define LAST_SLEEP_MODE_NONE        0
-#define LAST_SLEEP_MODE_DEEP_SLEEP  1
-#define LAST_SLEEP_MODE_USB_RESTART   2  /* left the "USB-awake" regime via button-restart */
+#define LAST_SLEEP_MODE_NONE              0
+#define LAST_SLEEP_MODE_DEEP_SLEEP        1
+#define LAST_SLEEP_MODE_USB_RESTART       2  /* left USB_AWAKE via button-restart */
+#define LAST_SLEEP_MODE_BATTERY_RESTART   3  /* left BATTERY_IDLE via button-restart */
 RTC_NOINIT_ATTR static uint8_t  last_sleep_mode;
 
 /* Button-press-triggered refresh marker. Set when the poll loop in
@@ -735,6 +741,23 @@ static void epaper_send_panel(int ctrl_pin, const uint8_t *image)
  * next, which matches the observed symptom. */
 static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_data)
 {
+    /* Step 0: restore BUSY to INPUT. The previous refresh's shutdown
+     * sequence switched BUSY to OUTPUT-LOW to bleed the signal line
+     * before cutting SYS_POWER (see ANALYSIS_FINAL.md). If we left it
+     * that way, epaper_wait_busy would read our own output (LOW) and
+     * timeout instead of seeing the controller's ready signal.
+     *
+     * Configuring with pull-disabled matches hw_gpio_init's original
+     * INPUT config — the external pull-up on the PCB handles the
+     * idle-HIGH state; any internal pull-up would fight the controller. */
+    gpio_config_t busy_in = {
+        .pin_bit_mask = (1ULL << PIN_EPAPER_BUSY),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    };
+    gpio_config(&busy_in);
+
     /* Step 1: power up the display rail from cold. SYS_POWER may already
      * be HIGH from boot init — force a LOW pulse first so the UC8179C's
      * charge-pump and booster state is definitively reset.
@@ -838,6 +861,15 @@ static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_
      * cut power while the signal lines were still driven, which is the
      * leading candidate for why the display occasionally ended up wedged
      * in a state only a factory-firmware reflash could clear. */
+    /* BUSY is INPUT from our side during normal operation (so we can
+     * poll the controller's status). The factory firmware briefly
+     * switches it to OUTPUT + drives LOW during this teardown — see
+     * ANALYSIS_FINAL.md "drives while still output" — to bleed residual
+     * voltage from the BUSY signal line alongside the other signal pins.
+     * We restore it to INPUT at the start of the next display cycle
+     * (see epaper_display_dual's pre-reset block). */
+    gpio_set_direction(PIN_EPAPER_BUSY, GPIO_MODE_OUTPUT);
+
     gpio_set_level(PIN_EPAPER_SCLK, 0);
     gpio_set_level(PIN_EPAPER_BUSY, 0);
     gpio_set_level(PIN_EPAPER_MOSI, 0);
@@ -888,6 +920,18 @@ static void wifi_init_once(void)
     wifi_inited = true;
 }
 
+/* Helper: check ESP-IDF error, log and return false on failure (non-fatal).
+ * Used inside wifi_connect to avoid ESP_ERROR_CHECK panic-on-error — a
+ * transient WiFi driver hiccup would otherwise crash the USB_AWAKE regime
+ * that's supposed to stay alive forever. */
+#define WIFI_TRY(expr) do {                                             \
+    esp_err_t __err = (expr);                                           \
+    if (__err != ESP_OK) {                                              \
+        ESP_LOGW(TAG, "%s -> %s (continuing)", #expr, esp_err_to_name(__err)); \
+        return false;                                                   \
+    }                                                                   \
+} while (0)
+
 static bool wifi_connect(void)
 {
     /* Create-once and reuse. Previously allocated a fresh EventGroup on
@@ -900,9 +944,15 @@ static bool wifi_connect(void)
     }
     wifi_init_once();
 
+    /* WIFI_AUTH_OPEN as the threshold accepts any auth level the AP
+     * advertises (OPEN / WEP / WPA / WPA2 / WPA3). Previously we hard-
+     * coded WPA2_PSK which worked on our WPA3-SAE AP only because
+     * ESP-IDF negotiates leniently; if the AP flips to WPA3-only it
+     * would reject our association silently. OPEN means "I'll accept
+     * whatever you offer." */
     wifi_config_t wifi_cfg = {
         .sta = {
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            .threshold.authmode = WIFI_AUTH_OPEN,
         },
     };
     /* strncpy with n == sizeof(dst) leaves the buffer non-terminated for a
@@ -914,20 +964,17 @@ static bool wifi_connect(void)
     wifi_cfg.sta.password[sizeof(wifi_cfg.sta.password) - 1] = '\0';
 
     /* Use cached channel/BSSID for fast reconnect */
-    bool attempting_cache = false;
     if (has_wifi_cache && wifi_channel > 0) {
         wifi_cfg.sta.channel = wifi_channel;
         memcpy(wifi_cfg.sta.bssid, wifi_bssid, 6);
         wifi_cfg.sta.bssid_set = true;
-        attempting_cache = true;
         ESP_LOGI(TAG, "WiFi fast reconnect ch=%d", wifi_channel);
     }
-    last_wifi_used_cache = false;  /* flipped to true only if cache path succeeds */
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_wifi_connect());
+    WIFI_TRY(esp_wifi_set_mode(WIFI_MODE_STA));
+    WIFI_TRY(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
+    WIFI_TRY(esp_wifi_start());
+    WIFI_TRY(esp_wifi_connect());
 
     EventBits_t bits = xEventGroupWaitBits(wifi_events,
         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
@@ -941,7 +988,10 @@ static bool wifi_connect(void)
             memcpy(wifi_bssid, ap.bssid, 6);
             has_wifi_cache = true;
         }
-        last_wifi_used_cache = attempting_cache;
+        /* Explicit: cache path worked if we were ATTEMPTING the cache.
+         * Matches wifi_cfg.sta.bssid_set, which was only set in the
+         * cache-attempt branch above. */
+        last_wifi_used_cache = wifi_cfg.sta.bssid_set;
         return true;
     }
 
@@ -968,6 +1018,8 @@ static bool wifi_connect(void)
                 memcpy(wifi_bssid, ap.bssid, 6);
                 has_wifi_cache = true;
             }
+            /* Explicit: full-scan branch, cache was NOT used. */
+            last_wifi_used_cache = false;
             return true;
         }
     }
@@ -1059,8 +1111,11 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
  *   usb           "host" (computer USB enumerated) | "none"
  *                 NB: NOT the same as "charging" — wall charger reads "none"
  *                     because GPIO 14 is a USB-host-detect signal, not VBUS.
- *   last_sleep    previous regime we came out of: deep_sleep | usb_restart |
- *                 none (fresh boot)
+ *   last_sleep    previous regime we came out of:
+ *                 deep_sleep      — woke from ESP deep sleep
+ *                 usb_restart     — esp_restart from USB_AWAKE (button)
+ *                 battery_restart — esp_restart from BATTERY_IDLE (button)
+ *                 none            — fresh boot after POR / flash
  *   rssi          WiFi signal strength of the current AP, dBm
  *   heap_kb       free heap in KiB
  *   spurious      consecutive spurious-reset short-paths taken (safety valve)
@@ -1095,8 +1150,9 @@ static void build_frame_state_json(char *buf, size_t buflen,
     int64_t clk_now = (clk_now_t < 1577836800) ? 0 : (int64_t)clk_now_t;
 
     const char *last_sleep_str =
-        (last_sleep_mode == LAST_SLEEP_MODE_DEEP_SLEEP) ? "deep_sleep" :
-        (last_sleep_mode == LAST_SLEEP_MODE_USB_RESTART) ? "usb_restart" :
+        (last_sleep_mode == LAST_SLEEP_MODE_DEEP_SLEEP)      ? "deep_sleep" :
+        (last_sleep_mode == LAST_SLEEP_MODE_USB_RESTART)     ? "usb_restart" :
+        (last_sleep_mode == LAST_SLEEP_MODE_BATTERY_RESTART) ? "battery_restart" :
         "none";
 
     int64_t uptime_s = (esp_timer_get_time() - boot_time_us) / 1000000LL;
@@ -1250,15 +1306,26 @@ static int read_battery_mv(void)
     };
     bool calibrated = (adc_cali_create_scheme_curve_fitting(&cali_cfg, &cali) == ESP_OK);
 
-    /* 50 samples with short delays for good averaging. */
+    /* 50 samples with short delays for good averaging. Initialise `raw`
+     * and check the read result — a failed read with uninitialised `raw`
+     * is UB and would contaminate the average with stack garbage. */
     int raw_sum = 0;
+    int good_reads = 0;
     for (int i = 0; i < 50; i++) {
-        int raw;
-        adc_oneshot_read(handle, ADC_CHANNEL_4, &raw);
-        raw_sum += raw;
+        int raw = 0;
+        if (adc_oneshot_read(handle, ADC_CHANNEL_4, &raw) == ESP_OK) {
+            raw_sum += raw;
+            good_reads++;
+        }
         vTaskDelay(pdMS_TO_TICKS(2));
     }
-    int raw_avg = raw_sum / 50;
+    if (good_reads == 0) {
+        ESP_LOGE("BATT", "all 50 ADC reads failed");
+        if (cali) adc_cali_delete_scheme_curve_fitting(cali);
+        adc_oneshot_del_unit(handle);
+        return 0;
+    }
+    int raw_avg = raw_sum / good_reads;
 
     int mv = 0;
     if (calibrated) {
@@ -1282,28 +1349,25 @@ static int read_battery_mv(void)
  * ═══════════════════════════════════════════════════════════════════ */
 
 static TaskHandle_t chg_monitor_task_handle = NULL;
-static bool chg_monitor_fast = false;  /* true = 2Hz (charge-only mode) */
 
 static void chg_monitor_task(void *arg)
 {
     bool led_on = false;
     while (1) {
+        /* GPIO 14 LOW = USB host enumerated → blink LED as "charging"
+         * indicator. On wall-charger-only (no USB data signaling) GPIO 14
+         * reads HIGH, so LED stays off — same as running on battery. We
+         * can't distinguish "fully-charged-on-USB" from "on-battery" with
+         * this signal alone, so they share behaviour. Spec-acceptable. */
         int charging = (gpio_get_level(PIN_USB_DETECT) == 0);
         if (charging) {
             led_on = !led_on;
             gpio_set_level(PIN_WORK_LED, led_on ? 1 : 0);
         } else {
-            /* OFF when not charging. CHG_STATUS=HIGH covers both
-             * "fully charged on USB" and "running on battery" — we
-             * can't distinguish them, so treat them the same and
-             * don't waste battery on a solid LED through the 60s
-             * awake window. Observed 2026-04-18: red LED burning
-             * for a full minute every battery refresh cycle. */
             gpio_set_level(PIN_WORK_LED, 0);
             led_on = false;
         }
-        int delay_ms = chg_monitor_fast ? 250 : 500;  /* 2Hz or 1Hz */
-        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+        vTaskDelay(pdMS_TO_TICKS(500));  /* 1 Hz blink */
     }
 }
 
@@ -1314,8 +1378,17 @@ static void chg_monitor_start(void)
     }
 }
 
-/* (chg_monitor_stop removed — esp_restart and esp_deep_sleep_start tear
- * down all FreeRTOS state for us; no manual stop needed.) */
+/* Called before we touch PIN_WORK_LED in a teardown path (enter_deep_sleep,
+ * button_triggered_restart) so the monitor task can't race with us —
+ * without this, the task can re-assert the LED after our final "off"
+ * and leave it lit until the chip actually powers down. */
+static void chg_monitor_stop(void)
+{
+    if (chg_monitor_task_handle) {
+        vTaskDelete(chg_monitor_task_handle);
+        chg_monitor_task_handle = NULL;
+    }
+}
 
 /* ═══════════════════════════════════════════════════════════════════
  *  Power-state detection
@@ -1325,10 +1398,37 @@ static void chg_monitor_start(void)
  *
  * NOT a pure VBUS-detect. Wall chargers / USB battery banks that provide
  * VBUS without USB data signaling leave GPIO 14 HIGH. See HARDWARE_FACTS.md
- * "USB Detection" for the empirical probe results. */
+ * "USB Detection" for the empirical probe results.
+ *
+ * Single-shot read. Use during boot classification where we want the
+ * instantaneous state; for regime-loop polling use usb_host_present_stable()
+ * which debounces against cable-wiggle / RF-interference glitches. */
 static bool usb_host_present(void)
 {
     return gpio_get_level(PIN_USB_DETECT) == 0;
+}
+
+/* Debounced USB detection. Returns the last STABLE state of GPIO 14,
+ * flipped only after DEBOUNCE consecutive opposite reads. Called from
+ * regime-loop polling (every POLL_INTERVAL_MS), so DEBOUNCE = 3 gives
+ * ~300 ms of hysteresis — fast enough that a real plug/unplug is still
+ * noticed promptly, slow enough that a single glitchy sample doesn't
+ * bounce us between regimes. */
+#define USB_DEBOUNCE_SAMPLES  3
+static bool usb_host_present_stable(void)
+{
+    static int stable_level = 1;  /* start assuming no host (HIGH) */
+    static int opposite_streak = 0;
+    int cur = gpio_get_level(PIN_USB_DETECT);
+    if (cur != stable_level) {
+        if (++opposite_streak >= USB_DEBOUNCE_SAMPLES) {
+            stable_level = cur;
+            opposite_streak = 0;
+        }
+    } else {
+        opposite_streak = 0;
+    }
+    return stable_level == 0;
 }
 
 /* Debounced button-1 read. Returns true only after N consecutive LOW
@@ -1383,6 +1483,31 @@ static bool refresh_due(void)
     return now >= next_refresh_epoch;
 }
 
+/* Reschedule the next refresh N seconds from now. Used on refresh-failure
+ * paths (WiFi down, server unreachable, server returned nonsense
+ * sleep_seconds) to keep the regime loops from hot-retrying at 100 ms.
+ * Logs the delay so the reason is clear in the serial output. */
+static void schedule_retry_in(int seconds, const char *reason)
+{
+    time_t now = now_epoch();
+    if (now > 0) {
+        next_refresh_epoch = (int64_t)now + seconds;
+    } else {
+        /* No clock yet — we can't anchor to an absolute epoch. Leave
+         * next_refresh_epoch as-is; refresh_due() will return true
+         * immediately because now==0, but the regime loops will just
+         * try again next poll tick. In USB this is fine (we want
+         * tight retries until the clock syncs); in battery we'll
+         * already have dropped into deep sleep before hitting this. */
+        next_refresh_epoch = 0;
+    }
+    /* No fresh pre_sleep_server_epoch either — clear it so the next
+     * boot doesn't log a bogus sleep_err_s. */
+    pre_sleep_server_epoch = 0;
+    last_sleep_err_known = false;
+    ESP_LOGW(TAG, "Refresh retry in %d s (%s)", seconds, reason);
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  *  Logging regime control
  * ═══════════════════════════════════════════════════════════════════ */
@@ -1423,7 +1548,9 @@ static void enter_deep_sleep(int64_t sleep_us)
     ESP_LOGI(TAG, "Deep sleep for %lld s (next-refresh-epoch=%lld)",
              sleep_us / 1000000LL, (long long)next_refresh_epoch);
 
-    /* Teardown */
+    /* Teardown. Stop chg_monitor FIRST so it can't toggle WORK_LED
+     * between our off-write and esp_deep_sleep_start. */
+    chg_monitor_stop();
     if (spi_handle != NULL) {
         spi_bus_remove_device(spi_handle);
         spi_bus_free(SPI2_HOST);
@@ -1494,6 +1621,7 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 
     if (!wifi_connect()) {
         ESP_LOGE(TAG, "WiFi connect failed — leaving prior image on display");
+        schedule_retry_in(REFRESH_RETRY_SECONDS, "wifi_connect failed");
         return false;
     }
     gpio_set_level(PIN_WIFI_LED, 1);
@@ -1506,13 +1634,23 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 
     /* Update persisted schedule: absolute server epoch at which the next
      * refresh is due. Anchors to server time so display + awake time
-     * doesn't drift the wake moment later each cycle. */
+     * doesn't drift the wake moment later each cycle.
+     *
+     * If server_epoch is bad (<=0) or sleep_seconds is nonsense (<=0 —
+     * malformed response, misconfigured server), fall through to the
+     * retry-in-60s helper below so we don't hot-loop. */
     if (server_epoch > 0 && sleep_seconds > 0) {
         next_refresh_epoch = server_epoch + sleep_seconds;
         last_sleep_seconds = sleep_seconds;
         save_pre_sleep_epoch(server_epoch, local_time_at_download_us);
         ESP_LOGI(TAG, "Next refresh scheduled for epoch %lld (in %d s)",
                  (long long)next_refresh_epoch, (int)sleep_seconds);
+    } else if (img) {
+        /* Download succeeded but the response was missing / invalid
+         * scheduling headers. Display the image we got (below) but
+         * don't trust the schedule. */
+        schedule_retry_in(REFRESH_RETRY_SECONDS,
+                          "server response missing/invalid X-Sleep-Seconds");
     }
 
     if (!img) {
@@ -1523,17 +1661,12 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
                  "Tried to connect to:\n"
                  "%s\n"
                  "\n"
-                 "Will retry in 3 hours.\n"
+                 "Will retry in %d s.\n"
                  "Press reset to try\n"
                  "again now.",
-                 config.image_url);
+                 config.image_url, REFRESH_RETRY_SECONDS);
         display_message(msg);
-        /* No next_refresh_epoch on failure — fall back to 3h retry
-         * via the enclosing regime's sleep-duration code. */
-        if (next_refresh_epoch == 0 || next_refresh_epoch < now_epoch()) {
-            time_t now = now_epoch();
-            next_refresh_epoch = (now > 0) ? now + (3 * 3600) : 0;
-        }
+        schedule_retry_in(REFRESH_RETRY_SECONDS, "download failed");
         return false;
     }
 
@@ -1563,14 +1696,23 @@ static void regime_battery_idle(int64_t boot_time_us);
 /* Signal a button-press refresh by setting the RTC action flag and
  * restarting. Boot path will detect the flag, clear it early, refresh,
  * and continue into whichever regime matches current usb_host state.
- * See firmware.md "Button = full reboot". */
-static void button_triggered_restart(void)
+ * See firmware.md "Button = full reboot".
+ *
+ * `sleep_mode` tells the next boot's X-Frame-State which regime we left:
+ * LAST_SLEEP_MODE_USB_RESTART when pressed in USB_AWAKE,
+ * LAST_SLEEP_MODE_BATTERY_RESTART when pressed during the BATTERY_IDLE
+ * window. Caller-provides rather than introspecting current_regime so
+ * it's impossible to forget to keep them in sync. */
+static void button_triggered_restart(uint8_t sleep_mode)
 {
     ESP_LOGI(TAG, "Button pressed — restarting for fresh-state refresh");
     pending_action = ACTION_REFRESH_FROM_BUTTON;
     rtc_magic = RTC_MAGIC;
-    /* Record how we're leaving this regime so diagnostics are clear. */
-    last_sleep_mode = LAST_SLEEP_MODE_USB_RESTART;
+    last_sleep_mode = sleep_mode;
+    /* Stop chg_monitor before touching the LED so the monitor task
+     * can't re-assert WORK_LED between our off-write and esp_restart. */
+    chg_monitor_stop();
+    gpio_set_level(PIN_WORK_LED, 0);
     vTaskDelay(pdMS_TO_TICKS(50));  /* let log flush */
     esp_restart();
 }
@@ -1584,7 +1726,7 @@ static void regime_usb_awake(int64_t boot_time_us)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
 
-        if (!usb_host_present()) {
+        if (!usb_host_present_stable()) {
             ESP_LOGI(TAG, "USB host gone — transitioning to BATTERY_IDLE");
             regime_battery_idle(boot_time_us);
             /* regime_battery_idle terminates in deep sleep; never returns */
@@ -1592,7 +1734,7 @@ static void regime_usb_awake(int64_t boot_time_us)
         }
 
         if (button1_pressed_debounced()) {
-            button_triggered_restart();
+            button_triggered_restart(LAST_SLEEP_MODE_USB_RESTART);
             return;
         }
 
@@ -1623,32 +1765,35 @@ static void regime_battery_idle(int64_t boot_time_us)
     while (esp_timer_get_time() < deadline_us) {
         vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
 
-        if (usb_host_present()) {
+        if (usb_host_present_stable()) {
             ESP_LOGI(TAG, "USB plugged during battery window — switching to USB_AWAKE");
             regime_usb_awake(boot_time_us);
             return;
         }
 
         if (button1_pressed_debounced()) {
-            button_triggered_restart();
+            button_triggered_restart(LAST_SLEEP_MODE_BATTERY_RESTART);
             return;
         }
     }
 
     /* Window expired — commit to deep sleep until the next scheduled
      * refresh (or the user plugs USB / presses a button, which wakes
-     * us via EXT1). */
+     * us via EXT1).
+     *
+     * perform_refresh always sets next_refresh_epoch to a future value
+     * on this boot (either from the server's schedule or via
+     * schedule_retry_in on failure). So the common case is a future
+     * next_refresh_epoch; the SLEEP_FALLBACK_3H_US branch only fires
+     * when we have no clock at all (never successfully synced from
+     * server). There is no "past-due + future-sleep" branch because
+     * it's unreachable under the retry-helper invariant. */
     time_t now = now_epoch();
     int64_t sleep_us;
     if (next_refresh_epoch > 0 && now > 0 && next_refresh_epoch > now) {
         sleep_us = (int64_t)(next_refresh_epoch - now) * 1000000LL;
-    } else if (next_refresh_epoch > 0 && now > 0 && next_refresh_epoch <= now) {
-        /* We're already past due — sleep the minimum (5 s) then wake
-         * and try to fetch. This shouldn't normally happen but is
-         * defensive against clock glitches. */
-        sleep_us = BATTERY_AWAKE_WINDOW_US;
     } else {
-        /* No valid schedule: 3 h retry. */
+        /* No valid / future schedule: wake in 3 h and retry. */
         sleep_us = SLEEP_FALLBACK_3H_US;
     }
     enter_deep_sleep(sleep_us);
@@ -1758,7 +1903,6 @@ void app_main(void)
      * hardware cause dictates — no infinite "button press keeps crashing"
      * loop. */
     wake_cause_t wake = classify_wake();
-    bool action_was_button_restart = (pending_action == ACTION_REFRESH_FROM_BUTTON);
     pending_action = ACTION_NONE;
 
     /* ── Step 3: NVS + config ───────────────────────────────────────
@@ -1791,11 +1935,10 @@ void app_main(void)
      * boot messages should respect the mode too. */
     log_level_apply(usb_host_present());
 
-    ESP_LOGI(TAG, "Boot #%" PRIu32 ", wake=%s, usb=%s%s",
+    ESP_LOGI(TAG, "Boot #%" PRIu32 ", wake=%s, usb=%s",
              boot_count,
              wake_cause_name(wake),
-             usb_host_present() ? "computer" : "absent",
-             action_was_button_restart ? " (button-restart)" : "");
+             usb_host_present() ? "computer" : "absent");
 
     vTaskDelay(pdMS_TO_TICKS(500));  /* analog front-end settle */
     spi_init();
@@ -1825,7 +1968,9 @@ void app_main(void)
         }
         ESP_LOGW(TAG, "Spurious-reset cap hit — treating as normal boot for reflash reachability");
     }
-    /* Past the short-path: any non-spurious wake resets the counter. */
+    /* Reset the counter once we've taken a path out: either this wasn't a
+     * spurious wake, or it was but we hit the cap and are breaking the loop
+     * to give the user a reflash window. Either way the streak ends here. */
     consecutive_spurious_resets = 0;
 
     /* ── Step 6: config sanity — show error + enter battery idle ───
