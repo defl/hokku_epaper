@@ -17,6 +17,7 @@ Replacement firmware and self-hosted image server for the Hokku / Huessen 13.3" 
 - **Per-image stats** — how often each image has been shown, total display time, last-seen timestamp.
 - **Schedule-driven refreshes** — configure one or more refresh times (e.g. 06:00, 12:00, 18:00); the frame sleeps between them to save battery.
 - **Ultra-low power on battery** — ~8 µA in deep sleep between refreshes, so a full charge lasts months. The web app shows a live battery indicator for every connected frame (red below 20 %) so you know when to plug in.
+- **Errors show up on the screen.** If something goes wrong — wrong WiFi password, server unreachable, configuration missing — the frame renders a readable explanation right on the e-paper instead of silently giving up. No serial-cable debugging required.
 - **Clock-synced** — the server tells the frame its wall-clock time on every refresh, so the dashboard can show real drift in seconds.
 - **Button on the bottom of the frame** forces an immediate refresh regardless of schedule.
 - **Debian package** with a systemd service, or run from source on any Python 3.9+ machine.
