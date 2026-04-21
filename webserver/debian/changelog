@@ -1,3 +1,12 @@
+hokku-server (2.1.18-1) unstable; urgency=low
+
+  * Web UI Details modal: next_ep now shown relative to the firmware's
+    own clk_now at request time rather than the viewer's browser time.
+    Tells you "firmware was 2 s late vs its schedule", not "this
+    timestamp was 100 minutes ago from now". Much more useful.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 20 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.17-1) unstable; urgency=low
 
   * X-Frame-State protocol revamp to match the redesigned firmware

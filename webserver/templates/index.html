@@ -521,7 +521,9 @@ function renderScreens(screens) {
 let lastScreens = {};
 
 // Pretty-print a single state value.
-function formatStateValue(key, v) {
+// `state` is the containing state object, used so next_ep can reference
+// clk_now from the same capture rather than the viewer's wall clock.
+function formatStateValue(key, v, state) {
   if (v == null) return '<span style="color:#999">-</span>';
   if (key === 'clk_now' && typeof v === 'number' && v > 0) {
     const dt = new Date(v * 1000);
@@ -544,10 +546,21 @@ function formatStateValue(key, v) {
     return `${sign}${v}s`;
   }
   if (key === 'next_ep' && typeof v === 'number' && v > 0) {
+    // next_ep is the firmware's scheduled time for THIS refresh event.
+    // Show it relative to the firmware's OWN clock at the moment of
+    // the request (clk_now from the same state dict), not relative to
+    // the viewer's browser time — that tells us whether the firmware
+    // fired early or late vs its own schedule. Only if clk_now is
+    // missing/0 do we fall back to browser time.
     const dt = new Date(v * 1000);
-    const delta = v - Math.floor(Date.now() / 1000);
-    const ds = delta >= 0 ? `in ${delta}s` : `${-delta}s ago`;
-    return `${dt.toLocaleString(undefined, {hour12: false})} (${ds})`;
+    const clkNow = (state && typeof state.clk_now === 'number' && state.clk_now > 0)
+        ? state.clk_now : Math.floor(Date.now() / 1000);
+    const delta = v - clkNow;
+    let label;
+    if (delta === 0)       label = 'exactly on time';
+    else if (delta > 0)    label = `${delta}s early (firmware fired before schedule)`;
+    else                   label = `${-delta}s late`;
+    return `${dt.toLocaleString(undefined, {hour12: false})} (${label})`;
   }
   if (key === 'wifi_cached') {
     return v ? 'fast-reconnect' : 'full-scan';
@@ -582,7 +595,7 @@ async function showScreenDetails(name) {
   document.getElementById('state-title').textContent = `State for "${name}"`;
   let rows = '<table>';
   keys.forEach(k => {
-    rows += `<tr><td>${k}</td><td>${formatStateValue(k, s.state[k])}</td></tr>`;
+    rows += `<tr><td>${k}</td><td>${formatStateValue(k, s.state[k], s.state)}</td></tr>`;
   });
   rows += '</table>';
   document.getElementById('state-body').innerHTML = rows;
