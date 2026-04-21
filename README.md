@@ -34,10 +34,24 @@ A self-hosted photo frame that actually works — no cloud, no accounts, no mont
 
 **Easy to run**
 - **Upload, download and manage everything from the web app.** No extra servers, no Linux config, no Samba share to mount. Just works out of the box.
+- **Runs happily on a Raspberry Pi.** Hundreds of 20+ MP photos, dithered once and served from cache thereafter — the per-request load is a file-copy, not image processing. A Pi Zero 2 W handles a multi-frame setup without breaking a sweat.
 - **Debian package** with a systemd service for a one-line install, or run from source on any Python 3.9+ host (Linux, macOS, Windows, Raspberry Pi).
 - **Pre-built firmware + a wizard flasher** — no ESP-IDF toolchain required. Walks you through WiFi, server address, and naming in a few clicks.
 - **Configuration lives on the server** (timezone, schedule, orientation, dither choice) — change it once in the web app, every frame picks it up on its next refresh.
 - **Clear Cache & Re-convert** one-click button for when you change orientation, dither algorithm, or want to re-render everything from scratch.
+
+### System requirements
+
+**Server side** — where you host the image server:
+- Any Linux, macOS, Windows, or Raspberry Pi host with Python 3.9+.
+- ~256 MB of RAM is plenty. Dithering a fresh upload briefly peaks a little higher while Pillow decodes the source, but it's single-threaded, transient, and you can feed it a slow machine.
+- Disk: ~2 MB per image for the dithered cache + preview + thumbnail, plus however big your originals are. A thousand photos fits comfortably on any SD card.
+- Networking: anywhere on the same LAN as the frame. No open-internet access needed.
+
+**Frame side** — the ESP32-S3 board already inside your Hokku / Huessen frame:
+- ESP32-S3 with 16 MB flash and 8 MB octal PSRAM. This is what ships in the frame — the pre-built firmware matches.
+- One USB-C cable (any USB-A-to-C or C-to-C works) for first-time flashing and re-configuration.
+- 2.4 GHz WiFi (open / WPA2 / WPA3). 5 GHz not supported by the chip.
 
 ## Installation
 
