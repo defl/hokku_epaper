@@ -88,9 +88,7 @@ The setup tool detects your frame over USB, flashes the firmware, and writes you
 
 ### How to Flash
 
-To flash the firmware, take off the front cover of the frame (it's magnetically attached, be careful as it's easily damaged) and connect a USB-A to USB-C cable to the ESP32-S3 board's USB-C port as shown below:
-
-![Connecting the USB cable for flashing](images/flashing_cable.png)
+To flash the firmware, take off the front cover of the frame (it's magnetically attached, be careful as it's easily damaged) and connect a USB-A to USB-C cable to the ESP32-S3 board's USB-C port.
 
 Once connected, run `python hokku_setup.py` from the `tools/` directory (or `hokku_setup.bat` on Windows). The setup tool walks you through WiFi credentials, server address, and screen name — then flashes the firmware:
 
