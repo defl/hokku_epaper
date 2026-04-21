@@ -5,3 +5,17 @@
 *.bin       binary
 *.jpeg      binary
 *.png       binary
+
+# Debian package control files must be LF — dpkg runs postinst et al.
+# through the kernel, which reads the shebang byte-for-byte. A CR in
+# "#!/bin/sh\r\n" makes the interpreter path /bin/sh\r, which ENOENTs.
+webserver/debian/postinst     text eol=lf
+webserver/debian/preinst      text eol=lf
+webserver/debian/postrm       text eol=lf
+webserver/debian/prerm        text eol=lf
+webserver/debian/rules        text eol=lf
+webserver/debian/control      text eol=lf
+webserver/debian/changelog    text eol=lf
+webserver/debian/install      text eol=lf
+webserver/debian/*.service    text eol=lf
+webserver/debian/hokku-server text eol=lf
