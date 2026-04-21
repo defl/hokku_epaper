@@ -176,26 +176,14 @@ charger-IC output. This matches the factory firmware's pattern (`battery_task`
 polls both pins together via `gpio_get_level(14)` + `gpio_get_level(12)` and
 treats them as a paired event signal, applying a 6-sample debounce).
 
-**Implication for button polling**: a `GPIO 12 == 0` reading must NOT be
-treated as a button press if it coincides (within ~200 ms) with a `GPIO 14`
-edge — it's a USB-plug artefact, not user intent. Either:
-- Debounce GPIO 12 over multiple samples and require GPIO 14 to be stable, or
-- Use only GPIO 1 (BUTTON_1) for the "next image" button polling, leaving
-  GPIO 12 as an EXT1 wake source only.
-
-### EXT1 wake usage
-
-- GPIO 14 with `ESP_EXT1_WAKEUP_ANY_LOW` wakes the chip on USB-host plug-in.
-  Combined with GPIO 1 (BUTTON_1) wakes on next-image button press.
-- GPIO 12 is RTC-capable but has the paired-with-14 issue; safest to either
-  exclude it entirely from EXT1 sources or accept that it'll fire on USB plug.
+Consequence for the current firmware's design choices is documented in
+[`firmware_design.md`](firmware_design.md) (USB detection + GPIO 12 section).
 
 ## Deep Sleep & Wakeup
-- **ext1 wakeup sources** (per spec): GPIO1 (BUTTON_1) + GPIO14 (USB_HOST_DETECT), both active LOW. GPIO12 is RTC-capable but transitions in lockstep with GPIO14 on USB-plug events (see "USB Detection" above), so its independent value as a wake source is dubious.
-- **GPIO39/40 CANNOT wake from deep sleep**: only GPIO0-21 are RTC-capable on ESP32-S3
-- **Original FW ext1 bitmask**: 0x1002 = GPIO1 | GPIO12 (factory firmware predates our USB-detect-on-14 finding; we should use 0x4002 = GPIO1 | GPIO14)
-- **USB-Serial/JTAG disconnects during deep sleep**: this causes the USB host to reset the chip, which appears as a fresh boot (wakeup cause UNDEFINED). Use an RTC memory flag to detect this and avoid re-displaying/looping.
-- **Target sleep current**: ~8µA with RTC GPIO isolation
+- **RTC-capable GPIOs**: only GPIO0–21 on ESP32-S3. GPIO39 / GPIO40 cannot wake from deep sleep.
+- **Original FW ext1 bitmask**: 0x1002 = GPIO1 | GPIO12 (factory firmware predates our USB-detect-on-14 finding).
+- **USB-Serial/JTAG disconnects during deep sleep**: this causes the USB host to reset the chip, which appears as a fresh boot (wakeup cause UNDEFINED). Firmware detects this via an RTC memory flag to avoid re-displaying / looping — see [`firmware_design.md`](firmware_design.md).
+- **Target sleep current**: ~8µA with RTC GPIO isolation.
 
 ## Boot Hazards
 - **CTRL pins LOW at boot**: gpio_config() defaults output to 0 (LOW = CS active). Display sees garbage during SPI bus init. Must set CTRL HIGH before spi_bus_initialize()
@@ -218,10 +206,3 @@ edge — it's a USB-plug artefact, not user intent. Either:
 - helper_spi_bulk: 0x4200BDE0
 - spi_device_polling_transmit: 0x420554E0
 
-## Development Rules
-- Always git commit firmware code before building and flashing (1-line summary)
-- Never use ESP32 USB pins — leave in original state so USB always works
-- Never create a fast boot loop — always verify
-- Always 15 second window before entering low power state
-- Can call software reset after flashing to speed up the process
-- Do NOT add power management (SYS_POWER on/off) inside epaper_display — app_main handles power
