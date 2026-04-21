@@ -25,13 +25,17 @@ Flashing procedure
 ==================
 - For reliable results, flash the factory dump first, wait 30s, then flash our firmware: factory dump → 30s wait → bootloader + partition table + app → NVS config
 - esptool works any time USB is connected regardless of firmware state (resets into ROM bootloader)
-- The firmware has a 120s reflash window before every deep sleep
+- Reflash strategy depends on regime: USB_AWAKE never deep-sleeps so the chip is always reachable while plugged into a computer. BATTERY_IDLE has only a 5 s awake window per refresh — to reflash, plug into USB to push the chip into USB_AWAKE first.
+
+Dithering
+=========
+- The image dithering pipeline (webserver/webserver.py) is explained in detail for humans in docs/dithering.md. If you change anything that affects dither output — algorithms, palette, saturation/vividness knobs, B&W detection, cache versioning — update docs/dithering.md to match. It is the one document that's meant to stay in sync with the code for non-AI readers.
 
 Coding and compiling
 ====================
 - always git commit firmware code before building and flashing, the comment is a 1 line summary of the change
 - never use the ESP32 USB pins for anything, leave them in their original state such that USB always works
 - always double check that you didn't create a fast boot loop by accident
-- always make sure there is at least a 120 second window before entering into a low power state
+- the firmware never auto-refreshes on boot (boot is not a refresh trigger). Refreshes happen only on schedule, button press, or first install. The reflash window on battery is 5 s by spec — if you need longer access, plug USB to enter USB_AWAKE which never sleeps.
 - hard_reset after flashing ESP32 automatically
 - the python environment to use is in .venv in the same directory as this file

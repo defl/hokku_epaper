@@ -1385,25 +1385,52 @@ class TestOrientation:
         assert "atkinson" in key_other
         assert key_active != key_other
 
-    def test_default_is_fs_hue_aware(self):
-        """fs_hue_aware is the new default algorithm."""
-        assert webserver.DEFAULT_CONFIG["dither_algorithm"] == "fs_hue_aware"
-        assert "fs_hue_aware" in webserver.VALID_DITHER_ALGORITHMS
+    def test_default_is_atkinson_hue_aware(self):
+        """atkinson_hue_aware is the current default after the V10 benchmark study."""
+        assert webserver.DEFAULT_CONFIG["dither_algorithm"] == "atkinson_hue_aware"
+        assert "atkinson_hue_aware" in webserver.VALID_DITHER_ALGORITHMS
+        # fs_hue_aware was deprecated — no longer listed as valid
+        assert "fs_hue_aware" not in webserver.VALID_DITHER_ALGORITHMS
+        assert "fs_hue_aware" in webserver._DEPRECATED_ALGORITHMS
 
-    def test_dither_for_algorithm_returns_four_tuple(self):
-        """_dither_for_algorithm now returns (fn, lut, color_enhance, scale_chroma)."""
+    def test_dither_for_algorithm_returns_algoconfig(self):
+        """_dither_for_algorithm returns an _AlgoConfig with the full pipeline knobs."""
         for algo in webserver.VALID_DITHER_ALGORITHMS:
-            result = webserver._dither_for_algorithm(algo)
-            assert len(result) == 4, f"{algo}: expected 4-tuple, got {len(result)}"
-            fn, lut, enhance, scale_chroma = result
-            assert callable(fn)
-            assert isinstance(enhance, float)
-            assert isinstance(scale_chroma, bool)
-        # Only fs_hue_aware uses chroma scaling
-        _, _, _, sc_fs = webserver._dither_for_algorithm("fs_hue_aware")
-        _, _, _, sc_ahu = webserver._dither_for_algorithm("atkinson_hue_aware")
-        assert sc_fs is True
-        assert sc_ahu is False
+            cfg = webserver._dither_for_algorithm(algo)
+            assert callable(cfg.dither_fn)
+            assert isinstance(cfg.color_enhance, float)
+            assert isinstance(cfg.scale_chroma, bool)
+            assert isinstance(cfg.adaptive_saturate, bool)
+            assert isinstance(cfg.adaptive_vivid, bool)
+        # atkinson_hue_aware is the V10 recipe — adaptive saturation + adaptive vividness
+        cfg_ahu = webserver._dither_for_algorithm("atkinson_hue_aware")
+        assert cfg_ahu.adaptive_saturate is True
+        assert cfg_ahu.adaptive_vivid is True
+        assert cfg_ahu.scale_chroma is False
+        # Classic algorithms keep legacy behavior
+        cfg_fs = webserver._dither_for_algorithm("floyd_steinberg")
+        assert cfg_fs.adaptive_saturate is False
+        assert cfg_fs.adaptive_vivid is False
+
+    def test_deprecated_algorithm_migration(self):
+        """Loading a config with fs_hue_aware should migrate to the current default."""
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"dither_algorithm": "fs_hue_aware"}, f)
+            temp_path = f.name
+        try:
+            with patch.dict(os.environ, {"HOKKU_CONFIG": temp_path}):
+                config = webserver._load_config()
+            assert config["dither_algorithm"] == webserver.DEFAULT_CONFIG["dither_algorithm"]
+        finally:
+            os.unlink(temp_path)
+
+    def test_cache_key_includes_version(self):
+        """Cache key suffix must include the cache version to invalidate old renders
+        when algorithm implementations change."""
+        path = Path("/images/test.jpg")
+        key = webserver._cache_key(path, "abcdef123456")
+        assert webserver._CACHE_VERSION in key
 
     def test_is_near_grayscale_detects_bw(self):
         """B&W source should be flagged; colorful source should not."""
@@ -1425,9 +1452,46 @@ class TestOrientation:
         img = np.full((8, 8, 3), [220, 40, 40], dtype=np.float32)  # saturated red
         out_lonly = webserver._compress_dynamic_range(img, scale_chroma=False)
         out_vivid = webserver._compress_dynamic_range(img, scale_chroma=True)
-        # vividness path scales chroma down in sync with L, so a/b in Lab are smaller
         lab_lonly = webserver._rgb_to_lab(out_lonly)
         lab_vivid = webserver._rgb_to_lab(out_vivid)
         chroma_lonly = np.sqrt(lab_lonly[..., 1] ** 2 + lab_lonly[..., 2] ** 2).mean()
         chroma_vivid = np.sqrt(lab_vivid[..., 1] ** 2 + lab_vivid[..., 2] ** 2).mean()
         assert chroma_vivid < chroma_lonly, f"vivid={chroma_vivid:.1f} should be < lonly={chroma_lonly:.1f}"
+
+    def test_adaptive_vivid_preserves_saturated_chroma(self):
+        """adaptive_vivid should leave saturated pixels at near-full chroma while
+        compressing near-neutral pixels — opposite of uniform scale_chroma."""
+        saturated = np.full((8, 8, 3), [220, 40, 40], dtype=np.float32)
+        neutral = np.full((8, 8, 3), [200, 195, 198], dtype=np.float32)  # near-white
+
+        out_sat_adaptive = webserver._compress_dynamic_range(saturated, adaptive_vivid=True)
+        out_sat_uniform = webserver._compress_dynamic_range(saturated, scale_chroma=True)
+        # Adaptive should keep more chroma on saturated input than uniform scale_chroma
+        lab_ad = webserver._rgb_to_lab(out_sat_adaptive)
+        lab_un = webserver._rgb_to_lab(out_sat_uniform)
+        chr_ad = np.sqrt(lab_ad[..., 1] ** 2 + lab_ad[..., 2] ** 2).mean()
+        chr_un = np.sqrt(lab_un[..., 1] ** 2 + lab_un[..., 2] ** 2).mean()
+        assert chr_ad > chr_un, f"adaptive kept less chroma: ad={chr_ad:.1f}, un={chr_un:.1f}"
+
+        # Near-neutral should get aggressive chroma compression under adaptive_vivid
+        # (not amplified into visible speckle)
+        out_neu_adaptive = webserver._compress_dynamic_range(neutral, adaptive_vivid=True)
+        lab_neu_in = webserver._rgb_to_lab(neutral)
+        lab_neu_out = webserver._rgb_to_lab(out_neu_adaptive)
+        chr_in = np.sqrt(lab_neu_in[..., 1] ** 2 + lab_neu_in[..., 2] ** 2).mean()
+        chr_out = np.sqrt(lab_neu_out[..., 1] ** 2 + lab_neu_out[..., 2] ** 2).mean()
+        assert chr_out <= chr_in + 0.5, f"neutral amplified: in={chr_in:.2f}, out={chr_out:.2f}"
+
+    def test_adaptive_saturate_gated_by_source_chroma(self):
+        """_adaptive_saturate should leave near-neutral pixels unchanged and boost
+        saturated pixels."""
+        saturated = np.full((8, 8, 3), [220, 40, 40], dtype=np.float64)
+        neutral = np.full((8, 8, 3), [200, 200, 200], dtype=np.float64)
+
+        sat_before = np.sqrt(np.sum((webserver._rgb_to_lab(saturated)[..., 1:]) ** 2, axis=-1)).mean()
+        sat_after = np.sqrt(np.sum((webserver._rgb_to_lab(webserver._adaptive_saturate(saturated, max_enhance=1.3))[..., 1:]) ** 2, axis=-1)).mean()
+        assert sat_after > sat_before, f"saturated should be boosted: before={sat_before:.1f} after={sat_after:.1f}"
+
+        neu_before = np.sqrt(np.sum((webserver._rgb_to_lab(neutral)[..., 1:]) ** 2, axis=-1)).mean()
+        neu_after = np.sqrt(np.sum((webserver._rgb_to_lab(webserver._adaptive_saturate(neutral, max_enhance=1.3))[..., 1:]) ** 2, axis=-1)).mean()
+        assert abs(neu_after - neu_before) < 0.5, f"neutral should be unchanged: before={neu_before:.2f} after={neu_after:.2f}"
