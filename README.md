@@ -7,6 +7,7 @@ Replacement firmware and self-hosted image server for the Hokku / Huessen 13.3" 
 ## Features
 
 - **Local-only.** Your photos never leave your network. The frame talks to a server you run on your own computer.
+- **Upload, download, and manage files directly in the web application.** No extra servers to set up, no Linux configuration, no Samba share to mount. Just works out of the box.
 - **Drop your photos in, done.** Any folder the server watches; the web GUI shows everything immediately. JPEG, PNG, BMP, TIFF, WebP, GIF, HEIC/HEIF, AVIF all work — the server auto-converts, rotates via EXIF, and dithers for the six-colour display.
 - **Multiple frames, one server.** Each frame gets a name. The web GUI shows a table of all connected frames with battery level, last-seen time, and when they'll next update.
 - **Fair rotation.** The least-shown image goes next, with a random tie-break. Newly-uploaded images jump to the front automatically.
