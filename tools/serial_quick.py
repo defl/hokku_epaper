@@ -1,89 +1,124 @@
-#!/usr/bin/env python3
-"""Quick serial monitor for the frame's USB-Serial/JTAG console.
+"""
+Serial log reader with rapid reconnect.
 
-Shows timestamped lines on stdout and (optionally) mirrors them to a
-log file. Exits cleanly on Ctrl-C or on loss of the serial port (e.g.
-the frame going to deep sleep, or the cable being unplugged).
+Reads lines from a serial port @ 115200 and prints them with timestamps.
+When the port disappears (USB unplug, device reset, etc.) it reconnects
+within ~100ms of the port becoming available again.
 
-Usage:
-    python serial_quick.py                       # defaults: COM3 @ 115200
-    python serial_quick.py --port COM5           # different port
-    python serial_quick.py --log session.log     # also write to file
-    python serial_quick.py --baud 921600         # different baud
+Usage: python serial_quick.py <PORT>    (e.g. COM3, /dev/ttyUSB0)
 
-On Linux / macOS the port is typically /dev/ttyACM0 or /dev/cu.usbmodem*.
+Requires: pip install pyserial
 """
 
 import argparse
-import datetime
-import io
 import sys
+import time
+from datetime import datetime
 
-try:
-    import serial  # pyserial
-except ImportError:
-    print("This script needs pyserial. Install with:\n\n    pip install pyserial\n")
-    sys.exit(1)
+import serial
+from serial import SerialException
+from serial.tools import list_ports
+
+BAUD = 115200
+READ_TIMEOUT_S = 0.05       # 50ms — how long each read() blocks
+RECONNECT_POLL_S = 0.05     # 50ms — poll for port 20x/sec
 
 
-# Force stdout to UTF-8 so unicode chars from the firmware (→, µ, etc.)
-# don't crash on Windows' default cp1252 code page.
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+def ts() -> str:
+    return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--port", default="COM3",
-                        help="serial port (default: COM3)")
-    parser.add_argument("--baud", type=int, default=115200,
-                        help="baud rate (default: 115200)")
-    parser.add_argument("--log",
-                        help="also write timestamped lines to this file")
-    args = parser.parse_args()
+def status(msg: str) -> None:
+    """Meta info (connects, disconnects) -> stderr so it doesn't mix with log data on stdout."""
+    print(f"[{ts()}] -- {msg}", file=sys.stderr, flush=True)
 
-    try:
-        s = serial.Serial(args.port, args.baud, timeout=0.5)
-    except serial.SerialException as e:
-        print(f"[err] could not open {args.port}: {e}")
-        sys.exit(1)
 
-    log_fh = None
-    if args.log:
-        log_fh = open(args.log, "w", encoding="utf-8", errors="replace")
-        print(f"[serial_quick] {args.port} @ {args.baud}, logging to {args.log}")
-    else:
-        print(f"[serial_quick] {args.port} @ {args.baud}")
+def port_present(name: str) -> bool:
+    return any(p.device.upper() == name.upper() for p in list_ports.comports())
 
-    buf = b""
+
+def wait_for_port(name: str) -> None:
+    """Block until the port reappears. Polls every RECONNECT_POLL_S."""
+    announced = False
+    while not port_present(name):
+        if not announced:
+            status(f"{name} gone - waiting for it to come back")
+            announced = True
+        time.sleep(RECONNECT_POLL_S)
+
+
+def open_port(name: str, baud: int) -> serial.Serial:
+    return serial.Serial(
+        port=name,
+        baudrate=baud,
+        timeout=READ_TIMEOUT_S,
+        write_timeout=0.5,
+    )
+
+
+def read_loop(ser: serial.Serial) -> None:
+    """
+    Read bytes, split on \\n, print each line with a timestamp.
+    Raises SerialException when the port dies -> outer loop reconnects.
+    On any exit, flushes any partial line still in the buffer.
+    """
+    buf = bytearray()
     try:
         while True:
-            try:
-                chunk = s.read(4096)
-            except OSError as e:
-                print(f"[serial_quick] serial read error: {e}")
-                break
+            chunk = ser.read(512)  # returns b"" on timeout, raises on disconnect
             if not chunk:
                 continue
-            buf += chunk
-            while b"\n" in buf:
-                line, buf = buf.split(b"\n", 1)
-                ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                text = line.decode("utf-8", errors="replace").rstrip("\r")
-                out = f"[{ts}] {text}"
-                print(out, flush=True)
-                if log_fh:
-                    log_fh.write(out + "\n")
-                    log_fh.flush()
-    except KeyboardInterrupt:
-        pass
+            buf.extend(chunk)
+            while True:
+                nl = buf.find(b"\n")
+                if nl < 0:
+                    break
+                line = bytes(buf[:nl]).rstrip(b"\r")
+                del buf[: nl + 1]
+                print(f"[{ts()}] {line.decode('utf-8', errors='replace')}", flush=True)
     finally:
-        if log_fh:
-            log_fh.close()
+        if buf:
+            print(
+                f"[{ts()}] {buf.decode('utf-8', errors='replace')}  <partial>",
+                flush=True,
+            )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Serial log reader with rapid reconnect.")
+    parser.add_argument("port", help="Serial port (e.g. COM3, /dev/ttyUSB0)")
+    parser.add_argument("--baud", type=int, default=BAUD, help=f"Baud rate (default {BAUD})")
+    args = parser.parse_args()
+
+    status(f"serial_quick started: {args.port} @ {args.baud}")
+    while True:
         try:
-            s.close()
-        except Exception:
-            pass
+            if not port_present(args.port):
+                wait_for_port(args.port)
+
+            ser = open_port(args.port, args.baud)
+            status(f"connected to {args.port}")
+            try:
+                read_loop(ser)
+            finally:
+                try:
+                    ser.close()
+                except Exception:
+                    pass
+
+        except SerialException as e:
+            status(f"serial error: {e} - reconnecting")
+            time.sleep(RECONNECT_POLL_S)
+        except KeyboardInterrupt:
+            status("stopped by user")
+            return
+        except Exception as e:
+            status(f"unexpected error: {e!r} - reconnecting")
+            time.sleep(RECONNECT_POLL_S)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
