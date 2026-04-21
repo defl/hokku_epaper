@@ -1,3 +1,12 @@
+hokku-server (2.1.19-1) unstable; urgency=low
+
+  * Dither: fs_hue_aware retired; atkinson_hue_aware upgraded to V10
+    recipe (adaptive-saturation) and is now the only hue-aware option.
+    Existing configs referencing fs_hue_aware migrate silently at load.
+  * New docs/dithering.md describing the pipeline for humans.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 20 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.18-1) unstable; urgency=low
 
   * Web UI Details modal: next_ep now shown relative to the firmware's
