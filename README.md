@@ -183,9 +183,10 @@ JPEG, PNG, BMP, TIFF, WebP, GIF, HEIC/HEIF, and AVIF. Drop any of these into the
 - **[Image Server documentation](webserver/README.md)** — install, web GUI, API endpoints, systemd service.
 - **[Dithering pipeline](docs/dithering.md)** — why the pipeline looks the way it does; failure modes and countermeasures; palette and Lab anchors.
 - **[Firmware documentation](firmware/README.md)** — building from source, manual flashing, developer notes.
-- **[Firmware design spec](firmware.md)** — the state-machine spec the current firmware implements.
+- **[Firmware design spec](docs/firmware_design.md)** — the state-machine spec the current firmware implements.
 - **[Hardware facts](HARDWARE_FACTS.md)** — confirmed GPIO map, SPI config, init sequence, USB-detection findings.
 - **[Changelog](CHANGELOG.md)** — release history.
+- **[Disclaimer](DISCLAIMER.md)** — warranty (none), intended use, reverse-engineering notes, privacy.
 
 ## Background
 

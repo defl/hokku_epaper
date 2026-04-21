@@ -2,7 +2,7 @@
  * Hokku 13.3" Spectra-6 E-Paper Frame — Custom Firmware
  * UC8179C dual-panel controller, 1200x800, SPI interface
  *
- * Design reference: firmware.md (root of repo) describes the state machine
+ * Design reference: docs/firmware_design.md describes the state machine
  * this implements. Hardware map + USB-detect findings in HARDWARE_FACTS.md.
  *
  * State machine summary:
@@ -12,7 +12,7 @@
  *   - DEEP_SLEEP    EXT1 wake on GPIO 1 (button) or GPIO 14 (USB plug) or timer
  *   - REFRESH       transient — fetch + display, return to enclosing regime
  *
- * Non-obvious rules (from spec, cross-reference firmware.md):
+ * Non-obvious rules (from spec, cross-reference docs/firmware_design.md):
  *   - Boot NEVER auto-refreshes. Only button / schedule / first-time install.
  *   - Button press = esp_restart() with RTC flag → guaranteed fresh state.
  *   - Sleep duration anchored to server epoch (absolute), not relative-to-now.
@@ -1696,7 +1696,7 @@ static void regime_battery_idle(int64_t boot_time_us);
 /* Signal a button-press refresh by setting the RTC action flag and
  * restarting. Boot path will detect the flag, clear it early, refresh,
  * and continue into whichever regime matches current usb_host state.
- * See firmware.md "Button = full reboot".
+ * See docs/firmware_design.md "Button = full reboot".
  *
  * `sleep_mode` tells the next boot's X-Frame-State which regime we left:
  * LAST_SLEEP_MODE_USB_RESTART when pressed in USB_AWAKE,

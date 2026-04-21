@@ -114,7 +114,7 @@ Complete rewrite of the release and deployment model. The firmware is now shippe
 
 - Build timestamp version (YYYYMMDDHHMMSSZ) embedded at fixed offset in app binary
 - Removed NTP sync, timezone handling, and schedule calculation
-- Removed embedded calibration image (moved to `resources/`)
+- Removed embedded calibration image
 - RTC magic value validates stale RTC memory after flash
 - USB charging detection: stays awake instead of boot-looping when USB connected
 - 120-second reflash window before every deep sleep

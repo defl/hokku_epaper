@@ -43,7 +43,7 @@
 - Size: 960,000 bytes (480K per panel)
 - Content: HUESSEN setup instructions (QR codes, app download steps)
 - The two panel halves are nearly identical but differ by ~3400 pixels (dithering noise at color boundaries)
-- Extracted images saved as `images/original_fw_ctrl1_600x1600.png` and `images/original_fw_ctrl2_600x1600.png`
+- Extracted images are kept under `.private/` (not in the repo; they're derivatives of the factory firmware binary)
 
 ## Confirmed GPIO Map
 
