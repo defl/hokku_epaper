@@ -31,6 +31,12 @@ Dithering
 =========
 - The image dithering pipeline (webserver/webserver.py) is explained in detail for humans in docs/dithering.md. If you change anything that affects dither output — algorithms, palette, saturation/vividness knobs, B&W detection, cache versioning — update docs/dithering.md to match. It is the one document that's meant to stay in sync with the code for non-AI readers.
 
+Reverse-engineering notes on the stock firmware
+===============================================
+- Everything we've learned about the stock E_Frame firmware (the one the device ships with) is written up for humans in docs/reverse_engineering_overview.md plus one file per firmware version (docs/reverse_engineering_v2.0.19_apr21.md, docs/reverse_engineering_v2.0.26_jun20.md). That's where the pin map, init-command bytes, display refresh and shutdown sequences, Ghidra findings, and things-we-got-wrong live.
+- If you do another RE pass — new stock firmware version, new Ghidra run, a finding that contradicts what's in those docs — update them. If a new stock version is analyzed, add a docs/reverse_engineering_v<VER>_<DATE>.md file alongside the existing ones and add it to the list at the top of docs/reverse_engineering_overview.md. The binaries and scratch notes stay in .private/; the digested findings go in docs/.
+- These docs are written for humans to onboard onto the display-driver code. Keep them complete and honest (including what didn't pan out) — they are explicitly not a summary for the AI.
+
 Coding and compiling
 ====================
 - always git commit firmware code before building and flashing, the comment is a 1 line summary of the change
