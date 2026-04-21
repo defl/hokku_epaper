@@ -6,21 +6,38 @@ Replacement firmware and self-hosted image server for the Hokku / Huessen 13.3" 
 
 ## Features
 
-- **Local-only.** Your photos never leave your network. The frame talks to a server you run on your own computer.
-- **Upload, download, and manage files directly in the web application.** No extra servers to set up, no Linux configuration, no Samba share to mount. Just works out of the box.
-- **Drop your photos in, done.** Any folder the server watches; the web GUI shows everything immediately. JPEG, PNG, BMP, TIFF, WebP, GIF, HEIC/HEIF, AVIF all work — the server auto-converts, rotates via EXIF, and dithers for the six-colour display.
-- **Multiple frames, one server.** Each frame gets a name. The web GUI shows a table of all connected frames with battery level, last-seen time, and when they'll next update.
-- **Fair rotation.** The least-shown image goes next, with a random tie-break. Newly-uploaded images jump to the front automatically.
-- **"Show next" button** on any image to force it onto the frame at the next refresh.
-- **Landscape or portrait.** Pick the mounting orientation in the settings panel; the server re-dithers everything accordingly.
-- **Three dither algorithms to choose from**, including a hue-aware Atkinson recipe that avoids the common failure modes (blue speckle on skin tones, pink noise on whites). See [`docs/dithering.md`](docs/dithering.md) for the details.
-- **Per-image stats** — how often each image has been shown, total display time, last-seen timestamp.
-- **Schedule-driven refreshes** — configure one or more refresh times (e.g. 06:00, 12:00, 18:00); the frame sleeps between them to save battery.
-- **Ultra-low power on battery** — ~8 µA in deep sleep between refreshes, so a full charge lasts months. The web app shows a live battery indicator for every connected frame (red below 20 %) so you know when to plug in.
+A self-hosted photo frame that actually works — no cloud, no accounts, no monthly sign-ups you forgot about.
+
+**Photos, your way**
+- **Local-only.** Your photos never leave your network. No cloud, no third-party servers, no telemetry.
+- **Drag-and-drop upload** straight into the web app — single files or dozens at a time, with a live progress list. Works on phones too.
+- **Browse in a grid**, preview originals *and* the dithered version side-by-side (so you see exactly what the frame will show before it shows it), delete anything you don't want with a one-click trash button.
+- **All the formats you actually have:** JPEG, PNG, HEIC/HEIF, AVIF, WebP, GIF, TIFF, BMP. Phone photos auto-rotate thanks to EXIF.
+- **Landscape or portrait** — flip a switch, the server re-dithers everything to match the mounting.
+- **"Show next" on any image** when you want to force a specific photo onto the frame at the next refresh.
+
+**Looks good on e-paper**
+- **Three dither algorithms to choose from**, including a hue-aware Atkinson recipe that handles skin tones and whites without the usual blue-speckle / pink-noise failure modes. ([the dithering rabbit hole →](docs/dithering.md))
+- **Calibrated to real Spectra 6 panel colours**, not theoretical sRGB, for accurate rendering.
+
+**Smart about frames**
+- **Multiple frames, one server.** Each frame gets a name and shows up in a dashboard table with battery level, last-seen time, WiFi signal, and when it'll next update.
+- **Fair image rotation** — least-shown image goes next, randomised tie-breaking, newly-uploaded photos jump to the front.
+- **Per-image stats** (shown count, total display time, last-seen) so you can see which shots are getting the most air time.
+- **Ultra-low power on battery** — ~8 µA in deep sleep, so a full charge lasts months. Live battery indicator per frame on the web app (red below 20 %) so you know when to plug in.
 - **Errors show up on the screen.** If something goes wrong — wrong WiFi password, server unreachable, configuration missing — the frame renders a readable explanation right on the e-paper instead of silently giving up. No serial-cable debugging required.
-- **Clock-synced** — the server tells the frame its wall-clock time on every refresh, so the dashboard can show real drift in seconds.
-- **Button on the bottom of the frame** forces an immediate refresh regardless of schedule.
-- **Debian package** with a systemd service, or run from source on any Python 3.9+ machine.
+- **Overdue-frame warning** banner if a frame is more than an hour late on its scheduled refresh — so you know to check WiFi or the battery before you notice a stale photo on the wall.
+- **Schedule-driven refreshes** (e.g. 06:00, 12:00, 18:00) with timezone support; the frame sleeps between refreshes and wakes on its own.
+- **Clock-synced** — every refresh carries the server's wall-clock, and the dashboard shows drift in seconds for every frame.
+- **Per-frame diagnostics modal** — one click opens the frame's self-reported state (firmware version, boot count, wake cause, WiFi cache hit, free heap, etc.) without a serial cable.
+- **Button on the back** forces an immediate refresh regardless of schedule.
+
+**Easy to run**
+- **Upload, download and manage everything from the web app.** No extra servers, no Linux config, no Samba share to mount. Just works out of the box.
+- **Debian package** with a systemd service for a one-line install, or run from source on any Python 3.9+ host (Linux, macOS, Windows, Raspberry Pi).
+- **Pre-built firmware + a wizard flasher** — no ESP-IDF toolchain required. Walks you through WiFi, server address, and naming in a few clicks.
+- **Configuration lives on the server** (timezone, schedule, orientation, dither choice) — change it once in the web app, every frame picks it up on its next refresh.
+- **Clear Cache & Re-convert** one-click button for when you change orientation, dither algorithm, or want to re-render everything from scratch.
 
 ## Installation
 
