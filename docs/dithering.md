@@ -287,30 +287,7 @@ saturated-feature preservation, simultaneously. V7 beats V10 on neutral_leak
 but loses on saturation (visible tongue loss). V11 pushes enhance to 1.35 and
 skin tones start looking sunburnt on outdoor/skin-heavy photos.
 
-The eval harness is preserved at `dither_test2/evaluate.py`. To re-run it
-against the current codebase:
-
-```
-cd <repo root>
-.venv/Scripts/python dither_test2/evaluate.py
-```
-
-It writes per-image 3×N grids to `dither_test2/eval<N>/` and aggregated
-metrics to `metrics.json`.
-
-## 6. Cache invalidation
-
-The cache key format includes a `_CACHE_VERSION` suffix (`"v2"` at time of
-writing). Bump this constant in `webserver/webserver.py` whenever an
-algorithm implementation changes in a way that affects output pixels. The
-next server start will automatically re-render every image because the old
-cache filenames no longer match.
-
-The cache key also includes the algorithm name, so cached renders for
-different algorithms coexist — switching back to a previously-rendered
-algorithm via the web UI is instant (no re-conversion).
-
-## 7. Research references
+## 6. Research references
 
 Key ideas from published work:
 
@@ -323,7 +300,7 @@ Key ideas from published work:
   practice. `adaptive_vivid` is a chroma-gated version of this.
 - **Atkinson (1984)** — Apple LaserWriter dither. 6/8 damping.
 
-## 8. Where the code lives
+## 7. Where the code lives
 
 - `webserver/webserver.py` — the production pipeline. Search for:
   - `VALID_DITHER_ALGORITHMS`, `_DEPRECATED_ALGORITHMS`, `DEFAULT_CONFIG`
@@ -340,7 +317,7 @@ Key ideas from published work:
 - `dither_test2/` (untracked scratch area, can be deleted) — the benchmark
   harness that chose V10, kept for reproduction.
 
-## 9. When this document is stale
+## 8. When this document is stale
 
 **Whenever dithering behavior changes** — a new algorithm, a tweak to
 `_adaptive_saturate` thresholds, a palette recalibration, a new failure mode
