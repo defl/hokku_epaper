@@ -3,7 +3,7 @@
  * UC8179C dual-panel controller, 1200x800, SPI interface
  *
  * Design reference: docs/firmware_design.md describes the state machine
- * this implements. Hardware map + USB-detect findings in HARDWARE_FACTS.md.
+ * this implements. Hardware map + USB-detect findings in docs/HARDWARE_FACTS.md.
  *
  * State machine summary:
  *   - USB_AWAKE     GPIO 14 LOW (computer USB): full-power, logs on, never
@@ -70,7 +70,7 @@ static const char *TAG = "hokku";
 #define PIN_BUTTON_1         1   /* "next image" button, active LOW, RTC-wake capable */
 #define PIN_PWR_BUTTON      12   /* Power button — transitions in lockstep with GPIO 14
                                   * on USB-plug events. Not used as an independent
-                                  * button source. See HARDWARE_FACTS.md "USB Detection". */
+                                  * button source. See docs/HARDWARE_FACTS.md "USB Detection". */
 #define PIN_BUTTON_2        40   /* Legacy "switch photo" (NOT RTC wake-capable) */
 #define PIN_BUTTON_3        39
 #define PIN_WORK_LED         2   /* Red LED (charge indicator) */
@@ -78,7 +78,7 @@ static const char *TAG = "hokku";
 #define PIN_BATT_ADC         5   /* ADC1_CH4, 3.34:1 divider */
 #define PIN_CHG_EN1          4   /* Charger enable (active LOW) */
 #define PIN_CHG_EN2         13   /* Charger enable (active LOW) */
-#define PIN_USB_DETECT      14   /* LOW = computer USB host present. See HARDWARE_FACTS.md */
+#define PIN_USB_DETECT      14   /* LOW = computer USB host present. See docs/HARDWARE_FACTS.md */
 
 /* ── Display parameters ──────────────────────────────────────────── */
 #define DISPLAY_W          1200
@@ -142,7 +142,7 @@ static const char *TAG = "hokku";
  *
  * RTC_DATA_ATTR would be wrong: it's re-initialised on every esp_restart,
  * which was the root cause of the "boot_count always 1, clk_now always 0"
- * bug in the pre-redesign firmware. See HARDWARE_FACTS.md deep-sleep notes. */
+ * bug in the pre-redesign firmware. See docs/HARDWARE_FACTS.md deep-sleep notes. */
 #define RTC_MAGIC 0x484F4B55  /* "HOKU" — validates RTC memory after POR / flash */
 
 RTC_NOINIT_ATTR static uint32_t rtc_magic;
@@ -1397,7 +1397,7 @@ static void chg_monitor_stop(void)
 /* USB host detection — GPIO 14 LOW means a computer USB host is enumerated.
  *
  * NOT a pure VBUS-detect. Wall chargers / USB battery banks that provide
- * VBUS without USB data signaling leave GPIO 14 HIGH. See HARDWARE_FACTS.md
+ * VBUS without USB data signaling leave GPIO 14 HIGH. See docs/HARDWARE_FACTS.md
  * "USB Detection" for the empirical probe results.
  *
  * Single-shot read. Use during boot classification where we want the
@@ -1572,7 +1572,7 @@ static void enter_deep_sleep(int64_t sleep_us)
      * GPIO 12 is deliberately excluded: it transitions in lockstep with
      * GPIO 14 on USB plug so it would double-fire; and with its unusual
      * stuck-low behaviour on some boots, it can look permanently-pressed.
-     * See HARDWARE_FACTS.md "USB Detection" + "GPIO 12". */
+     * See docs/HARDWARE_FACTS.md "USB Detection" + "GPIO 12". */
     esp_sleep_enable_ext1_wakeup(
         (1ULL << PIN_BUTTON_1) | (1ULL << PIN_USB_DETECT),
         ESP_EXT1_WAKEUP_ANY_LOW
