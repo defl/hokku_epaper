@@ -1109,7 +1109,8 @@ def wait_for_mdns(hostname):
         time.sleep(2)
 
 
-def wait_for_webserver(hostname, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SECS):
+def wait_for_webserver(hostname, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SECS,
+                       ssh_enabled=False):
     """Poll HTTP /hokku/api/time. Returns True if reachable within timeout."""
     url = f"http://{hostname}.local:{port}/hokku/api/time"
     print(f"  Waiting up to {timeout}s for webserver at {url}...")
@@ -1127,7 +1128,12 @@ def wait_for_webserver(hostname, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SEC
         time.sleep(2)
     print()
     print("  TIMEOUT: webserver did not respond.")
-    print("  The .deb install may still be running. SSH in and check /var/log/hokku-firstboot-install.log.")
+    print("  The .deb install may still be running in the background.")
+    if ssh_enabled:
+        print("  SSH in and check /var/log/hokku-firstboot-install.log.")
+    else:
+        print("  SSH was left disabled, so the log isn't reachable remotely.")
+        print("  Re-run this installer with 'Enable SSH login?' set to 'y' to diagnose.")
     return False
 
 
@@ -1227,16 +1233,22 @@ def run():
     print("     - Boot 2: runs apt update + installs the .deb (+samba, if chosen)")
     print("     - Total first-boot time: typically 3-8 minutes,")
     print("       longer on slow SD cards or slow internet.")
-    print("     - If something seems stuck, SSH in and tail:")
-    print("         /var/log/hokku-firstboot-install.log")
-    print("         /boot/firmware/firstrun.log")
+    if cfg["ssh_enabled"]:
+        print("     - If something seems stuck, SSH in and tail:")
+        print("         /var/log/hokku-firstboot-install.log")
+        print("         /boot/firmware/firstrun.log")
+    else:
+        print("     - If something seems stuck there's no way to inspect logs")
+        print("       remotely (SSH was left disabled). Re-run this installer")
+        print("       and answer 'y' to 'Enable SSH login?' to get remote access")
+        print("       to /var/log/hokku-firstboot-install.log etc.")
     try:
         pi_ip = wait_for_mdns(cfg["hostname"])
     except KeyboardInterrupt:
         print("\n  Cancelled by user.")
         return None
 
-    webserver_ok = wait_for_webserver(cfg["hostname"])
+    webserver_ok = wait_for_webserver(cfg["hostname"], ssh_enabled=cfg["ssh_enabled"])
 
     return {
         "wifi_ssid": cfg["wifi_ssid"],
