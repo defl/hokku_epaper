@@ -21,6 +21,21 @@ Display driver
 - display_message() must use split_and_display() — the exact same function used for downloaded images. The buffer layout must be identical: first 480K = panel 1, second 480K = panel 2.
 - After flashing the factory firmware dump (.private/flash_dump.bin) before our firmware, wait 30s for the display controller to fully reset. The factory restore puts the display in a known good state.
 
+Firmware packaging (single merged file)
+=======================================
+- Every firmware build **must** produce a single merged file named `hokku-firmware_<version>.bin` (e.g. `hokku-firmware_v2.1.20.bin`). The setup tool flashes this file at offset 0x0 — it contains bootloader + partition table + app at their correct offsets.
+- **Do not** commit or release the individual `bootloader.bin` / `partition-table.bin` / `hokku_epaper.bin` parts. The tool does not support the split layout; it looks only for `hokku-firmware_*.bin`.
+- Build the merged file with esptool's `merge-bin` after `idf.py build`:
+  ```
+  esptool --chip esp32s3 merge-bin --output firmware/release/hokku-firmware_<version>.bin \
+      --flash-mode dio --flash-freq 80m --flash-size 16MB \
+      0x0      firmware/build/bootloader/bootloader.bin \
+      0x8000   firmware/build/partition_table/partition-table.bin \
+      0x10000  firmware/build/hokku_epaper.bin
+  ```
+- `build.bat` / `build_worktree.bat` should run `idf.py build` then this merge step. Keep only the merged file under `firmware/release/`.
+- When tagging a GitHub release, attach the merged file as the single firmware asset. The setup tool downloads it from the latest release if `firmware/release/` is empty. If no `hokku-firmware_*.bin` asset is found the tool aborts — never publish a release missing this file.
+
 Flashing procedure
 ==================
 - For reliable results, flash the factory dump first, wait 30s, then flash our firmware: factory dump → 30s wait → bootloader + partition table + app → NVS config

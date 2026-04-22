@@ -49,19 +49,6 @@ On Windows, replace `/dev/ttyACM0` with `COM3` (or whichever port your device is
 
 All configuration (WiFi SSID/password, server URL, screen name) is stored in the NVS partition, not in source code. Use `hokku_setup.py` or `hokku_config.py` to write it.
 
-### Publishing a release
-
-When tagging a GitHub release, **always attach all three firmware binaries**:
-
-- `bootloader.bin`
-- `partition-table.bin`
-- `hokku_epaper.bin`
-
-The setup tool (`hokku_setup.bat`) auto-downloads firmware from the latest
-release when the local `firmware/release/` dir is incomplete. If a release is
-missing any of these three files the flasher can't reconstruct a bootable
-image and the tool aborts — do not publish partial firmware releases.
-
 ### Important notes
 
 - **Do not modify the display driver code** (SPI init, CS, BUSY polling, GPIO init, `epaper_reset`, `epaper_init_panel`, `epaper_send_panel`, `epaper_display_dual`). See `CLAUDE.md` for details.

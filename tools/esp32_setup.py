@@ -23,34 +23,42 @@ SCRIPT_DIR = Path(__file__).parent
 LOCAL_FIRMWARE_DIR = SCRIPT_DIR.parent / "firmware" / "release"
 FIRMWARE_CACHE_DIR = release_cache.CACHE_DIR / "firmware"
 
-FIRMWARE_FILES = ("bootloader.bin", "partition-table.bin", "hokku_epaper.bin")
-
-# Mutable — resolved at run() time via resolve_firmware_dir(). Default to the
-# committed local dir so anyone using this module as a library gets reasonable
-# behaviour without having to call the resolver first.
+# Mutable — resolved at run() time via resolve_firmware_dir().
 FIRMWARE_DIR = LOCAL_FIRMWARE_DIR
 
+# Flash offsets inside the merged image. Only BOOTLOADER_OFFSET is used for
+# flashing (write the whole merged image at 0x0); APP_OFFSET is where we seek
+# inside the merged image to read the app descriptor / version string.
 BOOTLOADER_OFFSET = 0x0
-PARTITION_TABLE_OFFSET = 0x8000
 APP_OFFSET = 0x10000
 
 
 # -------- firmware location resolver --------
 
+def _merged_firmware_file(directory):
+    """Return the merged hokku-firmware_<version>.bin in `directory`, or None."""
+    if directory is None or not directory.exists():
+        return None
+    matches = sorted(directory.glob("hokku-firmware_*.bin"))
+    return matches[-1] if matches else None
+
+
+def _is_merged_firmware_asset(name):
+    return name.startswith("hokku-firmware_") and name.endswith(".bin")
+
+
 def resolve_firmware_dir():
-    """Return a directory containing all three firmware files. Prefers the
-    committed firmware/release/ dir; falls back to downloading the files from
-    the latest GitHub release into .cache/firmware/<tag>/. Returns None on
-    failure (no local files and no network)."""
+    """Return a directory containing a merged hokku-firmware_<version>.bin.
+    Prefers the local firmware/release/ dir; falls back to downloading the
+    merged release asset from GitHub into .cache/firmware/<tag>/. Returns None
+    if nothing is available (no local file and no network)."""
     global FIRMWARE_DIR
 
-    if all((LOCAL_FIRMWARE_DIR / f).exists() for f in FIRMWARE_FILES):
+    if _merged_firmware_file(LOCAL_FIRMWARE_DIR):
         FIRMWARE_DIR = LOCAL_FIRMWARE_DIR
         return FIRMWARE_DIR
 
-    missing_local = [f for f in FIRMWARE_FILES if not (LOCAL_FIRMWARE_DIR / f).exists()]
-    print(f"  Firmware files missing from {LOCAL_FIRMWARE_DIR}: {', '.join(missing_local)}")
-    print("  Fetching from latest GitHub release...")
+    print(f"  No hokku-firmware_*.bin in {LOCAL_FIRMWARE_DIR}. Fetching latest GitHub release...")
     try:
         release = release_cache.get_latest_release()
     except Exception as e:
@@ -58,21 +66,33 @@ def resolve_firmware_dir():
         return None
 
     tag = release.get("tag_name", "latest")
-    target_dir = FIRMWARE_CACHE_DIR / tag
+    asset = release_cache.find_asset(release, _is_merged_firmware_asset)
+    if asset is None:
+        print(f"  ERROR: release {tag} has no hokku-firmware_*.bin asset.")
+        print("  (See 'Releasing firmware' in CLAUDE.md — the release must ship")
+        print("   a single merged hokku-firmware_<version>.bin file.)")
+        return None
 
-    for fname in FIRMWARE_FILES:
-        asset = release_cache.find_asset(release, lambda n, f=fname: n == f)
-        if asset is None:
-            print(f"  ERROR: release {tag} has no asset named {fname}.")
-            print("  (The release must include bootloader.bin, partition-table.bin,")
-            print("   and hokku_epaper.bin so the flasher can recreate a full image.)")
-            return None
-        if release_cache.ensure_cached_asset(asset, target_dir, label=f"(release {tag})") is None:
-            return None
+    target_dir = FIRMWARE_CACHE_DIR / tag
+    if release_cache.ensure_cached_asset(asset, target_dir, label=f"(release {tag})") is None:
+        return None
 
     FIRMWARE_DIR = target_dir
     print(f"  Firmware ready: {FIRMWARE_DIR}")
     return FIRMWARE_DIR
+
+
+def _release_app_header(directory=None):
+    """Return the first 256 bytes of the app section inside the merged firmware
+    image (located at offset 0x10000). Used to read the release version string
+    and compare against what's on the device."""
+    directory = directory or FIRMWARE_DIR
+    merged = _merged_firmware_file(directory)
+    if not merged:
+        return None
+    with open(merged, "rb") as f:
+        f.seek(APP_OFFSET)
+        return f.read(256)
 
 
 # -------- device scan --------
@@ -164,10 +184,8 @@ def parse_device_state(nvs_data, app_header):
         if ver:
             result["device_version"] = ver
 
-    app_bin = FIRMWARE_DIR / "hokku_epaper.bin"
-    if app_bin.exists():
-        with open(app_bin, "rb") as f:
-            release_header = f.read(256)
+    release_header = _release_app_header()
+    if release_header:
         if len(release_header) >= 80:
             ver = release_header[48:80].split(b"\x00")[0].decode("ascii", errors="replace")
             if ver:
@@ -446,29 +464,21 @@ def write_config(port, config):
 
 
 def flash_firmware(port):
-    bootloader = FIRMWARE_DIR / "bootloader.bin"
-    partition_table = FIRMWARE_DIR / "partition-table.bin"
-    app = FIRMWARE_DIR / "hokku_epaper.bin"
-
-    missing = [name for name, path in [
-        ("bootloader.bin", bootloader),
-        ("partition-table.bin", partition_table),
-        ("hokku_epaper.bin", app),
-    ] if not path.exists()]
-
-    if missing:
-        print(f"  ERROR: Firmware files not found in {FIRMWARE_DIR}/")
-        for m in missing:
-            print(f"    Missing: {m}")
-        return False
-
+    """Flash the merged hokku-firmware_<version>.bin image at offset 0x0."""
     try:
         import esptool
     except ImportError:
         print("  Error: esptool not installed. Run: pip install esptool")
         return False
 
-    print("  Flashing firmware (this takes about 30 seconds)...")
+    merged = _merged_firmware_file(FIRMWARE_DIR)
+    if not merged:
+        print(f"  ERROR: No hokku-firmware_*.bin in {FIRMWARE_DIR}.")
+        print("  (See 'Releasing firmware' in CLAUDE.md — builds must produce a")
+        print("   single merged firmware file.)")
+        return False
+
+    print(f"  Flashing {merged.name} (~30s)...")
     try:
         esptool.main([
             "--chip", "esp32s3",
@@ -478,9 +488,7 @@ def flash_firmware(port):
             "--flash-mode", "dio",
             "--flash-freq", "80m",
             "--flash-size", "16MB",
-            hex(BOOTLOADER_OFFSET), str(bootloader),
-            hex(PARTITION_TABLE_OFFSET), str(partition_table),
-            hex(APP_OFFSET), str(app),
+            hex(BOOTLOADER_OFFSET), str(merged),
         ])
         print("  Firmware flashed successfully.")
         return True

@@ -106,22 +106,51 @@ class TestEnsureCachedAsset:
 
 # ---------- resolve_firmware_dir ----------
 
+class TestMergedFirmwareDetection:
+    def test_picks_merged_file(self, tmp_path):
+        (tmp_path / "hokku-firmware_v1.0.0.bin").write_bytes(b"x")
+        assert esp32_setup._merged_firmware_file(tmp_path).name == "hokku-firmware_v1.0.0.bin"
+
+    def test_returns_none_when_no_merged(self, tmp_path):
+        assert esp32_setup._merged_firmware_file(tmp_path) is None
+
+    def test_ignores_non_matching(self, tmp_path):
+        (tmp_path / "bootloader.bin").write_bytes(b"x")
+        assert esp32_setup._merged_firmware_file(tmp_path) is None
+
+    def test_picks_latest_sorted(self, tmp_path):
+        (tmp_path / "hokku-firmware_v1.bin").write_bytes(b"x")
+        (tmp_path / "hokku-firmware_v2.bin").write_bytes(b"x")
+        assert esp32_setup._merged_firmware_file(tmp_path).name == "hokku-firmware_v2.bin"
+
+    def test_nonexistent_dir(self, tmp_path):
+        assert esp32_setup._merged_firmware_file(tmp_path / "nope") is None
+
+
+class TestIsMergedAsset:
+    def test_matches_merged(self):
+        assert esp32_setup._is_merged_firmware_asset("hokku-firmware_v2.1.20.bin")
+
+    def test_rejects_parts(self):
+        for n in ("bootloader.bin", "partition-table.bin", "hokku_epaper.bin"):
+            assert not esp32_setup._is_merged_firmware_asset(n)
+
+    def test_rejects_deb(self):
+        assert not esp32_setup._is_merged_firmware_asset("hokku-server_2.1.20-1_all.deb")
+
+
 class TestResolveFirmwareDir:
-    def test_uses_local_when_all_files_present(self, tmp_path, monkeypatch):
+    def test_uses_local_when_merged_file_present(self, tmp_path, monkeypatch):
         local = tmp_path / "release"
         local.mkdir()
-        for f in esp32_setup.FIRMWARE_FILES:
-            (local / f).write_bytes(b"x")
+        (local / "hokku-firmware_v1.0.0.bin").write_bytes(b"x")
         monkeypatch.setattr(esp32_setup, "LOCAL_FIRMWARE_DIR", local)
         monkeypatch.setattr(esp32_setup, "FIRMWARE_DIR", None)
-        result = esp32_setup.resolve_firmware_dir()
-        assert result == local
+        assert esp32_setup.resolve_firmware_dir() == local
 
-    def test_downloads_when_local_incomplete(self, tmp_path, monkeypatch):
-        """Simulate the three firmware assets being absent locally; the resolver
-        should call into release_cache.ensure_cached_asset for each file."""
+    def test_downloads_merged_when_local_empty(self, tmp_path, monkeypatch):
         local = tmp_path / "release"
-        local.mkdir()  # empty — all three files missing
+        local.mkdir()  # empty
 
         cache = tmp_path / "firmware-cache"
         monkeypatch.setattr(esp32_setup, "LOCAL_FIRMWARE_DIR", local)
@@ -131,8 +160,7 @@ class TestResolveFirmwareDir:
         fake_release = {
             "tag_name": "v9.9.9",
             "assets": [
-                {"name": f, "browser_download_url": f"http://x/{f}", "size": 3}
-                for f in esp32_setup.FIRMWARE_FILES
+                {"name": "hokku-firmware_v9.9.9.bin", "browser_download_url": "http://x/fw.bin", "size": 42},
             ],
         }
         monkeypatch.setattr(release_cache, "get_latest_release", lambda: fake_release)
@@ -141,31 +169,28 @@ class TestResolveFirmwareDir:
         def fake_ensure(asset, target_dir, label=""):
             path = target_dir / asset["name"]
             target_dir.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"xxx")
+            path.write_bytes(b"x" * asset["size"])
             downloaded.append(asset["name"])
             return path
         monkeypatch.setattr(release_cache, "ensure_cached_asset", fake_ensure)
 
         result = esp32_setup.resolve_firmware_dir()
         assert result == cache / "v9.9.9"
-        assert set(downloaded) == set(esp32_setup.FIRMWARE_FILES)
+        assert downloaded == ["hokku-firmware_v9.9.9.bin"]
 
-    def test_returns_none_when_asset_missing_from_release(self, tmp_path, monkeypatch):
-        """If the latest release is missing any required firmware file, fail
-        fast — we refuse to flash a partial firmware image."""
+    def test_returns_none_when_release_has_no_merged_asset(self, tmp_path, monkeypatch):
         local = tmp_path / "release"
         local.mkdir()
         monkeypatch.setattr(esp32_setup, "LOCAL_FIRMWARE_DIR", local)
         monkeypatch.setattr(esp32_setup, "FIRMWARE_CACHE_DIR", tmp_path / "cache")
         monkeypatch.setattr(esp32_setup, "FIRMWARE_DIR", None)
 
-        # Release has only 2 of 3 assets
         fake_release = {
             "tag_name": "v1",
-            "assets": [
+            "assets": [  # the three legacy parts — no merged file
                 {"name": "bootloader.bin", "browser_download_url": "u1", "size": 1},
-                {"name": "hokku_epaper.bin", "browser_download_url": "u2", "size": 1},
-                # partition-table.bin intentionally missing
+                {"name": "partition-table.bin", "browser_download_url": "u2", "size": 1},
+                {"name": "hokku_epaper.bin", "browser_download_url": "u3", "size": 1},
             ],
         }
         monkeypatch.setattr(release_cache, "get_latest_release", lambda: fake_release)
@@ -181,3 +206,24 @@ class TestResolveFirmwareDir:
             raise OSError("network down")
         monkeypatch.setattr(release_cache, "get_latest_release", boom)
         assert esp32_setup.resolve_firmware_dir() is None
+
+
+class TestReleaseAppHeader:
+    def test_reads_from_merged_at_app_offset(self, tmp_path):
+        """Merged file must be read at offset 0x10000 (app region)."""
+        merged = tmp_path / "hokku-firmware_v1.bin"
+        # Fill with zeros then write a recognizable pattern at APP_OFFSET
+        blob = bytearray(esp32_setup.APP_OFFSET + 256)
+        blob[esp32_setup.APP_OFFSET:esp32_setup.APP_OFFSET + 16] = b"APPHEADER_START\x00"
+        merged.write_bytes(bytes(blob))
+        header = esp32_setup._release_app_header(directory=tmp_path)
+        assert header is not None
+        assert header.startswith(b"APPHEADER_START\x00")
+
+    def test_ignores_three_file_layout(self, tmp_path):
+        """Three-file layout is no longer supported — only merged files count."""
+        (tmp_path / "hokku_epaper.bin").write_bytes(b"DIRECT_APP_HEADER" + b"\x00" * 300)
+        assert esp32_setup._release_app_header(directory=tmp_path) is None
+
+    def test_returns_none_when_no_merged(self, tmp_path):
+        assert esp32_setup._release_app_header(directory=tmp_path) is None
