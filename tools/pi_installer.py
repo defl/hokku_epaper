@@ -667,7 +667,10 @@ def write_image_to_disk(image_path, disk_index, disk_size_bytes):
     src_size = image_path.stat().st_size  # only useful for .img; for .xz we don't know decompressed size
 
     print()
-    print(f"  Writing {image_path.name} to PhysicalDrive{disk_index} ...")
+    print(f"  Writing {image_path.name} to 'PhysicalDrive{disk_index}' ...")
+    if is_xz:
+        print(f"  (The .img.xz is decompressed on the fly — the actual amount")
+        print(f"   written to the card is ~2.5 GB, not the {image_path.stat().st_size // 1024**2} MB source.)")
     print("  This takes 3-10 minutes. Do not remove the card.")
 
     vol_handles = _dismount_volumes(disk_index)
