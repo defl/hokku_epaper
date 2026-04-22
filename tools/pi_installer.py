@@ -138,8 +138,15 @@ def _relaunch_elevated():
     # Quote args that contain spaces/backslashes so the new process sees the same argv.
     def q(a):
         return f'"{a}"' if (" " in a or "\\" in a) else a
-    # Tell the elevated process to pause before the window closes so errors stay visible.
-    new_argv = sys.argv + (["--pause-on-exit"] if "--pause-on-exit" not in sys.argv else [])
+    # Carry state across the elevation barrier so the new window doesn't re-ask
+    # the user questions they've already answered:
+    #   --pi-install       : user already said yes to the "install Pi OS?" prompt
+    #   --pause-on-exit    : keep the new window open so errors stay readable
+    extra = []
+    for flag in ("--pi-install", "--pause-on-exit"):
+        if flag not in sys.argv:
+            extra.append(flag)
+    new_argv = sys.argv + extra
     params = " ".join(q(a) for a in new_argv)
     SW_SHOWNORMAL = 1
     rc = ctypes.windll.shell32.ShellExecuteW(
@@ -778,12 +785,58 @@ def find_bootfs_letter(disk_index, timeout=30):
 
 
 def find_deb_package():
-    """Find a hokku-server_*.deb to ship on the SD card."""
+    """Find a hokku-server_*.deb in the usual search locations (no prompting)."""
     candidates = []
     for d in [CACHE_DIR, REPO_ROOT, REPO_ROOT / "webserver"]:
         if d.exists():
             candidates.extend(sorted(d.glob("hokku-server_*.deb")))
     return candidates[-1] if candidates else None
+
+
+def locate_deb_package_interactive():
+    """Auto-find the .deb; if missing, ask the user for a path and copy it to
+    .cache/ so subsequent runs pick it up automatically. Returns Path or None."""
+    deb = find_deb_package()
+    if deb:
+        return deb
+
+    print()
+    print("  No hokku-server_*.deb found in the usual locations:")
+    print(f"    {CACHE_DIR}")
+    print(f"    {REPO_ROOT}")
+    print(f"    {REPO_ROOT / 'webserver'}")
+    print()
+    print("  A .deb is required to install hokku-server on the Pi. Options:")
+    print("    - Build one on a Linux box: cd webserver && ./build-deb.sh")
+    print("    - Or enter the path to an existing .deb below.")
+    print()
+
+    while True:
+        path_str = input("  Path to hokku-server_*.deb (blank to abort): ").strip().strip('"').strip("'")
+        if not path_str:
+            return None
+        p = Path(path_str)
+        if not p.exists():
+            print(f"  ERROR: {p} does not exist.")
+            continue
+        if not p.is_file():
+            print(f"  ERROR: {p} is not a file.")
+            continue
+        if not p.name.startswith("hokku-server_") or not p.suffix == ".deb":
+            print(f"  ERROR: {p.name} doesn't look like a hokku-server .deb (expected hokku-server_*.deb).")
+            if not _yesno("Use it anyway?", default_yes=False):
+                continue
+        # Cache it so future runs find it automatically.
+        try:
+            ensure_cache_dir()
+            cached = CACHE_DIR / p.name
+            if cached.resolve() != p.resolve():
+                shutil.copy2(p, cached)
+                print(f"  Cached to {cached} for future runs.")
+            return cached
+        except Exception as e:
+            print(f"  (Could not cache to .cache/: {e}. Using original path.)")
+            return p
 
 
 def inject_boot_customization(bootfs_letter, cfg, deb_path):
@@ -1096,10 +1149,9 @@ def run():
         return None
 
     # Pre-flight: .deb must exist before we write anything.
-    deb = find_deb_package()
+    deb = locate_deb_package_interactive()
     if not deb:
-        print("  ERROR: no hokku-server_*.deb found in .cache/, repo root, or webserver/.")
-        print("  Build one with: cd webserver && ./build-deb.sh")
+        print("  Aborted: no .deb available.")
         return None
     print(f"  .deb package: {deb.name} ({deb.stat().st_size // 1024} KB)")
 

@@ -33,13 +33,18 @@ def _yesno(prompt, default_yes=True):
 
 def main():
     _pause_on_exit = "--pause-on-exit" in sys.argv
+    _preselected_install = "--pi-install" in sys.argv  # carried across UAC relaunch
     _banner()
 
     pi_credentials = None
     pi_install_ran = False
     server_reachable = False
 
-    do_install = _yesno("Do you want to install Raspberry Pi OS on an SD card?", default_yes=False)
+    if _preselected_install:
+        do_install = True
+        print("  (Continuing Pi OS install in elevated session.)")
+    else:
+        do_install = _yesno("Do you want to install Raspberry Pi OS on an SD card?", default_yes=False)
 
     if do_install:
         result = pi_installer.run()
