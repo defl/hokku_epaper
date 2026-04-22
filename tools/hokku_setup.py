@@ -32,6 +32,7 @@ def _yesno(prompt, default_yes=True):
 
 
 def main():
+    _pause_on_exit = "--pause-on-exit" in sys.argv
     _banner()
 
     pi_credentials = None
@@ -67,6 +68,8 @@ def main():
         print("  NOTE: hokku-server is not reachable — you can still configure the ESP32.")
 
     rc = esp32_setup.run(pi_credentials=pi_credentials, pi_install_ran=pi_install_ran)
+    if _pause_on_exit:
+        input("\n  Press Enter to close this window. ")
     sys.exit(rc or 0)
 
 

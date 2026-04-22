@@ -131,6 +131,24 @@ def is_admin():
         return False
 
 
+def _relaunch_elevated():
+    """Re-invoke the running Python script with admin rights via UAC. The new
+    process runs in its own console window (ShellExecute can't share ours).
+    Returns True if the UAC prompt was accepted and the process started."""
+    # Quote args that contain spaces/backslashes so the new process sees the same argv.
+    def q(a):
+        return f'"{a}"' if (" " in a or "\\" in a) else a
+    # Tell the elevated process to pause before the window closes so errors stay visible.
+    new_argv = sys.argv + (["--pause-on-exit"] if "--pause-on-exit" not in sys.argv else [])
+    params = " ".join(q(a) for a in new_argv)
+    SW_SHOWNORMAL = 1
+    rc = ctypes.windll.shell32.ShellExecuteW(
+        None, "runas", sys.executable, params, str(Path.cwd()), SW_SHOWNORMAL,
+    )
+    # ShellExecute returns an HINSTANCE-ish integer; values > 32 are success.
+    return rc > 32
+
+
 def fmt_gb(n):
     if n <= 0:
         return "?"
@@ -1064,9 +1082,17 @@ def run():
         print("  ERROR: Pi installer currently only supports Windows.")
         return None
     if not is_admin():
-        print("  ERROR: administrator privileges required to write to the SD card.")
-        print("  Close this window and re-run hokku_setup.bat — it will offer")
-        print("  to relaunch itself elevated (via a UAC prompt).")
+        print("  Administrator privileges are required to write to the SD card.")
+        answer = input("  Re-launch this installer as Administrator? [Y/n]: ").strip().lower()
+        if answer in ("", "y", "yes"):
+            if _relaunch_elevated():
+                print()
+                print("  An elevated installer window has opened — continue there.")
+                print("  (You can close this window; nothing else will run here.)")
+                input("  Press Enter to close this window. ")
+                sys.exit(0)
+            else:
+                print("  Failed to elevate (did you decline the UAC prompt?).")
         return None
 
     # Pre-flight: .deb must exist before we write anything.
