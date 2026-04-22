@@ -447,9 +447,18 @@ def prompt_image_path():
     ensure_cache_dir()
     cached = sorted(CACHE_DIR.glob("*raspios*arm64*lite*.img*")) + sorted(CACHE_DIR.glob("*.img.xz"))
     cached = [p for p in cached if p.is_file()]
-    default_hint = f"(cached: {cached[-1].name})" if cached else "(no cached image)"
 
-    path_str = input(f"  Image path (press Enter to use default) {default_hint}: ").strip()
+    if cached:
+        print(f"  Cached image available: {cached[-1].name}")
+        print("  Press Enter to use it, or paste a path to a different .img/.img.xz file.")
+    else:
+        print("  No Pi OS image cached yet.")
+        print("  Press Enter to download the latest Pi OS Lite 64-bit image")
+        print("    (~550 MB compressed — .img.xz from downloads.raspberrypi.com,")
+        print(f"     cached to {CACHE_DIR}\\ for future runs),")
+        print("  or paste a path to an existing .img / .img.xz file.")
+
+    path_str = input("  > ").strip().strip('"').strip("'")
     if path_str:
         p = Path(path_str)
         if not p.exists():
@@ -462,6 +471,7 @@ def prompt_image_path():
         return cached[-1]
 
     # Download latest
+    print()
     print("  Resolving latest Pi OS Lite 64-bit URL...")
     try:
         req = urllib.request.Request(PI_OS_LATEST_URL, method="HEAD")
