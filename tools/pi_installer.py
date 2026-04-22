@@ -10,13 +10,10 @@ Windows-only (uses \\.\PhysicalDriveN and wmic). Admin required.
 import ctypes
 import ctypes.wintypes as wt
 import getpass
-import hashlib
-import io
+import json
 import lzma
-import os
 import shutil
 import socket
-import string
 import subprocess
 import sys
 import time
@@ -49,6 +46,82 @@ OPEN_EXISTING = 3
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 
+# ---------- input validation ----------
+
+# Shared safe character set: printable ASCII (0x20-0x7E) minus characters that
+# are hard to embed safely across the four contexts we interpolate into:
+# bash double-quoted strings, bash heredocs, NetworkManager .nmconnection ini
+# values, and wpa_supplicant double-quoted string values.
+_DISALLOWED_ANY = set('"\\\n\r')
+
+
+def _bad_chars(s, extra_disallowed=""):
+    """Return sorted list of disallowed/unprintable characters found in `s`."""
+    bad = set()
+    for ch in s:
+        code = ord(ch)
+        if code < 0x20 or code > 0x7E:
+            bad.add(ch)
+        elif ch in _DISALLOWED_ANY or ch in extra_disallowed:
+            bad.add(ch)
+    return sorted(bad)
+
+
+def _char_report(chars):
+    """Human-readable list of bad characters — shows repr so control chars visible."""
+    return ", ".join(repr(c) for c in chars)
+
+
+def validate_ssid(s):
+    """Return (ok, reason). WPA SSID: 1-32 bytes, no `"`, `\\`, newlines, no non-printable."""
+    if not s:
+        return False, "SSID is empty"
+    if len(s.encode("utf-8")) > 32:
+        return False, f"SSID is {len(s.encode('utf-8'))} bytes (max 32)"
+    bad = _bad_chars(s)
+    if bad:
+        return False, f"SSID contains disallowed characters: {_char_report(bad)}"
+    return True, ""
+
+
+def validate_wifi_password(s):
+    """Return (ok, reason). WPA2 PSK: 8-63 printable ASCII (or empty for open network)."""
+    if s == "":
+        return True, ""  # open network
+    if len(s) < 8:
+        return False, "WiFi password must be at least 8 characters (WPA2 PSK requirement)"
+    if len(s) > 63:
+        return False, f"WiFi password is {len(s)} characters (max 63)"
+    bad = _bad_chars(s)
+    if bad:
+        return False, f"WiFi password contains disallowed characters: {_char_report(bad)}"
+    return True, ""
+
+
+def validate_username(s):
+    """Return (ok, reason). Linux username: [a-z][a-z0-9_-]*, max 32."""
+    if not s:
+        return False, "Username is empty"
+    if len(s) > 32:
+        return False, f"Username is {len(s)} characters (max 32)"
+    if not s[0].islower() and s[0] != "_":
+        return False, "Username must start with a lowercase letter or underscore"
+    for ch in s:
+        if not (ch.islower() or ch.isdigit() or ch in "_-"):
+            return False, f"Username contains disallowed character: {ch!r} (allowed: a-z 0-9 _ -)"
+    return True, ""
+
+
+def validate_linux_password(s):
+    """Return (ok, reason). chpasswd line: no `:` (separator), no newline/CR."""
+    if not s:
+        return False, "Password is empty"
+    bad = _bad_chars(s, extra_disallowed=":")
+    if bad:
+        return False, f"Password contains disallowed characters: {_char_report(bad)}"
+    return True, ""
+
+
 # ---------- Windows helpers ----------
 
 def is_admin():
@@ -58,22 +131,101 @@ def is_admin():
         return False
 
 
+def fmt_gb(n):
+    if n <= 0:
+        return "?"
+    return f"{n / 1024**3:.1f} GB"
+
+
+# ---------- Drive listing (PowerShell primary, wmic fallback) ----------
+
+_POWERSHELL_DRIVES = r'''
+$out = @()
+foreach ($d in Get-CimInstance Win32_DiskDrive) {
+    $letters = @()
+    try {
+        $parts = Get-CimInstance -Query ("ASSOCIATORS OF {Win32_DiskDrive.DeviceID=`"" + $d.DeviceID.Replace('\','\\') + "`"} WHERE AssocClass = Win32_DiskDriveToDiskPartition")
+        foreach ($p in $parts) {
+            $ld = Get-CimInstance -Query ("ASSOCIATORS OF {Win32_DiskPartition.DeviceID=`"" + $p.DeviceID + "`"} WHERE AssocClass = Win32_LogicalDiskToPartition")
+            if ($ld) { $letters += $ld.DeviceID }
+        }
+    } catch {}
+    $out += [PSCustomObject]@{
+        Index = [int]$d.Index
+        Model = [string]$d.Model
+        Size = [int64]($d.Size)
+        InterfaceType = [string]$d.InterfaceType
+        MediaType = [string]$d.MediaType
+        Letters = $letters
+    }
+}
+$out | ConvertTo-Json -Compress -Depth 3
+'''
+
+
+def _run_powershell_drives():
+    """Return raw stdout from the PowerShell drives query, or None if PS unavailable/failed."""
+    for exe in ("powershell.exe", "pwsh.exe"):
+        try:
+            res = subprocess.run(
+                [exe, "-NoProfile", "-NonInteractive", "-Command", _POWERSHELL_DRIVES],
+                capture_output=True, text=True, timeout=15,
+            )
+        except FileNotFoundError:
+            continue
+        except Exception:
+            continue
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout
+    return None
+
+
+def parse_powershell_drives(stdout):
+    """Parse the JSON output of _POWERSHELL_DRIVES into list of drive dicts."""
+    if not stdout or not stdout.strip():
+        return []
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(data, dict):
+        data = [data]  # single-row JSON is not wrapped in a list
+    drives = []
+    for r in data:
+        letters = r.get("Letters") or []
+        if isinstance(letters, str):
+            letters = [letters]
+        media = r.get("MediaType") or ""
+        removable = "Removable" in media or "External" in media
+        drives.append({
+            "index": int(r.get("Index", -1)),
+            "model": (r.get("Model") or "").strip(),
+            "size_bytes": int(r.get("Size") or 0),
+            "interface": (r.get("InterfaceType") or "").strip(),
+            "media": media,
+            "removable": removable,
+            "letters": list(letters),
+        })
+    return drives
+
+
 def _wmic(command):
-    """Run wmic, return stdout as text (or empty string on failure)."""
+    """Run wmic, return stdout text (empty on failure or wmic missing)."""
     try:
         res = subprocess.run(command, capture_output=True, text=True, timeout=10)
-        return res.stdout
+        return res.stdout if res.returncode == 0 else ""
+    except FileNotFoundError:
+        return ""
     except Exception:
         return ""
 
 
-def _parse_wmic_table(output):
-    """Parse fixed-width wmic output into list of dicts. wmic uses column-aligned text."""
+def parse_wmic_table(output):
+    """Parse fixed-width wmic /format:table output into list of dicts."""
     lines = [l.rstrip() for l in output.splitlines() if l.strip()]
     if len(lines) < 2:
         return []
     header_line = lines[0]
-    # Find column start positions by scanning for transitions from space to non-space
     positions = []
     in_space = True
     for i, ch in enumerate(header_line):
@@ -96,11 +248,63 @@ def _parse_wmic_table(output):
     return rows
 
 
+def _wmic_list_drive_letters_for(disk_index):
+    """wmic-based partition→letter mapping for one physical disk."""
+    out = _wmic([
+        "wmic", "path", "Win32_DiskDriveToDiskPartition", "get",
+        "Antecedent,Dependent", "/format:list"
+    ])
+    partitions = []
+    for blk in out.replace("\r", "").split("\n\n"):
+        d = {}
+        for line in blk.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                d[k] = v
+        ante = d.get("Antecedent", "")
+        dep = d.get("Dependent", "")
+        if 'DeviceID="' not in ante or 'DeviceID="' not in dep:
+            continue
+        try:
+            disk_n = int(ante.split('DeviceID="')[1].split('"')[0].split("\\\\")[-1].replace("PHYSICALDRIVE", ""))
+        except Exception:
+            continue
+        part_id = dep.split('DeviceID="')[1].split('"')[0]
+        partitions.append((disk_n, part_id))
+
+    out2 = _wmic([
+        "wmic", "path", "Win32_LogicalDiskToPartition", "get",
+        "Antecedent,Dependent", "/format:list"
+    ])
+    letters = []
+    for blk in out2.replace("\r", "").split("\n\n"):
+        d = {}
+        for line in blk.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                d[k] = v
+        ante = d.get("Antecedent", "")
+        dep = d.get("Dependent", "")
+        if 'DeviceID="' not in ante or 'DeviceID="' not in dep:
+            continue
+        part_id = ante.split('DeviceID="')[1].split('"')[0]
+        letter = dep.split('DeviceID="')[1].split('"')[0]
+        for (di, pid) in partitions:
+            if di == disk_index and pid == part_id:
+                letters.append(letter)
+    return letters
+
+
 def list_disk_drives():
-    """Return list of {index:int, model:str, size_bytes:int, interface:str, media:str, removable:bool}."""
+    """PowerShell first, wmic fallback. Returns list of drive dicts w/ letters filled in."""
+    ps_out = _run_powershell_drives()
+    if ps_out is not None:
+        return parse_powershell_drives(ps_out)
+
+    # Fallback: wmic
     out = _wmic(["wmic", "diskdrive", "get",
                  "Index,Model,Size,InterfaceType,MediaType", "/format:table"])
-    rows = _parse_wmic_table(out)
+    rows = parse_wmic_table(out)
     drives = []
     for r in rows:
         try:
@@ -120,67 +324,17 @@ def list_disk_drives():
             "interface": r.get("InterfaceType", ""),
             "media": media,
             "removable": removable,
+            "letters": _wmic_list_drive_letters_for(idx),
         })
     return drives
 
 
 def list_drive_letters_for(disk_index):
-    """Return list of drive letters (e.g. ['E:']) for partitions on the given physical disk."""
-    # diskdrive -> partition
-    out = _wmic([
-        "wmic", "path", "Win32_DiskDriveToDiskPartition", "get",
-        "Antecedent,Dependent", "/format:list"
-    ])
-    # parse a flat list of (disk#, partition id) pairs
-    blocks = out.replace("\r", "").split("\n\n")
-    partitions = []  # (disk_index, partition_device_id)
-    for blk in blocks:
-        d = {}
-        for line in blk.splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                d[k] = v
-        ante = d.get("Antecedent", "")
-        dep = d.get("Dependent", "")
-        if "DeviceID" not in ante or "DeviceID" not in dep:
-            continue
-        # Extract disk index from Disk #N
-        try:
-            disk_n = int(ante.split('DeviceID="')[1].split('"')[0].split("\\\\")[-1].replace("PHYSICALDRIVE", ""))
-        except Exception:
-            continue
-        part_id = dep.split('DeviceID="')[1].split('"')[0] if 'DeviceID="' in dep else ""
-        partitions.append((disk_n, part_id))
-
-    # partition -> logical disk
-    out2 = _wmic([
-        "wmic", "path", "Win32_LogicalDiskToPartition", "get",
-        "Antecedent,Dependent", "/format:list"
-    ])
-    letters = []
-    for blk in out2.replace("\r", "").split("\n\n"):
-        d = {}
-        for line in blk.splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                d[k] = v
-        ante = d.get("Antecedent", "")
-        dep = d.get("Dependent", "")
-        if 'DeviceID="' not in ante or 'DeviceID="' not in dep:
-            continue
-        part_id = ante.split('DeviceID="')[1].split('"')[0]
-        letter = dep.split('DeviceID="')[1].split('"')[0]
-        # check whether this partition belongs to our disk
-        for (di, pid) in partitions:
-            if di == disk_index and pid == part_id:
-                letters.append(letter)
-    return letters
-
-
-def fmt_gb(n):
-    if n <= 0:
-        return "?"
-    return f"{n / 1024**3:.1f} GB"
+    """Convenience: letters for a single disk, using whichever backend is active."""
+    for d in list_disk_drives():
+        if d["index"] == disk_index:
+            return list(d.get("letters") or [])
+    return []
 
 
 def guess_sd_drive(drives):
@@ -249,7 +403,7 @@ def _print_drive_list(drives):
     print()
     print("  All disk drives:")
     for d in drives:
-        letters = ", ".join(list_drive_letters_for(d["index"])) or "(no letter)"
+        letters = ", ".join(d.get("letters") or []) or "(no letter)"
         removable = "removable" if d["removable"] else "fixed"
         print(f"    PhysicalDrive{d['index']}  {d['model']}  {fmt_gb(d['size_bytes'])}  "
               f"{d['interface']}/{removable}  [{letters}]")
@@ -366,25 +520,46 @@ def _yesno(prompt, default_yes=True):
     return v in ("y", "yes")
 
 
+def _prompt_validated(prompt, validator, hidden=False, default=None):
+    """Prompt until the user supplies input that passes `validator(s) -> (ok, reason)`."""
+    while True:
+        if hidden:
+            s = getpass.getpass(prompt)
+        else:
+            s = input(prompt)
+        if not s and default is not None:
+            s = default
+        ok, reason = validator(s)
+        if ok:
+            return s
+        print(f"  ERROR: {reason}")
+
+
 def collect_install_config():
     """Ask user for wifi, user/pass, ssh, samba. Returns dict."""
     print()
     print("  Install settings")
     print("  ----------------")
+    print("  (printable ASCII only; `\"`, `\\`, newlines are not allowed)")
 
-    wifi_ssid = ""
-    while not wifi_ssid:
-        wifi_ssid = input("  WiFi SSID: ").strip()
-        if not wifi_ssid:
-            print("  SSID is required.")
-
-    wifi_pass = getpass.getpass("  WiFi Password (input hidden): ")
+    wifi_ssid = _prompt_validated("  WiFi SSID: ", validate_ssid)
+    wifi_pass = _prompt_validated("  WiFi Password (input hidden, empty = open network): ",
+                                  validate_wifi_password, hidden=True)
     if not wifi_pass:
         print("  WARNING: empty WiFi password — open network assumed.")
 
-    user = input(f"  Linux username [{PI_OS_DEFAULT_USER}]: ").strip() or PI_OS_DEFAULT_USER
+    user = _prompt_validated(
+        f"  Linux username [{PI_OS_DEFAULT_USER}]: ",
+        validate_username,
+        default=PI_OS_DEFAULT_USER,
+    )
     while True:
-        password = getpass.getpass(f"  Password for '{user}' [{PI_OS_DEFAULT_PASS}]: ") or PI_OS_DEFAULT_PASS
+        password = _prompt_validated(
+            f"  Password for '{user}' [{PI_OS_DEFAULT_PASS}]: ",
+            validate_linux_password,
+            hidden=True,
+            default=PI_OS_DEFAULT_PASS,
+        )
         confirm = getpass.getpass("  Confirm password: ") or PI_OS_DEFAULT_PASS
         if password == confirm:
             break
@@ -893,6 +1068,14 @@ def run():
         print("  Please re-run this script from an elevated (Administrator) shell.")
         return None
 
+    # Pre-flight: .deb must exist before we write anything.
+    deb = find_deb_package()
+    if not deb:
+        print("  ERROR: no hokku-server_*.deb found in .cache/, repo root, or webserver/.")
+        print("  Build one with: cd webserver && ./build-deb.sh")
+        return None
+    print(f"  .deb package: {deb.name} ({deb.stat().st_size // 1024} KB)")
+
     # Step 1 — pick the SD card
     drive = prompt_sd_drive()
     if not drive:
@@ -909,13 +1092,6 @@ def run():
     print("  Step 3 of 4: Write image and configure")
     print("  --------------------------------------")
     cfg = collect_install_config()
-
-    deb = find_deb_package()
-    if not deb:
-        print("  ERROR: no hokku-server_*.deb found in .cache/, repo root, or webserver/.")
-        print("  Build one with: cd webserver && ./build-deb.sh")
-        return None
-    print(f"  Using .deb: {deb}")
 
     letters = list_drive_letters_for(drive["index"])
     print()
@@ -948,8 +1124,16 @@ def run():
     print()
     print("  Step 4 of 4: Wait for Pi to come online")
     print("  --------------------------------------")
-    print(f"  Insert the SD card into the Pi Zero W2 and power it on.")
-    print(f"  (First boot installs the .deb and can take 3-5 minutes.)")
+    print("  Insert the SD card into the Pi Zero W2 and power it on.")
+    print()
+    print("  !! FIRST BOOT IS SLOW !!")
+    print("     - Boot 1: customizes the OS, then reboots (~1-2 min)")
+    print("     - Boot 2: runs apt update + installs the .deb (+samba, if chosen)")
+    print("     - Total first-boot time: typically 3-8 minutes,")
+    print("       longer on slow SD cards or slow internet.")
+    print("     - If something seems stuck, SSH in and tail:")
+    print("         /var/log/hokku-firstboot-install.log")
+    print("         /boot/firmware/firstrun.log")
     try:
         wait_for_mdns(cfg["hostname"])
     except KeyboardInterrupt:
