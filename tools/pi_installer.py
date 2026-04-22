@@ -525,17 +525,6 @@ def _download_with_progress(url, dest):
 
 # ---------- Install config prompt ----------
 
-def _detect_local_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return None
-
-
 def _yesno(prompt, default_yes=True):
     suffix = "[Y/n]" if default_yes else "[y/N]"
     v = input(f"  {prompt} {suffix}: ").strip().lower()
@@ -592,13 +581,6 @@ def collect_install_config():
     ssh_enabled = _yesno("Enable SSH login?", default_yes=False)
     samba = _yesno("Install Samba (Windows file share) with same credentials?", default_yes=False)
 
-    server_ip = _detect_local_ip()
-    print()
-    if server_ip:
-        print(f"  Detected local IP: {server_ip} — this will be hokku-server's IP once it boots.")
-    else:
-        print("  Could not detect local IP; ESP32 configuration may need manual IP entry.")
-
     return {
         "hostname": PI_OS_HOSTNAME,
         "wifi_ssid": wifi_ssid,
@@ -607,7 +589,8 @@ def collect_install_config():
         "password": password,
         "ssh_enabled": ssh_enabled,
         "samba": samba,
-        "server_ip": server_ip,  # used later to pre-fill ESP32 config
+        # server_ip is populated later, after mDNS resolves hokku-server.local.
+        "server_ip": None,
     }
 
 
@@ -1233,7 +1216,7 @@ def run():
     print("         /var/log/hokku-firstboot-install.log")
     print("         /boot/firmware/firstrun.log")
     try:
-        wait_for_mdns(cfg["hostname"])
+        pi_ip = wait_for_mdns(cfg["hostname"])
     except KeyboardInterrupt:
         print("\n  Cancelled by user.")
         return None
@@ -1243,7 +1226,7 @@ def run():
     return {
         "wifi_ssid": cfg["wifi_ssid"],
         "wifi_pass": cfg["wifi_pass"],
-        "server_ip": cfg["server_ip"],
+        "server_ip": pi_ip,
         "hostname": cfg["hostname"],
         "webserver_ok": webserver_ok,
     }
