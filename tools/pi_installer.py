@@ -29,7 +29,10 @@ PI_OS_HOSTNAME = "hokku-server"
 PI_OS_DEFAULT_USER = "hokku"
 PI_OS_DEFAULT_PASS = "hokku"
 WEBSERVER_PORT = 8080
-WEBSERVER_WAIT_SECS = 60
+# First boot on a Pi Zero 2 W installs ~90 Debian packages (and optionally samba,
+# another ~36 packages + ~100 MB). Over wifi on a tiny SoC that's 5-10 minutes.
+# 60s was catastrophically optimistic.
+WEBSERVER_WAIT_SECS = 900
 
 PI_OS_LATEST_URL = "https://downloads.raspberrypi.com/raspios_lite_arm64_latest"
 
@@ -1146,6 +1149,23 @@ echo "--- end network state ---"
 set -e
 export DEBIAN_FRONTEND=noninteractive
 
+# Wait up to 90s for systemd-timesyncd to step the clock via NTP. Without this,
+# the Pi's clock is whatever fake-hwclock has (typically the image build date),
+# which is days behind reality. apt's signature verification on trixie uses
+# signature validity windows and rejects "Not live until ..." signatures, so a
+# stale clock causes apt-get update to fail with OpenPGP errors.
+echo "--- waiting for NTP sync ---"
+for i in $(seq 1 90); do
+    if timedatectl show --property=NTPSynchronized --value 2>/dev/null | grep -qx yes; then
+        echo "Clock is NTP-synchronised ($(date))"
+        break
+    fi
+    sleep 1
+done
+if ! timedatectl show --property=NTPSynchronized --value 2>/dev/null | grep -qx yes; then
+    echo "WARNING: clock did not sync within 90s — apt signatures may reject stale cert windows."
+fi
+
 # Wait up to 60s for apt to be usable (avoids racing with unattended-upgrades)
 for i in $(seq 1 60); do
     if ! pgrep -f 'apt-get|dpkg|unattended-upgrade' >/dev/null; then
@@ -1251,18 +1271,26 @@ def wait_for_webserver(hostname, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SEC
                        ssh_enabled=False):
     """Poll HTTP /hokku/api/time. Returns True if reachable within timeout."""
     url = f"http://{hostname}.local:{port}/hokku/api/time"
-    print(f"  Waiting up to {timeout}s for webserver at {url}...")
-    deadline = time.time() + timeout
+    print(f"  Waiting up to {timeout // 60}m for webserver at {url}")
+    print("  (first boot installs ~90 packages + samba if chosen — be patient).")
+    start = time.time()
+    deadline = start + timeout
+    last_status = start
     while time.time() < deadline:
         try:
             with urllib.request.urlopen(url, timeout=3) as r:
                 if r.status == 200:
-                    print(f"  Webserver OK (after {int(timeout - (deadline - time.time()))}s).")
+                    print(f"\n  Webserver OK (after {int(time.time() - start)}s).")
                     return True
         except Exception:
             pass
+        # Progress: one dot every 2s, a status line every 30s with elapsed.
         sys.stdout.write(".")
         sys.stdout.flush()
+        if time.time() - last_status >= 30:
+            elapsed = int(time.time() - start)
+            print(f" [{elapsed}s elapsed]")
+            last_status = time.time()
         time.sleep(2)
     print()
     print("  TIMEOUT: webserver did not respond.")
