@@ -232,13 +232,37 @@ class TestRenderFirstrun:
 
 
 class TestRenderFirstboot:
-    def test_samba_share_path_expanded(self):
+    def test_samba_share_points_at_upload_dir(self):
         cfg = dict(user="alice", password="pw", samba=True, wifi_ssid="s", wifi_pass="p",
                    ssh_enabled=True, hostname="h", server_ip=None)
         script = pi._render_firstboot(cfg)
-        assert "/home/alice" in script
+        # Share must target the hokku-server upload dir, NOT the user's home.
+        assert "/var/lib/hokku/upload" in script
+        assert "/home/alice" not in script
+        # Share name / comment
+        assert "[Images]" in script
+        assert "comment = Images" in script
+        # No stray Python placeholders leaked through.
         assert "{user}" not in script
         assert "{password}" not in script
+        assert "{samba_share}" not in script
+        # valid_users is the login user so auth works against smbpasswd db.
+        assert "valid users = alice" in script
+        # force_user / force_group must be emitted so writes are owned by the
+        # hokku-server DynamicUser (otherwise the service can't read them).
+        assert "force user = $HOKKU_USER" in script
+        assert "force group = $HOKKU_GROUP" in script
+
+    def test_samba_block_is_runtime_gated(self):
+        """The samba install block is always rendered into the script, but is
+        guarded by a check for the install-samba marker file that firstrun.sh
+        only creates when the user opted in. samba=False in cfg therefore means
+        the block exists in the script but the runtime `if [ -f ... ]` skips it."""
+        cfg = dict(user="u", password="p", samba=False, wifi_ssid="s", wifi_pass="p",
+                   ssh_enabled=True, hostname="h", server_ip=None)
+        script = pi._render_firstboot(cfg)
+        assert "/boot/firmware/hokku/install-samba" in script
+        assert "apt-get install -y samba" in script  # gated at runtime
 
     def test_installs_deb(self):
         cfg = dict(user="u", password="p", samba=False, wifi_ssid="s", wifi_pass="p",
