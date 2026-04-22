@@ -379,25 +379,38 @@ def prompt_sd_drive():
     initial_idx = {d["index"] for d in initial}
 
     guess = guess_sd_drive(initial)
+
     if guess:
-        print(f"  Current drives suggest: PhysicalDrive{guess['index']} — {guess['model']} "
-              f"({fmt_gb(guess['size_bytes'])})")
-    else:
-        print("  No obviously-SD drive visible yet.")
+        letters = ", ".join(guess.get("letters") or []) or "no letter"
+        print(f"  Detected likely SD card: PhysicalDrive{guess['index']} — "
+              f"{guess['model']} ({fmt_gb(guess['size_bytes'])}, {letters})")
+        print()
+        print(f"    [Enter]  use PhysicalDrive{guess['index']}")
+        print("    l        list all drives and pick manually")
+        print("    w        wait for a different SD card to be inserted")
+        resp = input("  Choice: ").strip().lower()
+        if resp == "":
+            return guess
+        if resp == "l":
+            _print_drive_list(list_disk_drives())
+            idx = _prompt_drive_index()
+            return next((d for d in list_disk_drives() if d["index"] == idx), None)
+        if resp == "w":
+            return wait_for_new_drive(initial_idx, "Waiting for a new SD card...")
+        print(f"  Unknown choice {resp!r}, aborting.")
+        return None
 
+    # No guess — ask user to insert one.
+    print("  No removable SD-card-sized drive currently visible.")
     print()
-    print("  Please insert the SD card now.")
-    print("  Press Enter when inserted, or type 'l' to list all drives: ", end="", flush=True)
-    resp = input().strip().lower()
-
+    print("    [Enter]  wait for an SD card to be inserted")
+    print("    l        list all drives and pick manually")
+    resp = input("  Choice: ").strip().lower()
     if resp == "l":
         _print_drive_list(list_disk_drives())
         idx = _prompt_drive_index()
-        all_drives = list_disk_drives()
-        return next((d for d in all_drives if d["index"] == idx), None)
-
-    # Wait for a new drive
-    return wait_for_new_drive(initial_idx, "Waiting for new SD card...")
+        return next((d for d in list_disk_drives() if d["index"] == idx), None)
+    return wait_for_new_drive(initial_idx, "Waiting for an SD card...")
 
 
 def _print_drive_list(drives):
