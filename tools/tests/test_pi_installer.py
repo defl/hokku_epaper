@@ -279,41 +279,22 @@ class TestFindDebPackage:
         assert pi.find_deb_package() is None
 
 
-# ---------- GitHub release asset picker ----------
+# ---------- .deb asset predicate (matching hokku-server_*.deb) ----------
 
-class TestFindDebAsset:
-    def test_picks_matching_deb(self):
-        release = {"assets": [
-            {"name": "bootloader.bin", "browser_download_url": "u1", "size": 20480},
-            {"name": "hokku-server_2.1.20-1_all.deb", "browser_download_url": "u2", "size": 36864},
-            {"name": "hokku_epaper.bin", "browser_download_url": "u3", "size": 966656},
-        ]}
-        result = pi._find_deb_asset(release)
-        assert result == ("hokku-server_2.1.20-1_all.deb", "u2", 36864)
+class TestDebAssetPredicate:
+    def test_matches_deb(self):
+        assert pi._deb_name_matches("hokku-server_2.1.20-1_all.deb")
 
-    def test_returns_none_when_no_match(self):
-        release = {"assets": [
-            {"name": "bootloader.bin", "browser_download_url": "u1", "size": 20480},
-        ]}
-        assert pi._find_deb_asset(release) is None
+    def test_rejects_non_deb(self):
+        assert not pi._deb_name_matches("bootloader.bin")
+        assert not pi._deb_name_matches("hokku-server_2.1.20-1_all.txt")
 
-    def test_ignores_other_deb_names(self):
-        release = {"assets": [
-            {"name": "something-else_1.0_all.deb", "browser_download_url": "u1", "size": 500},
-        ]}
-        assert pi._find_deb_asset(release) is None
+    def test_rejects_other_packages(self):
+        assert not pi._deb_name_matches("something-else_1.0_all.deb")
+        assert not pi._deb_name_matches("hokku-other_1_all.deb")
 
-    def test_no_assets_key(self):
-        assert pi._find_deb_asset({}) is None
-
-    def test_null_assets(self):
-        assert pi._find_deb_asset({"assets": None}) is None
-
-    def test_missing_size(self):
-        release = {"assets": [
-            {"name": "hokku-server_1_all.deb", "browser_download_url": "u1"},
-        ]}
-        assert pi._find_deb_asset(release) == ("hokku-server_1_all.deb", "u1", 0)
+    def test_empty_and_none(self):
+        assert not pi._deb_name_matches("")
 
 
 # ---------- SD drive guess ----------

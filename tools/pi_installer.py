@@ -21,9 +21,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import release_cache
 
-REPO_ROOT = Path(__file__).parent.parent
-CACHE_DIR = REPO_ROOT / ".cache"
+REPO_ROOT = release_cache.REPO_ROOT
+CACHE_DIR = release_cache.CACHE_DIR
 PI_OS_HOSTNAME = "hokku-server"
 PI_OS_DEFAULT_USER = "hokku"
 PI_OS_DEFAULT_PASS = "hokku"
@@ -31,7 +32,6 @@ WEBSERVER_PORT = 8080
 WEBSERVER_WAIT_SECS = 60
 
 PI_OS_LATEST_URL = "https://downloads.raspberrypi.com/raspios_lite_arm64_latest"
-GITHUB_RELEASES_LATEST = "https://api.github.com/repos/defl/hokku_epaper/releases/latest"
 
 # Windows FSCTLs
 FSCTL_LOCK_VOLUME = 0x00090018
@@ -769,28 +769,16 @@ def find_deb_package():
     return candidates[-1] if candidates else None
 
 
-def _find_deb_asset(release_json):
-    """Pick the .deb asset out of a GitHub release JSON payload.
-    Returns (name, url, size) or None if no matching asset."""
-    for asset in release_json.get("assets", []) or []:
-        name = asset.get("name", "")
-        if name.startswith("hokku-server_") and name.endswith(".deb"):
-            return name, asset.get("browser_download_url"), int(asset.get("size") or 0)
-    return None
+def _deb_name_matches(name):
+    return name.startswith("hokku-server_") and name.endswith(".deb")
 
 
 def fetch_latest_release_deb():
-    """Hit GitHub's latest-release API and download the hokku-server .deb to
-    .cache/. Returns the cached Path or None on any failure."""
-    ensure_cache_dir()
-    print(f"  Querying {GITHUB_RELEASES_LATEST}...")
+    """Query GitHub's latest-release API and download the hokku-server .deb
+    to .cache/. Returns the cached Path or None on any failure."""
+    print("  Querying GitHub latest release...")
     try:
-        req = urllib.request.Request(
-            GITHUB_RELEASES_LATEST,
-            headers={"Accept": "application/vnd.github+json", "User-Agent": "hokku-setup"},
-        )
-        with urllib.request.urlopen(req, timeout=15) as r:
-            release = json.loads(r.read().decode("utf-8"))
+        release = release_cache.get_latest_release()
     except urllib.error.HTTPError as e:
         print(f"  ERROR: GitHub API returned {e.code} {e.reason}")
         return None
@@ -799,21 +787,12 @@ def fetch_latest_release_deb():
         return None
 
     tag = release.get("tag_name", "?")
-    asset = _find_deb_asset(release)
+    asset = release_cache.find_asset(release, _deb_name_matches)
     if asset is None:
         print(f"  ERROR: release {tag} has no hokku-server_*.deb asset.")
         return None
-    name, url, size = asset
-
-    target = CACHE_DIR / name
-    if target.exists() and size and target.stat().st_size == size:
-        print(f"  Already cached: {target} (release {tag})")
-        return target
-
-    print(f"  Downloading {name} from release {tag} ({size // 1024} KB)...")
-    if not _download_with_progress(url, target):
-        return None
-    return target
+    cached = release_cache.ensure_cached_asset(asset, CACHE_DIR, label=f"(release {tag})")
+    return cached
 
 
 def locate_deb_package_interactive():

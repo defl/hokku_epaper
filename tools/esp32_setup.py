@@ -12,6 +12,7 @@ from pathlib import Path
 import serial
 import serial.tools.list_ports
 
+import release_cache
 from hokku_config import (
     ESP32S3_VID, ESP32S3_PID,
     NVS_OFFSET, NVS_SIZE, CONFIG_VERSION,
@@ -19,11 +20,59 @@ from hokku_config import (
 )
 
 SCRIPT_DIR = Path(__file__).parent
-FIRMWARE_DIR = SCRIPT_DIR.parent / "firmware" / "release"
+LOCAL_FIRMWARE_DIR = SCRIPT_DIR.parent / "firmware" / "release"
+FIRMWARE_CACHE_DIR = release_cache.CACHE_DIR / "firmware"
+
+FIRMWARE_FILES = ("bootloader.bin", "partition-table.bin", "hokku_epaper.bin")
+
+# Mutable — resolved at run() time via resolve_firmware_dir(). Default to the
+# committed local dir so anyone using this module as a library gets reasonable
+# behaviour without having to call the resolver first.
+FIRMWARE_DIR = LOCAL_FIRMWARE_DIR
 
 BOOTLOADER_OFFSET = 0x0
 PARTITION_TABLE_OFFSET = 0x8000
 APP_OFFSET = 0x10000
+
+
+# -------- firmware location resolver --------
+
+def resolve_firmware_dir():
+    """Return a directory containing all three firmware files. Prefers the
+    committed firmware/release/ dir; falls back to downloading the files from
+    the latest GitHub release into .cache/firmware/<tag>/. Returns None on
+    failure (no local files and no network)."""
+    global FIRMWARE_DIR
+
+    if all((LOCAL_FIRMWARE_DIR / f).exists() for f in FIRMWARE_FILES):
+        FIRMWARE_DIR = LOCAL_FIRMWARE_DIR
+        return FIRMWARE_DIR
+
+    missing_local = [f for f in FIRMWARE_FILES if not (LOCAL_FIRMWARE_DIR / f).exists()]
+    print(f"  Firmware files missing from {LOCAL_FIRMWARE_DIR}: {', '.join(missing_local)}")
+    print("  Fetching from latest GitHub release...")
+    try:
+        release = release_cache.get_latest_release()
+    except Exception as e:
+        print(f"  ERROR: could not reach GitHub: {e}")
+        return None
+
+    tag = release.get("tag_name", "latest")
+    target_dir = FIRMWARE_CACHE_DIR / tag
+
+    for fname in FIRMWARE_FILES:
+        asset = release_cache.find_asset(release, lambda n, f=fname: n == f)
+        if asset is None:
+            print(f"  ERROR: release {tag} has no asset named {fname}.")
+            print("  (The release must include bootloader.bin, partition-table.bin,")
+            print("   and hokku_epaper.bin so the flasher can recreate a full image.)")
+            return None
+        if release_cache.ensure_cached_asset(asset, target_dir, label=f"(release {tag})") is None:
+            return None
+
+    FIRMWARE_DIR = target_dir
+    print(f"  Firmware ready: {FIRMWARE_DIR}")
+    return FIRMWARE_DIR
 
 
 # -------- device scan --------
@@ -603,6 +652,12 @@ def run(pi_credentials=None, pi_install_ran=False):
         print("  ERROR: esptool is not installed.")
         print("  Run: pip install esptool pyserial")
         return 1
+
+    # Resolve firmware location up front so version comparisons during the
+    # device scan have binaries to compare against.
+    if resolve_firmware_dir() is None:
+        print("  WARNING: no firmware available locally or from GitHub.")
+        print("  Configuration is still possible; flashing is not.")
 
     print("  Scanning for ESP32-S3 on USB serial ports...")
     devices = scan_devices()
