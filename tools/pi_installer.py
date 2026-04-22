@@ -883,11 +883,12 @@ def inject_boot_customization(bootfs_letter, cfg, deb_path):
     (hokku_dir / "firstboot-install.sh").write_bytes(firstboot.encode("utf-8").replace(b"\r\n", b"\n"))
     print("    wrote firstrun.sh + hokku/firstboot-install.sh")
 
-    # Patch cmdline.txt — Pi OS expects systemd.run=/boot/firmware/firstrun.sh on a single line
+    # Patch cmdline.txt — Pi OS expects systemd.run=/boot/firmware/firstrun.sh on a single line.
+    # Strip any pre-existing systemd.* tokens from a previous install attempt so we
+    # don't end up with multiple systemd.unit= or systemd.run= entries fighting.
     cmdline_path = boot / "cmdline.txt"
     original = cmdline_path.read_text(encoding="utf-8").rstrip()
-    # Remove any prior systemd.run= tokens
-    tokens = [t for t in original.split() if not t.startswith("systemd.run") and t != "systemd.run_success_action=reboot"]
+    tokens = [t for t in original.split() if not t.startswith("systemd.")]
     tokens += [
         "systemd.run=/boot/firmware/firstrun.sh",
         "systemd.run_success_action=reboot",
@@ -1016,7 +1017,12 @@ systemctl enable hokku-firstboot.service
 [ "{samba}" = "1" ] && touch /boot/firmware/hokku/install-samba
 
 # --- clean up cmdline.txt ---
-sed -i 's| systemd\\.run[^ ]*||g' /boot/firmware/cmdline.txt
+# Strip *all* systemd.* tokens we added (systemd.run=..., systemd.run_success_action=...,
+# systemd.unit=kernel-command-line.target). Previous narrow pattern left
+# systemd.unit= behind, which told systemd to boot into the kernel-command-line
+# target instead of multi-user.target — chip booted but never brought up network
+# or ran hokku-firstboot.service.
+sed -i 's| systemd\\.[^ ]*||g' /boot/firmware/cmdline.txt
 rm -f /boot/firmware/firstrun.sh
 
 echo "=== firstrun.sh done $(date) ==="
