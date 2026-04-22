@@ -138,6 +138,17 @@ def fmt_gb(n):
     return f"{n / 1024**3:.1f} GB"
 
 
+def fmt_drive_id(drive):
+    """Format a drive for display. Puts drive letter(s) first because users
+    think in drive letters; always single-quotes so the name reads as one unit.
+      with letter:    'E:' (PhysicalDrive2)
+      without letter: 'PhysicalDrive2'"""
+    letters = drive.get("letters") or []
+    if letters:
+        return f"'{', '.join(letters)}' (PhysicalDrive{drive['index']})"
+    return f"'PhysicalDrive{drive['index']}'"
+
+
 # ---------- Drive listing (PowerShell primary, wmic fallback) ----------
 
 _POWERSHELL_DRIVES = r'''
@@ -361,7 +372,7 @@ def wait_for_new_drive(initial_indices, prompt):
             # Pick the first removable new drive
             removable = [d for d in new if d["removable"]]
             picked = removable[0] if removable else new[0]
-            print(f"  New drive detected: PhysicalDrive{picked['index']} "
+            print(f"  New drive detected: {fmt_drive_id(picked)} "
                   f"— {picked['model']} ({fmt_gb(picked['size_bytes'])})")
             return picked
         sys.stdout.write(f"\r  waiting {spin[i % 4]} ")
@@ -381,11 +392,10 @@ def prompt_sd_drive():
     guess = guess_sd_drive(initial)
 
     if guess:
-        letters = ", ".join(guess.get("letters") or []) or "no letter"
-        print(f"  Detected likely SD card: PhysicalDrive{guess['index']} — "
-              f"{guess['model']} ({fmt_gb(guess['size_bytes'])}, {letters})")
+        print(f"  Detected likely SD card: {fmt_drive_id(guess)} — "
+              f"{guess['model']} ({fmt_gb(guess['size_bytes'])})")
         print()
-        print(f"    [Enter]  use PhysicalDrive{guess['index']}")
+        print(f"    [Enter]  use {fmt_drive_id(guess)}")
         print("    l        list all drives and pick manually")
         print("    w        wait for a different SD card to be inserted")
         resp = input("  Choice: ").strip().lower()
@@ -417,10 +427,9 @@ def _print_drive_list(drives):
     print()
     print("  All disk drives:")
     for d in drives:
-        letters = ", ".join(d.get("letters") or []) or "(no letter)"
         removable = "removable" if d["removable"] else "fixed"
-        print(f"    PhysicalDrive{d['index']}  {d['model']}  {fmt_gb(d['size_bytes'])}  "
-              f"{d['interface']}/{removable}  [{letters}]")
+        print(f"    {fmt_drive_id(d)}  {d['model']}  {fmt_gb(d['size_bytes'])}  "
+              f"{d['interface']}/{removable}")
 
 
 def _prompt_drive_index():
@@ -660,14 +669,16 @@ def _unlock_volumes(handles):
             _close(h)
 
 
-def write_image_to_disk(image_path, disk_index, disk_size_bytes):
+def write_image_to_disk(image_path, drive):
+    disk_index = drive["index"]
+    disk_size_bytes = drive["size_bytes"]
     """Decompress (if .xz) and raw-write `image_path` to PhysicalDrive<disk_index>.
     Prints progress. Returns True on success."""
     is_xz = str(image_path).endswith(".xz")
     src_size = image_path.stat().st_size  # only useful for .img; for .xz we don't know decompressed size
 
     print()
-    print(f"  Writing {image_path.name} to 'PhysicalDrive{disk_index}' ...")
+    print(f"  Writing {image_path.name} to {fmt_drive_id(drive)} ...")
     if is_xz:
         print(f"  (The .img.xz is decompressed on the fly — the actual amount")
         print(f"   written to the card is ~2.5 GB, not the {image_path.stat().st_size // 1024**2} MB source.)")
@@ -1177,16 +1188,17 @@ def run():
     print("  --------------------------------------")
     cfg = collect_install_config()
 
-    letters = list_drive_letters_for(drive["index"])
+    # Refresh letters in case Windows has (un)mounted anything since Step 1.
+    drive["letters"] = list_drive_letters_for(drive["index"])
     print()
     print("  !! ALL DATA ON THE FOLLOWING DEVICE WILL BE ERASED !!")
-    print(f"    PhysicalDrive{drive['index']}  {drive['model']}  "
-          f"{fmt_gb(drive['size_bytes'])}  [{', '.join(letters) or 'no drive letter'}]")
+    print(f"    {fmt_drive_id(drive)}  {drive['model']}  "
+          f"{fmt_gb(drive['size_bytes'])}")
     if input("  Type 'YES' to proceed: ").strip() != "YES":
         print("  Aborted.")
         return None
 
-    if not write_image_to_disk(image, drive["index"], drive["size_bytes"]):
+    if not write_image_to_disk(image, drive):
         return None
 
     print("  Locating bootfs partition...")
