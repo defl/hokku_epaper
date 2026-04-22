@@ -589,7 +589,7 @@ def collect_install_config():
             break
         print("  Passwords don't match, try again.")
 
-    ssh_enabled = _yesno("Enable SSH login?", default_yes=True)
+    ssh_enabled = _yesno("Enable SSH login?", default_yes=False)
     samba = _yesno("Install Samba (Windows file share) with same credentials?", default_yes=False)
 
     server_ip = _detect_local_ip()
