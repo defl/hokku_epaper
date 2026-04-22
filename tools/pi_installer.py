@@ -1149,15 +1149,18 @@ echo "--- end network state ---"
 set -e
 export DEBIAN_FRONTEND=noninteractive
 
-# Wait up to 90s for systemd-timesyncd to step the clock via NTP. Without this,
-# the Pi's clock is whatever fake-hwclock has (typically the image build date),
-# which is days behind reality. apt's signature verification on trixie uses
-# signature validity windows and rejects "Not live until ..." signatures, so a
-# stale clock causes apt-get update to fail with OpenPGP errors.
-echo "--- waiting for NTP sync ---"
+# Force an immediate NTP sync and wait for it. Without this the Pi's clock is
+# whatever fake-hwclock stored (typically days behind reality), which makes
+# apt's signature verification on trixie reject valid signatures as "Not live
+# until ...". We trigger an immediate NTP query by bouncing systemd-timesyncd
+# rather than waiting for its usual poll cadence.
+echo "--- forcing NTP sync ---"
+echo "clock before: $(date)"
+timedatectl set-ntp true 2>/dev/null || true
+systemctl restart systemd-timesyncd 2>/dev/null || true
 for i in $(seq 1 90); do
     if timedatectl show --property=NTPSynchronized --value 2>/dev/null | grep -qx yes; then
-        echo "Clock is NTP-synchronised ($(date))"
+        echo "clock synced after ${i}s: $(date)"
         break
     fi
     sleep 1
