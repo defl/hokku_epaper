@@ -170,6 +170,50 @@ class TestValidators:
             ok, _ = pi.validate_linux_password(s)
             assert not ok, f"expected {s!r} invalid"
 
+    @pytest.mark.parametrize("s", ["GB", "US", "DE", "NL", "FR", "JP", "AU"])
+    def test_valid_country_codes(self, s):
+        ok, _ = pi.validate_country_code(s)
+        assert ok, f"expected {s!r} valid"
+
+    @pytest.mark.parametrize("s,why", [
+        ("", "empty"),
+        ("G", "too short"),
+        ("GBR", "too long"),
+        ("gb", "lowercase"),
+        ("G1", "digit"),
+        ("G ", "space"),
+    ])
+    def test_invalid_country_codes(self, s, why):
+        ok, _ = pi.validate_country_code(s)
+        assert not ok, f"expected {s!r} invalid ({why})"
+
+    @pytest.mark.parametrize("s", [
+        "Europe/London", "America/New_York", "Asia/Tokyo", "UTC", "Pacific/Auckland",
+    ])
+    def test_valid_timezones(self, s):
+        ok, reason = pi.validate_timezone(s)
+        assert ok, f"expected {s!r} valid (reason: {reason})"
+
+    @pytest.mark.parametrize("s,why", [
+        ("", "empty"),
+        ("Europe London", "space not slash"),
+        ("Europe//London", "double slash"),
+        ("/Europe", "leading slash"),
+    ])
+    def test_invalid_timezones_always(self, s, why):
+        """Cases that fail both strict (zoneinfo) and loose (format-only) checks."""
+        ok, _ = pi.validate_timezone(s)
+        assert not ok, f"expected {s!r} invalid ({why})"
+
+    def test_invalid_timezone_unknown_zone_when_tzdata_available(self):
+        """Strict-only: 'Not/A_Real_Zone' is format-valid but not a real zone.
+        When tzdata is present (Linux, or Windows with the tzdata PyPI pkg),
+        we expect rejection; when absent, we accept and let the Pi reject it."""
+        if pi._available_timezones() is None:
+            pytest.skip("tzdata not available on this host")
+        ok, _ = pi.validate_timezone("Not/A_Real_Zone")
+        assert not ok
+
 
 # ---------- Shell escaping ----------
 
@@ -196,10 +240,20 @@ class TestRenderFirstrun:
     def _cfg(self, **overrides):
         base = dict(
             hostname="hokku-server", wifi_ssid="MyWifi", wifi_pass="mypass1234",
-            user="hokku", password="hokku", ssh_enabled=True, samba=False, server_ip="192.168.1.10",
+            user="hokku", password="hokku", ssh_enabled=True, samba=False,
+            server_ip="192.168.1.10", country="GB", timezone="Europe/London",
         )
         base.update(overrides)
         return base
+
+    def test_country_is_used_in_wpa_and_raspi_config(self):
+        script = pi._render_firstrun(self._cfg(country="NL"))
+        assert "country=NL" in script
+        assert "do_wifi_country NL" in script
+
+    def test_timezone_is_set(self):
+        script = pi._render_firstrun(self._cfg(timezone="America/Los_Angeles"))
+        assert 'timedatectl set-timezone "America/Los_Angeles"' in script
 
     def test_no_unsubstituted_braces(self):
         """No f-string placeholders should remain unexpanded."""
