@@ -31,6 +31,7 @@ WEBSERVER_PORT = 8080
 WEBSERVER_WAIT_SECS = 60
 
 PI_OS_LATEST_URL = "https://downloads.raspberrypi.com/raspios_lite_arm64_latest"
+GITHUB_RELEASES_LATEST = "https://api.github.com/repos/defl/hokku_epaper/releases/latest"
 
 # Windows FSCTLs
 FSCTL_LOCK_VOLUME = 0x00090018
@@ -768,22 +769,72 @@ def find_deb_package():
     return candidates[-1] if candidates else None
 
 
+def _find_deb_asset(release_json):
+    """Pick the .deb asset out of a GitHub release JSON payload.
+    Returns (name, url, size) or None if no matching asset."""
+    for asset in release_json.get("assets", []) or []:
+        name = asset.get("name", "")
+        if name.startswith("hokku-server_") and name.endswith(".deb"):
+            return name, asset.get("browser_download_url"), int(asset.get("size") or 0)
+    return None
+
+
+def fetch_latest_release_deb():
+    """Hit GitHub's latest-release API and download the hokku-server .deb to
+    .cache/. Returns the cached Path or None on any failure."""
+    ensure_cache_dir()
+    print(f"  Querying {GITHUB_RELEASES_LATEST}...")
+    try:
+        req = urllib.request.Request(
+            GITHUB_RELEASES_LATEST,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "hokku-setup"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            release = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        print(f"  ERROR: GitHub API returned {e.code} {e.reason}")
+        return None
+    except Exception as e:
+        print(f"  ERROR: could not reach GitHub: {e}")
+        return None
+
+    tag = release.get("tag_name", "?")
+    asset = _find_deb_asset(release)
+    if asset is None:
+        print(f"  ERROR: release {tag} has no hokku-server_*.deb asset.")
+        return None
+    name, url, size = asset
+
+    target = CACHE_DIR / name
+    if target.exists() and size and target.stat().st_size == size:
+        print(f"  Already cached: {target} (release {tag})")
+        return target
+
+    print(f"  Downloading {name} from release {tag} ({size // 1024} KB)...")
+    if not _download_with_progress(url, target):
+        return None
+    return target
+
+
 def locate_deb_package_interactive():
-    """Auto-find the .deb; if missing, ask the user for a path and copy it to
-    .cache/ so subsequent runs pick it up automatically. Returns Path or None."""
+    """Auto-find the .deb, or fetch it from the latest GitHub release; if both
+    fail, ask the user for a path. Returns Path or None."""
     deb = find_deb_package()
     if deb:
         return deb
 
     print()
-    print("  No hokku-server_*.deb found in the usual locations:")
-    print(f"    {CACHE_DIR}")
-    print(f"    {REPO_ROOT}")
-    print(f"    {REPO_ROOT / 'webserver'}")
+    print("  No hokku-server_*.deb found locally. Fetching latest GitHub release...")
+    deb = fetch_latest_release_deb()
+    if deb:
+        return deb
+
     print()
-    print("  A .deb is required to install hokku-server on the Pi. Options:")
+    print("  Could not auto-fetch the .deb. A .deb is required to install")
+    print("  hokku-server on the Pi. Options:")
+    print("    - Check your internet connection and retry")
     print("    - Build one on a Linux box: cd webserver && ./build-deb.sh")
-    print("    - Or enter the path to an existing .deb below.")
+    print("    - Enter the path to an existing .deb below")
     print()
 
     while True:
