@@ -131,31 +131,6 @@ def is_admin():
         return False
 
 
-def _relaunch_elevated():
-    """Re-invoke the running Python script with admin rights via UAC. The new
-    process runs in its own console window (ShellExecute can't share ours).
-    Returns True if the UAC prompt was accepted and the process started."""
-    # Quote args that contain spaces/backslashes so the new process sees the same argv.
-    def q(a):
-        return f'"{a}"' if (" " in a or "\\" in a) else a
-    # Carry state across the elevation barrier so the new window doesn't re-ask
-    # the user questions they've already answered:
-    #   --pi-install       : user already said yes to the "install Pi OS?" prompt
-    #   --pause-on-exit    : keep the new window open so errors stay readable
-    extra = []
-    for flag in ("--pi-install", "--pause-on-exit"):
-        if flag not in sys.argv:
-            extra.append(flag)
-    new_argv = sys.argv + extra
-    params = " ".join(q(a) for a in new_argv)
-    SW_SHOWNORMAL = 1
-    rc = ctypes.windll.shell32.ShellExecuteW(
-        None, "runas", sys.executable, params, str(Path.cwd()), SW_SHOWNORMAL,
-    )
-    # ShellExecute returns an HINSTANCE-ish integer; values > 32 are success.
-    return rc > 32
-
-
 def fmt_gb(n):
     if n <= 0:
         return "?"
@@ -1135,17 +1110,8 @@ def run():
         print("  ERROR: Pi installer currently only supports Windows.")
         return None
     if not is_admin():
-        print("  Administrator privileges are required to write to the SD card.")
-        answer = input("  Re-launch this installer as Administrator? [Y/n]: ").strip().lower()
-        if answer in ("", "y", "yes"):
-            if _relaunch_elevated():
-                print()
-                print("  An elevated installer window has opened — continue there.")
-                print("  (You can close this window; nothing else will run here.)")
-                input("  Press Enter to close this window. ")
-                sys.exit(0)
-            else:
-                print("  Failed to elevate (did you decline the UAC prompt?).")
+        print("  ERROR: Administrator privileges are required to write to the SD card.")
+        print("  Launch via hokku_setup.bat (it auto-elevates) rather than python directly.")
         return None
 
     # Pre-flight: .deb must exist before we write anything.
