@@ -1065,7 +1065,8 @@ def run():
         return None
     if not is_admin():
         print("  ERROR: administrator privileges required to write to the SD card.")
-        print("  Please re-run this script from an elevated (Administrator) shell.")
+        print("  Close this window and re-run hokku_setup.bat — it will offer")
+        print("  to relaunch itself elevated (via a UAC prompt).")
         return None
 
     # Pre-flight: .deb must exist before we write anything.

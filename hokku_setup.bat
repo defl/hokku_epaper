@@ -1,5 +1,26 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
+
+REM --- Elevation check ---
+REM The Pi OS SD-card imaging phase needs admin (raw disk writes).
+REM The ESP32 phase does not. Ask the user; only elevate if needed.
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo.
+    echo This installer has two phases:
+    echo   1. Flash a Raspberry Pi OS SD card  ^(requires Administrator^)
+    echo   2. Configure / flash the ESP32 frame ^(does not^)
+    echo.
+    set /p "DOPI=Will you be flashing an SD card in this run? [y/N]: "
+    if /i "!DOPI!"=="y" (
+        echo.
+        echo Relaunching with Administrator privileges ^(accept the UAC prompt^)...
+        powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -WorkingDirectory '%~dp0' -Verb RunAs"
+        exit /b 0
+    )
+    echo Continuing without elevation ^(ESP32-only mode^).
+    echo.
+)
 
 REM Check if python3 is available
 where python3 >nul 2>&1
