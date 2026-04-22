@@ -1,3 +1,17 @@
+hokku-server (2.1.21-1) unstable; urgency=low
+
+  * Fix crash-loop on fresh Debian install: DEFAULT_CONFIG's
+    upload_dir/cache_dir were hardcoded to /images/upload and
+    /images/cache — the from-source dev paths. Under the systemd
+    service those are not writable (/ is read-only for DynamicUser),
+    so the server threw OSError at startup and systemd kept
+    restarting it forever. Defaults now derive from HOKKU_CONFIG's
+    parent dir (/var/lib/hokku for the Debian install, dev paths
+    otherwise) and existing stale config.json files are migrated
+    on load.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 22 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.20-1) unstable; urgency=low
 
   * Documentation restructure: README rewritten for end users

@@ -78,11 +78,29 @@ VALID_DITHER_ALGORITHMS = ("floyd_steinberg", "atkinson", "atkinson_hue_aware")
 # which beats fs_hue_aware on every benchmark metric.
 _DEPRECATED_ALGORITHMS = ("fs_hue_aware",)
 
+def _default_upload_cache_dirs():
+    """Return (upload_dir, cache_dir) appropriate for the runtime environment.
+
+    When HOKKU_CONFIG is set (the Debian service unit does this, pointing at
+    /var/lib/hokku/config.json), colocate upload/cache under the same
+    StateDirectory — DynamicUser can write there, and `/images/*` is not a
+    valid path on a real system anyway. For dev runs from source (no env
+    var) fall back to the historic repo-relative /images paths.
+    """
+    env_cfg = os.environ.get("HOKKU_CONFIG")
+    if env_cfg:
+        base = Path(env_cfg).parent
+        return str(base / "upload"), str(base / "cache")
+    return "/images/upload", "/images/cache"
+
+
+_DEFAULT_UPLOAD_DIR, _DEFAULT_CACHE_DIR = _default_upload_cache_dirs()
+
 DEFAULT_CONFIG = {
     "timezone": "America/Chicago",
     "refresh_image_at_time": ["0600", "1200", "1800"],
-    "upload_dir": "/images/upload",
-    "cache_dir": "/images/cache",
+    "upload_dir": _DEFAULT_UPLOAD_DIR,
+    "cache_dir": _DEFAULT_CACHE_DIR,
     "port": 8080,
     "poll_interval_seconds": 10,
     "orientation": "landscape",
@@ -150,6 +168,17 @@ def _load_config():
                     old = config["dither_algorithm"]
                     config["dither_algorithm"] = DEFAULT_CONFIG["dither_algorithm"]
                     print(f"  Migrating deprecated dither_algorithm '{old}' -> '{config['dither_algorithm']}'")
+                # Migrate stale dev-default paths when we're clearly running as
+                # a system service (HOKKU_CONFIG is set). 2.1.20 and earlier
+                # hardcoded /images/upload into DEFAULT_CONFIG, which a Debian
+                # install can't mkdir because / is read-only.
+                if os.environ.get("HOKKU_CONFIG"):
+                    if config.get("upload_dir") == "/images/upload":
+                        config["upload_dir"] = _DEFAULT_UPLOAD_DIR
+                        print(f"  Migrating upload_dir /images/upload -> {_DEFAULT_UPLOAD_DIR}")
+                    if config.get("cache_dir") == "/images/cache":
+                        config["cache_dir"] = _DEFAULT_CACHE_DIR
+                        print(f"  Migrating cache_dir /images/cache -> {_DEFAULT_CACHE_DIR}")
                 print(f"  Config loaded from: {path}")
                 break
             except (json.JSONDecodeError, OSError) as e:
