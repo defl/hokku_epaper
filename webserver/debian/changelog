@@ -1,4 +1,4 @@
-hokku-server (2.1.21-1) unstable; urgency=low
+hokku-server (2.1.21-2) unstable; urgency=low
 
   * Fix crash-loop on fresh Debian install: DEFAULT_CONFIG's
     upload_dir/cache_dir were hardcoded to /images/upload and
