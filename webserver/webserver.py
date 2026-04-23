@@ -330,6 +330,31 @@ _DISPLAY_WHITE_L = float(_rgb_to_lab(PALETTE_MEASURED_RGB[1:2])[0, 0])
 # dithering algorithm doesn't try to reproduce brightness levels the panel
 # can't show. Based on esp32-photoframe's preprocessImage approach.
 
+def _apply_in_strips(img_array, func, *args, **kwargs):
+    """Run a per-pixel color-conversion function over horizontal strips of
+    `img_array`, writing each strip's result into a preallocated output.
+
+    The compress / adaptive-saturate pipelines below build 6+ full-image
+    float32 intermediates each. On a 1600x1200 canvas at float32 that's
+    ~140 MB peak concurrent — still enough to OOM-kill the hokku-server
+    service on a Pi Zero 2 W (512 MB total, maybe 100 MB free). Each row is
+    independent in both functions (no cross-row state), so processing in
+    strips of ~200 rows brings peak memory down by ~6x without changing
+    output."""
+    STRIP_ROWS = 200
+    h = img_array.shape[0]
+    if h <= STRIP_ROWS:
+        return func(img_array, *args, **kwargs)
+    out = None
+    for y0 in range(0, h, STRIP_ROWS):
+        y1 = min(y0 + STRIP_ROWS, h)
+        strip_result = func(img_array[y0:y1], *args, **kwargs)
+        if out is None:
+            out = np.empty((h,) + strip_result.shape[1:], dtype=strip_result.dtype)
+        out[y0:y1] = strip_result
+    return out
+
+
 def _compress_dynamic_range(img_array, scale_chroma=False, adaptive_vivid=False,
                              vivid_low=5.0, vivid_high=15.0):
     """Compress image luminance from [0,100] L* into the display's actual L* range.
@@ -728,7 +753,11 @@ def _prepare_canvas(img, color_enhance=1.2, adaptive_saturate=False):
     canvas = ImageEnhance.Contrast(canvas).enhance(1.1)
     canvas = ImageEnhance.Sharpness(canvas).enhance(1.3)
     if adaptive_saturate:
-        arr = _adaptive_saturate(np.array(canvas, dtype=np.float32), max_enhance=color_enhance)
+        arr = _apply_in_strips(
+            np.array(canvas, dtype=np.float32),
+            _adaptive_saturate,
+            max_enhance=color_enhance,
+        )
         canvas = Image.fromarray(arr.astype(np.uint8))
     else:
         canvas = ImageEnhance.Color(canvas).enhance(color_enhance)
@@ -1006,8 +1035,9 @@ def _convert_image(img_path):
 
     canvas, padding_mask = _prepare_canvas(img, color_enhance=cfg.color_enhance,
                                            adaptive_saturate=cfg.adaptive_saturate)
-    canvas_array = _compress_dynamic_range(
+    canvas_array = _apply_in_strips(
         np.array(canvas, dtype=np.float32),
+        _compress_dynamic_range,
         scale_chroma=cfg.scale_chroma,
         adaptive_vivid=cfg.adaptive_vivid,
     )
@@ -1393,6 +1423,17 @@ def api_status():
         all_upload = sorted(p.name for p in _list_images())
         upload_files = [{"name": n, "dithered": n in pool_set} for n in all_upload]
 
+        # Also list images that were quarantined after a prior crash, so the
+        # UI can show them in a "Failed" section with a retry button.
+        upload_dir = _get_upload_dir()
+        failed_files = []
+        if upload_dir.exists():
+            for f in upload_dir.iterdir():
+                if f.is_file() and f.name.endswith(".failed"):
+                    orig = f.name[:-len(".failed")]
+                    failed_files.append(orig)
+            failed_files.sort()
+
         enriched = {}
         for fname in pool_files:
             entry = serve_data.get(fname, {})
@@ -1409,6 +1450,7 @@ def api_status():
         return jsonify({
             "pool_files": pool_files,
             "upload_files": upload_files,
+            "failed_files": failed_files,
             "pool_size": len(_pool),
             "upload_size": len(upload_files),
             "serve_data": enriched,
@@ -1713,6 +1755,28 @@ def api_delete_image(filename):
     threading.Thread(target=_sync_pool, daemon=True).start()
 
     return jsonify({"status": "ok", "deleted": safe_name})
+
+
+@app.route("/hokku/api/image/<filename>/retry", methods=["POST"])
+def api_retry_image(filename):
+    """Remove the .failed quarantine marker for an image and re-trigger a sync
+    so the dither pipeline picks it up again."""
+    safe_name = secure_filename(filename)
+    if not safe_name:
+        return jsonify({"error": "Invalid filename"}), 400
+    img_path = _get_upload_dir() / safe_name
+    if not img_path.exists() or not img_path.is_file():
+        return jsonify({"error": "Image not found"}), 404
+    marker = _failed_marker(img_path)
+    if not marker.exists():
+        return jsonify({"error": "Image is not in the failed state"}), 400
+    try:
+        marker.unlink()
+    except OSError as e:
+        return jsonify({"error": f"Failed to remove marker: {e.strerror or e}"}), 500
+    print(f"  Retry: unquarantined {safe_name}")
+    threading.Thread(target=_sync_pool, daemon=True).start()
+    return jsonify({"status": "ok", "retrying": safe_name})
 
 
 @app.route("/hokku/api/clear_cache", methods=["POST"])

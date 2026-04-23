@@ -1,3 +1,23 @@
+hokku-server (2.1.21-6) unstable; urgency=low
+
+  * OOM fix (round three). Even with the -5 float32 pipeline a
+    1600x1200 canvas still builds 6+ concurrent 23 MB arrays during
+    _compress_dynamic_range and _adaptive_saturate, peaking around
+    140 MB and OOM-killing on a Pi Zero 2 W with ~100 MB free.
+    Added _apply_in_strips that iterates the color conversion in
+    200-row strips, writing results into a preallocated output
+    buffer. Each row is independent in both functions so splitting
+    is safe; peak RAM drops by ~6x (~25 MB per strip + 23 MB output
+    = ~50 MB total). No visible output change.
+  * Web GUI: failed-conversion list. Images that crashed the dither
+    pipeline now appear in a dedicated amber section below the main
+    grid, each with a Retry button that POSTs to the new
+    /hokku/api/image/<name>/retry endpoint (removes the .failed
+    quarantine marker and re-triggers a pool sync). The failed_files
+    array is part of /hokku/api/status now.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 22 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.21-5) unstable; urgency=low
 
   * OOM fix (real this time). _compress_dynamic_range and
