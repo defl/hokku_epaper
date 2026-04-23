@@ -757,70 +757,70 @@ function renderUploadProgress(rows) {
   el.innerHTML = rows.map(r => `<div class="upload-row ${r.status}"><span>${r.name}</span><span>${r.message}</span></div>`).join('');
 }
 
-async function uploadFiles(fileList) {
-  const files = Array.from(fileList || []);
-  if (!files.length) return;
-
-  const rows = files.map(f => ({name: f.name, status: 'pending', message: 'Uploading...'}));
-  renderUploadProgress(rows);
-
+async function uploadOneFile(file, row, renderAll) {
+  // One file per request. Big batches as a single multipart POST tend to fail
+  // with "Failed to fetch" on slow Pis (the connection drops long before all
+  // bytes are read); per-file keeps each request short and lets one failure
+  // not doom the batch.
   const form = new FormData();
-  let anyValid = false;
-  files.forEach((f, i) => {
-    const ext = '.' + (f.name.split('.').pop() || '').toLowerCase();
-    if (!ALLOWED_EXTS.includes(ext)) {
-      rows[i].status = 'error';
-      rows[i].message = 'Unsupported type';
-    } else {
-      form.append('files', f);
-      anyValid = true;
-    }
-  });
-  renderUploadProgress(rows);
-
-  if (!anyValid) {
-    setTimeout(() => renderUploadProgress([]), 4000);
-    return;
-  }
-
+  form.append('files', file);
   try {
     const resp = await fetch('/hokku/api/upload', {method: 'POST', body: form});
     if (!resp.ok) {
-      // Server returned a non-2xx (likely an HTML error page from Flask).
-      // Surface a meaningful message instead of the JSON parser's "Unexpected token '<'".
       let detail = `HTTP ${resp.status}`;
       try { const j = await resp.json(); if (j && j.error) detail = j.error; } catch (_) {}
       throw new Error(detail);
     }
     const data = await resp.json();
-    const savedSet = new Set(data.saved || []);
-    const skippedMap = {};
-    (data.skipped || []).forEach(s => { skippedMap[s.filename] = s.reason; });
-
-    rows.forEach(r => {
-      if (r.status === 'error') return;
-      // Server may rename to avoid clobbering — match on prefix as best-effort
-      const matched = (data.saved || []).find(n => n === r.name || n.startsWith(r.name.replace(/\.[^.]+$/, '') + '_'));
-      if (matched) {
-        r.status = 'ok';
-        r.message = matched === r.name ? 'Uploaded' : 'Uploaded as ' + matched;
-      } else if (skippedMap[r.name]) {
-        r.status = 'error';
-        r.message = skippedMap[r.name];
-      } else {
-        r.status = 'error';
-        r.message = 'Failed';
-      }
-    });
-    renderUploadProgress(rows);
-    showToast(`Uploaded ${(data.saved || []).length} file(s) — converting in background`);
-    refreshStatus();
-    setTimeout(() => renderUploadProgress([]), 6000);
+    const saved = (data.saved || [])[0];
+    const skipped = (data.skipped || [])[0];
+    if (saved) {
+      row.status = 'ok';
+      row.message = saved === file.name ? 'Uploaded' : 'Uploaded as ' + saved;
+    } else if (skipped) {
+      row.status = 'error';
+      row.message = skipped.reason;
+    } else {
+      row.status = 'error';
+      row.message = 'Failed';
+    }
   } catch (e) {
-    rows.forEach(r => { if (r.status === 'pending') { r.status = 'error'; r.message = e.message; } });
-    renderUploadProgress(rows);
-    showToast('Upload error: ' + e.message);
+    row.status = 'error';
+    row.message = e.message;
   }
+  renderAll();
+}
+
+async function uploadFiles(fileList) {
+  const all = Array.from(fileList || []);
+  // Silently drop non-images — don't clutter the progress panel with rejects
+  // for whatever else got caught in a bulk drag (Thumbs.db, .DS_Store, folders).
+  const files = all.filter(f => {
+    const ext = '.' + (f.name.split('.').pop() || '').toLowerCase();
+    return ALLOWED_EXTS.includes(ext);
+  });
+  if (!files.length) return;
+
+  const rows = files.map(f => ({name: f.name, status: 'pending', message: 'Uploading...'}));
+  const render = () => renderUploadProgress(rows);
+  render();
+
+  // Upload sequentially. Keeps memory usage predictable on the Pi and avoids
+  // Flask dev-server concurrency weirdness.
+  for (let i = 0; i < files.length; i++) {
+    await uploadOneFile(files[i], rows[i], render);
+  }
+
+  const okCount = rows.filter(r => r.status === 'ok').length;
+  const failCount = rows.filter(r => r.status === 'error').length;
+  if (okCount) {
+    showToast(`Uploaded ${okCount} file(s) — converting in background`);
+    refreshStatus();
+  }
+  if (failCount) {
+    showToast(`${failCount} file(s) failed — see panel for details`);
+  }
+  setTimeout(() => renderUploadProgress([]), 6000);
 }
 
 document.getElementById('file-input').addEventListener('change', e => {
