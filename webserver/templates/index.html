@@ -28,7 +28,7 @@
   .btn-danger { background: #dc2626; color: #fff; }
   .btn-danger:hover { background: #b91c1c; }
   .btn-small { padding: 4px 10px; font-size: 0.8em; }
-  .server-time { font-size: 0.9em; color: #666; margin-left: 8px; }
+  .server-time { font-size: 0.85em; color: #666; position: absolute; top: 16px; right: 24px; font-family: ui-monospace, 'SF Mono', Consolas, monospace; }
   .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9em; cursor: pointer; user-select: none; }
   .toggle input[type="checkbox"] { width: 16px; height: 16px; accent-color: #dc2626; cursor: pointer; }
   .info-btn { width: 22px; height: 22px; border-radius: 50%; border: 1px solid #ccc; background: #fff; color: #555; font-weight: 700; font-size: 0.85em; cursor: pointer; line-height: 1; padding: 0; }
@@ -134,16 +134,13 @@
 </head>
 <body>
 
+<span class="server-time" id="server-time"></span>
+
 <h1>Hokku Image Server</h1>
 
 <!-- Config Section -->
 <div class="config-section">
   <h2>Configuration</h2>
-
-  <div class="config-row">
-    <label>Server time:</label>
-    <span class="server-time" id="server-time"></span>
-  </div>
 
   <div class="config-row">
     <label>Refresh times:</label>
@@ -629,7 +626,7 @@ async function refreshStatus() {
     document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
     document.getElementById('orientation').value = cfg.orientation || 'landscape';
     document.getElementById('dither-algorithm').value = cfg.dither_algorithm || 'atkinson_hue_aware';
-    document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
+    document.getElementById('server-time').textContent = data.server_time || '';
 
     // Debug Fast Refresh toggle state + banner
     const debugOn = !!cfg.debug_fast_refresh;

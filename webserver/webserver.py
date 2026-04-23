@@ -632,12 +632,49 @@ def _get_upload_dir():
 def _get_cache_dir():
     return Path(_config["cache_dir"])
 
+def _failed_marker(img_path):
+    return img_path.with_name(img_path.name + ".failed")
+
+
+def _processing_marker(img_path):
+    return img_path.with_name(img_path.name + ".processing")
+
+
 def _list_images():
+    """List images in the upload dir, excluding any marked as previously
+    failed. A .failed sibling next to an image (e.g. photo.jpg.failed) means
+    a prior conversion attempt crashed or was killed by the OS; we refuse to
+    retry automatically so one bad image can't restart-loop the service
+    forever. Delete the .failed marker (or the image itself) to retry."""
     upload_dir = _get_upload_dir()
     if not upload_dir.exists():
         return []
-    return [f for f in upload_dir.iterdir()
-            if f.suffix.lower() in IMAGE_EXTENSIONS and f.is_file()]
+    return [
+        f for f in upload_dir.iterdir()
+        if f.suffix.lower() in IMAGE_EXTENSIONS
+        and f.is_file()
+        and not _failed_marker(f).exists()
+    ]
+
+
+def _promote_processing_markers_to_failed():
+    """At startup: any leftover .processing markers mean the last run crashed
+    mid-conversion. Rename each to .failed so _list_images excludes them."""
+    upload_dir = _get_upload_dir()
+    if not upload_dir.exists():
+        return
+    for f in upload_dir.iterdir():
+        if f.is_file() and f.name.endswith(".processing"):
+            img_name = f.name[:-len(".processing")]
+            img_path = upload_dir / img_name
+            failed = _failed_marker(img_path)
+            try:
+                f.replace(failed)
+                print(f"  WARNING: {img_name} failed on a previous run "
+                      f"(crash or OOM mid-convert). Marked as .failed; "
+                      f"delete the marker to retry.")
+            except OSError as e:
+                print(f"  Could not promote {f.name} -> {failed.name}: {e}")
 
 
 def _prepare_canvas(img, color_enhance=1.2, adaptive_saturate=False):
@@ -914,16 +951,14 @@ def _convert_image(img_path):
     img = Image.open(img_path)
 
     # Pre-downscale huge source images BEFORE forcing a full decode. The
-    # target canvas is 1600x1200, so nothing past ~2x that (3200x2400) adds
-    # useful detail after dithering, but a 12MP JPEG costs ~36 MB decoded
-    # plus several float64 buffers during processing — enough to OOM-kill
-    # the hokku-server service on a Pi Zero 2 W (512 MB RAM, ~200 MB free).
-    #
-    # For JPEGs, PIL's draft() passes a hint to libjpeg to decode at 1/2,
-    # 1/4, or 1/8 resolution natively — no full-resolution buffer is ever
-    # allocated. For non-JPEGs draft() is a no-op but those are usually
-    # smaller anyway.
-    _MAX_PRE_DECODE_DIM = 3200
+    # target canvas is 1600x1200, so nothing past ~1.25x that (2000 px on
+    # the long edge) adds useful detail after LANCZOS resize + dither, but a
+    # 12MP JPEG costs several hundred MB of float64 buffers during the
+    # dither pipeline — enough to OOM-kill the service on a Pi Zero 2 W
+    # (512 MB RAM, ~100 MB free). 2000 px gives libjpeg a chance to pick a
+    # 1:2 DCT scale on a 4000-wide source, landing ~1920 px natively with
+    # no intermediate full-res buffer.
+    _MAX_PRE_DECODE_DIM = 2000
     if max(img.size) > _MAX_PRE_DECODE_DIM:
         try:
             img.draft("RGB", (_MAX_PRE_DECODE_DIM, _MAX_PRE_DECODE_DIM))
@@ -1010,9 +1045,22 @@ def _convert_and_store(img_path, content_hash):
             with _lock:
                 _converting_count += 1
                 _converting_name = img_path.name
+            # Write a .processing marker BEFORE attempting conversion. If
+            # the process gets OOM-killed mid-dither, this marker survives
+            # the crash; startup then promotes it to .failed so we don't
+            # restart-loop on the same image.
+            marker = _processing_marker(img_path)
+            try:
+                marker.touch()
+            except OSError:
+                pass
             try:
                 raw_bytes, preview_bytes = _convert_image(img_path)
                 _save_to_cache(cache_dir, img_path, content_hash, raw_bytes, preview_bytes)
+                try:
+                    marker.unlink(missing_ok=True)
+                except OSError:
+                    pass
             finally:
                 with _lock:
                     _converting_count -= 1
@@ -1323,7 +1371,8 @@ def web_gui():
 @app.route("/hokku/api/status")
 def api_status():
     """JSON API for the web GUI — includes enriched serve_data with formatted durations."""
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z").strip()
+    # Time only — the top-right display doesn't need the date.
+    now_str = datetime.now().strftime("%H:%M:%S %Z").strip()
 
     with _lock:
         pool_files = sorted(Path(k).name for k in _pool.keys())
@@ -1710,6 +1759,10 @@ def main():
     print(f"  Endpoints:")
     print(f"    GET /hokku/screen/      — 960K binary (fair rotation) + X-Sleep-Seconds header")
     print(f"    GET /hokku/ui           — Web GUI")
+
+    # Quarantine any image whose .processing marker survived a crash —
+    # otherwise we restart-loop on a bad image forever.
+    _promote_processing_markers_to_failed()
 
     images = _list_images()
     if images:

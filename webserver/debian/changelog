@@ -1,3 +1,23 @@
+hokku-server (2.1.21-4) unstable; urgency=low
+
+  * Further OOM mitigation. -3's 3200 px pre-decode cap still
+    OOM-killed on a Pi Zero 2 W mid-dither on a 9 MP photo —
+    _prepare_canvas + _adaptive_saturate + the dither pass can
+    together allocate several hundred MB of float64 on a 3200x2150
+    intermediate. Lowered _MAX_PRE_DECODE_DIM to 2000 px, which lets
+    libjpeg decode most phone photos at 1:2 DCT scale natively.
+  * Per-image crash quarantine. A .processing marker is dropped
+    next to each image just before conversion and removed on
+    success. If the service is OOM-killed (or otherwise crashes)
+    before removing it, startup renames any orphaned marker to
+    .failed. _list_images skips anything with a .failed sibling so
+    a single problem image can no longer restart-loop the service.
+    Delete the .failed marker to retry.
+  * Web GUI: server time moved to the top-right corner and trimmed
+    to HH:MM:SS (the date was never useful at a glance).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 22 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.21-3) unstable; urgency=low
 
   * Avoid OOM kills on low-RAM hosts (Pi Zero 2 W, 512 MB) when
