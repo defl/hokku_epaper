@@ -1,3 +1,22 @@
+hokku-server (2.1.21-3) unstable; urgency=low
+
+  * Avoid OOM kills on low-RAM hosts (Pi Zero 2 W, 512 MB) when
+    converting large photos. Full decode of a 12MP JPEG costs ~36 MB
+    plus several float64 buffers during dithering; the Linux OOM
+    killer hit the service mid-conversion, leaving the uploaded file
+    on disk and restart-looping forever. Both _convert_image and
+    _ensure_thumbnail now call PIL Image.draft() before accessing
+    pixels, which tells libjpeg to decode at 1/2, 1/4, or 1/8 native
+    resolution so the full-res buffer is never allocated. Non-JPEGs
+    fall through to an explicit resize to the same cap (3200 px for
+    the dither pipeline, 600 px for thumbnails).
+  * Upload UI: large batches are now sent one file per request
+    instead of a single giant multipart body — fixes "Failed to
+    fetch" on slow links. Non-images dropped via drag-drop are
+    silently filtered instead of appearing as red error rows.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 22 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.21-2) unstable; urgency=low
 
   * Fix crash-loop on fresh Debian install: DEFAULT_CONFIG's

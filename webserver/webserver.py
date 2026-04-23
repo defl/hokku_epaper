@@ -912,11 +912,39 @@ def _convert_image(img_path):
     t0 = time.time()
     from PIL import ImageOps
     img = Image.open(img_path)
+
+    # Pre-downscale huge source images BEFORE forcing a full decode. The
+    # target canvas is 1600x1200, so nothing past ~2x that (3200x2400) adds
+    # useful detail after dithering, but a 12MP JPEG costs ~36 MB decoded
+    # plus several float64 buffers during processing — enough to OOM-kill
+    # the hokku-server service on a Pi Zero 2 W (512 MB RAM, ~200 MB free).
+    #
+    # For JPEGs, PIL's draft() passes a hint to libjpeg to decode at 1/2,
+    # 1/4, or 1/8 resolution natively — no full-resolution buffer is ever
+    # allocated. For non-JPEGs draft() is a no-op but those are usually
+    # smaller anyway.
+    _MAX_PRE_DECODE_DIM = 3200
+    if max(img.size) > _MAX_PRE_DECODE_DIM:
+        try:
+            img.draft("RGB", (_MAX_PRE_DECODE_DIM, _MAX_PRE_DECODE_DIM))
+        except Exception:
+            pass  # draft is best-effort; we'll fall through to the resize below
+
     # Apply EXIF orientation before converting — phones and cameras store
     # rotation as metadata rather than rotating the actual pixel data.
     # Without this, portrait photos appear sideways on the display.
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
+
+    # draft() leaves the image near the target size but not exact. If the
+    # image is still larger than _MAX_PRE_DECODE_DIM (non-JPEG where draft
+    # did nothing, or JPEG that draft scaled to e.g. 1920x1440), downsize
+    # now before _prepare_canvas allocates big float64 arrays.
+    if max(img.size) > _MAX_PRE_DECODE_DIM:
+        scale = _MAX_PRE_DECODE_DIM / max(img.size)
+        new_size = (int(img.size[0] * scale), int(img.size[1] * scale))
+        img = img.resize(new_size, Image.LANCZOS)
+
     print(f"  {img_path.name}: {img.size[0]}x{img.size[1]}")
 
     algorithm = _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"])
@@ -1397,6 +1425,14 @@ def _ensure_thumbnail(img_path):
             from PIL import ImageOps
             thumb_path.parent.mkdir(parents=True, exist_ok=True)
             img = Image.open(img_path)
+            # Ask libjpeg for a pre-decoded, already-downscaled buffer when the
+            # source is large — we only need 300x300 out, so a full decode of a
+            # 12MP phone photo is pure RAM waste on a Pi Zero 2 W. See the
+            # matching note in _convert_image.
+            try:
+                img.draft("RGB", (600, 600))
+            except Exception:
+                pass
             img = ImageOps.exif_transpose(img)
             # JPEG can't encode alpha — flatten RGBA / LA / P-with-transparency
             # onto a white canvas before saving.
