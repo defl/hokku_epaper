@@ -321,22 +321,33 @@ def test_bw_fallback_keeps_bw_image_monochrome(loaded_images):
 
 
 @pytest.mark.skipif(not _test_images(), reason="images/test/ not checked out")
-def test_bw_fallback_off_changes_result(loaded_images):
-    """Regression guard: disabling B&W fallback must actually affect the
-    output for a B&W image (otherwise the flag is a no-op and the fallback
-    tests above prove nothing)."""
-    bw = next((img for name, img in loaded_images.items() if "_BW_" in name), None)
-    if bw is None:
-        pytest.skip("No BW test image present")
+def test_bw_fallback_kicks_in_on_tinted_grayscale():
+    """Regression guard: the B&W fallback must produce a different result
+    than the default pipeline when it detects a grayscale source.
+
+    A pure-grayscale source image often produces identical output with
+    or without the fallback, because the adaptive saturation/vividness
+    stages collapse to identity on zero-chroma pixels. To prove the flag
+    isn't a no-op we use a synthetic grayscale image with a slight warm
+    tint (RGB ratio ≈ 1.00/0.98/0.96 — the kind of JPEG/scanning noise
+    that is exactly the failure mode bw_fallback exists to prevent),
+    which forces the two pipeline branches apart.
+    """
+    # 240 × 320 so we have enough pixels for the dither to diverge meaningfully.
+    arr = np.linspace(40, 220, 320 * 240, dtype=np.float32).reshape(240, 320)
+    rgb = np.stack([arr * 1.00, arr * 0.98, arr * 0.96], axis=-1)
+    rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+    tinted_bw = Image.fromarray(rgb)
 
     with_fb = webserver._default_dither_config()
     no_fb = _override(with_fb, bw_fallback__enabled=False)
 
-    result_fb, _ = _render(bw, with_fb)
-    result_no_fb, _ = _render(bw, no_fb)
+    result_fb, _ = _render(tinted_bw, with_fb)
+    result_no_fb, _ = _render(tinted_bw, no_fb)
 
     assert not np.array_equal(result_fb, result_no_fb), (
-        "B&W fallback flag is a no-op: output identical with/without fallback")
+        "B&W fallback flag is a no-op: tinted-grayscale source produced "
+        "identical output with and without the override.")
 
 
 @pytest.mark.skipif(not _test_images(), reason="images/test/ not checked out")

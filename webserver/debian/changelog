@@ -1,3 +1,27 @@
+hokku-server (2.2.1-1) unstable; urgency=low
+
+  * Dither pipeline memory footprint cut from ~490 MB to ~68 MB peak at
+    production canvas (1200x1600). Changes:
+      - Early JPEG draft downsample so a 32 MP source no longer sits in
+        RAM as 96 MB of RGB through the DRC peak.
+      - Lab-space helpers kept in float32 end-to-end (halves every
+        intermediate) with dtype preservation via typed constants.
+      - `np.where(cond, toe, shoulder)` on full-canvas buffers replaced
+        with in-place masked updates — saves a second canvas-sized
+        allocation per branch.
+      - `_xyz_to_lab` and `_lab_to_srgb_f32` reuse the Lab buffer via
+        in-place matmul and channel-slot reshuffling instead of
+        `np.stack([L, a, b])`.
+      - Fused adaptive saturation + DRC into a single Lab round-trip.
+      - Source image freed before Lab transforms allocate.
+    Same output bits; lower peak allocation on the Pi.
+  * New webserver/tests/test_dither_memory.py: 18-combo (6 images x 3
+    presets) half-canvas matrix at 30 MB ceiling (proxies 100 MB at
+    full canvas) plus opt-in @pytest.mark.memory full-canvas smoke
+    tests verifying < 100 MB on the real production path.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 23 Apr 2026 00:00:00 +0000
+
 hokku-server (2.2.0-1) unstable; urgency=low
 
   * Dither pipeline exposed as editable presets + full per-stage

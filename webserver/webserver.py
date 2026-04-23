@@ -388,31 +388,118 @@ app = Flask(__name__, template_folder=_template_folder)
 # ── CIE Lab conversion for perceptual color matching ─────────────────
 
 def _srgb_to_linear(c):
-    """Convert sRGB [0-255] to linear RGB [0-1]."""
-    c = c / 255.0
-    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    """Convert sRGB [0-255] to linear RGB [0-1]. Preserves float input
+    dtype (float32 in, float32 out) so the Lab pipeline can stay in
+    float32 end-to-end. Integer inputs are promoted to float64 to avoid
+    truncation from dividing uint8 by 255.
 
-def _linear_to_xyz(rgb):
-    """Convert linear RGB to CIE XYZ (D65 illuminant)."""
+    Implementation note: an obvious `np.where(cond, toe, shoulder)` call
+    would allocate *both* full-size toe and shoulder arrays before
+    selecting. On a 1200×1600×3 float32 canvas that doubles the working
+    set. Instead we compute the shoulder into a single output buffer
+    in-place and then overwrite the sub-threshold pixels with their toe
+    values via a boolean mask.
+    """
+    c = np.asarray(c)
+    if not np.issubdtype(c.dtype, np.floating):
+        c = c.astype(np.float64)
+    dt = c.dtype
+    # Build the output buffer we'll own in-place.
+    out = c / np.asarray(255.0, dtype=dt)
+    toe_mask = out <= np.asarray(0.04045, dtype=dt)
+    # Shoulder branch, in place: ((out + 0.055) / 1.055) ** 2.4
+    np.add(out, np.asarray(0.055, dtype=dt), out=out)
+    np.divide(out, np.asarray(1.055, dtype=dt), out=out)
+    np.power(out, np.asarray(2.4, dtype=dt), out=out)
+    # Toe values need a different formula. out still holds their shoulder-
+    # branch result; overwrite only those entries with c[toe]/12.92.
+    # Slight subtlety: out was computed from (c/255.0 + 0.055)/1.055 so the
+    # "original" c/255.0 is no longer available — recompute it just for toe
+    # pixels, which is a small fraction of typical photos.
+    if toe_mask.any():
+        toe_src = c[toe_mask].astype(dt, copy=False) / np.asarray(255.0, dtype=dt)
+        out[toe_mask] = toe_src / np.asarray(12.92, dtype=dt)
+    return out
+
+def _linear_to_xyz(rgb, in_place=False):
+    """Convert linear RGB to CIE XYZ (D65 illuminant). If `in_place`
+    is True, the matmul result is written back into `rgb` — numpy
+    supports that with overlapping input/output and it saves a
+    full-canvas allocation on the hot dither path."""
     M = np.array([
         [0.4124564, 0.3575761, 0.1804375],
         [0.2126729, 0.7151522, 0.0721750],
         [0.0193339, 0.1191920, 0.9503041],
-    ])
+    ], dtype=rgb.dtype)
+    if in_place:
+        np.matmul(rgb, M.T, out=rgb)
+        return rgb
     return rgb @ M.T
 
-def _xyz_to_lab(xyz):
-    """Convert XYZ to CIE Lab."""
-    ref = np.array([0.95047, 1.00000, 1.08883])
-    xyz = xyz / ref
-    f = np.where(xyz > 0.008856, xyz ** (1/3), 7.787 * xyz + 16/116)
-    L = 116 * f[..., 1] - 16
-    a = 500 * (f[..., 0] - f[..., 1])
-    b = 200 * (f[..., 1] - f[..., 2])
-    return np.stack([L, a, b], axis=-1)
+def _xyz_to_lab(xyz, in_place=False):
+    """Convert XYZ to CIE Lab. Avoids `np.where` on the large branch so a
+    full-res canvas doesn't allocate both branches at once.
+
+    If `in_place` is True the xyz buffer is reused for the lab output —
+    saves a full-canvas allocation and the `np.stack([L, a, b])` transient
+    that would otherwise peak at ~45 MB per 1200×1600 float32 canvas.
+    Callers that still need the original xyz should pass False.
+    """
+    dt = xyz.dtype
+    ref = np.array([0.95047, 1.00000, 1.08883], dtype=dt)
+    if in_place:
+        xyz /= ref  # overwrite caller's buffer
+    else:
+        xyz = xyz / ref  # 1 full alloc we own
+    thresh = np.asarray(0.008856, dtype=dt)
+    toe_mask = xyz <= thresh
+    # Cube-root branch in place: f = xyz ** (1/3). Toe pixels get an
+    # incorrect value; fix via mask below.
+    np.power(xyz, np.asarray(1.0 / 3.0, dtype=dt), out=xyz)
+    if toe_mask.any():
+        f_toe_cubed = xyz[toe_mask] ** 3
+        xyz[toe_mask] = np.asarray(7.787, dtype=dt) * f_toe_cubed + np.asarray(16.0 / 116.0, dtype=dt)
+    del toe_mask
+
+    # Compute L/a/b in place on the same buffer. Order matters because the
+    # formulas share f[1]: compute `a` (needs f[0] + f[1]) first, writing
+    # into slot 0 — that frees slot 0 but f[1] is still original. Then `b`
+    # (needs f[1] + f[2]), writing into slot 2. Finally L (needs f[1]),
+    # writing into slot 1. The buffer now holds [a, L, b] — we have to
+    # swap slots 0 and 1 to match the [L, a, b] convention callers expect.
+    f = xyz  # rename for clarity
+    c116 = np.asarray(116.0, dtype=dt)
+    c16 = np.asarray(16.0, dtype=dt)
+    c500 = np.asarray(500.0, dtype=dt)
+    c200 = np.asarray(200.0, dtype=dt)
+
+    # Peel the per-channel slices as (H, W) views so assignments land in place.
+    f0 = f[..., 0]
+    f1 = f[..., 1]
+    f2 = f[..., 2]
+
+    # b into slot 2: 200 * (f1 - f2)  — uses original f1 and f2
+    np.subtract(f1, f2, out=f2)
+    f2 *= c200
+    # a into slot 0: 500 * (f0 - f1)  — uses original f0 and f1
+    np.subtract(f0, f1, out=f0)
+    f0 *= c500
+    # L into slot 1: 116 * f1 - 16  — uses original f1
+    f1 *= c116
+    f1 -= c16
+
+    # Buffer is [a, L, b]; swap slots 0 and 1 to produce [L, a, b]. The
+    # view-based swap doesn't allocate a new canvas, just copies a single
+    # channel's worth (~7.7 MB for the tmp).
+    tmp = f0.copy()
+    f0[...] = f1
+    f1[...] = tmp
+    return f
 
 def _rgb_to_lab(rgb):
-    """Convert sRGB [0-255] to CIE Lab. Clamps input to valid range."""
+    """Convert sRGB [0-255] to CIE Lab. Clamps input to valid range.
+    Used at module load against the 6-entry palette — intentionally
+    float64 for maximum precision in the one-time LUT build."""
     linear = _srgb_to_linear(np.clip(np.asarray(rgb, dtype=np.float64), 0, 255))
     xyz = _linear_to_xyz(linear)
     return _xyz_to_lab(xyz)
@@ -429,6 +516,99 @@ _DISPLAY_WHITE_L = float(_rgb_to_lab(PALETTE_MEASURED_RGB[1:2])[0, 0])
 # dithering algorithm doesn't try to reproduce brightness levels the panel
 # can't show. Based on esp32-photoframe's preprocessImage approach.
 
+def _lab_to_srgb_f32(lab):
+    """Lab → sRGB [0, 255] as float32. Built to minimise peak allocation
+    on a 1200×1600×3 canvas: the Lab buffer is overwritten in place and
+    converted to a linear-RGB buffer via a single matmul (not three
+    scalar expansions which would hold 6 channel buffers live)."""
+    ref = np.array([0.95047, 1.00000, 1.08883], dtype=np.float32)
+    eps = np.float32(0.008856)
+    kappa = np.float32(903.3)
+
+    # Build xyz in-place on top of the lab buffer. Lab channels are
+    # read-only views but we're going to overwrite each in turn.
+    L = lab[..., 0]
+    a = lab[..., 1]
+    b = lab[..., 2]
+
+    # Precompute the f values (lab_to_xyz inversion) into small intermediates.
+    fy = (L + 16.0) / 116.0
+    fx = a / 500.0 + fy
+    fz = fy - b / 200.0
+    del a, b
+
+    # Overwrite lab slices with xyz values. `L` here aliases `lab[...,0]`.
+    # y-channel uses L directly (standard CIE):
+    y_new = ((L + 16.0) / 116.0) ** 3
+    toe_y = L <= kappa * eps
+    if toe_y.any():
+        y_new[toe_y] = L[toe_y] / kappa
+    y_new *= ref[1]
+    lab[..., 1] = y_new  # park y in slot 1
+    del y_new, toe_y, L, fy
+
+    # x from fx
+    x_new = fx ** 3
+    toe_x = x_new <= eps
+    if toe_x.any():
+        x_new[toe_x] = (np.float32(116.0) * fx[toe_x] - np.float32(16.0)) / kappa
+    x_new *= ref[0]
+    lab[..., 0] = x_new
+    del x_new, toe_x, fx
+
+    # z from fz
+    z_new = fz ** 3
+    toe_z = z_new <= eps
+    if toe_z.any():
+        z_new[toe_z] = (np.float32(116.0) * fz[toe_z] - np.float32(16.0)) / kappa
+    z_new *= ref[2]
+    lab[..., 2] = z_new
+    del z_new, toe_z, fz
+
+    # lab now holds xyz. In-place matmul to linear RGB — saves a 23 MB
+    # allocation on a 1200×1600×3 float32 canvas.
+    M_inv = np.array([
+        [ 3.2404542, -1.5371385, -0.4985314],
+        [-0.9692660,  1.8760108,  0.0415560],
+        [ 0.0556434, -0.2040259,  1.0572252],
+    ], dtype=np.float32)
+    np.matmul(lab, M_inv.T, out=lab)
+    linear = lab
+    np.clip(linear, 0, 1, out=linear)
+
+    # sRGB gamma, in-place on linear buffer with masked toe fixup.
+    # Save toe-region originals (small, usually <1% of pixels) before the
+    # in-place shoulder chain overwrites them.
+    toe_mask = linear <= np.asarray(0.0031308, dtype=np.float32)
+    toe_saved = linear[toe_mask].copy() if toe_mask.any() else None
+    # Shoulder: 1.055 * linear**(1/2.4) - 0.055 (in place)
+    np.power(linear, np.asarray(1.0 / 2.4, dtype=np.float32), out=linear)
+    linear *= np.float32(1.055)
+    linear -= np.float32(0.055)
+    # Toe overwrite: linear * 12.92
+    if toe_saved is not None:
+        linear[toe_mask] = toe_saved * np.float32(12.92)
+    del toe_mask, toe_saved
+
+    linear *= 255.0
+    np.clip(linear, 0, 255, out=linear)
+    return linear
+
+
+def _rgb_f32_to_lab(rgb_f32):
+    """sRGB [0,255] float32 → Lab float32. Same math as _rgb_to_lab but
+    kept in float32 throughout to halve peak footprint on full-res
+    canvases. Reuses the linear-RGB buffer as the XYZ buffer via
+    in-place matmul (numpy handles overlapping input/output for matmul),
+    saving one full-canvas allocation."""
+    linear = _srgb_to_linear(rgb_f32)
+    xyz = _linear_to_xyz(linear, in_place=True)
+    del linear
+    lab = _xyz_to_lab(xyz, in_place=True)  # xyz buffer is reused as lab
+    del xyz
+    return lab.astype(np.float32, copy=False)
+
+
 def _compress_dynamic_range(img_array, scale_chroma=False, adaptive_vivid=False,
                              vivid_low=5.0, vivid_high=15.0):
     """Compress image luminance from [0,100] L* into the display's actual L* range.
@@ -443,43 +623,24 @@ def _compress_dynamic_range(img_array, scale_chroma=False, adaptive_vivid=False,
         (chroma>vivid_high) keep full chroma (preserves tongues, red logos).
         Smooth ramp between. This is the "best of both" behavior.
     """
-    rgb = np.asarray(img_array, dtype=np.float64)
-    linear = _srgb_to_linear(rgb)
-    xyz = _linear_to_xyz(linear)
-    lab = _xyz_to_lab(xyz)
-    L_ratio = (_DISPLAY_WHITE_L - _DISPLAY_BLACK_L) / 100.0
-    lab[..., 0] = _DISPLAY_BLACK_L + lab[..., 0] * L_ratio
+    rgb = np.asarray(img_array, dtype=np.float32)
+    lab = _rgb_f32_to_lab(rgb)
+    del rgb
+    L_ratio = np.float32((_DISPLAY_WHITE_L - _DISPLAY_BLACK_L) / 100.0)
+    lab[..., 0] = np.float32(_DISPLAY_BLACK_L) + lab[..., 0] * L_ratio
     if adaptive_vivid:
         chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
-        t = np.clip((chroma - vivid_low) / (vivid_high - vivid_low), 0.0, 1.0)
-        c_factor = L_ratio + (1.0 - L_ratio) * t
+        t = np.clip((chroma - np.float32(vivid_low)) / np.float32(vivid_high - vivid_low), 0.0, 1.0)
+        del chroma
+        c_factor = L_ratio + (np.float32(1.0) - L_ratio) * t
+        del t
         lab[..., 1] *= c_factor
         lab[..., 2] *= c_factor
+        del c_factor
     elif scale_chroma:
         lab[..., 1] *= L_ratio
         lab[..., 2] *= L_ratio
-    ref = np.array([0.95047, 1.00000, 1.08883])
-    L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
-    fy = (L + 16) / 116.0
-    fx = a / 500.0 + fy
-    fz = fy - b / 200.0
-    eps = 0.008856
-    kappa = 903.3
-    xyz_out = np.zeros_like(lab)
-    xyz_out[..., 0] = np.where(fx ** 3 > eps, fx ** 3, (116 * fx - 16) / kappa) * ref[0]
-    xyz_out[..., 1] = np.where(L > kappa * eps, ((L + 16) / 116.0) ** 3, L / kappa) * ref[1]
-    xyz_out[..., 2] = np.where(fz ** 3 > eps, fz ** 3, (116 * fz - 16) / kappa) * ref[2]
-    M_inv = np.array([
-        [ 3.2404542, -1.5371385, -0.4985314],
-        [-0.9692660,  1.8760108,  0.0415560],
-        [ 0.0556434, -0.2040259,  1.0572252],
-    ])
-    linear_out = xyz_out @ M_inv.T
-    linear_out = np.clip(linear_out, 0, 1)
-    srgb = np.where(linear_out <= 0.0031308,
-                    linear_out * 12.92,
-                    1.055 * (linear_out ** (1.0 / 2.4)) - 0.055)
-    return np.clip(srgb * 255, 0, 255).astype(np.float32)
+    return _lab_to_srgb_f32(lab)
 
 
 def _adaptive_saturate(img_array, max_enhance=1.25, low_thresh=5.0, high_thresh=15.0):
@@ -493,36 +654,18 @@ def _adaptive_saturate(img_array, max_enhance=1.25, low_thresh=5.0, high_thresh=
     only boosts pixels that already have meaningful chroma. Result: tongues
     and red logos get the full enhance; white umbrellas stay white.
     """
-    rgb = np.asarray(img_array, dtype=np.float64)
-    linear = _srgb_to_linear(rgb)
-    xyz = _linear_to_xyz(linear)
-    lab = _xyz_to_lab(xyz)
+    rgb = np.asarray(img_array, dtype=np.float32)
+    lab = _rgb_f32_to_lab(rgb)
+    del rgb
     chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
-    t = np.clip((chroma - low_thresh) / (high_thresh - low_thresh), 0.0, 1.0)
-    factor = 1.0 + (max_enhance - 1.0) * t
+    t = np.clip((chroma - np.float32(low_thresh)) / np.float32(high_thresh - low_thresh), 0.0, 1.0)
+    del chroma
+    factor = np.float32(1.0) + np.float32(max_enhance - 1.0) * t
+    del t
     lab[..., 1] *= factor
     lab[..., 2] *= factor
-    # Convert Lab back to sRGB (same math as in _compress_dynamic_range)
-    ref = np.array([0.95047, 1.00000, 1.08883])
-    L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
-    fy = (L + 16) / 116.0
-    fx = a / 500.0 + fy
-    fz = fy - b / 200.0
-    eps = 0.008856
-    kappa = 903.3
-    xyz_out = np.zeros_like(lab)
-    xyz_out[..., 0] = np.where(fx ** 3 > eps, fx ** 3, (116 * fx - 16) / kappa) * ref[0]
-    xyz_out[..., 1] = np.where(L > kappa * eps, ((L + 16) / 116.0) ** 3, L / kappa) * ref[1]
-    xyz_out[..., 2] = np.where(fz ** 3 > eps, fz ** 3, (116 * fz - 16) / kappa) * ref[2]
-    M_inv = np.array([
-        [ 3.2404542, -1.5371385, -0.4985314],
-        [-0.9692660,  1.8760108,  0.0415560],
-        [ 0.0556434, -0.2040259,  1.0572252],
-    ])
-    linear_out = np.clip(xyz_out @ M_inv.T, 0, 1)
-    srgb = np.where(linear_out <= 0.0031308, linear_out * 12.92,
-                    1.055 * (linear_out ** (1.0 / 2.4)) - 0.055)
-    return np.clip(srgb * 255, 0, 255).astype(np.float32)
+    del factor
+    return _lab_to_srgb_f32(lab)
 
 
 # ── Disk cache ──────────────────────────────────────────────────────
@@ -788,15 +931,11 @@ def _prepare_canvas(img, dither_cfg, portrait, canvas_w, canvas_h):
     sat_value = float(sat.get("value", 1.25))
     if sat_mode == "global":
         canvas = ImageEnhance.Color(canvas).enhance(sat_value)
-    elif sat_mode == "adaptive":
-        arr = _adaptive_saturate(
-            np.array(canvas, dtype=np.float64),
-            max_enhance=sat_value,
-            low_thresh=float(sat.get("low", 5.0)),
-            high_thresh=float(sat.get("high", 15.0)),
-        )
-        canvas = Image.fromarray(arr.astype(np.uint8))
-    # sat_mode == "off": no saturation adjustment
+    # sat_mode == "adaptive" is deferred to _dither_prepared_canvas so
+    # callers can drop their source-image reference before the Lab-space
+    # transforms allocate. Running it here holds source+canvas+lab
+    # simultaneously and peaks ~50 MB above the target ceiling on large
+    # JPEGs. sat_mode == "off" simply skips saturation entirely.
 
     if not portrait:
         canvas = canvas.rotate(-90, expand=True)
@@ -1014,32 +1153,101 @@ def _maybe_apply_bw_fallback(dither_cfg, img):
     return override, True
 
 
-def _run_dither_pipeline(img, dither_cfg, orientation, canvas_w, canvas_h):
-    """Shared pipeline core used by both the full-resolution _convert_image
-    and the preview endpoint. Runs: prepare_canvas → DRC → dither kernel,
-    and returns (result_idx, padding_mask). result_idx is a (canvas_h,
-    canvas_w) uint8 array of palette indices; padding_mask marks padding
-    pixels (outside the fitted image) for post-force-to-white.
-    """
-    portrait = (orientation == "portrait")
-    canvas, padding_mask = _prepare_canvas(img, dither_cfg, portrait, canvas_w, canvas_h)
+def _apply_lab_stage(canvas, sat_cfg, drc_cfg):
+    """Fused adaptive-saturation + DRC in a single Lab round-trip.
 
-    drc = dither_cfg.get("drc", {})
-    if drc.get("enabled", True):
-        chroma_mode = drc.get("chroma_mode", "adaptive_vivid")
-        canvas_array = _compress_dynamic_range(
-            np.array(canvas, dtype=np.float32),
-            scale_chroma=(chroma_mode == "flat"),
-            adaptive_vivid=(chroma_mode == "adaptive_vivid"),
-            vivid_low=float(drc.get("vivid_low", 5.0)),
-            vivid_high=float(drc.get("vivid_high", 15.0)),
-        )
-        canvas = Image.fromarray(canvas_array.astype(np.uint8))
+    The two stages operate on the same lab buffer so we do one
+    rgb→lab conversion and one lab→rgb conversion for both together,
+    instead of two round-trips. On a 1200×1600 float32 canvas each
+    round-trip peaks at ~50 MB of intermediate allocations; fusing
+    cuts peak by that full second trip.
+
+    Execution order matches the old sequential path: adaptive saturation
+    runs first (operates on a* and b*), then DRC L* remap + optional
+    chroma compression. Global/off saturation modes were already applied
+    during canvas prep; this helper skips them.
+
+    Returns a new PIL Image with the transformed pixels, or the input
+    canvas if no Lab-space work is needed.
+    """
+    sat_mode = sat_cfg.get("mode")
+    drc_enabled = drc_cfg.get("enabled", True)
+    sat_active = sat_mode == "adaptive"
+
+    if not (sat_active or drc_enabled):
+        return canvas  # nothing to do in Lab space
+
+    rgb = np.array(canvas, dtype=np.float32)
+    lab = _rgb_f32_to_lab(rgb)
+    del rgb
+
+    # (1) adaptive saturation on a*, b*
+    if sat_active:
+        max_enhance = np.float32(sat_cfg.get("value", 1.25))
+        low = np.float32(sat_cfg.get("low", 5.0))
+        high = np.float32(sat_cfg.get("high", 15.0))
+        chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
+        t = np.clip((chroma - low) / (high - low), 0.0, 1.0)
+        del chroma
+        factor = np.float32(1.0) + (max_enhance - np.float32(1.0)) * t
+        del t
+        lab[..., 1] *= factor
+        lab[..., 2] *= factor
+        del factor
+
+    # (2) DRC L* remap and optional chroma handling
+    if drc_enabled:
+        L_ratio = np.float32((_DISPLAY_WHITE_L - _DISPLAY_BLACK_L) / 100.0)
+        lab[..., 0] = np.float32(_DISPLAY_BLACK_L) + lab[..., 0] * L_ratio
+        chroma_mode = drc_cfg.get("chroma_mode", "adaptive_vivid")
+        if chroma_mode == "adaptive_vivid":
+            vivid_low = np.float32(drc_cfg.get("vivid_low", 5.0))
+            vivid_high = np.float32(drc_cfg.get("vivid_high", 15.0))
+            chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
+            t = np.clip((chroma - vivid_low) / (vivid_high - vivid_low), 0.0, 1.0)
+            del chroma
+            c_factor = L_ratio + (np.float32(1.0) - L_ratio) * t
+            del t
+            lab[..., 1] *= c_factor
+            lab[..., 2] *= c_factor
+            del c_factor
+        elif chroma_mode == "flat":
+            lab[..., 1] *= L_ratio
+            lab[..., 2] *= L_ratio
+
+    out_arr = _lab_to_srgb_f32(lab)
+    del lab
+    result = Image.fromarray(out_arr.astype(np.uint8))
+    del out_arr
+    return result
+
+
+def _dither_prepared_canvas(canvas, padding_mask, dither_cfg):
+    """Run the Lab-stage pipeline (fused saturation+DRC) then the dither
+    kernel on an already-prepared canvas. Split out from
+    _run_dither_pipeline so callers can drop their source-image
+    reference before the Lab-space transforms allocate — on large JPEGs
+    that saves 20–50 MB of peak footprint.
+    """
+    canvas = _apply_lab_stage(canvas, dither_cfg.get("saturation", {}),
+                               dither_cfg.get("drc", {}))
 
     kernel_fn = _get_kernel_fn(dither_cfg)
     lut = _get_lut(dither_cfg)
     result_idx = kernel_fn(canvas, lut, _LUT_SCALE)
+    del canvas
     result_idx[padding_mask] = 1  # force padding to pure white
+    return result_idx
+
+
+def _run_dither_pipeline(img, dither_cfg, orientation, canvas_w, canvas_h):
+    """Convenience wrapper: prepare_canvas → _dither_prepared_canvas. Used
+    by the preview endpoint where the source image is always small. The
+    full-resolution _convert_image path splits the two calls manually so
+    it can drop its source-image reference before DRC peaks."""
+    portrait = (orientation == "portrait")
+    canvas, padding_mask = _prepare_canvas(img, dither_cfg, portrait, canvas_w, canvas_h)
+    result_idx = _dither_prepared_canvas(canvas, padding_mask, dither_cfg)
     return result_idx, padding_mask
 
 
@@ -1063,10 +1271,22 @@ def _convert_image(img_path):
     t0 = time.time()
     from PIL import ImageOps
     img = Image.open(img_path)
-    # Apply EXIF orientation before converting — phones and cameras store
-    # rotation as metadata rather than rotating the actual pixel data.
+    # Early downsample: a 32-megapixel phone JPEG would otherwise sit in
+    # RAM as 96 MB of RGB alongside the DRC float arrays and OOM the Pi.
+    # JPEG's draft() asks the decoder to emit a smaller image by skipping
+    # DCT coefficients — free, no full-size decode ever happens. Other
+    # formats fall back to thumbnail() after load, which still caps the
+    # peak by releasing the full-size copy. The ceiling is 3× the panel
+    # long-edge so LANCZOS resampling to canvas still has ample detail.
+    max_side = 3 * max(FULL_W, PANEL_H)
+    try:
+        img.draft(None, (max_side, max_side))
+    except Exception:
+        pass  # non-JPEG or decoder without draft — tolerable
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
+    if max(img.size) > max_side:
+        img.thumbnail((max_side, max_side), Image.LANCZOS)
     print(f"  {img_path.name}: {img.size[0]}x{img.size[1]}")
 
     dither_cfg = _config["dither"]
@@ -1077,8 +1297,16 @@ def _convert_image(img_path):
     orientation = _config.get("orientation", "landscape")
     # Full-resolution panel buffer is 1200×1600 (portrait) regardless of
     # orientation — landscape rotates into the same buffer shape.
-    result_idx, _ = _run_dither_pipeline(img, dither_cfg, orientation,
-                                         canvas_w=FULL_W, canvas_h=PANEL_H)
+    # We run _prepare_canvas inline (not via _run_dither_pipeline) so we
+    # can free the full-size source image BEFORE the DRC arrays allocate.
+    # On a 32 MP source that's the difference between a 450 MB peak and
+    # a ~50 MB peak.
+    portrait = (orientation == "portrait")
+    canvas, padding_mask = _prepare_canvas(img, dither_cfg, portrait,
+                                           canvas_w=FULL_W, canvas_h=PANEL_H)
+    del img  # source no longer needed; release its RGB buffer
+    result_idx = _dither_prepared_canvas(canvas, padding_mask, dither_cfg)
+    del canvas, padding_mask
 
     nibbles = PALETTE_NIBBLE[result_idx]
     panel1_nib = nibbles[:, :PANEL_W]
