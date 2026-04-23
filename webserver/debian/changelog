@@ -1,3 +1,18 @@
+hokku-server (2.1.21-5) unstable; urgency=low
+
+  * OOM fix (real this time). _compress_dynamic_range and
+    _adaptive_saturate were silently upcasting their input from
+    float32 to float64 and chaining through 6+ full-image
+    intermediate arrays (linear, xyz, lab, xyz_out, linear_out,
+    srgb). At 1600x1200 that's ~320 MB concurrent, which SIGKILLs
+    the service on a 512 MB Pi Zero 2 W after 40+ seconds of
+    dither. Pinned the pipeline to float32 throughout — precision
+    is far more than enough for 8-bit RGB output, and peak RAM
+    drops by half. Same fix applied to _is_near_grayscale's Lab
+    conversion for consistency.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 22 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.21-4) unstable; urgency=low
 
   * Further OOM mitigation. -3's 3200 px pre-decode cap still

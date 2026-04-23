@@ -344,7 +344,11 @@ def _compress_dynamic_range(img_array, scale_chroma=False, adaptive_vivid=False,
         (chroma>vivid_high) keep full chroma (preserves tongues, red logos).
         Smooth ramp between. This is the "best of both" behavior.
     """
-    rgb = np.asarray(img_array, dtype=np.float64)
+    # float32 throughout — precision is plenty for 8-bit RGB output and cuts
+    # peak RAM in half. The chain here builds 6+ full-image intermediates
+    # (linear, xyz, lab, xyz_out, linear_out, srgb); float64 on a 1600x1200
+    # canvas costs ~320 MB concurrent and OOMs a 512 MB Pi.
+    rgb = np.asarray(img_array, dtype=np.float32)
     linear = _srgb_to_linear(rgb)
     xyz = _linear_to_xyz(linear)
     lab = _xyz_to_lab(xyz)
@@ -394,7 +398,11 @@ def _adaptive_saturate(img_array, max_enhance=1.25, low_thresh=5.0, high_thresh=
     only boosts pixels that already have meaningful chroma. Result: tongues
     and red logos get the full enhance; white umbrellas stay white.
     """
-    rgb = np.asarray(img_array, dtype=np.float64)
+    # float32 throughout — precision is plenty for 8-bit RGB output and cuts
+    # peak RAM in half. The chain here builds 6+ full-image intermediates
+    # (linear, xyz, lab, xyz_out, linear_out, srgb); float64 on a 1600x1200
+    # canvas costs ~320 MB concurrent and OOMs a 512 MB Pi.
+    rgb = np.asarray(img_array, dtype=np.float32)
     linear = _srgb_to_linear(rgb)
     xyz = _linear_to_xyz(linear)
     lab = _xyz_to_lab(xyz)
@@ -720,7 +728,7 @@ def _prepare_canvas(img, color_enhance=1.2, adaptive_saturate=False):
     canvas = ImageEnhance.Contrast(canvas).enhance(1.1)
     canvas = ImageEnhance.Sharpness(canvas).enhance(1.3)
     if adaptive_saturate:
-        arr = _adaptive_saturate(np.array(canvas, dtype=np.float64), max_enhance=color_enhance)
+        arr = _adaptive_saturate(np.array(canvas, dtype=np.float32), max_enhance=color_enhance)
         canvas = Image.fromarray(arr.astype(np.uint8))
     else:
         canvas = ImageEnhance.Color(canvas).enhance(color_enhance)
@@ -938,7 +946,7 @@ def _is_near_grayscale(img):
     """
     thumb = img.copy()
     thumb.thumbnail((200, 200), Image.LANCZOS)
-    arr = np.asarray(thumb.convert("RGB"), dtype=np.float64)
+    arr = np.asarray(thumb.convert("RGB"), dtype=np.float32)
     lab = _xyz_to_lab(_linear_to_xyz(_srgb_to_linear(arr)))
     chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
     return float(np.percentile(chroma, 95)) < _GRAYSCALE_CHROMA_THRESHOLD
