@@ -122,6 +122,79 @@ def _cache_entries():
     return entries
 
 
+def _parse_firmware_tag(filename):
+    """Extract the tag from 'hokku-firmware_<tag>.bin'. Returns tag or 'local'."""
+    stem = Path(filename).stem  # drops .bin
+    if stem.startswith("hokku-firmware_"):
+        return stem[len("hokku-firmware_"):]
+    return "local"
+
+
+def _fetch_firmware_from_github():
+    """Download the merged firmware asset from the latest GitHub release into
+    .cache/firmware/<tag>/. Returns the cached Path or None on failure."""
+    try:
+        rel = release_cache.get_latest_release()
+    except urllib.error.HTTPError as e:
+        print(f"  ERROR: GitHub API returned {e.code} {e.reason}")
+        return None
+    except Exception as e:
+        print(f"  ERROR: could not reach GitHub: {e}")
+        return None
+
+    tag = rel.get("tag_name", "latest")
+    asset = release_cache.find_asset(rel, esp32_setup._is_merged_firmware_asset)
+    if asset is None:
+        print(f"  ERROR: release {tag} has no hokku-firmware_*.bin asset.")
+        return None
+
+    target_dir = esp32_setup.FIRMWARE_CACHE_DIR / tag
+    return release_cache.ensure_cached_asset(asset, target_dir, label=f"(release {tag})")
+
+
+def _import_firmware_from_local(local_path):
+    """Copy a locally-built merged firmware into .cache/firmware/<tag>/.
+    Returns the cached Path or None on failure."""
+    tag = _parse_firmware_tag(local_path.name)
+    target_dir = esp32_setup.FIRMWARE_CACHE_DIR / tag
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / local_path.name
+    try:
+        if target.resolve() != local_path.resolve():
+            shutil.copy2(local_path, target)
+            print(f"  Imported {local_path} -> {target} ({_fmt_size(target.stat().st_size)})")
+        else:
+            print(f"  Already at target path: {target}")
+        return target
+    except OSError as e:
+        print(f"  ERROR: could not copy: {e}")
+        return None
+
+
+def _fetch_firmware_with_local_choice():
+    """If a local firmware build exists, ask whether to import or download.
+    Otherwise go straight to GitHub. Returns cached Path or None."""
+    local = esp32_setup._merged_firmware_file(esp32_setup.LOCAL_FIRMWARE_DIR)
+    if local is None:
+        print("  No local firmware build found; downloading from GitHub.")
+        return _fetch_firmware_from_github()
+
+    print(f"  Local firmware build: {local}  ({_fmt_size(local.stat().st_size)})")
+    print("    [L]  import the local build into .cache")
+    print("    [D]  download the latest release from GitHub instead")
+    print("    [S]  skip")
+    while True:
+        choice = input("    [L]> ").strip().lower() or "l"
+        if choice in ("l", "local"):
+            return _import_firmware_from_local(local)
+        if choice in ("d", "download"):
+            return _fetch_firmware_from_github()
+        if choice in ("s", "skip"):
+            print("  Firmware: skipped.")
+            return None
+        print(f"    Unknown choice {choice!r}; pick L, D, or S.")
+
+
 def action_download_everything():
     """Prefetch the Pi OS image, hokku-server .deb, and merged firmware into
     .cache/. Each asset skips its download if already cached at the expected
@@ -149,28 +222,14 @@ def action_download_everything():
     if deb is None:
         print("  .deb: FAILED")
 
-    # 3. Firmware merged bin — GitHub release.
-    # Bypass resolve_firmware_dir() here: it would short-circuit on a local
-    # firmware/release/ hit, but the user asked to *download* things, not
-    # check what's on disk. Pull the latest release directly.
+    # 3. Firmware merged bin.
+    # If a local build exists (firmware/release/hokku-firmware_*.bin) ask the
+    # user whether to import it or pull the latest release from GitHub —
+    # they might be running this to capture a dev build in .cache/, or to
+    # refresh an old cache from the official release. Don't guess.
     print()
     print("  [3/3] Merged firmware")
-    merged = None
-    try:
-        rel = release_cache.get_latest_release()
-        tag = rel.get("tag_name", "latest")
-        asset = release_cache.find_asset(rel, esp32_setup._is_merged_firmware_asset)
-        if asset is None:
-            print(f"  ERROR: release {tag} has no hokku-firmware_*.bin asset.")
-        else:
-            target_dir = esp32_setup.FIRMWARE_CACHE_DIR / tag
-            merged = release_cache.ensure_cached_asset(
-                asset, target_dir, label=f"(release {tag})"
-            )
-    except urllib.error.HTTPError as e:
-        print(f"  ERROR: GitHub API returned {e.code} {e.reason}")
-    except Exception as e:
-        print(f"  ERROR: could not reach GitHub: {e}")
+    merged = _fetch_firmware_with_local_choice()
     if merged is None:
         print("  Firmware: FAILED")
 
