@@ -652,28 +652,90 @@ def main_menu(device, pi_credentials=None, pi_install_ran=False):
             print("  Invalid choice.")
 
 
-def run(pi_credentials=None, pi_install_ran=False):
-    """Entry point called by the top-level installer."""
+def _prepare(require_firmware):
+    """Shared prelude for the run_* helpers: check esptool, resolve firmware
+    (if needed), scan, and let the user pick a device. Returns the selected
+    device dict, or None on failure."""
     try:
         import esptool  # noqa: F401
     except ImportError:
         print("  ERROR: esptool is not installed.")
         print("  Run: pip install esptool pyserial")
-        return 1
+        return None
 
-    # Resolve firmware location up front so version comparisons during the
-    # device scan have binaries to compare against.
-    if resolve_firmware_dir() is None:
-        print("  WARNING: no firmware available locally or from GitHub.")
-        print("  Configuration is still possible; flashing is not.")
+    if require_firmware and resolve_firmware_dir() is None:
+        print("  ERROR: no firmware available locally or from GitHub. Aborting.")
+        return None
+    if not require_firmware:
+        # Still try to resolve so the menu can show version info; tolerate failure.
+        resolve_firmware_dir()
 
     print("  Scanning for ESP32-S3 on USB serial ports...")
     devices = scan_devices()
     print()
+    return select_device(devices)
 
-    device = select_device(devices)
+
+def run(pi_credentials=None, pi_install_ran=False):
+    """Full interactive menu (configure / flash / both)."""
+    device = _prepare(require_firmware=False)
     if device is None:
         return 1
-
     main_menu(device, pi_credentials=pi_credentials, pi_install_ran=pi_install_ran)
+    return 0
+
+
+def run_configure_and_flash(pi_credentials=None):
+    """Direct: prompt for config, write NVS, then flash firmware, then
+    post-flash boot check. No inner menu."""
+    device = _prepare(require_firmware=True)
+    if device is None:
+        return 1
+    port = device["port"]
+    existing = device.get("config") or {}
+
+    print("  Configure + flash firmware")
+    print("  --------------------------")
+    new_config = prompt_config(existing, pi_credentials)
+    if new_config is None:
+        return 1
+    if not write_config(port, new_config):
+        return 1
+    if not flash_firmware(port):
+        return 1
+    check_boot(port)
+    return 0
+
+
+def run_configure_only(pi_credentials=None):
+    """Direct: prompt for config, write NVS, done. Does not flash."""
+    device = _prepare(require_firmware=False)
+    if device is None:
+        return 1
+    port = device["port"]
+    existing = device.get("config") or {}
+
+    print("  Configure only (keep existing firmware)")
+    print("  ---------------------------------------")
+    new_config = prompt_config(existing, pi_credentials)
+    if new_config is None:
+        return 1
+    if not write_config(port, new_config):
+        return 1
+    print("  Device will restart with new configuration.")
+    return 0
+
+
+def run_flash_only():
+    """Direct: flash firmware keeping existing NVS config. Post-flash boot check."""
+    device = _prepare(require_firmware=True)
+    if device is None:
+        return 1
+    port = device["port"]
+
+    print("  Flash firmware only (keep existing config)")
+    print("  ------------------------------------------")
+    if not flash_firmware(port):
+        return 1
+    check_boot(port)
     return 0

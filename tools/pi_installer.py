@@ -1160,7 +1160,7 @@ timedatectl set-ntp true 2>/dev/null || true
 systemctl restart systemd-timesyncd 2>/dev/null || true
 for i in $(seq 1 90); do
     if timedatectl show --property=NTPSynchronized --value 2>/dev/null | grep -qx yes; then
-        echo "clock synced after ${i}s: $(date)"
+        echo "clock synced after $i""s: $(date)"
         break
     fi
     sleep 1
