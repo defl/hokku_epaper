@@ -310,52 +310,67 @@ def _print_menu(default):
 
 # ---------- advanced submenu ----------
 
-def action_show_settings():
-    """Show the cached install settings and let the user re-enter them."""
-    print()
-    print("  Install settings (from .cache/settings.json)")
-    print("  --------------------------------------------")
-    s = release_cache.load_settings()
-    if not s:
-        print("  No cached settings yet — running the installer will create some.")
-    else:
-        def _show(label, key, mask=False):
-            val = s.get(key)
-            if val is None or val == "":
-                display = "(unset)"
-            elif mask:
-                display = "(set)"
-            else:
-                display = val
-            print(f"    {label:15s} {display}")
-        _show("wifi_ssid:",    "wifi_ssid")
-        _show("wifi_pass:",    "wifi_pass",  mask=True)
-        _show("user:",         "user")
-        _show("password:",     "password",   mask=True)
-        _show("ssh_enabled:",  "ssh_enabled")
-        _show("samba:",        "samba")
-        _show("country:",      "country")
-        _show("timezone:",     "timezone")
+def _render_settings(s, reveal):
+    """Print the sticky-settings block. If `reveal` is True, show password
+    values in the clear; otherwise print '(set)' for anything non-empty."""
+    def _show(label, key, sensitive=False):
+        val = s.get(key)
+        if val is None or val == "":
+            display = "(unset)"
+        elif sensitive and not reveal:
+            display = "(set)"
+        else:
+            display = val
+        print(f"    {label:15s} {display}")
+    _show("wifi_ssid:",    "wifi_ssid")
+    _show("wifi_pass:",    "wifi_pass",  sensitive=True)
+    _show("user:",         "user")
+    _show("password:",     "password",   sensitive=True)
+    _show("ssh_enabled:",  "ssh_enabled")
+    _show("samba:",        "samba")
+    _show("country:",      "country")
+    _show("timezone:",     "timezone")
 
-    print()
-    print("    [1] Re-enter all settings (prompts with current values as defaults)")
-    print("    [2] Clear all settings (next install starts from built-in defaults)")
-    print("    [3] Back")
-    choice = input("    [3]> ").strip() or "3"
-    if choice == "1":
-        # collect_install_config reads sticky, prompts, saves. Discard result —
-        # we only want the save side-effect.
-        pi_installer.collect_install_config()
-        return 0
-    if choice == "2":
-        try:
-            release_cache.SETTINGS_FILE.unlink(missing_ok=True)
-            print("  Cleared.")
-        except OSError as e:
-            print(f"  Failed to clear: {e}")
-            return 1
-        return 0
-    return 0  # back
+
+def action_show_settings():
+    """Show cached install settings and offer edit / clear / reveal-passwords."""
+    reveal = False
+    while True:
+        print()
+        print("  Install settings (from .cache/settings.json)")
+        print("  --------------------------------------------")
+        s = release_cache.load_settings()
+        if not s:
+            print("  No cached settings yet — running the installer will create some.")
+        else:
+            _render_settings(s, reveal=reveal)
+
+        print()
+        print("    [1] Re-enter all settings (prompts with current values as defaults)")
+        print("    [2] Clear all settings (next install starts from built-in defaults)")
+        print(f"    [3] {'Hide' if reveal else 'Show'} passwords")
+        print("    [4] Back")
+        choice = input("    [4]> ").strip() or "4"
+
+        if choice == "1":
+            # collect_install_config reads sticky, prompts, saves. Discard
+            # the return value — we only want the save side-effect.
+            pi_installer.collect_install_config()
+            return 0
+        if choice == "2":
+            try:
+                release_cache.SETTINGS_FILE.unlink(missing_ok=True)
+                print("  Cleared.")
+            except OSError as e:
+                print(f"  Failed to clear: {e}")
+                return 1
+            return 0
+        if choice == "3":
+            reveal = not reveal
+            continue  # redisplay with toggled reveal
+        if choice == "4":
+            return 0
+        print(f"    Unknown choice {choice!r}.")
 
 
 def _print_advanced_menu():
