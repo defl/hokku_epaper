@@ -1,5 +1,11 @@
 This is a project where you're writing firmware for an ESP32 that drives an e-ink display.
 
+Releases
+========
+- **NEVER** upload, replace, or delete GitHub release assets without an explicit "yes, publish" (or equivalent) from the user for that specific change. Building a `.deb` or merged firmware locally is fine; `gh release upload`, `gh release delete-asset`, `gh release create`, `gh release edit`, and any force-pushed tag are not.
+- "I see the fix works" or "tests pass" are NOT release authorisations. Ask first, every time, even after several successful releases in a row in the same session.
+- After the user confirms, state exactly what will be uploaded/removed (filenames, release tag) before running the `gh` commands, so the user has a last chance to veto.
+
 Hardware
 ========
 - The known facts are in docs/hardware_facts.md, though this might be wrong so treat with caution
