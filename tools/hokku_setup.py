@@ -282,11 +282,11 @@ def _menu_default(status):
         return "1"  # no device → full Pi install likely
     dev = status["device"]
     if not dev.get("has_hokku_firmware"):
-        return "2"  # configure + flash
+        return "3"  # configure + flash
     if not dev.get("config_version_ok"):
-        return "3"  # has firmware, needs config
+        return "4"  # has firmware, needs config
     if dev.get("firmware_current") is False:
-        return "4"  # firmware update
+        return "5"  # firmware update
     return "1"
 
 
@@ -294,12 +294,13 @@ def _print_menu(default):
     print("  What would you like to do?")
     options = [
         ("1", "Full install — image SD card, then configure + flash ESP32"),
-        ("2", "ESP32: configure + flash firmware"),
-        ("3", "ESP32: configure only (keep existing firmware)"),
-        ("4", "ESP32: flash firmware only (keep existing config)"),
-        ("5", "Download everything into .cache"),
-        ("6", "Clear .cache"),
-        ("7", "Exit"),
+        ("2", "Server only — image SD card with hokku-server, skip ESP32"),
+        ("3", "ESP32: configure + flash firmware"),
+        ("4", "ESP32: configure only (keep existing firmware)"),
+        ("5", "ESP32: flash firmware only (keep existing config)"),
+        ("6", "Download everything into .cache"),
+        ("7", "Clear .cache"),
+        ("8", "Exit"),
     ]
     for num, label in options:
         marker = "  <-- default" if num == default else ""
@@ -330,16 +331,31 @@ def _dispatch(choice):
         return "continue", esp32_setup.run(pi_credentials=pi_credentials,
                                            pi_install_ran=pi_install_ran)
     if choice == "2":
-        return "continue", esp32_setup.run_configure_and_flash()
+        # Server only: image the SD card, run through mDNS/HTTP wait, then stop.
+        result = pi_installer.run()
+        if result is None:
+            print()
+            print("  Pi install did not complete.")
+            return "continue", 1
+        print()
+        if result.get("webserver_ok"):
+            print(f"  Server ready at http://{result['hostname']}.local:8080/ "
+                  f"(IP {result.get('server_ip') or '?'}).")
+        else:
+            print("  Server install submitted but HTTP probe timed out — "
+                  "check the Pi directly.")
+        return "continue", 0
     if choice == "3":
-        return "continue", esp32_setup.run_configure_only()
+        return "continue", esp32_setup.run_configure_and_flash()
     if choice == "4":
-        return "continue", esp32_setup.run_flash_only()
+        return "continue", esp32_setup.run_configure_only()
     if choice == "5":
-        return "continue", action_download_everything()
+        return "continue", esp32_setup.run_flash_only()
     if choice == "6":
-        return "continue", action_clear_cache()
+        return "continue", action_download_everything()
     if choice == "7":
+        return "continue", action_clear_cache()
+    if choice == "8":
         print("  Bye!")
         return "exit", 0
     print(f"  Unknown choice {choice!r}.")
