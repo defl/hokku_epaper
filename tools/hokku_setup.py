@@ -231,20 +231,9 @@ def _print_menu(default):
     print()
 
 
-def main():
-    _pause_on_exit = "--pause-on-exit" in sys.argv
-    _banner()
-
-    status = _scan_device_status()
-    _print_device_status(status)
-    print()
-
-    default = _menu_default(status)
-    _print_menu(default)
-
-    choice = input(f"  [{default}]> ").strip() or default
-    rc = 0
-
+def _dispatch(choice):
+    """Run the chosen action. Returns ('continue', rc) to re-display the menu,
+    or ('exit', rc) to quit."""
     if choice == "1":
         # Full install: Pi OS SD, then ESP32 config+flash with pre-fill.
         result = pi_installer.run()
@@ -262,34 +251,54 @@ def main():
         print()
         print("  ESP32 phase")
         print("  -----------")
-        rc = esp32_setup.run(pi_credentials=pi_credentials, pi_install_ran=pi_install_ran)
-
-    elif choice == "2":
-        rc = esp32_setup.run_configure_and_flash()
-
-    elif choice == "3":
-        rc = esp32_setup.run_configure_only()
-
-    elif choice == "4":
-        rc = esp32_setup.run_flash_only()
-
-    elif choice == "5":
-        rc = action_download_everything()
-
-    elif choice == "6":
-        rc = action_clear_cache()
-
-    elif choice == "7":
+        return "continue", esp32_setup.run(pi_credentials=pi_credentials,
+                                           pi_install_ran=pi_install_ran)
+    if choice == "2":
+        return "continue", esp32_setup.run_configure_and_flash()
+    if choice == "3":
+        return "continue", esp32_setup.run_configure_only()
+    if choice == "4":
+        return "continue", esp32_setup.run_flash_only()
+    if choice == "5":
+        return "continue", action_download_everything()
+    if choice == "6":
+        return "continue", action_clear_cache()
+    if choice == "7":
         print("  Bye!")
-        rc = 0
+        return "exit", 0
+    print(f"  Unknown choice {choice!r}.")
+    return "continue", 1
 
-    else:
-        print(f"  Unknown choice {choice!r}.")
-        rc = 1
+
+def main():
+    _pause_on_exit = "--pause-on-exit" in sys.argv
+    _banner()
+
+    last_rc = 0
+    first = True
+    while True:
+        # Rescan on every iteration — running an action (flash, configure,
+        # imaging) changes device state, so a stale status line would mislead.
+        if not first:
+            print()
+            print()
+        first = False
+
+        status = _scan_device_status()
+        _print_device_status(status)
+        print()
+
+        default = _menu_default(status)
+        _print_menu(default)
+
+        choice = input(f"  [{default}]> ").strip() or default
+        action, last_rc = _dispatch(choice)
+        if action == "exit":
+            break
 
     if _pause_on_exit:
         input("\n  Press Enter to close this window. ")
-    sys.exit(rc or 0)
+    sys.exit(last_rc or 0)
 
 
 if __name__ == "__main__":
