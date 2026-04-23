@@ -1,3 +1,32 @@
+hokku-server (2.2.0-1) unstable; urgency=low
+
+  * Dither pipeline exposed as editable presets + full per-stage
+    Advanced panel in the web UI: every knob (autocontrast, gamma,
+    brightness/contrast/sharpness, saturation mode+thresholds,
+    dynamic-range compression chroma mode+thresholds, palette LUT
+    mode+hue-cutoff+neutral-chroma, B&W fallback, dither kernel)
+    is toggleable/tunable with a per-knob (?) help popover. Three
+    named presets: Floyd–Steinberg (pre-2.0), Atkinson soft, and
+    Atkinson hue-aware (default).
+  * Settings form loaded ONCE via new /api/config; /api/status poll
+    no longer returns config so user edits can't be clobbered mid-
+    typing. New /api/dither/preview renders an unsaved config at
+    half resolution for interactive feedback.
+  * Config schema change: nested "dither" object replaces the flat
+    dither_algorithm string. Legacy string is silently dropped on
+    load. Cache key now hashes the normalised dither config so any
+    knob change invalidates just its own renders (_CACHE_VERSION
+    bumped to v3; existing caches are discarded on upgrade).
+  * Hue-aware LUTs memoised by (hue_cutoff_deg, neutral_chroma) so
+    tweaking the knob doesn't pay a 32³ rebuild per render.
+  * docs/dithering.md updated to match the preset/knob schema.
+  * Tests: 294 passing, including a new 162-case permutation matrix
+    (24 dither configs × 6 real-world test images) with hard
+    invariants + soft artifact bounds (neutral-leak ≤ 35%, B&W
+    fallback ≥ 95% monochrome).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 22 Apr 2026 00:00:00 +0000
+
 hokku-server (2.1.20-1) unstable; urgency=low
 
   * Documentation restructure: README rewritten for end users
