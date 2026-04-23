@@ -610,55 +610,102 @@ def _prompt_validated(prompt, validator, hidden=False, default=None):
         print(f"  ERROR: {reason}")
 
 
+_STICKY_KEYS = ("wifi_ssid", "wifi_pass", "user", "password", "ssh_enabled",
+                "samba", "country", "timezone")
+
+
+def _masked(s):
+    return "*" * len(s) if s else ""
+
+
+def _prompt_with_sticky(prompt_label, validator, sticky, default, hidden=False):
+    """Prompt with sticky-value fallback. If `sticky` is set, show it as the
+    default (masked if `hidden`); empty input keeps it. Else use `default`."""
+    if sticky:
+        shown = _masked(sticky) if hidden else sticky
+        suffix = f"[{shown}]"
+    elif default is not None:
+        suffix = f"[{default}]"
+    else:
+        suffix = ""
+    p = f"  {prompt_label} {suffix}: " if suffix else f"  {prompt_label}: "
+    while True:
+        s = getpass.getpass(p) if hidden else input(p)
+        if not s:
+            s = sticky if sticky else (default if default is not None else "")
+        ok, reason = validator(s)
+        if ok:
+            return s
+        print(f"  ERROR: {reason}")
+
+
 def collect_install_config():
-    """Ask user for wifi, user/pass, ssh, samba. Returns dict."""
+    """Ask user for wifi, user/pass, ssh, samba. Returns dict.
+
+    Previously-entered values are loaded from .cache/settings.json and used
+    as defaults. Any changes the user makes are saved back for the next run.
+    Passwords are stored in plain text — the user opted in to this caching."""
+    import release_cache
+    sticky = release_cache.load_settings()
+
     print()
     print("  Install settings")
     print("  ----------------")
-    print("  (printable ASCII only; `\"`, `\\`, newlines are not allowed)")
+    if sticky:
+        print("  (defaults from previous run in brackets; press Enter to keep)")
+    else:
+        print("  (printable ASCII only; `\"`, `\\`, newlines are not allowed)")
 
-    wifi_ssid = _prompt_validated("  WiFi SSID: ", validate_ssid)
-    wifi_pass = _prompt_validated("  WiFi Password (input hidden, empty = open network): ",
-                                  validate_wifi_password, hidden=True)
+    wifi_ssid = _prompt_with_sticky("WiFi SSID", validate_ssid,
+                                    sticky.get("wifi_ssid"), default=None)
+    wifi_pass = _prompt_with_sticky("WiFi Password (empty = open network)",
+                                    validate_wifi_password,
+                                    sticky.get("wifi_pass"), default="", hidden=True)
     if not wifi_pass:
         print("  WARNING: empty WiFi password — open network assumed.")
 
-    user = _prompt_validated(
-        f"  Linux username [{PI_OS_DEFAULT_USER}]: ",
-        validate_username,
-        default=PI_OS_DEFAULT_USER,
-    )
+    user = _prompt_with_sticky("Linux username", validate_username,
+                               sticky.get("user"), default=PI_OS_DEFAULT_USER)
     while True:
-        password = _prompt_validated(
-            f"  Password for '{user}' [{PI_OS_DEFAULT_PASS}]: ",
+        password = _prompt_with_sticky(
+            f"Password for '{user}'",
             validate_linux_password,
-            hidden=True,
+            sticky.get("password"),
             default=PI_OS_DEFAULT_PASS,
+            hidden=True,
         )
+        # Only ask to confirm if the user actually typed something new.
+        if password == sticky.get("password"):
+            break
         confirm = getpass.getpass("  Confirm password: ") or PI_OS_DEFAULT_PASS
         if password == confirm:
             break
         print("  Passwords don't match, try again.")
 
-    ssh_enabled = _yesno("Enable SSH login?", default_yes=False)
-    samba = _yesno("Install Samba (Windows file share) with same credentials?", default_yes=False)
+    ssh_default = sticky.get("ssh_enabled", False)
+    ssh_enabled = _yesno("Enable SSH login?", default_yes=ssh_default)
+    samba_default = sticky.get("samba", False)
+    samba = _yesno("Install Samba (Windows file share) with same credentials?",
+                   default_yes=samba_default)
 
     print()
     print("  Regional settings")
     print("  (country sets the WiFi regulatory domain — the radio won't associate")
-    print("   without it. Timezone sets systemd-timesyncd's clock display.)")
-    country = _prompt_validated(
-        "  WiFi country code (ISO 3166 alpha-2, e.g. US, GB, DE, NL) [US]: ",
+    print("   without it. Timezone sets the Pi's system clock via timedatectl.)")
+    country = _prompt_with_sticky(
+        "WiFi country code (ISO 3166 alpha-2)",
         validate_country_code,
+        sticky.get("country"),
         default="US",
     )
-    timezone = _prompt_validated(
-        "  Timezone (IANA, e.g. America/Chicago, America/New_York, Europe/London) [America/Chicago]: ",
+    timezone = _prompt_with_sticky(
+        "Timezone (IANA, e.g. America/Chicago, Europe/London)",
         validate_timezone,
+        sticky.get("timezone"),
         default="America/Chicago",
     )
 
-    return {
+    cfg = {
         "hostname": PI_OS_HOSTNAME,
         "wifi_ssid": wifi_ssid,
         "wifi_pass": wifi_pass,
@@ -671,6 +718,14 @@ def collect_install_config():
         # server_ip is populated later, after mDNS resolves hokku-server.local.
         "server_ip": None,
     }
+
+    # Persist the sticky subset (not hostname or server_ip — derived, not user input).
+    try:
+        release_cache.save_settings({k: cfg[k] for k in _STICKY_KEYS})
+    except OSError as e:
+        print(f"  WARNING: could not save settings cache: {e}")
+
+    return cfg
 
 
 # ---------- Raw disk write ----------

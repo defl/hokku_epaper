@@ -7,6 +7,13 @@ hokku-server (2.1.21-1) unstable; urgency=low
     (Debian install and from-source runs alike); dev users needing
     a different location override in their config.json. Existing
     stale /images/* paths in config.json are migrated on load.
+  * Timezone is no longer a configurable setting. The server now
+    always uses the host OS timezone (set via `timedatectl` on the
+    Pi — hokku-setup's installer already prompts for this). Removed
+    from DEFAULT_CONFIG, _SAVE_KEYS, the /hokku/api/config endpoint,
+    and the Configuration card in the web GUI. /hokku/api/status
+    no longer returns a timezone field in config; /hokku/api/time
+    still returns the system-resolved zone for display.
 
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 22 Apr 2026 00:00:00 +0000
 

@@ -141,39 +141,7 @@
   <h2>Configuration</h2>
 
   <div class="config-row">
-    <label>Timezone:</label>
-    <select id="timezone">
-      <option>America/New_York</option>
-      <option>America/Chicago</option>
-      <option>America/Denver</option>
-      <option>America/Los_Angeles</option>
-      <option>America/Anchorage</option>
-      <option>Pacific/Honolulu</option>
-      <option>America/Toronto</option>
-      <option>America/Vancouver</option>
-      <option>America/Sao_Paulo</option>
-      <option>Europe/London</option>
-      <option>Europe/Paris</option>
-      <option>Europe/Berlin</option>
-      <option>Europe/Amsterdam</option>
-      <option>Europe/Rome</option>
-      <option>Europe/Madrid</option>
-      <option>Europe/Stockholm</option>
-      <option>Europe/Helsinki</option>
-      <option>Europe/Moscow</option>
-      <option>Asia/Dubai</option>
-      <option>Asia/Kolkata</option>
-      <option>Asia/Bangkok</option>
-      <option>Asia/Shanghai</option>
-      <option>Asia/Tokyo</option>
-      <option>Asia/Seoul</option>
-      <option>Asia/Singapore</option>
-      <option>Australia/Sydney</option>
-      <option>Australia/Melbourne</option>
-      <option>Australia/Perth</option>
-      <option>Pacific/Auckland</option>
-      <option>UTC</option>
-    </select>
+    <label>Server time:</label>
     <span class="server-time" id="server-time"></span>
   </div>
 
@@ -345,7 +313,6 @@ function removeTime(idx) {
 
 async function saveConfig() {
   const data = {
-    timezone: document.getElementById('timezone').value,
     refresh_image_at_time: refreshTimes,
     poll_interval_seconds: parseInt(document.getElementById('poll-interval').value) || 10,
     orientation: document.getElementById('orientation').value,
@@ -655,20 +622,7 @@ async function refreshStatus() {
     const data = await resp.json();
 
     // Update config UI
-    const tz = document.getElementById('timezone');
     const cfg = data.config;
-    // Set timezone
-    let found = false;
-    for (let opt of tz.options) {
-      if (opt.value === cfg.timezone) { opt.selected = true; found = true; break; }
-    }
-    if (!found) {
-      const opt = document.createElement('option');
-      opt.value = cfg.timezone;
-      opt.textContent = cfg.timezone;
-      opt.selected = true;
-      tz.appendChild(opt);
-    }
 
     refreshTimes = cfg.refresh_image_at_time || [];
     renderRefreshTimes();

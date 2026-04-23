@@ -23,7 +23,7 @@ import webserver
 class TestConfigLoading:
     def test_default_config(self):
         config = webserver.DEFAULT_CONFIG
-        assert "timezone" in config
+        assert "timezone" not in config  # timezone removed — host OS controls it
         assert "refresh_image_at_time" in config
         assert "upload_dir" in config
         assert "cache_dir" in config
@@ -32,12 +32,11 @@ class TestConfigLoading:
 
     def test_load_config_from_file(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump({"timezone": "Europe/London", "port": 9090, "poll_interval_seconds": 30}, f)
+            json.dump({"port": 9090, "poll_interval_seconds": 30}, f)
             temp_path = f.name
         try:
             with patch.dict(os.environ, {"HOKKU_CONFIG": temp_path}):
                 config = webserver._load_config()
-            assert config["timezone"] == "Europe/London"
             assert config["port"] == 9090
             assert config["poll_interval_seconds"] == 30
         finally:
@@ -45,12 +44,12 @@ class TestConfigLoading:
 
     def test_load_config_env_var(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump({"timezone": "Asia/Tokyo"}, f)
+            json.dump({"orientation": "portrait"}, f)
             temp_path = f.name
         try:
             with patch.dict(os.environ, {"HOKKU_CONFIG": temp_path}):
                 config = webserver._load_config()
-            assert config["timezone"] == "Asia/Tokyo"
+            assert config["orientation"] == "portrait"
         finally:
             os.unlink(temp_path)
 
@@ -64,22 +63,22 @@ class TestConfigLoading:
 
 class TestSleepCalculation:
     def test_next_time_today(self):
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0600", "1200", "1800"]}
+        config = {"refresh_image_at_time": ["0600", "1200", "1800"]}
         sleep = webserver._calculate_sleep_seconds(config)
         assert sleep >= 60
 
     def test_empty_times_fallback(self):
-        config = {"timezone": "UTC", "refresh_image_at_time": []}
+        config = {"refresh_image_at_time": []}
         sleep = webserver._calculate_sleep_seconds(config)
         assert sleep == 21600
 
     def test_minimum_sleep(self):
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0000", "0001", "0002"]}
+        config = {"refresh_image_at_time": ["0000", "0001", "0002"]}
         sleep = webserver._calculate_sleep_seconds(config)
         assert sleep >= 60
 
     def test_hhmm_parsing(self):
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0930", "1845"]}
+        config = {"refresh_image_at_time": ["0930", "1845"]}
         sleep = webserver._calculate_sleep_seconds(config)
         assert isinstance(sleep, int)
         assert sleep >= 60
@@ -510,12 +509,12 @@ class TestBatteryReporting:
 
 class TestDebugFastRefresh:
     def test_calculate_sleep_seconds_bypasses_schedule(self):
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0600"],
+        config = {"refresh_image_at_time": ["0600"],
                   "debug_fast_refresh": True}
         assert webserver._calculate_sleep_seconds(config) == webserver.DEBUG_FAST_REFRESH_SECONDS
 
     def test_calculate_sleep_seconds_normal_when_disabled(self):
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0600"],
+        config = {"refresh_image_at_time": ["0600"],
                   "debug_fast_refresh": False}
         val = webserver._calculate_sleep_seconds(config)
         assert val != webserver.DEBUG_FAST_REFRESH_SECONDS
@@ -757,7 +756,7 @@ class TestBusyRetrySeconds:
         must still return at most 300s so the screen comes back soon
         when conversion finishes."""
         # 300s cap is min(300, delta-to-next-refresh). Use a far-future schedule.
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0600"]}
+        config = {"refresh_image_at_time": ["0600"]}
         with patch.object(webserver, "_config", config):
             val = webserver._busy_retry_seconds()
         assert 60 <= val <= 300
@@ -768,7 +767,7 @@ class TestBusyRetrySeconds:
         # Hack: set refresh_at a minute in the future relative to now.
         # Use a schedule that's only a minute or two away via the UTC now.
         # Easier: verify val never exceeds _calculate_sleep_seconds.
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0600", "1200", "1800"]}
+        config = {"refresh_image_at_time": ["0600", "1200", "1800"]}
         with patch.object(webserver, "_config", config):
             normal = webserver._calculate_sleep_seconds(config)
             busy = webserver._busy_retry_seconds()
@@ -957,11 +956,13 @@ class TestConfigEndpoints:
              webserver.app.test_client() as client:
             yield client, cfg
 
-    def test_config_update_timezone(self, client):
+    def test_config_update_ignores_timezone(self, client):
+        """Timezone is no longer configurable via the API — it follows the host OS.
+        Posting one should be silently ignored, not accepted."""
         client_, cfg = client
         resp = client_.post("/hokku/api/config", json={"timezone": "Asia/Tokyo"})
         assert resp.status_code == 200
-        assert cfg["timezone"] == "Asia/Tokyo"
+        assert "timezone" not in cfg
 
     def test_config_update_refresh_times(self, client):
         client_, cfg = client

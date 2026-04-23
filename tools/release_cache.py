@@ -15,6 +15,7 @@ GITHUB_RELEASES_LATEST = "https://api.github.com/repos/defl/hokku_epaper/release
 
 REPO_ROOT = Path(__file__).parent.parent
 CACHE_DIR = REPO_ROOT / ".cache"
+SETTINGS_FILE = CACHE_DIR / "settings.json"
 
 _cached_release = None
 
@@ -103,3 +104,44 @@ def _reset_cache_for_tests():
     """Test helper — wipe the memoised release between tests."""
     global _cached_release
     _cached_release = None
+
+
+# ---------- sticky install settings ----------
+
+def load_settings():
+    """Load previously-saved install settings (wifi SSID/PSK, Linux username/
+    password, country, timezone, ssh/samba flags) from .cache/settings.json.
+    Returns {} if the file doesn't exist or is malformed.
+
+    NOTE: these are stored in plain text. The user opted in to this caching
+    explicitly. On POSIX the file is chmod'd 0600 so only the caller's UID
+    can read it; on Windows we rely on the user's profile ACLs.
+    """
+    if not SETTINGS_FILE.exists():
+        return {}
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_settings(settings):
+    """Persist install settings to .cache/settings.json with 0600 perms."""
+    CACHE_DIR.mkdir(exist_ok=True)
+    tmp = SETTINGS_FILE.with_suffix(".json.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+        try:
+            tmp.chmod(0o600)
+        except OSError:
+            pass  # Windows ignores mode bits on FAT
+        tmp.replace(SETTINGS_FILE)
+    except OSError as e:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise

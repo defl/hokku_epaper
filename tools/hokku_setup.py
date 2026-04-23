@@ -102,9 +102,10 @@ def _print_device_status(status):
 # ---------- cache actions ----------
 
 CACHE_PATTERNS = [
-    ("Pi OS images",    "*raspios*.img*"),
+    ("Pi OS images",     "*raspios*.img*"),
     ("hokku-server deb", "hokku-server_*.deb"),
     ("firmware bundles", "firmware/**/*"),
+    ("install settings", "settings.json"),
     ("partial downloads", "**/*.part"),
 ]
 

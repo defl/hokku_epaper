@@ -86,7 +86,9 @@ _DEFAULT_UPLOAD_DIR = "/var/lib/hokku/upload"
 _DEFAULT_CACHE_DIR = "/var/lib/hokku/cache"
 
 DEFAULT_CONFIG = {
-    "timezone": "America/Chicago",
+    # Timezone is read from the host OS at runtime (set via `timedatectl` on
+    # the Pi install, or the dev's workstation zone otherwise). No longer
+    # a stored config key — the server always follows system-local time.
     "refresh_image_at_time": ["0600", "1200", "1800"],
     "upload_dir": _DEFAULT_UPLOAD_DIR,
     "cache_dir": _DEFAULT_CACHE_DIR,
@@ -107,7 +109,7 @@ DEBUG_FAST_REFRESH_SECONDS = 180
 _config_file_path = None  # set during load, used for saving
 
 
-_SAVE_KEYS = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir",
+_SAVE_KEYS = ["refresh_image_at_time", "upload_dir", "cache_dir",
               "port", "poll_interval_seconds", "orientation",
               "debug_fast_refresh", "dither_algorithm"]
 
@@ -215,7 +217,8 @@ def _save_config(config):
 
 
 def _calculate_sleep_seconds(config):
-    """Calculate seconds until next refresh_image_at_time based on server's clock and timezone.
+    """Calculate seconds until next refresh_image_at_time based on the server's
+    system clock (system timezone — set by `timedatectl` on the host).
 
     Debug Fast Refresh: if config["debug_fast_refresh"] is true we short-
     circuit to DEBUG_FAST_REFRESH_SECONDS regardless of schedule. Screens
@@ -224,16 +227,7 @@ def _calculate_sleep_seconds(config):
     if config.get("debug_fast_refresh"):
         return DEBUG_FAST_REFRESH_SECONDS
 
-    try:
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo(config["timezone"])
-    except (ImportError, KeyError, Exception):
-        tz = None
-
-    if tz:
-        now = datetime.now(tz)
-    else:
-        now = datetime.now()
+    now = datetime.now()  # system-local time
 
     times = config.get("refresh_image_at_time", ["0600", "1200", "1800"])
     if not times:
@@ -1301,12 +1295,7 @@ def web_gui():
 @app.route("/hokku/api/status")
 def api_status():
     """JSON API for the web GUI — includes enriched serve_data with formatted durations."""
-    try:
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo(_config["timezone"])
-        now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S %Z")
-    except Exception:
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z").strip()
 
     with _lock:
         pool_files = sorted(Path(k).name for k in _pool.keys())
@@ -1346,7 +1335,6 @@ def api_status():
             "converting_done": _converting_done,
             "server_time": now_str,
             "config": {
-                "timezone": _config["timezone"],
                 "refresh_image_at_time": _config["refresh_image_at_time"],
                 "port": _config["port"],
                 "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
@@ -1482,9 +1470,6 @@ def api_config():
         return jsonify({"error": "No JSON body"}), 400
 
     changed = False
-    if "timezone" in data:
-        _config["timezone"] = data["timezone"]
-        changed = True
     if "refresh_image_at_time" in data:
         _config["refresh_image_at_time"] = data["refresh_image_at_time"]
         changed = True
@@ -1539,7 +1524,6 @@ def api_config():
         threading.Thread(target=_sync_pool, daemon=True).start()
 
     return jsonify({"status": "ok", "config": {
-        "timezone": _config["timezone"],
         "refresh_image_at_time": _config["refresh_image_at_time"],
         "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
         "orientation": _config.get("orientation", "landscape"),
@@ -1650,16 +1634,18 @@ def api_clear_cache():
 
 @app.route("/hokku/api/time")
 def api_time():
-    """Return current server time in configured timezone."""
+    """Return current server time in the system timezone."""
+    now = datetime.now()
+    # Read the host's configured zone for informational purposes only. Falls
+    # back to the empty string if not resolvable (e.g. stripped container).
     try:
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo(_config["timezone"])
-        now = datetime.now(tz)
+        import time as _time
+        tz_name = _time.tzname[_time.daylight and _time.localtime().tm_isdst > 0]
     except Exception:
-        now = datetime.now()
+        tz_name = ""
     return jsonify({
         "time": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "timezone": _config["timezone"],
+        "timezone": tz_name,
     })
 
 
@@ -1681,7 +1667,7 @@ def main():
     print(f"Hokku image server (full resolution: {VISUAL_W}x{VISUAL_H})")
     print(f"  Upload dir: {upload_dir}")
     print(f"  Cache dir:  {cache_dir}")
-    print(f"  Timezone:   {_config['timezone']}")
+    print(f"  Timezone:   system ({datetime.now().astimezone().tzinfo})")
     print(f"  Refresh at: {_config['refresh_image_at_time']}")
     print(f"  Poll interval: {poll}s")
     print(f"  Output: {TOTAL_BYTES} bytes per image ({PANEL_BYTES} per panel)")
