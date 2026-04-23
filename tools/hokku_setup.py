@@ -299,14 +299,94 @@ def _print_menu(default):
         ("3", "ESP32: configure + flash firmware"),
         ("4", "ESP32: configure only (keep existing firmware)"),
         ("5", "ESP32: flash firmware only (keep existing config)"),
-        ("6", "Download everything into .cache"),
-        ("7", "Clear .cache"),
-        ("8", "Exit"),
+        ("6", "Advanced — install settings, cache management"),
+        ("7", "Exit"),
     ]
     for num, label in options:
         marker = "  <-- default" if num == default else ""
         print(f"    [{num}] {label}{marker}")
     print()
+
+
+# ---------- advanced submenu ----------
+
+def action_show_settings():
+    """Show the cached install settings and let the user re-enter them."""
+    print()
+    print("  Install settings (from .cache/settings.json)")
+    print("  --------------------------------------------")
+    s = release_cache.load_settings()
+    if not s:
+        print("  No cached settings yet — running the installer will create some.")
+    else:
+        def _show(label, key, mask=False):
+            val = s.get(key)
+            if val is None or val == "":
+                display = "(unset)"
+            elif mask:
+                display = "(set)"
+            else:
+                display = val
+            print(f"    {label:15s} {display}")
+        _show("wifi_ssid:",    "wifi_ssid")
+        _show("wifi_pass:",    "wifi_pass",  mask=True)
+        _show("user:",         "user")
+        _show("password:",     "password",   mask=True)
+        _show("ssh_enabled:",  "ssh_enabled")
+        _show("samba:",        "samba")
+        _show("country:",      "country")
+        _show("timezone:",     "timezone")
+
+    print()
+    print("    [1] Re-enter all settings (prompts with current values as defaults)")
+    print("    [2] Clear all settings (next install starts from built-in defaults)")
+    print("    [3] Back")
+    choice = input("    [3]> ").strip() or "3"
+    if choice == "1":
+        # collect_install_config reads sticky, prompts, saves. Discard result —
+        # we only want the save side-effect.
+        pi_installer.collect_install_config()
+        return 0
+    if choice == "2":
+        try:
+            release_cache.SETTINGS_FILE.unlink(missing_ok=True)
+            print("  Cleared.")
+        except OSError as e:
+            print(f"  Failed to clear: {e}")
+            return 1
+        return 0
+    return 0  # back
+
+
+def _print_advanced_menu():
+    print()
+    print("  Advanced")
+    print("  --------")
+    for num, label in [
+        ("1", "Show / edit install settings"),
+        ("2", "Download everything into .cache"),
+        ("3", "Clear .cache"),
+        ("4", "Back to main menu"),
+    ]:
+        print(f"    [{num}] {label}")
+    print()
+
+
+def action_advanced():
+    """Advanced submenu loop — stays here until the user picks Back."""
+    while True:
+        _print_advanced_menu()
+        choice = input("    [4]> ").strip() or "4"
+        if choice == "1":
+            action_show_settings()
+        elif choice == "2":
+            action_download_everything()
+        elif choice == "3":
+            action_clear_cache()
+        elif choice == "4":
+            return 0
+        else:
+            print(f"    Unknown choice {choice!r}.")
 
 
 def _dispatch(choice):
@@ -353,10 +433,8 @@ def _dispatch(choice):
     if choice == "5":
         return "continue", esp32_setup.run_flash_only()
     if choice == "6":
-        return "continue", action_download_everything()
+        return "continue", action_advanced()
     if choice == "7":
-        return "continue", action_clear_cache()
-    if choice == "8":
         print("  Bye!")
         return "exit", 0
     print(f"  Unknown choice {choice!r}.")
