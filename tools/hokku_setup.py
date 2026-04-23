@@ -149,11 +149,28 @@ def action_download_everything():
     if deb is None:
         print("  .deb: FAILED")
 
-    # 3. Firmware merged bin — GitHub release
+    # 3. Firmware merged bin — GitHub release.
+    # Bypass resolve_firmware_dir() here: it would short-circuit on a local
+    # firmware/release/ hit, but the user asked to *download* things, not
+    # check what's on disk. Pull the latest release directly.
     print()
     print("  [3/3] Merged firmware")
-    fw_dir = esp32_setup.resolve_firmware_dir()
-    merged = esp32_setup._merged_firmware_file(fw_dir) if fw_dir else None
+    merged = None
+    try:
+        rel = release_cache.get_latest_release()
+        tag = rel.get("tag_name", "latest")
+        asset = release_cache.find_asset(rel, esp32_setup._is_merged_firmware_asset)
+        if asset is None:
+            print(f"  ERROR: release {tag} has no hokku-firmware_*.bin asset.")
+        else:
+            target_dir = esp32_setup.FIRMWARE_CACHE_DIR / tag
+            merged = release_cache.ensure_cached_asset(
+                asset, target_dir, label=f"(release {tag})"
+            )
+    except urllib.error.HTTPError as e:
+        print(f"  ERROR: GitHub API returned {e.code} {e.reason}")
+    except Exception as e:
+        print(f"  ERROR: could not reach GitHub: {e}")
     if merged is None:
         print("  Firmware: FAILED")
 
