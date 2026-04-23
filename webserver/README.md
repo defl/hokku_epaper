@@ -20,8 +20,8 @@ python webserver.py
 
 Drop images into the upload directory and they are automatically converted. The web GUI is available at `http://server:8080/`.
 
-- **Debian install**: images go in `/var/lib/hokku/upload/`, config at `/etc/hokku/config.json`
-- **From source**: images go in `/images/upload/`, config at `./config.json`
+- **Debian install**: images go in `/var/lib/hokku/upload/`, config at `/var/lib/hokku/config.json`
+- **From source**: same defaults (`/var/lib/hokku/upload/`, `/var/lib/hokku/cache/`). Override `upload_dir` / `cache_dir` in `./config.json` if you need a different location.
 
 ## Web GUI
 
