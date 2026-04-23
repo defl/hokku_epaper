@@ -268,6 +268,8 @@ class TestFlaskEndpoints:
             assert resp.status_code == 503
 
     def test_api_status_endpoint(self, client):
+        """Status is the poll endpoint: returns volatile state only (no config, so
+        user edits in the settings form can't be clobbered mid-typing)."""
         with patch.object(webserver, "_pool", {}), \
              patch.object(webserver, "_database", {"serve_data": {}}), \
              patch.object(webserver, "_config", webserver.DEFAULT_CONFIG), \
@@ -279,8 +281,25 @@ class TestFlaskEndpoints:
             assert resp.status_code == 200
             data = resp.get_json()
             assert "server_time" in data
-            assert "config" in data
             assert "screens" in data
+            assert "pool_files" in data
+            # /api/status must NOT echo config — the settings form is loaded once
+            # by /api/config and the poll deliberately doesn't overwrite it.
+            assert "config" not in data
+
+    def test_api_config_get_endpoint(self, client):
+        """GET /api/config returns full config + preset catalog."""
+        with patch.object(webserver, "_config", webserver.DEFAULT_CONFIG):
+            resp = client.get("/hokku/api/config")
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert "config" in data
+            assert "dither" in data["config"]
+            assert "dither_presets" in data
+            assert "default_preset" in data
+            assert data["default_preset"] == "atkinson_hue_aware"
+            for name in webserver.DITHER_PRESETS:
+                assert name in data["dither_presets"]
 
     def test_screen_tracking(self, client):
         """X-Screen-Name header is tracked in database."""
@@ -535,18 +554,13 @@ class TestDebugFastRefresh:
             assert cfg["debug_fast_refresh"] is True
             assert resp.get_json()["config"]["debug_fast_refresh"] is True
 
-    def test_api_status_exposes_debug_flag(self):
+    def test_api_config_exposes_debug_flag(self):
+        """The debug_fast_refresh flag is loaded once by /api/config (not polled)."""
         webserver.app.config["TESTING"] = True
         cfg = {**webserver.DEFAULT_CONFIG, "debug_fast_refresh": True}
         with webserver.app.test_client() as client, \
-             patch.object(webserver, "_config", cfg), \
-             patch.object(webserver, "_pool", {}), \
-             patch.object(webserver, "_database", {"serve_data": {}}), \
-             patch.object(webserver, "_converting_count", 0), \
-             patch.object(webserver, "_converting_name", None), \
-             patch.object(webserver, "_last_served",
-                         {"key": None, "name": None, "served_at": None}):
-            resp = client.get("/hokku/api/status")
+             patch.object(webserver, "_config", cfg):
+            resp = client.get("/hokku/api/config")
             assert resp.status_code == 200
             data = resp.get_json()
             assert data["config"]["debug_fast_refresh"] is True
@@ -1262,11 +1276,20 @@ class TestOrientation:
         """Create a solid-color test image."""
         return Image.new("RGB", (w, h), color)
 
+    def _prep(self, img, orientation):
+        """Call the new _prepare_canvas signature with production canvas dims."""
+        return webserver._prepare_canvas(
+            img,
+            webserver._default_dither_config(),
+            portrait=(orientation == "portrait"),
+            canvas_w=webserver.FULL_W,
+            canvas_h=webserver.PANEL_H,
+        )
+
     def test_landscape_canvas_dimensions(self):
         """Landscape mode: canvas should be 1200x1600 (native format) after rotation."""
         img = self._make_image(800, 600)
-        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "landscape"}):
-            canvas, mask = webserver._prepare_canvas(img)
+        canvas, mask = self._prep(img, "landscape")
         # PIL size is (width, height), numpy shape is (height, width)
         assert canvas.size == (webserver.FULL_W, webserver.PANEL_H)  # (1200, 1600)
         assert mask.shape == (webserver.PANEL_H, webserver.FULL_W)   # (1600, 1200)
@@ -1274,8 +1297,7 @@ class TestOrientation:
     def test_portrait_canvas_dimensions(self):
         """Portrait mode: canvas should be 1200x1600 (native format) without rotation."""
         img = self._make_image(600, 800)
-        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "portrait"}):
-            canvas, mask = webserver._prepare_canvas(img)
+        canvas, mask = self._prep(img, "portrait")
         assert canvas.size == (webserver.FULL_W, webserver.PANEL_H)  # (1200, 1600)
         assert mask.shape == (webserver.PANEL_H, webserver.FULL_W)   # (1600, 1200)
 
@@ -1283,8 +1305,7 @@ class TestOrientation:
         """Landscape: tall image gets pillarbox padding on left and right."""
         # 600x800 image is taller than 4:3, so it gets pillarboxed in 1600x1200
         img = self._make_image(600, 800)
-        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "landscape"}):
-            canvas, mask = webserver._prepare_canvas(img)
+        canvas, mask = self._prep(img, "landscape")
         # After rotation to 1200x1600: mask should have True (padding) and False (image) regions
         assert mask.any(), "Should have some padding pixels"
         assert not mask.all(), "Should have some image pixels"
@@ -1293,47 +1314,42 @@ class TestOrientation:
         """Portrait: wide image gets letterbox padding on top and bottom."""
         # 800x600 image is wider than 3:4 portrait, so it gets letterboxed in 1200x1600
         img = self._make_image(800, 600)
-        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "portrait"}):
-            canvas, mask = webserver._prepare_canvas(img)
+        canvas, mask = self._prep(img, "portrait")
         assert mask.any(), "Should have some padding pixels"
         assert not mask.all(), "Should have some image pixels"
 
     def test_landscape_exact_fit_no_padding(self):
         """Landscape: 4:3 image fills the canvas exactly — no padding."""
         img = self._make_image(1600, 1200)
-        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "landscape"}):
-            canvas, mask = webserver._prepare_canvas(img)
+        canvas, mask = self._prep(img, "landscape")
         assert not mask.any(), "Exact 4:3 landscape should have no padding"
 
     def test_portrait_exact_fit_no_padding(self):
         """Portrait: 3:4 image fills the canvas exactly — no padding."""
         img = self._make_image(1200, 1600)
-        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "portrait"}):
-            canvas, mask = webserver._prepare_canvas(img)
+        canvas, mask = self._prep(img, "portrait")
         assert not mask.any(), "Exact 3:4 portrait should have no padding"
 
     def test_padding_forced_white_landscape(self):
         """Landscape: padding pixels in dithered output should be white (palette index 1)."""
         # Use a small non-4:3 image so there IS padding
         img = self._make_image(100, 100, color=(50, 50, 50))
-        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "landscape"}):
-            canvas, mask = webserver._prepare_canvas(img)
-            canvas_array = webserver._compress_dynamic_range(np.array(canvas, dtype=np.float32))
-            canvas_img = Image.fromarray(canvas_array.astype(np.uint8))
-            result_idx = webserver._floyd_steinberg_dither(canvas_img)
-            result_idx[mask] = 1  # This is what _convert_image does
+        canvas, mask = self._prep(img, "landscape")
+        canvas_array = webserver._compress_dynamic_range(np.array(canvas, dtype=np.float32))
+        canvas_img = Image.fromarray(canvas_array.astype(np.uint8))
+        result_idx = webserver._floyd_steinberg_dither(canvas_img)
+        result_idx[mask] = 1  # This is what _convert_image does
         # All padding pixels must be palette index 1 (white)
         assert (result_idx[mask] == 1).all(), "All padding pixels should be white in landscape"
 
     def test_padding_forced_white_portrait(self):
         """Portrait: padding pixels in dithered output should be white (palette index 1)."""
         img = self._make_image(100, 100, color=(50, 50, 50))
-        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "orientation": "portrait"}):
-            canvas, mask = webserver._prepare_canvas(img)
-            canvas_array = webserver._compress_dynamic_range(np.array(canvas, dtype=np.float32))
-            canvas_img = Image.fromarray(canvas_array.astype(np.uint8))
-            result_idx = webserver._floyd_steinberg_dither(canvas_img)
-            result_idx[mask] = 1
+        canvas, mask = self._prep(img, "portrait")
+        canvas_array = webserver._compress_dynamic_range(np.array(canvas, dtype=np.float32))
+        canvas_img = Image.fromarray(canvas_array.astype(np.uint8))
+        result_idx = webserver._floyd_steinberg_dither(canvas_img)
+        result_idx[mask] = 1
         assert (result_idx[mask] == 1).all(), "All padding pixels should be white in portrait"
 
     def test_pool_entries_are_metadata_only(self):
@@ -1360,60 +1376,91 @@ class TestOrientation:
         assert "_l_" in key_l
         assert "_p_" in key_p
 
-    def test_cache_key_differs_by_dither_algorithm(self):
-        """Cache keys must differ per algorithm so switching preserves prior renders."""
+    def test_cache_key_differs_by_dither_preset(self):
+        """Cache keys must differ per preset so presets don't stomp each other's renders."""
         path = Path("/images/test.jpg")
         content_hash = "abcdef123456"
         keys = {}
-        for algo in webserver.VALID_DITHER_ALGORITHMS:
-            with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "dither_algorithm": algo}):
-                keys[algo] = webserver._cache_key(path, content_hash)
-        # All three must be distinct
+        for name, preset in webserver.DITHER_PRESETS.items():
+            cfg = {**webserver.DEFAULT_CONFIG, "dither": preset["dither"]}
+            with patch.object(webserver, "_config", cfg):
+                keys[name] = webserver._cache_key(path, content_hash)
         assert len(set(keys.values())) == len(keys), f"Cache keys collided: {keys}"
-        # Algorithm name must appear in each key
-        for algo, key in keys.items():
-            assert algo in key, f"Algorithm {algo} missing from cache key {key}"
 
-    def test_cache_key_algorithm_override(self):
-        """_cache_key must accept an explicit algorithm parameter that overrides _config."""
+    def test_cache_key_reflects_dither_knob_changes(self):
+        """Any knob change must flip the cache key so the next sync re-renders."""
         path = Path("/images/test.jpg")
         content_hash = "abcdef123456"
-        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "dither_algorithm": "floyd_steinberg"}):
-            key_active = webserver._cache_key(path, content_hash)
-            key_other = webserver._cache_key(path, content_hash, algorithm="atkinson")
-        assert "floyd_steinberg" in key_active
-        assert "atkinson" in key_other
-        assert key_active != key_other
+        base = webserver._default_dither_config()
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "dither": base}):
+            key_before = webserver._cache_key(path, content_hash)
+        tweaked = webserver._default_dither_config()
+        tweaked["palette_lut"]["hue_cutoff_deg"] = 80.0
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "dither": tweaked}):
+            key_after = webserver._cache_key(path, content_hash)
+        assert key_before != key_after
 
-    def test_default_is_atkinson_hue_aware(self):
-        """atkinson_hue_aware is the current default after the V10 benchmark study."""
-        assert webserver.DEFAULT_CONFIG["dither_algorithm"] == "atkinson_hue_aware"
-        assert "atkinson_hue_aware" in webserver.VALID_DITHER_ALGORITHMS
-        # fs_hue_aware was deprecated — no longer listed as valid
-        assert "fs_hue_aware" not in webserver.VALID_DITHER_ALGORITHMS
-        assert "fs_hue_aware" in webserver._DEPRECATED_ALGORITHMS
+    def test_default_preset_is_atkinson_hue_aware(self):
+        """atkinson_hue_aware remains the shipping default after the preset refactor."""
+        assert webserver.DEFAULT_PRESET == "atkinson_hue_aware"
+        assert "atkinson_hue_aware" in webserver.DITHER_PRESETS
+        assert "floyd_steinberg_vivid" in webserver.DITHER_PRESETS
+        assert "atkinson_soft" in webserver.DITHER_PRESETS
+        # DEFAULT_CONFIG["dither"] is a deep-copy of the default preset's dither.
+        assert webserver.DEFAULT_CONFIG["dither"] == webserver.DITHER_PRESETS["atkinson_hue_aware"]["dither"]
 
-    def test_dither_for_algorithm_returns_algoconfig(self):
-        """_dither_for_algorithm returns an _AlgoConfig with the full pipeline knobs."""
-        for algo in webserver.VALID_DITHER_ALGORITHMS:
-            cfg = webserver._dither_for_algorithm(algo)
-            assert callable(cfg.dither_fn)
-            assert isinstance(cfg.color_enhance, float)
-            assert isinstance(cfg.scale_chroma, bool)
-            assert isinstance(cfg.adaptive_saturate, bool)
-            assert isinstance(cfg.adaptive_vivid, bool)
-        # atkinson_hue_aware is the V10 recipe — adaptive saturation + adaptive vividness
-        cfg_ahu = webserver._dither_for_algorithm("atkinson_hue_aware")
-        assert cfg_ahu.adaptive_saturate is True
-        assert cfg_ahu.adaptive_vivid is True
-        assert cfg_ahu.scale_chroma is False
-        # Classic algorithms keep legacy behavior
-        cfg_fs = webserver._dither_for_algorithm("floyd_steinberg")
-        assert cfg_fs.adaptive_saturate is False
-        assert cfg_fs.adaptive_vivid is False
+    def test_dither_preset_shapes(self):
+        """Every preset carries the full per-stage schema so the UI can render it without branches."""
+        expected_keys = {"autocontrast", "gamma", "brightness", "contrast", "sharpness",
+                         "saturation", "drc", "palette_lut", "bw_fallback", "kernel"}
+        for name, preset in webserver.DITHER_PRESETS.items():
+            d = preset["dither"]
+            assert set(d.keys()) == expected_keys, f"{name} missing keys: {expected_keys - set(d.keys())}"
+            assert d["saturation"]["mode"] in {"off", "global", "adaptive"}
+            assert d["drc"]["chroma_mode"] in {"off", "flat", "adaptive_vivid"}
+            assert d["palette_lut"]["mode"] in {"euclidean", "hue_aware"}
+            assert d["kernel"] in {"floyd_steinberg", "atkinson"}
 
-    def test_deprecated_algorithm_migration(self):
-        """Loading a config with fs_hue_aware should migrate to the current default."""
+    def test_atkinson_hue_aware_preset_is_v10_recipe(self):
+        """The default preset encodes the V10 recipe: adaptive saturation + adaptive vividness."""
+        d = webserver.DITHER_PRESETS["atkinson_hue_aware"]["dither"]
+        assert d["saturation"]["mode"] == "adaptive"
+        assert d["drc"]["chroma_mode"] == "adaptive_vivid"
+        assert d["palette_lut"]["mode"] == "hue_aware"
+        assert d["kernel"] == "atkinson"
+        assert d["bw_fallback"]["enabled"] is True
+
+    def test_floyd_steinberg_vivid_matches_pre_2_0(self):
+        """The FS preset reproduces the pre-2.0 output bit-identically."""
+        d = webserver.DITHER_PRESETS["floyd_steinberg_vivid"]["dither"]
+        assert d["saturation"]["mode"] == "global"
+        assert d["saturation"]["value"] == 1.2
+        assert d["drc"]["chroma_mode"] == "off"
+        assert d["palette_lut"]["mode"] == "euclidean"
+        assert d["kernel"] == "floyd_steinberg"
+        assert d["bw_fallback"]["enabled"] is False
+
+    def test_normalize_dither_config_fills_missing_keys(self):
+        """Partial dither objects (from hand-edited JSON or preview payloads) inherit defaults."""
+        partial = {"kernel": "floyd_steinberg"}
+        out = webserver._normalize_dither_config(partial)
+        assert out["kernel"] == "floyd_steinberg"
+        # Every other top-level key must be present and match the default
+        default = webserver._default_dither_config()
+        for key in default:
+            if key == "kernel":
+                continue
+            assert out[key] == default[key]
+
+    def test_normalize_dither_config_ignores_unknown_keys(self):
+        """Bad keys in a saved config shouldn't leak into the pipeline."""
+        bad = {"unknown_stage": {"x": 1}, "kernel": "atkinson"}
+        out = webserver._normalize_dither_config(bad)
+        assert "unknown_stage" not in out
+        assert out["kernel"] == "atkinson"
+
+    def test_legacy_dither_algorithm_string_dropped(self):
+        """Old config files with just dither_algorithm string load as the default preset."""
         import tempfile
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"dither_algorithm": "fs_hue_aware"}, f)
@@ -1421,7 +1468,8 @@ class TestOrientation:
         try:
             with patch.dict(os.environ, {"HOKKU_CONFIG": temp_path}):
                 config = webserver._load_config()
-            assert config["dither_algorithm"] == webserver.DEFAULT_CONFIG["dither_algorithm"]
+            assert "dither_algorithm" not in config
+            assert config["dither"] == webserver._default_dither_config()
         finally:
             os.unlink(temp_path)
 
@@ -1432,20 +1480,38 @@ class TestOrientation:
         key = webserver._cache_key(path, "abcdef123456")
         assert webserver._CACHE_VERSION in key
 
-    def test_is_near_grayscale_detects_bw(self):
-        """B&W source should be flagged; colorful source should not."""
-        # Grayscale: R=G=B across a range of values
+    def test_bw_fallback_triggers_for_grayscale(self):
+        """B&W source should trigger the conservative override; colorful source should not."""
         bw = Image.new("RGB", (400, 300))
         pixels = bw.load()
         for y in range(300):
             for x in range(400):
                 v = (x * 255) // 400
                 pixels[x, y] = (v, v, v)
-        assert webserver._is_near_grayscale(bw) is True
-
-        # Saturated red + blue patches
         color = Image.new("RGB", (400, 300), (200, 40, 40))
-        assert webserver._is_near_grayscale(color) is False
+
+        cfg = webserver._default_dither_config()  # bw_fallback enabled by default
+        bw_cfg, bw_applied = webserver._maybe_apply_bw_fallback(cfg, bw)
+        color_cfg, color_applied = webserver._maybe_apply_bw_fallback(cfg, color)
+
+        assert bw_applied is True, "grayscale image should trigger the fallback"
+        assert color_applied is False, "saturated image should not trigger the fallback"
+        # Override collapses to flat 1.05 saturation + DRC chroma off
+        assert bw_cfg["saturation"]["mode"] == "global"
+        assert bw_cfg["saturation"]["value"] == 1.05
+        assert bw_cfg["drc"]["chroma_mode"] == "off"
+        # Untouched stages remain identical
+        assert bw_cfg["palette_lut"] == cfg["palette_lut"]
+        assert bw_cfg["kernel"] == cfg["kernel"]
+
+    def test_bw_fallback_respects_disabled_flag(self):
+        """If bw_fallback is disabled in config, even a B&W image passes through untouched."""
+        bw = Image.new("RGB", (400, 300), (128, 128, 128))
+        cfg = webserver._default_dither_config()
+        cfg["bw_fallback"]["enabled"] = False
+        out_cfg, applied = webserver._maybe_apply_bw_fallback(cfg, bw)
+        assert applied is False
+        assert out_cfg is cfg
 
     def test_compress_dynamic_range_scale_chroma_flag(self):
         """scale_chroma=True should reduce output chroma for saturated input."""

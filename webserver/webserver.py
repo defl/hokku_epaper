@@ -18,6 +18,7 @@ Endpoints:
     GET /hokku/ui           — Web GUI for configuration and image management
     GET /hokku/api/...      — JSON API for the web GUI
 """
+import copy
 import hashlib
 import json
 import os
@@ -68,15 +69,126 @@ PALETTE_NIBBLE = np.array([0x0, 0x1, 0x2, 0x3, 0x5, 0x6], dtype=np.uint8)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif", ".heic", ".heif", ".avif"}
 
-# ── Configuration ──────────────────────────────────────────────────
+# ── Dither pipeline presets ────────────────────────────────────────
+# Every preset is a full, self-contained dither config. The frontend
+# displays preset names as a dropdown; touching any knob flips the
+# label to "Custom" but keeps the resolved config exactly as the user
+# edited it. Adding a new preset is a one-liner here — no other code
+# paths need to know its name.
 
-VALID_DITHER_ALGORITHMS = ("floyd_steinberg", "atkinson", "atkinson_hue_aware")
-# Deprecated algorithms — silently migrated to DEFAULT_CONFIG["dither_algorithm"].
-# fs_hue_aware was tried as a default but had a near-neutral amplification failure
-# mode (white umbrellas, light clothing picked up pink speckle). The current
-# atkinson_hue_aware implementation uses adaptive saturation + adaptive vividness
-# which beats fs_hue_aware on every benchmark metric.
-_DEPRECATED_ALGORITHMS = ("fs_hue_aware",)
+DITHER_PRESETS = {
+    "floyd_steinberg_vivid": {
+        "label": "Floyd–Steinberg — vivid, warm (pre-2.0)",
+        "description": (
+            "Classic error diffusion with a flat chroma boost. "
+            "Warm skin tones and vivid reds at the cost of visible speckle "
+            "in near-white regions. Matches the pre-2.0 default output."
+        ),
+        "dither": {
+            "autocontrast": {"enabled": True, "cutoff": 0.5},
+            "gamma":        {"enabled": True, "value": 0.85},
+            "brightness":   1.0,
+            "contrast":     1.1,
+            "sharpness":    1.3,
+            "saturation":   {"mode": "global", "value": 1.2,
+                             "low": 5.0, "high": 15.0},
+            "drc":          {"enabled": True, "chroma_mode": "off",
+                             "vivid_low": 5.0, "vivid_high": 15.0},
+            "palette_lut":  {"mode": "euclidean",
+                             "hue_cutoff_deg": 95.0, "neutral_chroma": 8.0},
+            "bw_fallback":  {"enabled": False,
+                             "chroma_threshold": 8.0, "percentile": 95},
+            "kernel":       "floyd_steinberg",
+        },
+    },
+    "atkinson_soft": {
+        "label": "Atkinson — soft, warm",
+        "description": (
+            "Sparser Atkinson kernel with the same warm/vivid colour "
+            "pipeline. Cleaner gradients than Floyd–Steinberg while keeping "
+            "the warm skin tones."
+        ),
+        "dither": {
+            "autocontrast": {"enabled": True, "cutoff": 0.5},
+            "gamma":        {"enabled": True, "value": 0.85},
+            "brightness":   1.0,
+            "contrast":     1.1,
+            "sharpness":    1.3,
+            "saturation":   {"mode": "global", "value": 1.2,
+                             "low": 5.0, "high": 15.0},
+            "drc":          {"enabled": True, "chroma_mode": "off",
+                             "vivid_low": 5.0, "vivid_high": 15.0},
+            "palette_lut":  {"mode": "euclidean",
+                             "hue_cutoff_deg": 95.0, "neutral_chroma": 8.0},
+            "bw_fallback":  {"enabled": False,
+                             "chroma_threshold": 8.0, "percentile": 95},
+            "kernel":       "atkinson",
+        },
+    },
+    "atkinson_hue_aware": {
+        "label": "Atkinson — hue-aware (default)",
+        "description": (
+            "V10 recipe. Hue-aware palette mapping prevents near-neutral "
+            "pixels from snapping to red/blue; adaptive saturation boosts "
+            "only already-colourful pixels; adaptive vividness keeps whites "
+            "clean. Best for photos; less warm on faces than the legacy "
+            "presets."
+        ),
+        "dither": {
+            "autocontrast": {"enabled": True, "cutoff": 0.5},
+            "gamma":        {"enabled": True, "value": 0.85},
+            "brightness":   1.0,
+            "contrast":     1.1,
+            "sharpness":    1.3,
+            "saturation":   {"mode": "adaptive", "value": 1.25,
+                             "low": 5.0, "high": 15.0},
+            "drc":          {"enabled": True, "chroma_mode": "adaptive_vivid",
+                             "vivid_low": 5.0, "vivid_high": 15.0},
+            "palette_lut":  {"mode": "hue_aware",
+                             "hue_cutoff_deg": 95.0, "neutral_chroma": 8.0},
+            "bw_fallback":  {"enabled": True,
+                             "chroma_threshold": 8.0, "percentile": 95},
+            "kernel":       "atkinson",
+        },
+    },
+}
+
+DEFAULT_PRESET = "atkinson_hue_aware"
+
+
+def _default_dither_config():
+    """Fresh deep copy of the default preset's dither config."""
+    return copy.deepcopy(DITHER_PRESETS[DEFAULT_PRESET]["dither"])
+
+
+def _normalize_dither_config(value):
+    """Fill in any missing keys from the default preset. Returns a fresh dict.
+    Ignores keys that aren't part of the schema so bad saved state doesn't
+    leak into the pipeline."""
+    default = _default_dither_config()
+    if not isinstance(value, dict):
+        return default
+    out = default
+    for key, new_val in value.items():
+        if key not in out:
+            continue
+        if isinstance(out[key], dict) and isinstance(new_val, dict):
+            for inner_key, inner_val in new_val.items():
+                if inner_key in out[key]:
+                    out[key][inner_key] = inner_val
+        else:
+            out[key] = new_val
+    return out
+
+
+def _dither_config_hash(dither_cfg):
+    """Stable 8-char hash of a dither config — used in the cache key so any
+    knob change invalidates just the affected renders."""
+    blob = json.dumps(dither_cfg, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(blob.encode()).hexdigest()[:8]
+
+
+# ── Configuration ──────────────────────────────────────────────────
 
 DEFAULT_CONFIG = {
     "timezone": "America/Chicago",
@@ -92,7 +204,7 @@ DEFAULT_CONFIG = {
     # fast for visual testing of the dithering pipeline. Drains battery
     # hard — not for production use. Toggled from the web GUI.
     "debug_fast_refresh": False,
-    "dither_algorithm": "atkinson_hue_aware",
+    "dither": _default_dither_config(),
 }
 
 DEBUG_FAST_REFRESH_SECONDS = 180
@@ -102,7 +214,7 @@ _config_file_path = None  # set during load, used for saving
 
 _SAVE_KEYS = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir",
               "port", "poll_interval_seconds", "orientation",
-              "debug_fast_refresh", "dither_algorithm"]
+              "debug_fast_refresh", "dither"]
 
 
 def _load_config():
@@ -142,14 +254,10 @@ def _load_config():
                     user_config = json.load(f)
                 config.update(user_config)
                 loaded_path = path
-                # Migrate deprecated algorithm names to the current default.
-                # V10 (PR #3 2026-04-20) retired fs_hue_aware; anyone with it
-                # in their saved config gets upgraded silently to the new
-                # atkinson_hue_aware default.
-                if config.get("dither_algorithm") in _DEPRECATED_ALGORITHMS:
-                    old = config["dither_algorithm"]
-                    config["dither_algorithm"] = DEFAULT_CONFIG["dither_algorithm"]
-                    print(f"  Migrating deprecated dither_algorithm '{old}' -> '{config['dither_algorithm']}'")
+                # Legacy dither_algorithm string (pre-preset schema) is ignored
+                # — the default preset applies. Users reselect a preset once.
+                config.pop("dither_algorithm", None)
+                config["dither"] = _normalize_dither_config(config.get("dither"))
                 print(f"  Config loaded from: {path}")
                 break
             except (json.JSONDecodeError, OSError) as e:
@@ -428,13 +536,12 @@ def _hash_file(img_path):
 
 # Bump whenever algorithm implementations change in a way that affects output.
 # Old cached renders with a different version are ignored and re-rendered.
-_CACHE_VERSION = "v2"
+_CACHE_VERSION = "v3"
 
-def _cache_key(img_path, content_hash, algorithm=None):
+def _cache_key(img_path, content_hash):
     orientation = _config.get("orientation", "landscape")
-    if algorithm is None:
-        algorithm = _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"])
-    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}_{algorithm}_{_CACHE_VERSION}"
+    dither_hash = _dither_config_hash(_config["dither"])
+    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}_{dither_hash}_{_CACHE_VERSION}"
 
 def _load_from_cache(cache_dir, img_path, content_hash):
     key = _cache_key(img_path, content_hash)
@@ -631,56 +738,67 @@ def _list_images():
             if f.suffix.lower() in IMAGE_EXTENSIONS and f.is_file()]
 
 
-def _prepare_canvas(img, color_enhance=1.2, adaptive_saturate=False):
-    """Scale image to fit display, enhance for e-ink, produce 1200x1600 native buffer.
+def _prepare_canvas(img, dither_cfg, portrait, canvas_w, canvas_h):
+    """Composite img onto a canvas of the given size, then run the pre-dither
+    tonal/colour stages (autocontrast, gamma, brightness, contrast, sharpness,
+    saturation) as driven by dither_cfg.
 
-    In landscape mode: composites on 1600x1200 canvas, then rotates -90° to 1200x1600.
-    In portrait mode: composites directly on 1200x1600 canvas, no rotation needed.
+    canvas_w/canvas_h are the natural post-rotation buffer dims for production
+    (1200x1600) or a smaller multiple (e.g. 600x800) when rendering a preview.
 
-    Returns (canvas, padding_mask) where padding_mask is a boolean numpy array
-    (True = padding pixel, should be forced to white after dithering).
-
-    color_enhance is the saturation boost factor. With adaptive_saturate=True, the
-    boost is applied only to pixels with meaningful chroma (via _adaptive_saturate),
-    preserving near-neutral regions. With adaptive_saturate=False, PIL's global
-    Color.enhance is used (back-compat with the legacy algorithms).
+    Returns (canvas, padding_mask). padding_mask is True on padding pixels,
+    which get forced to pure white after dithering so the enhancement chain
+    can't turn them into a dotted off-white pattern.
     """
     from PIL import ImageEnhance, ImageOps
-    orientation = _config.get("orientation", "landscape")
-    portrait = (orientation == "portrait")
 
-    # Canvas dimensions: landscape = 1600x1200, portrait = 1200x1600
-    canvas_w = VISUAL_H if portrait else VISUAL_W   # 1200 or 1600
-    canvas_h = VISUAL_W if portrait else VISUAL_H   # 1600 or 1200
+    # _convert_image passes canvas_w/canvas_h pre-rotation for landscape
+    # (wide canvas, then rotated -90°) and post-rotation for portrait.
+    composite_w = canvas_h if not portrait else canvas_w
+    composite_h = canvas_w if not portrait else canvas_h
 
     w, h = img.size
-    scale = min(canvas_w / w, canvas_h / h)
-    new_w, new_h = int(w * scale), int(h * scale)
+    scale = min(composite_w / w, composite_h / h)
+    new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
     img_resized = img.resize((new_w, new_h), Image.LANCZOS)
-    canvas = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
-    x_off = (canvas_w - new_w) // 2
-    y_off = (canvas_h - new_h) // 2
+    canvas = Image.new("RGB", (composite_w, composite_h), (255, 255, 255))
+    x_off = (composite_w - new_w) // 2
+    y_off = (composite_h - new_h) // 2
     canvas.paste(img_resized, (x_off, y_off))
 
-    # Build padding mask (True = padding, not image content)
-    mask = np.ones((canvas_h, canvas_w), dtype=bool)
+    mask = np.ones((composite_h, composite_w), dtype=bool)
     mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
 
-    canvas = ImageOps.autocontrast(canvas, cutoff=0.5)
-    gamma = 0.85
-    gamma_lut = [int(((i / 255.0) ** gamma) * 255) for i in range(256)] * 3
-    canvas = canvas.point(gamma_lut)
-    canvas = ImageEnhance.Brightness(canvas).enhance(1.0)
-    canvas = ImageEnhance.Contrast(canvas).enhance(1.1)
-    canvas = ImageEnhance.Sharpness(canvas).enhance(1.3)
-    if adaptive_saturate:
-        arr = _adaptive_saturate(np.array(canvas, dtype=np.float64), max_enhance=color_enhance)
+    ac = dither_cfg.get("autocontrast", {})
+    if ac.get("enabled", True):
+        canvas = ImageOps.autocontrast(canvas, cutoff=float(ac.get("cutoff", 0.5)))
+
+    g = dither_cfg.get("gamma", {})
+    if g.get("enabled", True):
+        gamma_val = float(g.get("value", 0.85))
+        gamma_lut = [int(((i / 255.0) ** gamma_val) * 255) for i in range(256)] * 3
+        canvas = canvas.point(gamma_lut)
+
+    canvas = ImageEnhance.Brightness(canvas).enhance(float(dither_cfg.get("brightness", 1.0)))
+    canvas = ImageEnhance.Contrast(canvas).enhance(float(dither_cfg.get("contrast", 1.1)))
+    canvas = ImageEnhance.Sharpness(canvas).enhance(float(dither_cfg.get("sharpness", 1.3)))
+
+    sat = dither_cfg.get("saturation", {})
+    sat_mode = sat.get("mode", "adaptive")
+    sat_value = float(sat.get("value", 1.25))
+    if sat_mode == "global":
+        canvas = ImageEnhance.Color(canvas).enhance(sat_value)
+    elif sat_mode == "adaptive":
+        arr = _adaptive_saturate(
+            np.array(canvas, dtype=np.float64),
+            max_enhance=sat_value,
+            low_thresh=float(sat.get("low", 5.0)),
+            high_thresh=float(sat.get("high", 15.0)),
+        )
         canvas = Image.fromarray(arr.astype(np.uint8))
-    else:
-        canvas = ImageEnhance.Color(canvas).enhance(color_enhance)
+    # sat_mode == "off": no saturation adjustment
 
     if not portrait:
-        # Landscape: rotate -90° CW to get 1200x1600 native format
         canvas = canvas.rotate(-90, expand=True)
         mask = np.rot90(mask, k=3)
 
@@ -837,107 +955,131 @@ def _atkinson_dither(canvas, lut=None, lut_scale=None):
     return result_idx
 
 
-class _AlgoConfig:
-    """Bundle of per-algorithm pipeline parameters."""
-    __slots__ = ("dither_fn", "lut", "color_enhance", "scale_chroma",
-                 "adaptive_saturate", "adaptive_vivid")
-    def __init__(self, dither_fn, lut, color_enhance, scale_chroma,
-                 adaptive_saturate, adaptive_vivid):
-        self.dither_fn = dither_fn
-        self.lut = lut
-        self.color_enhance = color_enhance
-        self.scale_chroma = scale_chroma
-        self.adaptive_saturate = adaptive_saturate
-        self.adaptive_vivid = adaptive_vivid
+# Memoized hue-aware LUTs — keyed by (hue_cutoff_deg, neutral_chroma). Building
+# one is expensive (32³ pixels × 6 palette entries + hue math), so users who
+# tweak a knob shouldn't pay that cost on every render.
+_hue_aware_lut_cache = {}
+_hue_aware_lut_lock = threading.Lock()
 
 
-def _dither_for_algorithm(algorithm):
-    """Return an _AlgoConfig describing the full pipeline for the algorithm.
+def _get_lut(dither_cfg):
+    """Pick the RGB→palette-index LUT for this pipeline config. Memoizes
+    hue-aware LUTs by (cutoff, neutral_chroma) so repeated tweaks are cheap."""
+    lut_cfg = dither_cfg.get("palette_lut", {})
+    mode = lut_cfg.get("mode", "hue_aware")
+    if mode == "euclidean":
+        return _RGB_LUT_EUCLID
+    cutoff = float(lut_cfg.get("hue_cutoff_deg", 95.0))
+    neutral = float(lut_cfg.get("neutral_chroma", 8.0))
+    if cutoff == 95.0 and neutral == 8.0:
+        return _RGB_LUT_HUE_AWARE
+    key = (round(cutoff, 3), round(neutral, 3))
+    with _hue_aware_lut_lock:
+        lut = _hue_aware_lut_cache.get(key)
+        if lut is None:
+            lut, _ = _build_rgb_lut_hue_aware(hue_cutoff_deg=cutoff, neutral_chroma=neutral)
+            _hue_aware_lut_cache[key] = lut
+        return lut
 
-    atkinson_hue_aware uses the V10 recipe (adaptive saturation + adaptive
-    vividness compression): boosts chroma only for pixels that already have
-    meaningful chroma (so near-white regions don't amplify into phantom colors)
-    and compresses chroma only for near-neutral pixels (so saturated features
-    like tongues stay vivid). Benchmarked to beat the shipped baseline on both
-    neutral-region cleanliness and saturated-feature retention.
 
-    The other algorithms preserve their legacy behavior for users who prefer
-    those noise textures.
+def _get_kernel_fn(dither_cfg):
+    return _floyd_steinberg_dither if dither_cfg.get("kernel") == "floyd_steinberg" else _atkinson_dither
+
+
+def _maybe_apply_bw_fallback(dither_cfg, img):
+    """If bw_fallback is enabled and the image is near-grayscale, return a
+    derived config that disables adaptive saturation/vividness (they amplify
+    tiny chroma deviations in B&W images into a visible pink cast). Otherwise
+    returns dither_cfg unchanged.
+
+    Conservative override: flat Color(1.05) saturation, no DRC chroma
+    compression. Palette LUT, kernel, and tonal stages stay as configured.
     """
-    if algorithm == "floyd_steinberg":
-        return _AlgoConfig(_floyd_steinberg_dither, _RGB_LUT_EUCLID, 1.2, False, False, False)
-    if algorithm == "atkinson":
-        return _AlgoConfig(_atkinson_dither, _RGB_LUT_EUCLID, 1.2, False, False, False)
-    if algorithm == "atkinson_hue_aware":
-        return _AlgoConfig(_atkinson_dither, _RGB_LUT_HUE_AWARE, 1.25, False, True, True)
-    # Unknown algorithm falls back to the default recipe so unfamiliar config
-    # values don't hard-fail the server.
-    return _AlgoConfig(_atkinson_dither, _RGB_LUT_HUE_AWARE, 1.25, False, True, True)
-
-
-# Images whose max chroma stays below this threshold are treated as near-grayscale
-# and rendered with a conservative preset (no adaptive saturation boost). Without
-# this, the adaptive saturation + vividness pipeline amplifies tiny chroma
-# deviations in B&W inputs into a visible pink cast.
-_GRAYSCALE_CHROMA_THRESHOLD = 8.0
-
-
-def _is_near_grayscale(img):
-    """Detect near-B&W source images by sampling Lab chroma.
-
-    Downsamples to 200px for speed, converts to Lab, and returns True if the
-    95th-percentile chroma is below _GRAYSCALE_CHROMA_THRESHOLD. Downsampling
-    rather than sampling avoids being fooled by a single chromatic pixel in
-    an otherwise grayscale image.
-    """
+    fb = dither_cfg.get("bw_fallback", {})
+    if not fb.get("enabled"):
+        return dither_cfg, False
+    threshold = float(fb.get("chroma_threshold", 8.0))
+    percentile = int(fb.get("percentile", 95))
     thumb = img.copy()
     thumb.thumbnail((200, 200), Image.LANCZOS)
     arr = np.asarray(thumb.convert("RGB"), dtype=np.float64)
     lab = _xyz_to_lab(_linear_to_xyz(_srgb_to_linear(arr)))
     chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
-    return float(np.percentile(chroma, 95)) < _GRAYSCALE_CHROMA_THRESHOLD
+    if float(np.percentile(chroma, percentile)) >= threshold:
+        return dither_cfg, False
+    override = copy.deepcopy(dither_cfg)
+    override["saturation"] = {"mode": "global", "value": 1.05,
+                              "low": 5.0, "high": 15.0}
+    override.setdefault("drc", {})["chroma_mode"] = "off"
+    return override, True
+
+
+def _run_dither_pipeline(img, dither_cfg, orientation, canvas_w, canvas_h):
+    """Shared pipeline core used by both the full-resolution _convert_image
+    and the preview endpoint. Runs: prepare_canvas → DRC → dither kernel,
+    and returns (result_idx, padding_mask). result_idx is a (canvas_h,
+    canvas_w) uint8 array of palette indices; padding_mask marks padding
+    pixels (outside the fitted image) for post-force-to-white.
+    """
+    portrait = (orientation == "portrait")
+    canvas, padding_mask = _prepare_canvas(img, dither_cfg, portrait, canvas_w, canvas_h)
+
+    drc = dither_cfg.get("drc", {})
+    if drc.get("enabled", True):
+        chroma_mode = drc.get("chroma_mode", "adaptive_vivid")
+        canvas_array = _compress_dynamic_range(
+            np.array(canvas, dtype=np.float32),
+            scale_chroma=(chroma_mode == "flat"),
+            adaptive_vivid=(chroma_mode == "adaptive_vivid"),
+            vivid_low=float(drc.get("vivid_low", 5.0)),
+            vivid_high=float(drc.get("vivid_high", 15.0)),
+        )
+        canvas = Image.fromarray(canvas_array.astype(np.uint8))
+
+    kernel_fn = _get_kernel_fn(dither_cfg)
+    lut = _get_lut(dither_cfg)
+    result_idx = kernel_fn(canvas, lut, _LUT_SCALE)
+    result_idx[padding_mask] = 1  # force padding to pure white
+    return result_idx, padding_mask
+
+
+def _render_preview_png(result_idx, orientation):
+    """Convert a palette-index buffer into a human-viewable PNG (bytes)."""
+    preview_rgb = PALETTE_PREVIEW_RGB[result_idx]
+    if orientation == "landscape":
+        preview_img = Image.fromarray(preview_rgb).rotate(90, expand=True)
+    else:
+        preview_img = Image.fromarray(preview_rgb)
+    buf = BytesIO()
+    preview_img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _convert_image(img_path):
+    """Full-resolution render to panel bytes + preview PNG. Uses the saved
+    _config['dither'] pipeline. Applies B&W fallback when the input image
+    qualifies."""
     print(f"Converting: {img_path.name}")
     t0 = time.time()
     from PIL import ImageOps
     img = Image.open(img_path)
     # Apply EXIF orientation before converting — phones and cameras store
     # rotation as metadata rather than rotating the actual pixel data.
-    # Without this, portrait photos appear sideways on the display.
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
     print(f"  {img_path.name}: {img.size[0]}x{img.size[1]}")
 
-    algorithm = _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"])
-    cfg = _dither_for_algorithm(algorithm)
+    dither_cfg = _config["dither"]
+    dither_cfg, bw_used = _maybe_apply_bw_fallback(dither_cfg, img)
+    if bw_used:
+        print(f"  {img_path.name}: B&W detected, applying conservative fallback")
 
-    # B&W fallback: adaptive saturation/vividness amplify tiny chroma deviations
-    # in near-grayscale images into a visible color cast. Detect and use the
-    # conservative preset (no adaptive saturation, modest enhance).
-    if (cfg.adaptive_saturate or cfg.adaptive_vivid) and _is_near_grayscale(img):
-        print(f"  {img_path.name}: B&W detected, using conservative preset")
-        cfg = _AlgoConfig(cfg.dither_fn, cfg.lut, 1.05, False, False, False)
+    orientation = _config.get("orientation", "landscape")
+    # Full-resolution panel buffer is 1200×1600 (portrait) regardless of
+    # orientation — landscape rotates into the same buffer shape.
+    result_idx, _ = _run_dither_pipeline(img, dither_cfg, orientation,
+                                         canvas_w=FULL_W, canvas_h=PANEL_H)
 
-    print(f"  {img_path.name}: algorithm={algorithm} enhance={cfg.color_enhance} "
-          f"adaptive_sat={cfg.adaptive_saturate} adaptive_vivid={cfg.adaptive_vivid} "
-          f"scale_chroma={cfg.scale_chroma}")
-
-    canvas, padding_mask = _prepare_canvas(img, color_enhance=cfg.color_enhance,
-                                           adaptive_saturate=cfg.adaptive_saturate)
-    canvas_array = _compress_dynamic_range(
-        np.array(canvas, dtype=np.float32),
-        scale_chroma=cfg.scale_chroma,
-        adaptive_vivid=cfg.adaptive_vivid,
-    )
-    canvas = Image.fromarray(canvas_array.astype(np.uint8))
-    result_idx = cfg.dither_fn(canvas, cfg.lut, _LUT_SCALE)
-
-    # Force padding areas to pure white (palette index 1) — without this,
-    # the enhancement + dithering pipeline turns pure white into a slightly
-    # off-white that gets dithered as a visible dotted pattern.
-    result_idx[padding_mask] = 1
     nibbles = PALETTE_NIBBLE[result_idx]
     panel1_nib = nibbles[:, :PANEL_W]
     panel2_nib = nibbles[:, PANEL_W:]
@@ -945,20 +1087,39 @@ def _convert_image(img_path):
     panel2_bin = (panel2_nib[:, 0::2] << 4) | panel2_nib[:, 1::2]
     raw_bytes = panel1_bin.astype(np.uint8).tobytes() + panel2_bin.astype(np.uint8).tobytes()
     assert len(raw_bytes) == TOTAL_BYTES, f"Expected {TOTAL_BYTES}, got {len(raw_bytes)}"
-    preview_rgb = PALETTE_PREVIEW_RGB[result_idx]
-    orientation = _config.get("orientation", "landscape")
-    if orientation == "landscape":
-        # Rotate back 90° CCW for human-friendly landscape preview
-        preview_img = Image.fromarray(preview_rgb).rotate(90, expand=True)
-    else:
-        # Portrait: already in natural viewing orientation
-        preview_img = Image.fromarray(preview_rgb)
-    buf = BytesIO()
-    preview_img.save(buf, format="PNG")
-    preview_bytes = buf.getvalue()
+
+    preview_bytes = _render_preview_png(result_idx, orientation)
     elapsed = time.time() - t0
     print(f"  {img_path.name}: done in {elapsed:.1f}s")
     return raw_bytes, preview_bytes
+
+
+# Preview button downsamples the source to this long-edge size before running
+# the full pipeline. ~1 s render (vs ~10 s full-res) — trades dither-pattern
+# fidelity for interactive feedback while tweaking knobs.
+_PREVIEW_LONG_EDGE = 800
+
+
+def _render_dither_preview(img_path, dither_cfg):
+    """Small-canvas render used by /api/dither/preview. Returns PNG bytes.
+    Does NOT touch _config, _pool, or the disk cache — callers can safely
+    pass the unsaved form state."""
+    from PIL import ImageOps
+    img = Image.open(img_path)
+    img = ImageOps.exif_transpose(img)
+    img = img.convert("RGB")
+    img.thumbnail((_PREVIEW_LONG_EDGE, _PREVIEW_LONG_EDGE), Image.LANCZOS)
+
+    dither_cfg = _normalize_dither_config(dither_cfg)
+    dither_cfg, _ = _maybe_apply_bw_fallback(dither_cfg, img)
+
+    orientation = _config.get("orientation", "landscape")
+    # Half-resolution canvas preserves the same aspect ratio as full render.
+    canvas_w = FULL_W // 2
+    canvas_h = PANEL_H // 2
+    result_idx, _ = _run_dither_pipeline(img, dither_cfg, orientation,
+                                         canvas_w=canvas_w, canvas_h=canvas_h)
+    return _render_preview_png(result_idx, orientation)
 
 
 def _convert_and_store(img_path, content_hash):
@@ -1065,10 +1226,7 @@ def _sync_pool_inner():
     with _lock:
         valid_cache_keys = set()
         for key, entry in _pool.items():
-            # Keep cached renders for every algorithm, not just the active one,
-            # so toggling the dither dropdown is instant on a re-visit.
-            for algo in VALID_DITHER_ALGORITHMS:
-                valid_cache_keys.add(_cache_key(Path(key), entry["hash"], algorithm=algo))
+            valid_cache_keys.add(_cache_key(Path(key), entry["hash"]))
     _purge_stale_cache(cache_dir, valid_cache_keys)
 
 
@@ -1330,19 +1488,35 @@ def api_status():
             "converting_total": _converting_total,
             "converting_done": _converting_done,
             "server_time": now_str,
-            "config": {
-                "timezone": _config["timezone"],
-                "refresh_image_at_time": _config["refresh_image_at_time"],
-                "port": _config["port"],
-                "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
-                "orientation": _config.get("orientation", "landscape"),
-                "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
-                "debug_fast_refresh_seconds": DEBUG_FAST_REFRESH_SECONDS,
-                "dither_algorithm": _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"]),
-                "upload_dir": str(_get_upload_dir()),
-                "cache_dir": str(_get_cache_dir()),
-            },
         })
+
+
+@app.route("/hokku/api/config", methods=["GET"])
+def api_config_get():
+    """Return the full config + preset catalog. Intended to be fetched ONCE
+    when the settings form first renders — the /api/status poll deliberately
+    omits config so it can't overwrite fields the user is editing."""
+    presets = {
+        name: {"label": p["label"], "description": p["description"],
+               "dither": p["dither"]}
+        for name, p in DITHER_PRESETS.items()
+    }
+    return jsonify({
+        "config": {
+            "timezone": _config["timezone"],
+            "refresh_image_at_time": _config["refresh_image_at_time"],
+            "port": _config["port"],
+            "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
+            "orientation": _config.get("orientation", "landscape"),
+            "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
+            "debug_fast_refresh_seconds": DEBUG_FAST_REFRESH_SECONDS,
+            "dither": _config["dither"],
+            "upload_dir": str(_get_upload_dir()),
+            "cache_dir": str(_get_cache_dir()),
+        },
+        "dither_presets": presets,
+        "default_preset": DEFAULT_PRESET,
+    })
 
 
 # Formats browsers can display natively — everything else gets converted to JPEG
@@ -1492,17 +1666,12 @@ def api_config():
         _config["debug_fast_refresh"] = bool(data["debug_fast_refresh"])
         changed = True
 
-    algorithm_changed = False
-    if "dither_algorithm" in data:
-        val = data["dither_algorithm"]
-        # Silently migrate deprecated names to the current default
-        if val in _DEPRECATED_ALGORITHMS:
-            val = DEFAULT_CONFIG["dither_algorithm"]
-        if val not in VALID_DITHER_ALGORITHMS:
-            return jsonify({"error": f"Unknown dither_algorithm: {val}"}), 400
-        if _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"]) != val:
-            algorithm_changed = True
-        _config["dither_algorithm"] = val
+    dither_changed = False
+    if "dither" in data:
+        new_dither = _normalize_dither_config(data["dither"])
+        if _dither_config_hash(_config["dither"]) != _dither_config_hash(new_dither):
+            dither_changed = True
+        _config["dither"] = new_dither
         changed = True
 
     if changed:
@@ -1514,11 +1683,10 @@ def api_config():
         with _lock:
             _pool.clear()
         threading.Thread(target=_sync_pool, daemon=True).start()
-    elif algorithm_changed:
-        # Algorithm change: cache key changes so pool entries won't find matching
-        # renders. Drop the pool to force _sync_pool to re-run _convert_and_store,
-        # which hits cache for algorithms we've rendered before (instant) and
-        # falls through to _convert_image for new ones.
+    elif dither_changed:
+        # Dither config change: cache key changes so pool entries won't find
+        # matching renders. Drop the pool to force _sync_pool to re-run
+        # _convert_and_store.
         with _lock:
             _pool.clear()
         threading.Thread(target=_sync_pool, daemon=True).start()
@@ -1529,8 +1697,35 @@ def api_config():
         "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
         "orientation": _config.get("orientation", "landscape"),
         "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
-        "dither_algorithm": _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"]),
+        "dither": _config["dither"],
     }})
+
+
+@app.route("/hokku/api/dither/preview", methods=["POST"])
+def api_dither_preview():
+    """Render a preview PNG using an *unsaved* dither config.
+
+    Body: {"filename": "<image in upload dir>", "dither": {<dither config>}}
+    Returns: PNG bytes. Does not touch the pool or disk cache."""
+    data = request.get_json(silent=True) or {}
+    filename = data.get("filename")
+    dither_cfg = data.get("dither")
+    if not filename or not isinstance(dither_cfg, dict):
+        return jsonify({"error": "Expected JSON {filename, dither}"}), 400
+
+    upload_dir = _get_upload_dir()
+    img_path = upload_dir / filename
+    if not img_path.exists() or not img_path.is_file():
+        abort(404)
+    if img_path.suffix.lower() not in IMAGE_EXTENSIONS:
+        abort(404)
+
+    try:
+        preview_bytes = _render_dither_preview(img_path, dither_cfg)
+    except Exception as e:
+        print(f"  Dither preview error for {filename}: {e}")
+        return jsonify({"error": str(e)}), 500
+    return send_file(BytesIO(preview_bytes), mimetype="image/png")
 
 
 @app.route("/hokku/api/upload", methods=["POST"])
