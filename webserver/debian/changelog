@@ -1,93 +1,56 @@
-hokku-server (2.1.21-6) unstable; urgency=low
+hokku-server (2.2.1-1) unstable; urgency=low
 
-  * OOM fix (round three). Even with the -5 float32 pipeline a
-    1600x1200 canvas still builds 6+ concurrent 23 MB arrays during
-    _compress_dynamic_range and _adaptive_saturate, peaking around
-    140 MB and OOM-killing on a Pi Zero 2 W with ~100 MB free.
-    Added _apply_in_strips that iterates the color conversion in
-    200-row strips, writing results into a preallocated output
-    buffer. Each row is independent in both functions so splitting
-    is safe; peak RAM drops by ~6x (~25 MB per strip + 23 MB output
-    = ~50 MB total). No visible output change.
-  * Web GUI: failed-conversion list. Images that crashed the dither
-    pipeline now appear in a dedicated amber section below the main
-    grid, each with a Retry button that POSTs to the new
-    /hokku/api/image/<name>/retry endpoint (removes the .failed
-    quarantine marker and re-triggers a pool sync). The failed_files
-    array is part of /hokku/api/status now.
+  * Dither pipeline memory footprint cut from ~490 MB to ~68 MB peak at
+    production canvas (1200x1600). Changes:
+      - Early JPEG draft downsample so a 32 MP source no longer sits in
+        RAM as 96 MB of RGB through the DRC peak.
+      - Lab-space helpers kept in float32 end-to-end (halves every
+        intermediate) with dtype preservation via typed constants.
+      - `np.where(cond, toe, shoulder)` on full-canvas buffers replaced
+        with in-place masked updates — saves a second canvas-sized
+        allocation per branch.
+      - `_xyz_to_lab` and `_lab_to_srgb_f32` reuse the Lab buffer via
+        in-place matmul and channel-slot reshuffling instead of
+        `np.stack([L, a, b])`.
+      - Fused adaptive saturation + DRC into a single Lab round-trip.
+      - Source image freed before Lab transforms allocate.
+    Same output bits; lower peak allocation on the Pi.
+  * New webserver/tests/test_dither_memory.py: 18-combo (6 images x 3
+    presets) half-canvas matrix at 30 MB ceiling (proxies 100 MB at
+    full canvas) plus opt-in @pytest.mark.memory full-canvas smoke
+    tests verifying < 100 MB on the real production path.
+  * (Pi-deployment fixes from the parallel pi2w branch — paths,
+    timezone removal, crash quarantine, failed-images UI, sequential
+    upload — folded into 2.2.2-1 below as a follow-up commit.)
 
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 22 Apr 2026 00:00:00 +0000
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 23 Apr 2026 00:00:00 +0000
 
-hokku-server (2.1.21-5) unstable; urgency=low
+hokku-server (2.2.0-1) unstable; urgency=low
 
-  * OOM fix (real this time). _compress_dynamic_range and
-    _adaptive_saturate were silently upcasting their input from
-    float32 to float64 and chaining through 6+ full-image
-    intermediate arrays (linear, xyz, lab, xyz_out, linear_out,
-    srgb). At 1600x1200 that's ~320 MB concurrent, which SIGKILLs
-    the service on a 512 MB Pi Zero 2 W after 40+ seconds of
-    dither. Pinned the pipeline to float32 throughout — precision
-    is far more than enough for 8-bit RGB output, and peak RAM
-    drops by half. Same fix applied to _is_near_grayscale's Lab
-    conversion for consistency.
-
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 22 Apr 2026 00:00:00 +0000
-
-hokku-server (2.1.21-4) unstable; urgency=low
-
-  * Further OOM mitigation. -3's 3200 px pre-decode cap still
-    OOM-killed on a Pi Zero 2 W mid-dither on a 9 MP photo —
-    _prepare_canvas + _adaptive_saturate + the dither pass can
-    together allocate several hundred MB of float64 on a 3200x2150
-    intermediate. Lowered _MAX_PRE_DECODE_DIM to 2000 px, which lets
-    libjpeg decode most phone photos at 1:2 DCT scale natively.
-  * Per-image crash quarantine. A .processing marker is dropped
-    next to each image just before conversion and removed on
-    success. If the service is OOM-killed (or otherwise crashes)
-    before removing it, startup renames any orphaned marker to
-    .failed. _list_images skips anything with a .failed sibling so
-    a single problem image can no longer restart-loop the service.
-    Delete the .failed marker to retry.
-  * Web GUI: server time moved to the top-right corner and trimmed
-    to HH:MM:SS (the date was never useful at a glance).
-
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 22 Apr 2026 00:00:00 +0000
-
-hokku-server (2.1.21-3) unstable; urgency=low
-
-  * Avoid OOM kills on low-RAM hosts (Pi Zero 2 W, 512 MB) when
-    converting large photos. Full decode of a 12MP JPEG costs ~36 MB
-    plus several float64 buffers during dithering; the Linux OOM
-    killer hit the service mid-conversion, leaving the uploaded file
-    on disk and restart-looping forever. Both _convert_image and
-    _ensure_thumbnail now call PIL Image.draft() before accessing
-    pixels, which tells libjpeg to decode at 1/2, 1/4, or 1/8 native
-    resolution so the full-res buffer is never allocated. Non-JPEGs
-    fall through to an explicit resize to the same cap (3200 px for
-    the dither pipeline, 600 px for thumbnails).
-  * Upload UI: large batches are now sent one file per request
-    instead of a single giant multipart body — fixes "Failed to
-    fetch" on slow links. Non-images dropped via drag-drop are
-    silently filtered instead of appearing as red error rows.
-
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 22 Apr 2026 00:00:00 +0000
-
-hokku-server (2.1.21-2) unstable; urgency=low
-
-  * Fix crash-loop on fresh Debian install: DEFAULT_CONFIG's
-    upload_dir/cache_dir were hardcoded to /images/upload and
-    /images/cache — invalid paths on any normal system. Now fixed
-    at /var/lib/hokku/upload and /var/lib/hokku/cache for everyone
-    (Debian install and from-source runs alike); dev users needing
-    a different location override in their config.json. Existing
-    stale /images/* paths in config.json are migrated on load.
-  * Timezone is no longer a configurable setting. The server now
-    always uses the host OS timezone (set via `timedatectl` on the
-    Pi — hokku-setup's installer already prompts for this). Removed
-    from DEFAULT_CONFIG, _SAVE_KEYS, the /hokku/api/config endpoint,
-    and the Configuration card in the web GUI. /hokku/api/status
-    no longer returns a timezone field in config; /hokku/api/time
-    still returns the system-resolved zone for display.
+  * Dither pipeline exposed as editable presets + full per-stage
+    Advanced panel in the web UI: every knob (autocontrast, gamma,
+    brightness/contrast/sharpness, saturation mode+thresholds,
+    dynamic-range compression chroma mode+thresholds, palette LUT
+    mode+hue-cutoff+neutral-chroma, B&W fallback, dither kernel)
+    is toggleable/tunable with a per-knob (?) help popover. Three
+    named presets: Floyd–Steinberg (pre-2.0), Atkinson soft, and
+    Atkinson hue-aware (default).
+  * Settings form loaded ONCE via new /api/config; /api/status poll
+    no longer returns config so user edits can't be clobbered mid-
+    typing. New /api/dither/preview renders an unsaved config at
+    half resolution for interactive feedback.
+  * Config schema change: nested "dither" object replaces the flat
+    dither_algorithm string. Legacy string is silently dropped on
+    load. Cache key now hashes the normalised dither config so any
+    knob change invalidates just its own renders (_CACHE_VERSION
+    bumped to v3; existing caches are discarded on upgrade).
+  * Hue-aware LUTs memoised by (hue_cutoff_deg, neutral_chroma) so
+    tweaking the knob doesn't pay a 32³ rebuild per render.
+  * docs/dithering.md updated to match the preset/knob schema.
+  * Tests: 294 passing, including a new 162-case permutation matrix
+    (24 dither configs × 6 real-world test images) with hard
+    invariants + soft artifact bounds (neutral-leak ≤ 35%, B&W
+    fallback ≥ 95% monochrome).
 
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 22 Apr 2026 00:00:00 +0000
 

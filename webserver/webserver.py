@@ -18,6 +18,7 @@ Endpoints:
     GET /hokku/ui           — Web GUI for configuration and image management
     GET /hokku/api/...      — JSON API for the web GUI
 """
+import copy
 import hashlib
 import json
 import os
@@ -68,30 +69,132 @@ PALETTE_NIBBLE = np.array([0x0, 0x1, 0x2, 0x3, 0x5, 0x6], dtype=np.uint8)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif", ".heic", ".heif", ".avif"}
 
+# ── Dither pipeline presets ────────────────────────────────────────
+# Every preset is a full, self-contained dither config. The frontend
+# displays preset names as a dropdown; touching any knob flips the
+# label to "Custom" but keeps the resolved config exactly as the user
+# edited it. Adding a new preset is a one-liner here — no other code
+# paths need to know its name.
+
+DITHER_PRESETS = {
+    "floyd_steinberg_vivid": {
+        "label": "Floyd–Steinberg — vivid, warm (pre-2.0)",
+        "description": (
+            "Classic error diffusion with a flat chroma boost. "
+            "Warm skin tones and vivid reds at the cost of visible speckle "
+            "in near-white regions. Matches the pre-2.0 default output."
+        ),
+        "dither": {
+            "autocontrast": {"enabled": True, "cutoff": 0.5},
+            "gamma":        {"enabled": True, "value": 0.85},
+            "brightness":   1.0,
+            "contrast":     1.1,
+            "sharpness":    1.3,
+            "saturation":   {"mode": "global", "value": 1.2,
+                             "low": 5.0, "high": 15.0},
+            "drc":          {"enabled": True, "chroma_mode": "off",
+                             "vivid_low": 5.0, "vivid_high": 15.0},
+            "palette_lut":  {"mode": "euclidean",
+                             "hue_cutoff_deg": 95.0, "neutral_chroma": 8.0},
+            "bw_fallback":  {"enabled": False,
+                             "chroma_threshold": 8.0, "percentile": 95},
+            "kernel":       "floyd_steinberg",
+        },
+    },
+    "atkinson_soft": {
+        "label": "Atkinson — soft, warm",
+        "description": (
+            "Sparser Atkinson kernel with the same warm/vivid colour "
+            "pipeline. Cleaner gradients than Floyd–Steinberg while keeping "
+            "the warm skin tones."
+        ),
+        "dither": {
+            "autocontrast": {"enabled": True, "cutoff": 0.5},
+            "gamma":        {"enabled": True, "value": 0.85},
+            "brightness":   1.0,
+            "contrast":     1.1,
+            "sharpness":    1.3,
+            "saturation":   {"mode": "global", "value": 1.2,
+                             "low": 5.0, "high": 15.0},
+            "drc":          {"enabled": True, "chroma_mode": "off",
+                             "vivid_low": 5.0, "vivid_high": 15.0},
+            "palette_lut":  {"mode": "euclidean",
+                             "hue_cutoff_deg": 95.0, "neutral_chroma": 8.0},
+            "bw_fallback":  {"enabled": False,
+                             "chroma_threshold": 8.0, "percentile": 95},
+            "kernel":       "atkinson",
+        },
+    },
+    "atkinson_hue_aware": {
+        "label": "Atkinson — hue-aware (default)",
+        "description": (
+            "V10 recipe. Hue-aware palette mapping prevents near-neutral "
+            "pixels from snapping to red/blue; adaptive saturation boosts "
+            "only already-colourful pixels; adaptive vividness keeps whites "
+            "clean. Best for photos; less warm on faces than the legacy "
+            "presets."
+        ),
+        "dither": {
+            "autocontrast": {"enabled": True, "cutoff": 0.5},
+            "gamma":        {"enabled": True, "value": 0.85},
+            "brightness":   1.0,
+            "contrast":     1.1,
+            "sharpness":    1.3,
+            "saturation":   {"mode": "adaptive", "value": 1.25,
+                             "low": 5.0, "high": 15.0},
+            "drc":          {"enabled": True, "chroma_mode": "adaptive_vivid",
+                             "vivid_low": 5.0, "vivid_high": 15.0},
+            "palette_lut":  {"mode": "hue_aware",
+                             "hue_cutoff_deg": 95.0, "neutral_chroma": 8.0},
+            "bw_fallback":  {"enabled": True,
+                             "chroma_threshold": 8.0, "percentile": 95},
+            "kernel":       "atkinson",
+        },
+    },
+}
+
+DEFAULT_PRESET = "atkinson_hue_aware"
+
+
+def _default_dither_config():
+    """Fresh deep copy of the default preset's dither config."""
+    return copy.deepcopy(DITHER_PRESETS[DEFAULT_PRESET]["dither"])
+
+
+def _normalize_dither_config(value):
+    """Fill in any missing keys from the default preset. Returns a fresh dict.
+    Ignores keys that aren't part of the schema so bad saved state doesn't
+    leak into the pipeline."""
+    default = _default_dither_config()
+    if not isinstance(value, dict):
+        return default
+    out = default
+    for key, new_val in value.items():
+        if key not in out:
+            continue
+        if isinstance(out[key], dict) and isinstance(new_val, dict):
+            for inner_key, inner_val in new_val.items():
+                if inner_key in out[key]:
+                    out[key][inner_key] = inner_val
+        else:
+            out[key] = new_val
+    return out
+
+
+def _dither_config_hash(dither_cfg):
+    """Stable 8-char hash of a dither config — used in the cache key so any
+    knob change invalidates just the affected renders."""
+    blob = json.dumps(dither_cfg, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(blob.encode()).hexdigest()[:8]
+
+
 # ── Configuration ──────────────────────────────────────────────────
 
-VALID_DITHER_ALGORITHMS = ("floyd_steinberg", "atkinson", "atkinson_hue_aware")
-# Deprecated algorithms — silently migrated to DEFAULT_CONFIG["dither_algorithm"].
-# fs_hue_aware was tried as a default but had a near-neutral amplification failure
-# mode (white umbrellas, light clothing picked up pink speckle). The current
-# atkinson_hue_aware implementation uses adaptive saturation + adaptive vividness
-# which beats fs_hue_aware on every benchmark metric.
-_DEPRECATED_ALGORITHMS = ("fs_hue_aware",)
-
-# Single source of truth for where images and cache live. Used by both the
-# Debian install (StateDirectory=hokku; DynamicUser can write here) and dev
-# runs from source. Dev users who want a different location override in their
-# own config.json.
-_DEFAULT_UPLOAD_DIR = "/var/lib/hokku/upload"
-_DEFAULT_CACHE_DIR = "/var/lib/hokku/cache"
-
 DEFAULT_CONFIG = {
-    # Timezone is read from the host OS at runtime (set via `timedatectl` on
-    # the Pi install, or the dev's workstation zone otherwise). No longer
-    # a stored config key — the server always follows system-local time.
+    "timezone": "America/Chicago",
     "refresh_image_at_time": ["0600", "1200", "1800"],
-    "upload_dir": _DEFAULT_UPLOAD_DIR,
-    "cache_dir": _DEFAULT_CACHE_DIR,
+    "upload_dir": "/images/upload",
+    "cache_dir": "/images/cache",
     "port": 8080,
     "poll_interval_seconds": 10,
     "orientation": "landscape",
@@ -101,7 +204,7 @@ DEFAULT_CONFIG = {
     # fast for visual testing of the dithering pipeline. Drains battery
     # hard — not for production use. Toggled from the web GUI.
     "debug_fast_refresh": False,
-    "dither_algorithm": "atkinson_hue_aware",
+    "dither": _default_dither_config(),
 }
 
 DEBUG_FAST_REFRESH_SECONDS = 180
@@ -109,9 +212,9 @@ DEBUG_FAST_REFRESH_SECONDS = 180
 _config_file_path = None  # set during load, used for saving
 
 
-_SAVE_KEYS = ["refresh_image_at_time", "upload_dir", "cache_dir",
+_SAVE_KEYS = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir",
               "port", "poll_interval_seconds", "orientation",
-              "debug_fast_refresh", "dither_algorithm"]
+              "debug_fast_refresh", "dither"]
 
 
 def _load_config():
@@ -151,22 +254,10 @@ def _load_config():
                     user_config = json.load(f)
                 config.update(user_config)
                 loaded_path = path
-                # Migrate deprecated algorithm names to the current default.
-                # V10 (PR #3 2026-04-20) retired fs_hue_aware; anyone with it
-                # in their saved config gets upgraded silently to the new
-                # atkinson_hue_aware default.
-                if config.get("dither_algorithm") in _DEPRECATED_ALGORITHMS:
-                    old = config["dither_algorithm"]
-                    config["dither_algorithm"] = DEFAULT_CONFIG["dither_algorithm"]
-                    print(f"  Migrating deprecated dither_algorithm '{old}' -> '{config['dither_algorithm']}'")
-                # Migrate stale paths from 2.1.20 and earlier, which hardcoded
-                # /images/upload — unwritable under the Debian service unit.
-                if config.get("upload_dir") == "/images/upload":
-                    config["upload_dir"] = _DEFAULT_UPLOAD_DIR
-                    print(f"  Migrating upload_dir /images/upload -> {_DEFAULT_UPLOAD_DIR}")
-                if config.get("cache_dir") == "/images/cache":
-                    config["cache_dir"] = _DEFAULT_CACHE_DIR
-                    print(f"  Migrating cache_dir /images/cache -> {_DEFAULT_CACHE_DIR}")
+                # Legacy dither_algorithm string (pre-preset schema) is ignored
+                # — the default preset applies. Users reselect a preset once.
+                config.pop("dither_algorithm", None)
+                config["dither"] = _normalize_dither_config(config.get("dither"))
                 print(f"  Config loaded from: {path}")
                 break
             except (json.JSONDecodeError, OSError) as e:
@@ -217,8 +308,7 @@ def _save_config(config):
 
 
 def _calculate_sleep_seconds(config):
-    """Calculate seconds until next refresh_image_at_time based on the server's
-    system clock (system timezone — set by `timedatectl` on the host).
+    """Calculate seconds until next refresh_image_at_time based on server's clock and timezone.
 
     Debug Fast Refresh: if config["debug_fast_refresh"] is true we short-
     circuit to DEBUG_FAST_REFRESH_SECONDS regardless of schedule. Screens
@@ -227,7 +317,16 @@ def _calculate_sleep_seconds(config):
     if config.get("debug_fast_refresh"):
         return DEBUG_FAST_REFRESH_SECONDS
 
-    now = datetime.now()  # system-local time
+    try:
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo(config["timezone"])
+    except (ImportError, KeyError, Exception):
+        tz = None
+
+    if tz:
+        now = datetime.now(tz)
+    else:
+        now = datetime.now()
 
     times = config.get("refresh_image_at_time", ["0600", "1200", "1800"])
     if not times:
@@ -289,31 +388,118 @@ app = Flask(__name__, template_folder=_template_folder)
 # ── CIE Lab conversion for perceptual color matching ─────────────────
 
 def _srgb_to_linear(c):
-    """Convert sRGB [0-255] to linear RGB [0-1]."""
-    c = c / 255.0
-    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    """Convert sRGB [0-255] to linear RGB [0-1]. Preserves float input
+    dtype (float32 in, float32 out) so the Lab pipeline can stay in
+    float32 end-to-end. Integer inputs are promoted to float64 to avoid
+    truncation from dividing uint8 by 255.
 
-def _linear_to_xyz(rgb):
-    """Convert linear RGB to CIE XYZ (D65 illuminant)."""
+    Implementation note: an obvious `np.where(cond, toe, shoulder)` call
+    would allocate *both* full-size toe and shoulder arrays before
+    selecting. On a 1200×1600×3 float32 canvas that doubles the working
+    set. Instead we compute the shoulder into a single output buffer
+    in-place and then overwrite the sub-threshold pixels with their toe
+    values via a boolean mask.
+    """
+    c = np.asarray(c)
+    if not np.issubdtype(c.dtype, np.floating):
+        c = c.astype(np.float64)
+    dt = c.dtype
+    # Build the output buffer we'll own in-place.
+    out = c / np.asarray(255.0, dtype=dt)
+    toe_mask = out <= np.asarray(0.04045, dtype=dt)
+    # Shoulder branch, in place: ((out + 0.055) / 1.055) ** 2.4
+    np.add(out, np.asarray(0.055, dtype=dt), out=out)
+    np.divide(out, np.asarray(1.055, dtype=dt), out=out)
+    np.power(out, np.asarray(2.4, dtype=dt), out=out)
+    # Toe values need a different formula. out still holds their shoulder-
+    # branch result; overwrite only those entries with c[toe]/12.92.
+    # Slight subtlety: out was computed from (c/255.0 + 0.055)/1.055 so the
+    # "original" c/255.0 is no longer available — recompute it just for toe
+    # pixels, which is a small fraction of typical photos.
+    if toe_mask.any():
+        toe_src = c[toe_mask].astype(dt, copy=False) / np.asarray(255.0, dtype=dt)
+        out[toe_mask] = toe_src / np.asarray(12.92, dtype=dt)
+    return out
+
+def _linear_to_xyz(rgb, in_place=False):
+    """Convert linear RGB to CIE XYZ (D65 illuminant). If `in_place`
+    is True, the matmul result is written back into `rgb` — numpy
+    supports that with overlapping input/output and it saves a
+    full-canvas allocation on the hot dither path."""
     M = np.array([
         [0.4124564, 0.3575761, 0.1804375],
         [0.2126729, 0.7151522, 0.0721750],
         [0.0193339, 0.1191920, 0.9503041],
-    ])
+    ], dtype=rgb.dtype)
+    if in_place:
+        np.matmul(rgb, M.T, out=rgb)
+        return rgb
     return rgb @ M.T
 
-def _xyz_to_lab(xyz):
-    """Convert XYZ to CIE Lab."""
-    ref = np.array([0.95047, 1.00000, 1.08883])
-    xyz = xyz / ref
-    f = np.where(xyz > 0.008856, xyz ** (1/3), 7.787 * xyz + 16/116)
-    L = 116 * f[..., 1] - 16
-    a = 500 * (f[..., 0] - f[..., 1])
-    b = 200 * (f[..., 1] - f[..., 2])
-    return np.stack([L, a, b], axis=-1)
+def _xyz_to_lab(xyz, in_place=False):
+    """Convert XYZ to CIE Lab. Avoids `np.where` on the large branch so a
+    full-res canvas doesn't allocate both branches at once.
+
+    If `in_place` is True the xyz buffer is reused for the lab output —
+    saves a full-canvas allocation and the `np.stack([L, a, b])` transient
+    that would otherwise peak at ~45 MB per 1200×1600 float32 canvas.
+    Callers that still need the original xyz should pass False.
+    """
+    dt = xyz.dtype
+    ref = np.array([0.95047, 1.00000, 1.08883], dtype=dt)
+    if in_place:
+        xyz /= ref  # overwrite caller's buffer
+    else:
+        xyz = xyz / ref  # 1 full alloc we own
+    thresh = np.asarray(0.008856, dtype=dt)
+    toe_mask = xyz <= thresh
+    # Cube-root branch in place: f = xyz ** (1/3). Toe pixels get an
+    # incorrect value; fix via mask below.
+    np.power(xyz, np.asarray(1.0 / 3.0, dtype=dt), out=xyz)
+    if toe_mask.any():
+        f_toe_cubed = xyz[toe_mask] ** 3
+        xyz[toe_mask] = np.asarray(7.787, dtype=dt) * f_toe_cubed + np.asarray(16.0 / 116.0, dtype=dt)
+    del toe_mask
+
+    # Compute L/a/b in place on the same buffer. Order matters because the
+    # formulas share f[1]: compute `a` (needs f[0] + f[1]) first, writing
+    # into slot 0 — that frees slot 0 but f[1] is still original. Then `b`
+    # (needs f[1] + f[2]), writing into slot 2. Finally L (needs f[1]),
+    # writing into slot 1. The buffer now holds [a, L, b] — we have to
+    # swap slots 0 and 1 to match the [L, a, b] convention callers expect.
+    f = xyz  # rename for clarity
+    c116 = np.asarray(116.0, dtype=dt)
+    c16 = np.asarray(16.0, dtype=dt)
+    c500 = np.asarray(500.0, dtype=dt)
+    c200 = np.asarray(200.0, dtype=dt)
+
+    # Peel the per-channel slices as (H, W) views so assignments land in place.
+    f0 = f[..., 0]
+    f1 = f[..., 1]
+    f2 = f[..., 2]
+
+    # b into slot 2: 200 * (f1 - f2)  — uses original f1 and f2
+    np.subtract(f1, f2, out=f2)
+    f2 *= c200
+    # a into slot 0: 500 * (f0 - f1)  — uses original f0 and f1
+    np.subtract(f0, f1, out=f0)
+    f0 *= c500
+    # L into slot 1: 116 * f1 - 16  — uses original f1
+    f1 *= c116
+    f1 -= c16
+
+    # Buffer is [a, L, b]; swap slots 0 and 1 to produce [L, a, b]. The
+    # view-based swap doesn't allocate a new canvas, just copies a single
+    # channel's worth (~7.7 MB for the tmp).
+    tmp = f0.copy()
+    f0[...] = f1
+    f1[...] = tmp
+    return f
 
 def _rgb_to_lab(rgb):
-    """Convert sRGB [0-255] to CIE Lab. Clamps input to valid range."""
+    """Convert sRGB [0-255] to CIE Lab. Clamps input to valid range.
+    Used at module load against the 6-entry palette — intentionally
+    float64 for maximum precision in the one-time LUT build."""
     linear = _srgb_to_linear(np.clip(np.asarray(rgb, dtype=np.float64), 0, 255))
     xyz = _linear_to_xyz(linear)
     return _xyz_to_lab(xyz)
@@ -330,29 +516,97 @@ _DISPLAY_WHITE_L = float(_rgb_to_lab(PALETTE_MEASURED_RGB[1:2])[0, 0])
 # dithering algorithm doesn't try to reproduce brightness levels the panel
 # can't show. Based on esp32-photoframe's preprocessImage approach.
 
-def _apply_in_strips(img_array, func, *args, **kwargs):
-    """Run a per-pixel color-conversion function over horizontal strips of
-    `img_array`, writing each strip's result into a preallocated output.
+def _lab_to_srgb_f32(lab):
+    """Lab → sRGB [0, 255] as float32. Built to minimise peak allocation
+    on a 1200×1600×3 canvas: the Lab buffer is overwritten in place and
+    converted to a linear-RGB buffer via a single matmul (not three
+    scalar expansions which would hold 6 channel buffers live)."""
+    ref = np.array([0.95047, 1.00000, 1.08883], dtype=np.float32)
+    eps = np.float32(0.008856)
+    kappa = np.float32(903.3)
 
-    The compress / adaptive-saturate pipelines below build 6+ full-image
-    float32 intermediates each. On a 1600x1200 canvas at float32 that's
-    ~140 MB peak concurrent — still enough to OOM-kill the hokku-server
-    service on a Pi Zero 2 W (512 MB total, maybe 100 MB free). Each row is
-    independent in both functions (no cross-row state), so processing in
-    strips of ~200 rows brings peak memory down by ~6x without changing
-    output."""
-    STRIP_ROWS = 200
-    h = img_array.shape[0]
-    if h <= STRIP_ROWS:
-        return func(img_array, *args, **kwargs)
-    out = None
-    for y0 in range(0, h, STRIP_ROWS):
-        y1 = min(y0 + STRIP_ROWS, h)
-        strip_result = func(img_array[y0:y1], *args, **kwargs)
-        if out is None:
-            out = np.empty((h,) + strip_result.shape[1:], dtype=strip_result.dtype)
-        out[y0:y1] = strip_result
-    return out
+    # Build xyz in-place on top of the lab buffer. Lab channels are
+    # read-only views but we're going to overwrite each in turn.
+    L = lab[..., 0]
+    a = lab[..., 1]
+    b = lab[..., 2]
+
+    # Precompute the f values (lab_to_xyz inversion) into small intermediates.
+    fy = (L + 16.0) / 116.0
+    fx = a / 500.0 + fy
+    fz = fy - b / 200.0
+    del a, b
+
+    # Overwrite lab slices with xyz values. `L` here aliases `lab[...,0]`.
+    # y-channel uses L directly (standard CIE):
+    y_new = ((L + 16.0) / 116.0) ** 3
+    toe_y = L <= kappa * eps
+    if toe_y.any():
+        y_new[toe_y] = L[toe_y] / kappa
+    y_new *= ref[1]
+    lab[..., 1] = y_new  # park y in slot 1
+    del y_new, toe_y, L, fy
+
+    # x from fx
+    x_new = fx ** 3
+    toe_x = x_new <= eps
+    if toe_x.any():
+        x_new[toe_x] = (np.float32(116.0) * fx[toe_x] - np.float32(16.0)) / kappa
+    x_new *= ref[0]
+    lab[..., 0] = x_new
+    del x_new, toe_x, fx
+
+    # z from fz
+    z_new = fz ** 3
+    toe_z = z_new <= eps
+    if toe_z.any():
+        z_new[toe_z] = (np.float32(116.0) * fz[toe_z] - np.float32(16.0)) / kappa
+    z_new *= ref[2]
+    lab[..., 2] = z_new
+    del z_new, toe_z, fz
+
+    # lab now holds xyz. In-place matmul to linear RGB — saves a 23 MB
+    # allocation on a 1200×1600×3 float32 canvas.
+    M_inv = np.array([
+        [ 3.2404542, -1.5371385, -0.4985314],
+        [-0.9692660,  1.8760108,  0.0415560],
+        [ 0.0556434, -0.2040259,  1.0572252],
+    ], dtype=np.float32)
+    np.matmul(lab, M_inv.T, out=lab)
+    linear = lab
+    np.clip(linear, 0, 1, out=linear)
+
+    # sRGB gamma, in-place on linear buffer with masked toe fixup.
+    # Save toe-region originals (small, usually <1% of pixels) before the
+    # in-place shoulder chain overwrites them.
+    toe_mask = linear <= np.asarray(0.0031308, dtype=np.float32)
+    toe_saved = linear[toe_mask].copy() if toe_mask.any() else None
+    # Shoulder: 1.055 * linear**(1/2.4) - 0.055 (in place)
+    np.power(linear, np.asarray(1.0 / 2.4, dtype=np.float32), out=linear)
+    linear *= np.float32(1.055)
+    linear -= np.float32(0.055)
+    # Toe overwrite: linear * 12.92
+    if toe_saved is not None:
+        linear[toe_mask] = toe_saved * np.float32(12.92)
+    del toe_mask, toe_saved
+
+    linear *= 255.0
+    np.clip(linear, 0, 255, out=linear)
+    return linear
+
+
+def _rgb_f32_to_lab(rgb_f32):
+    """sRGB [0,255] float32 → Lab float32. Same math as _rgb_to_lab but
+    kept in float32 throughout to halve peak footprint on full-res
+    canvases. Reuses the linear-RGB buffer as the XYZ buffer via
+    in-place matmul (numpy handles overlapping input/output for matmul),
+    saving one full-canvas allocation."""
+    linear = _srgb_to_linear(rgb_f32)
+    xyz = _linear_to_xyz(linear, in_place=True)
+    del linear
+    lab = _xyz_to_lab(xyz, in_place=True)  # xyz buffer is reused as lab
+    del xyz
+    return lab.astype(np.float32, copy=False)
 
 
 def _compress_dynamic_range(img_array, scale_chroma=False, adaptive_vivid=False,
@@ -369,47 +623,24 @@ def _compress_dynamic_range(img_array, scale_chroma=False, adaptive_vivid=False,
         (chroma>vivid_high) keep full chroma (preserves tongues, red logos).
         Smooth ramp between. This is the "best of both" behavior.
     """
-    # float32 throughout — precision is plenty for 8-bit RGB output and cuts
-    # peak RAM in half. The chain here builds 6+ full-image intermediates
-    # (linear, xyz, lab, xyz_out, linear_out, srgb); float64 on a 1600x1200
-    # canvas costs ~320 MB concurrent and OOMs a 512 MB Pi.
     rgb = np.asarray(img_array, dtype=np.float32)
-    linear = _srgb_to_linear(rgb)
-    xyz = _linear_to_xyz(linear)
-    lab = _xyz_to_lab(xyz)
-    L_ratio = (_DISPLAY_WHITE_L - _DISPLAY_BLACK_L) / 100.0
-    lab[..., 0] = _DISPLAY_BLACK_L + lab[..., 0] * L_ratio
+    lab = _rgb_f32_to_lab(rgb)
+    del rgb
+    L_ratio = np.float32((_DISPLAY_WHITE_L - _DISPLAY_BLACK_L) / 100.0)
+    lab[..., 0] = np.float32(_DISPLAY_BLACK_L) + lab[..., 0] * L_ratio
     if adaptive_vivid:
         chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
-        t = np.clip((chroma - vivid_low) / (vivid_high - vivid_low), 0.0, 1.0)
-        c_factor = L_ratio + (1.0 - L_ratio) * t
+        t = np.clip((chroma - np.float32(vivid_low)) / np.float32(vivid_high - vivid_low), 0.0, 1.0)
+        del chroma
+        c_factor = L_ratio + (np.float32(1.0) - L_ratio) * t
+        del t
         lab[..., 1] *= c_factor
         lab[..., 2] *= c_factor
+        del c_factor
     elif scale_chroma:
         lab[..., 1] *= L_ratio
         lab[..., 2] *= L_ratio
-    ref = np.array([0.95047, 1.00000, 1.08883])
-    L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
-    fy = (L + 16) / 116.0
-    fx = a / 500.0 + fy
-    fz = fy - b / 200.0
-    eps = 0.008856
-    kappa = 903.3
-    xyz_out = np.zeros_like(lab)
-    xyz_out[..., 0] = np.where(fx ** 3 > eps, fx ** 3, (116 * fx - 16) / kappa) * ref[0]
-    xyz_out[..., 1] = np.where(L > kappa * eps, ((L + 16) / 116.0) ** 3, L / kappa) * ref[1]
-    xyz_out[..., 2] = np.where(fz ** 3 > eps, fz ** 3, (116 * fz - 16) / kappa) * ref[2]
-    M_inv = np.array([
-        [ 3.2404542, -1.5371385, -0.4985314],
-        [-0.9692660,  1.8760108,  0.0415560],
-        [ 0.0556434, -0.2040259,  1.0572252],
-    ])
-    linear_out = xyz_out @ M_inv.T
-    linear_out = np.clip(linear_out, 0, 1)
-    srgb = np.where(linear_out <= 0.0031308,
-                    linear_out * 12.92,
-                    1.055 * (linear_out ** (1.0 / 2.4)) - 0.055)
-    return np.clip(srgb * 255, 0, 255).astype(np.float32)
+    return _lab_to_srgb_f32(lab)
 
 
 def _adaptive_saturate(img_array, max_enhance=1.25, low_thresh=5.0, high_thresh=15.0):
@@ -423,40 +654,18 @@ def _adaptive_saturate(img_array, max_enhance=1.25, low_thresh=5.0, high_thresh=
     only boosts pixels that already have meaningful chroma. Result: tongues
     and red logos get the full enhance; white umbrellas stay white.
     """
-    # float32 throughout — precision is plenty for 8-bit RGB output and cuts
-    # peak RAM in half. The chain here builds 6+ full-image intermediates
-    # (linear, xyz, lab, xyz_out, linear_out, srgb); float64 on a 1600x1200
-    # canvas costs ~320 MB concurrent and OOMs a 512 MB Pi.
     rgb = np.asarray(img_array, dtype=np.float32)
-    linear = _srgb_to_linear(rgb)
-    xyz = _linear_to_xyz(linear)
-    lab = _xyz_to_lab(xyz)
+    lab = _rgb_f32_to_lab(rgb)
+    del rgb
     chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
-    t = np.clip((chroma - low_thresh) / (high_thresh - low_thresh), 0.0, 1.0)
-    factor = 1.0 + (max_enhance - 1.0) * t
+    t = np.clip((chroma - np.float32(low_thresh)) / np.float32(high_thresh - low_thresh), 0.0, 1.0)
+    del chroma
+    factor = np.float32(1.0) + np.float32(max_enhance - 1.0) * t
+    del t
     lab[..., 1] *= factor
     lab[..., 2] *= factor
-    # Convert Lab back to sRGB (same math as in _compress_dynamic_range)
-    ref = np.array([0.95047, 1.00000, 1.08883])
-    L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
-    fy = (L + 16) / 116.0
-    fx = a / 500.0 + fy
-    fz = fy - b / 200.0
-    eps = 0.008856
-    kappa = 903.3
-    xyz_out = np.zeros_like(lab)
-    xyz_out[..., 0] = np.where(fx ** 3 > eps, fx ** 3, (116 * fx - 16) / kappa) * ref[0]
-    xyz_out[..., 1] = np.where(L > kappa * eps, ((L + 16) / 116.0) ** 3, L / kappa) * ref[1]
-    xyz_out[..., 2] = np.where(fz ** 3 > eps, fz ** 3, (116 * fz - 16) / kappa) * ref[2]
-    M_inv = np.array([
-        [ 3.2404542, -1.5371385, -0.4985314],
-        [-0.9692660,  1.8760108,  0.0415560],
-        [ 0.0556434, -0.2040259,  1.0572252],
-    ])
-    linear_out = np.clip(xyz_out @ M_inv.T, 0, 1)
-    srgb = np.where(linear_out <= 0.0031308, linear_out * 12.92,
-                    1.055 * (linear_out ** (1.0 / 2.4)) - 0.055)
-    return np.clip(srgb * 255, 0, 255).astype(np.float32)
+    del factor
+    return _lab_to_srgb_f32(lab)
 
 
 # ── Disk cache ──────────────────────────────────────────────────────
@@ -470,13 +679,12 @@ def _hash_file(img_path):
 
 # Bump whenever algorithm implementations change in a way that affects output.
 # Old cached renders with a different version are ignored and re-rendered.
-_CACHE_VERSION = "v2"
+_CACHE_VERSION = "v3"
 
-def _cache_key(img_path, content_hash, algorithm=None):
+def _cache_key(img_path, content_hash):
     orientation = _config.get("orientation", "landscape")
-    if algorithm is None:
-        algorithm = _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"])
-    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}_{algorithm}_{_CACHE_VERSION}"
+    dither_hash = _dither_config_hash(_config["dither"])
+    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}_{dither_hash}_{_CACHE_VERSION}"
 
 def _load_from_cache(cache_dir, img_path, content_hash):
     key = _cache_key(img_path, content_hash)
@@ -665,105 +873,71 @@ def _get_upload_dir():
 def _get_cache_dir():
     return Path(_config["cache_dir"])
 
-def _failed_marker(img_path):
-    return img_path.with_name(img_path.name + ".failed")
-
-
-def _processing_marker(img_path):
-    return img_path.with_name(img_path.name + ".processing")
-
-
 def _list_images():
-    """List images in the upload dir, excluding any marked as previously
-    failed. A .failed sibling next to an image (e.g. photo.jpg.failed) means
-    a prior conversion attempt crashed or was killed by the OS; we refuse to
-    retry automatically so one bad image can't restart-loop the service
-    forever. Delete the .failed marker (or the image itself) to retry."""
     upload_dir = _get_upload_dir()
     if not upload_dir.exists():
         return []
-    return [
-        f for f in upload_dir.iterdir()
-        if f.suffix.lower() in IMAGE_EXTENSIONS
-        and f.is_file()
-        and not _failed_marker(f).exists()
-    ]
+    return [f for f in upload_dir.iterdir()
+            if f.suffix.lower() in IMAGE_EXTENSIONS and f.is_file()]
 
 
-def _promote_processing_markers_to_failed():
-    """At startup: any leftover .processing markers mean the last run crashed
-    mid-conversion. Rename each to .failed so _list_images excludes them."""
-    upload_dir = _get_upload_dir()
-    if not upload_dir.exists():
-        return
-    for f in upload_dir.iterdir():
-        if f.is_file() and f.name.endswith(".processing"):
-            img_name = f.name[:-len(".processing")]
-            img_path = upload_dir / img_name
-            failed = _failed_marker(img_path)
-            try:
-                f.replace(failed)
-                print(f"  WARNING: {img_name} failed on a previous run "
-                      f"(crash or OOM mid-convert). Marked as .failed; "
-                      f"delete the marker to retry.")
-            except OSError as e:
-                print(f"  Could not promote {f.name} -> {failed.name}: {e}")
+def _prepare_canvas(img, dither_cfg, portrait, canvas_w, canvas_h):
+    """Composite img onto a canvas of the given size, then run the pre-dither
+    tonal/colour stages (autocontrast, gamma, brightness, contrast, sharpness,
+    saturation) as driven by dither_cfg.
 
+    canvas_w/canvas_h are the natural post-rotation buffer dims for production
+    (1200x1600) or a smaller multiple (e.g. 600x800) when rendering a preview.
 
-def _prepare_canvas(img, color_enhance=1.2, adaptive_saturate=False):
-    """Scale image to fit display, enhance for e-ink, produce 1200x1600 native buffer.
-
-    In landscape mode: composites on 1600x1200 canvas, then rotates -90° to 1200x1600.
-    In portrait mode: composites directly on 1200x1600 canvas, no rotation needed.
-
-    Returns (canvas, padding_mask) where padding_mask is a boolean numpy array
-    (True = padding pixel, should be forced to white after dithering).
-
-    color_enhance is the saturation boost factor. With adaptive_saturate=True, the
-    boost is applied only to pixels with meaningful chroma (via _adaptive_saturate),
-    preserving near-neutral regions. With adaptive_saturate=False, PIL's global
-    Color.enhance is used (back-compat with the legacy algorithms).
+    Returns (canvas, padding_mask). padding_mask is True on padding pixels,
+    which get forced to pure white after dithering so the enhancement chain
+    can't turn them into a dotted off-white pattern.
     """
     from PIL import ImageEnhance, ImageOps
-    orientation = _config.get("orientation", "landscape")
-    portrait = (orientation == "portrait")
 
-    # Canvas dimensions: landscape = 1600x1200, portrait = 1200x1600
-    canvas_w = VISUAL_H if portrait else VISUAL_W   # 1200 or 1600
-    canvas_h = VISUAL_W if portrait else VISUAL_H   # 1600 or 1200
+    # _convert_image passes canvas_w/canvas_h pre-rotation for landscape
+    # (wide canvas, then rotated -90°) and post-rotation for portrait.
+    composite_w = canvas_h if not portrait else canvas_w
+    composite_h = canvas_w if not portrait else canvas_h
 
     w, h = img.size
-    scale = min(canvas_w / w, canvas_h / h)
-    new_w, new_h = int(w * scale), int(h * scale)
+    scale = min(composite_w / w, composite_h / h)
+    new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
     img_resized = img.resize((new_w, new_h), Image.LANCZOS)
-    canvas = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
-    x_off = (canvas_w - new_w) // 2
-    y_off = (canvas_h - new_h) // 2
+    canvas = Image.new("RGB", (composite_w, composite_h), (255, 255, 255))
+    x_off = (composite_w - new_w) // 2
+    y_off = (composite_h - new_h) // 2
     canvas.paste(img_resized, (x_off, y_off))
 
-    # Build padding mask (True = padding, not image content)
-    mask = np.ones((canvas_h, canvas_w), dtype=bool)
+    mask = np.ones((composite_h, composite_w), dtype=bool)
     mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
 
-    canvas = ImageOps.autocontrast(canvas, cutoff=0.5)
-    gamma = 0.85
-    gamma_lut = [int(((i / 255.0) ** gamma) * 255) for i in range(256)] * 3
-    canvas = canvas.point(gamma_lut)
-    canvas = ImageEnhance.Brightness(canvas).enhance(1.0)
-    canvas = ImageEnhance.Contrast(canvas).enhance(1.1)
-    canvas = ImageEnhance.Sharpness(canvas).enhance(1.3)
-    if adaptive_saturate:
-        arr = _apply_in_strips(
-            np.array(canvas, dtype=np.float32),
-            _adaptive_saturate,
-            max_enhance=color_enhance,
-        )
-        canvas = Image.fromarray(arr.astype(np.uint8))
-    else:
-        canvas = ImageEnhance.Color(canvas).enhance(color_enhance)
+    ac = dither_cfg.get("autocontrast", {})
+    if ac.get("enabled", True):
+        canvas = ImageOps.autocontrast(canvas, cutoff=float(ac.get("cutoff", 0.5)))
+
+    g = dither_cfg.get("gamma", {})
+    if g.get("enabled", True):
+        gamma_val = float(g.get("value", 0.85))
+        gamma_lut = [int(((i / 255.0) ** gamma_val) * 255) for i in range(256)] * 3
+        canvas = canvas.point(gamma_lut)
+
+    canvas = ImageEnhance.Brightness(canvas).enhance(float(dither_cfg.get("brightness", 1.0)))
+    canvas = ImageEnhance.Contrast(canvas).enhance(float(dither_cfg.get("contrast", 1.1)))
+    canvas = ImageEnhance.Sharpness(canvas).enhance(float(dither_cfg.get("sharpness", 1.3)))
+
+    sat = dither_cfg.get("saturation", {})
+    sat_mode = sat.get("mode", "adaptive")
+    sat_value = float(sat.get("value", 1.25))
+    if sat_mode == "global":
+        canvas = ImageEnhance.Color(canvas).enhance(sat_value)
+    # sat_mode == "adaptive" is deferred to _dither_prepared_canvas so
+    # callers can drop their source-image reference before the Lab-space
+    # transforms allocate. Running it here holds source+canvas+lab
+    # simultaneously and peaks ~50 MB above the target ceiling on large
+    # JPEGs. sat_mode == "off" simply skips saturation entirely.
 
     if not portrait:
-        # Landscape: rotate -90° CW to get 1200x1600 native format
         canvas = canvas.rotate(-90, expand=True)
         mask = np.rot90(mask, k=3)
 
@@ -920,134 +1094,220 @@ def _atkinson_dither(canvas, lut=None, lut_scale=None):
     return result_idx
 
 
-class _AlgoConfig:
-    """Bundle of per-algorithm pipeline parameters."""
-    __slots__ = ("dither_fn", "lut", "color_enhance", "scale_chroma",
-                 "adaptive_saturate", "adaptive_vivid")
-    def __init__(self, dither_fn, lut, color_enhance, scale_chroma,
-                 adaptive_saturate, adaptive_vivid):
-        self.dither_fn = dither_fn
-        self.lut = lut
-        self.color_enhance = color_enhance
-        self.scale_chroma = scale_chroma
-        self.adaptive_saturate = adaptive_saturate
-        self.adaptive_vivid = adaptive_vivid
+# Memoized hue-aware LUTs — keyed by (hue_cutoff_deg, neutral_chroma). Building
+# one is expensive (32³ pixels × 6 palette entries + hue math), so users who
+# tweak a knob shouldn't pay that cost on every render.
+_hue_aware_lut_cache = {}
+_hue_aware_lut_lock = threading.Lock()
 
 
-def _dither_for_algorithm(algorithm):
-    """Return an _AlgoConfig describing the full pipeline for the algorithm.
+def _get_lut(dither_cfg):
+    """Pick the RGB→palette-index LUT for this pipeline config. Memoizes
+    hue-aware LUTs by (cutoff, neutral_chroma) so repeated tweaks are cheap."""
+    lut_cfg = dither_cfg.get("palette_lut", {})
+    mode = lut_cfg.get("mode", "hue_aware")
+    if mode == "euclidean":
+        return _RGB_LUT_EUCLID
+    cutoff = float(lut_cfg.get("hue_cutoff_deg", 95.0))
+    neutral = float(lut_cfg.get("neutral_chroma", 8.0))
+    if cutoff == 95.0 and neutral == 8.0:
+        return _RGB_LUT_HUE_AWARE
+    key = (round(cutoff, 3), round(neutral, 3))
+    with _hue_aware_lut_lock:
+        lut = _hue_aware_lut_cache.get(key)
+        if lut is None:
+            lut, _ = _build_rgb_lut_hue_aware(hue_cutoff_deg=cutoff, neutral_chroma=neutral)
+            _hue_aware_lut_cache[key] = lut
+        return lut
 
-    atkinson_hue_aware uses the V10 recipe (adaptive saturation + adaptive
-    vividness compression): boosts chroma only for pixels that already have
-    meaningful chroma (so near-white regions don't amplify into phantom colors)
-    and compresses chroma only for near-neutral pixels (so saturated features
-    like tongues stay vivid). Benchmarked to beat the shipped baseline on both
-    neutral-region cleanliness and saturated-feature retention.
 
-    The other algorithms preserve their legacy behavior for users who prefer
-    those noise textures.
+def _get_kernel_fn(dither_cfg):
+    return _floyd_steinberg_dither if dither_cfg.get("kernel") == "floyd_steinberg" else _atkinson_dither
+
+
+def _maybe_apply_bw_fallback(dither_cfg, img):
+    """If bw_fallback is enabled and the image is near-grayscale, return a
+    derived config that disables adaptive saturation/vividness (they amplify
+    tiny chroma deviations in B&W images into a visible pink cast). Otherwise
+    returns dither_cfg unchanged.
+
+    Conservative override: flat Color(1.05) saturation, no DRC chroma
+    compression. Palette LUT, kernel, and tonal stages stay as configured.
     """
-    if algorithm == "floyd_steinberg":
-        return _AlgoConfig(_floyd_steinberg_dither, _RGB_LUT_EUCLID, 1.2, False, False, False)
-    if algorithm == "atkinson":
-        return _AlgoConfig(_atkinson_dither, _RGB_LUT_EUCLID, 1.2, False, False, False)
-    if algorithm == "atkinson_hue_aware":
-        return _AlgoConfig(_atkinson_dither, _RGB_LUT_HUE_AWARE, 1.25, False, True, True)
-    # Unknown algorithm falls back to the default recipe so unfamiliar config
-    # values don't hard-fail the server.
-    return _AlgoConfig(_atkinson_dither, _RGB_LUT_HUE_AWARE, 1.25, False, True, True)
-
-
-# Images whose max chroma stays below this threshold are treated as near-grayscale
-# and rendered with a conservative preset (no adaptive saturation boost). Without
-# this, the adaptive saturation + vividness pipeline amplifies tiny chroma
-# deviations in B&W inputs into a visible pink cast.
-_GRAYSCALE_CHROMA_THRESHOLD = 8.0
-
-
-def _is_near_grayscale(img):
-    """Detect near-B&W source images by sampling Lab chroma.
-
-    Downsamples to 200px for speed, converts to Lab, and returns True if the
-    95th-percentile chroma is below _GRAYSCALE_CHROMA_THRESHOLD. Downsampling
-    rather than sampling avoids being fooled by a single chromatic pixel in
-    an otherwise grayscale image.
-    """
+    fb = dither_cfg.get("bw_fallback", {})
+    if not fb.get("enabled"):
+        return dither_cfg, False
+    threshold = float(fb.get("chroma_threshold", 8.0))
+    percentile = int(fb.get("percentile", 95))
     thumb = img.copy()
     thumb.thumbnail((200, 200), Image.LANCZOS)
-    arr = np.asarray(thumb.convert("RGB"), dtype=np.float32)
+    arr = np.asarray(thumb.convert("RGB"), dtype=np.float64)
     lab = _xyz_to_lab(_linear_to_xyz(_srgb_to_linear(arr)))
     chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
-    return float(np.percentile(chroma, 95)) < _GRAYSCALE_CHROMA_THRESHOLD
+    if float(np.percentile(chroma, percentile)) >= threshold:
+        return dither_cfg, False
+    override = copy.deepcopy(dither_cfg)
+    override["saturation"] = {"mode": "global", "value": 1.05,
+                              "low": 5.0, "high": 15.0}
+    override.setdefault("drc", {})["chroma_mode"] = "off"
+    return override, True
+
+
+def _apply_lab_stage(canvas, sat_cfg, drc_cfg):
+    """Fused adaptive-saturation + DRC in a single Lab round-trip.
+
+    The two stages operate on the same lab buffer so we do one
+    rgb→lab conversion and one lab→rgb conversion for both together,
+    instead of two round-trips. On a 1200×1600 float32 canvas each
+    round-trip peaks at ~50 MB of intermediate allocations; fusing
+    cuts peak by that full second trip.
+
+    Execution order matches the old sequential path: adaptive saturation
+    runs first (operates on a* and b*), then DRC L* remap + optional
+    chroma compression. Global/off saturation modes were already applied
+    during canvas prep; this helper skips them.
+
+    Returns a new PIL Image with the transformed pixels, or the input
+    canvas if no Lab-space work is needed.
+    """
+    sat_mode = sat_cfg.get("mode")
+    drc_enabled = drc_cfg.get("enabled", True)
+    sat_active = sat_mode == "adaptive"
+
+    if not (sat_active or drc_enabled):
+        return canvas  # nothing to do in Lab space
+
+    rgb = np.array(canvas, dtype=np.float32)
+    lab = _rgb_f32_to_lab(rgb)
+    del rgb
+
+    # (1) adaptive saturation on a*, b*
+    if sat_active:
+        max_enhance = np.float32(sat_cfg.get("value", 1.25))
+        low = np.float32(sat_cfg.get("low", 5.0))
+        high = np.float32(sat_cfg.get("high", 15.0))
+        chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
+        t = np.clip((chroma - low) / (high - low), 0.0, 1.0)
+        del chroma
+        factor = np.float32(1.0) + (max_enhance - np.float32(1.0)) * t
+        del t
+        lab[..., 1] *= factor
+        lab[..., 2] *= factor
+        del factor
+
+    # (2) DRC L* remap and optional chroma handling
+    if drc_enabled:
+        L_ratio = np.float32((_DISPLAY_WHITE_L - _DISPLAY_BLACK_L) / 100.0)
+        lab[..., 0] = np.float32(_DISPLAY_BLACK_L) + lab[..., 0] * L_ratio
+        chroma_mode = drc_cfg.get("chroma_mode", "adaptive_vivid")
+        if chroma_mode == "adaptive_vivid":
+            vivid_low = np.float32(drc_cfg.get("vivid_low", 5.0))
+            vivid_high = np.float32(drc_cfg.get("vivid_high", 15.0))
+            chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
+            t = np.clip((chroma - vivid_low) / (vivid_high - vivid_low), 0.0, 1.0)
+            del chroma
+            c_factor = L_ratio + (np.float32(1.0) - L_ratio) * t
+            del t
+            lab[..., 1] *= c_factor
+            lab[..., 2] *= c_factor
+            del c_factor
+        elif chroma_mode == "flat":
+            lab[..., 1] *= L_ratio
+            lab[..., 2] *= L_ratio
+
+    out_arr = _lab_to_srgb_f32(lab)
+    del lab
+    result = Image.fromarray(out_arr.astype(np.uint8))
+    del out_arr
+    return result
+
+
+def _dither_prepared_canvas(canvas, padding_mask, dither_cfg):
+    """Run the Lab-stage pipeline (fused saturation+DRC) then the dither
+    kernel on an already-prepared canvas. Split out from
+    _run_dither_pipeline so callers can drop their source-image
+    reference before the Lab-space transforms allocate — on large JPEGs
+    that saves 20–50 MB of peak footprint.
+    """
+    canvas = _apply_lab_stage(canvas, dither_cfg.get("saturation", {}),
+                               dither_cfg.get("drc", {}))
+
+    kernel_fn = _get_kernel_fn(dither_cfg)
+    lut = _get_lut(dither_cfg)
+    result_idx = kernel_fn(canvas, lut, _LUT_SCALE)
+    del canvas
+    result_idx[padding_mask] = 1  # force padding to pure white
+    return result_idx
+
+
+def _run_dither_pipeline(img, dither_cfg, orientation, canvas_w, canvas_h):
+    """Convenience wrapper: prepare_canvas → _dither_prepared_canvas. Used
+    by the preview endpoint where the source image is always small. The
+    full-resolution _convert_image path splits the two calls manually so
+    it can drop its source-image reference before DRC peaks."""
+    portrait = (orientation == "portrait")
+    canvas, padding_mask = _prepare_canvas(img, dither_cfg, portrait, canvas_w, canvas_h)
+    result_idx = _dither_prepared_canvas(canvas, padding_mask, dither_cfg)
+    return result_idx, padding_mask
+
+
+def _render_preview_png(result_idx, orientation):
+    """Convert a palette-index buffer into a human-viewable PNG (bytes)."""
+    preview_rgb = PALETTE_PREVIEW_RGB[result_idx]
+    if orientation == "landscape":
+        preview_img = Image.fromarray(preview_rgb).rotate(90, expand=True)
+    else:
+        preview_img = Image.fromarray(preview_rgb)
+    buf = BytesIO()
+    preview_img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _convert_image(img_path):
+    """Full-resolution render to panel bytes + preview PNG. Uses the saved
+    _config['dither'] pipeline. Applies B&W fallback when the input image
+    qualifies."""
     print(f"Converting: {img_path.name}")
     t0 = time.time()
     from PIL import ImageOps
     img = Image.open(img_path)
-
-    # Pre-downscale huge source images BEFORE forcing a full decode. The
-    # target canvas is 1600x1200, so nothing past ~1.25x that (2000 px on
-    # the long edge) adds useful detail after LANCZOS resize + dither, but a
-    # 12MP JPEG costs several hundred MB of float64 buffers during the
-    # dither pipeline — enough to OOM-kill the service on a Pi Zero 2 W
-    # (512 MB RAM, ~100 MB free). 2000 px gives libjpeg a chance to pick a
-    # 1:2 DCT scale on a 4000-wide source, landing ~1920 px natively with
-    # no intermediate full-res buffer.
-    _MAX_PRE_DECODE_DIM = 2000
-    if max(img.size) > _MAX_PRE_DECODE_DIM:
-        try:
-            img.draft("RGB", (_MAX_PRE_DECODE_DIM, _MAX_PRE_DECODE_DIM))
-        except Exception:
-            pass  # draft is best-effort; we'll fall through to the resize below
-
-    # Apply EXIF orientation before converting — phones and cameras store
-    # rotation as metadata rather than rotating the actual pixel data.
-    # Without this, portrait photos appear sideways on the display.
+    # Early downsample: a 32-megapixel phone JPEG would otherwise sit in
+    # RAM as 96 MB of RGB alongside the DRC float arrays and OOM the Pi.
+    # JPEG's draft() asks the decoder to emit a smaller image by skipping
+    # DCT coefficients — free, no full-size decode ever happens. Other
+    # formats fall back to thumbnail() after load, which still caps the
+    # peak by releasing the full-size copy. The ceiling is 3× the panel
+    # long-edge so LANCZOS resampling to canvas still has ample detail.
+    max_side = 3 * max(FULL_W, PANEL_H)
+    try:
+        img.draft(None, (max_side, max_side))
+    except Exception:
+        pass  # non-JPEG or decoder without draft — tolerable
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
-
-    # draft() leaves the image near the target size but not exact. If the
-    # image is still larger than _MAX_PRE_DECODE_DIM (non-JPEG where draft
-    # did nothing, or JPEG that draft scaled to e.g. 1920x1440), downsize
-    # now before _prepare_canvas allocates big float64 arrays.
-    if max(img.size) > _MAX_PRE_DECODE_DIM:
-        scale = _MAX_PRE_DECODE_DIM / max(img.size)
-        new_size = (int(img.size[0] * scale), int(img.size[1] * scale))
-        img = img.resize(new_size, Image.LANCZOS)
-
+    if max(img.size) > max_side:
+        img.thumbnail((max_side, max_side), Image.LANCZOS)
     print(f"  {img_path.name}: {img.size[0]}x{img.size[1]}")
 
-    algorithm = _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"])
-    cfg = _dither_for_algorithm(algorithm)
+    dither_cfg = _config["dither"]
+    dither_cfg, bw_used = _maybe_apply_bw_fallback(dither_cfg, img)
+    if bw_used:
+        print(f"  {img_path.name}: B&W detected, applying conservative fallback")
 
-    # B&W fallback: adaptive saturation/vividness amplify tiny chroma deviations
-    # in near-grayscale images into a visible color cast. Detect and use the
-    # conservative preset (no adaptive saturation, modest enhance).
-    if (cfg.adaptive_saturate or cfg.adaptive_vivid) and _is_near_grayscale(img):
-        print(f"  {img_path.name}: B&W detected, using conservative preset")
-        cfg = _AlgoConfig(cfg.dither_fn, cfg.lut, 1.05, False, False, False)
+    orientation = _config.get("orientation", "landscape")
+    # Full-resolution panel buffer is 1200×1600 (portrait) regardless of
+    # orientation — landscape rotates into the same buffer shape.
+    # We run _prepare_canvas inline (not via _run_dither_pipeline) so we
+    # can free the full-size source image BEFORE the DRC arrays allocate.
+    # On a 32 MP source that's the difference between a 450 MB peak and
+    # a ~50 MB peak.
+    portrait = (orientation == "portrait")
+    canvas, padding_mask = _prepare_canvas(img, dither_cfg, portrait,
+                                           canvas_w=FULL_W, canvas_h=PANEL_H)
+    del img  # source no longer needed; release its RGB buffer
+    result_idx = _dither_prepared_canvas(canvas, padding_mask, dither_cfg)
+    del canvas, padding_mask
 
-    print(f"  {img_path.name}: algorithm={algorithm} enhance={cfg.color_enhance} "
-          f"adaptive_sat={cfg.adaptive_saturate} adaptive_vivid={cfg.adaptive_vivid} "
-          f"scale_chroma={cfg.scale_chroma}")
-
-    canvas, padding_mask = _prepare_canvas(img, color_enhance=cfg.color_enhance,
-                                           adaptive_saturate=cfg.adaptive_saturate)
-    canvas_array = _apply_in_strips(
-        np.array(canvas, dtype=np.float32),
-        _compress_dynamic_range,
-        scale_chroma=cfg.scale_chroma,
-        adaptive_vivid=cfg.adaptive_vivid,
-    )
-    canvas = Image.fromarray(canvas_array.astype(np.uint8))
-    result_idx = cfg.dither_fn(canvas, cfg.lut, _LUT_SCALE)
-
-    # Force padding areas to pure white (palette index 1) — without this,
-    # the enhancement + dithering pipeline turns pure white into a slightly
-    # off-white that gets dithered as a visible dotted pattern.
-    result_idx[padding_mask] = 1
     nibbles = PALETTE_NIBBLE[result_idx]
     panel1_nib = nibbles[:, :PANEL_W]
     panel2_nib = nibbles[:, PANEL_W:]
@@ -1055,20 +1315,39 @@ def _convert_image(img_path):
     panel2_bin = (panel2_nib[:, 0::2] << 4) | panel2_nib[:, 1::2]
     raw_bytes = panel1_bin.astype(np.uint8).tobytes() + panel2_bin.astype(np.uint8).tobytes()
     assert len(raw_bytes) == TOTAL_BYTES, f"Expected {TOTAL_BYTES}, got {len(raw_bytes)}"
-    preview_rgb = PALETTE_PREVIEW_RGB[result_idx]
-    orientation = _config.get("orientation", "landscape")
-    if orientation == "landscape":
-        # Rotate back 90° CCW for human-friendly landscape preview
-        preview_img = Image.fromarray(preview_rgb).rotate(90, expand=True)
-    else:
-        # Portrait: already in natural viewing orientation
-        preview_img = Image.fromarray(preview_rgb)
-    buf = BytesIO()
-    preview_img.save(buf, format="PNG")
-    preview_bytes = buf.getvalue()
+
+    preview_bytes = _render_preview_png(result_idx, orientation)
     elapsed = time.time() - t0
     print(f"  {img_path.name}: done in {elapsed:.1f}s")
     return raw_bytes, preview_bytes
+
+
+# Preview button downsamples the source to this long-edge size before running
+# the full pipeline. ~1 s render (vs ~10 s full-res) — trades dither-pattern
+# fidelity for interactive feedback while tweaking knobs.
+_PREVIEW_LONG_EDGE = 800
+
+
+def _render_dither_preview(img_path, dither_cfg):
+    """Small-canvas render used by /api/dither/preview. Returns PNG bytes.
+    Does NOT touch _config, _pool, or the disk cache — callers can safely
+    pass the unsaved form state."""
+    from PIL import ImageOps
+    img = Image.open(img_path)
+    img = ImageOps.exif_transpose(img)
+    img = img.convert("RGB")
+    img.thumbnail((_PREVIEW_LONG_EDGE, _PREVIEW_LONG_EDGE), Image.LANCZOS)
+
+    dither_cfg = _normalize_dither_config(dither_cfg)
+    dither_cfg, _ = _maybe_apply_bw_fallback(dither_cfg, img)
+
+    orientation = _config.get("orientation", "landscape")
+    # Half-resolution canvas preserves the same aspect ratio as full render.
+    canvas_w = FULL_W // 2
+    canvas_h = PANEL_H // 2
+    result_idx, _ = _run_dither_pipeline(img, dither_cfg, orientation,
+                                         canvas_w=canvas_w, canvas_h=canvas_h)
+    return _render_preview_png(result_idx, orientation)
 
 
 def _convert_and_store(img_path, content_hash):
@@ -1083,22 +1362,9 @@ def _convert_and_store(img_path, content_hash):
             with _lock:
                 _converting_count += 1
                 _converting_name = img_path.name
-            # Write a .processing marker BEFORE attempting conversion. If
-            # the process gets OOM-killed mid-dither, this marker survives
-            # the crash; startup then promotes it to .failed so we don't
-            # restart-loop on the same image.
-            marker = _processing_marker(img_path)
-            try:
-                marker.touch()
-            except OSError:
-                pass
             try:
                 raw_bytes, preview_bytes = _convert_image(img_path)
                 _save_to_cache(cache_dir, img_path, content_hash, raw_bytes, preview_bytes)
-                try:
-                    marker.unlink(missing_ok=True)
-                except OSError:
-                    pass
             finally:
                 with _lock:
                     _converting_count -= 1
@@ -1188,10 +1454,7 @@ def _sync_pool_inner():
     with _lock:
         valid_cache_keys = set()
         for key, entry in _pool.items():
-            # Keep cached renders for every algorithm, not just the active one,
-            # so toggling the dither dropdown is instant on a re-visit.
-            for algo in VALID_DITHER_ALGORITHMS:
-                valid_cache_keys.add(_cache_key(Path(key), entry["hash"], algorithm=algo))
+            valid_cache_keys.add(_cache_key(Path(key), entry["hash"]))
     _purge_stale_cache(cache_dir, valid_cache_keys)
 
 
@@ -1409,8 +1672,12 @@ def web_gui():
 @app.route("/hokku/api/status")
 def api_status():
     """JSON API for the web GUI — includes enriched serve_data with formatted durations."""
-    # Time only — the top-right display doesn't need the date.
-    now_str = datetime.now().strftime("%H:%M:%S %Z").strip()
+    try:
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo(_config["timezone"])
+        now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+    except Exception:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     with _lock:
         pool_files = sorted(Path(k).name for k in _pool.keys())
@@ -1422,17 +1689,6 @@ def api_status():
         # for pending images with a "generating preview" badge.
         all_upload = sorted(p.name for p in _list_images())
         upload_files = [{"name": n, "dithered": n in pool_set} for n in all_upload]
-
-        # Also list images that were quarantined after a prior crash, so the
-        # UI can show them in a "Failed" section with a retry button.
-        upload_dir = _get_upload_dir()
-        failed_files = []
-        if upload_dir.exists():
-            for f in upload_dir.iterdir():
-                if f.is_file() and f.name.endswith(".failed"):
-                    orig = f.name[:-len(".failed")]
-                    failed_files.append(orig)
-            failed_files.sort()
 
         enriched = {}
         for fname in pool_files:
@@ -1450,7 +1706,6 @@ def api_status():
         return jsonify({
             "pool_files": pool_files,
             "upload_files": upload_files,
-            "failed_files": failed_files,
             "pool_size": len(_pool),
             "upload_size": len(upload_files),
             "serve_data": enriched,
@@ -1461,18 +1716,35 @@ def api_status():
             "converting_total": _converting_total,
             "converting_done": _converting_done,
             "server_time": now_str,
-            "config": {
-                "refresh_image_at_time": _config["refresh_image_at_time"],
-                "port": _config["port"],
-                "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
-                "orientation": _config.get("orientation", "landscape"),
-                "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
-                "debug_fast_refresh_seconds": DEBUG_FAST_REFRESH_SECONDS,
-                "dither_algorithm": _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"]),
-                "upload_dir": str(_get_upload_dir()),
-                "cache_dir": str(_get_cache_dir()),
-            },
         })
+
+
+@app.route("/hokku/api/config", methods=["GET"])
+def api_config_get():
+    """Return the full config + preset catalog. Intended to be fetched ONCE
+    when the settings form first renders — the /api/status poll deliberately
+    omits config so it can't overwrite fields the user is editing."""
+    presets = {
+        name: {"label": p["label"], "description": p["description"],
+               "dither": p["dither"]}
+        for name, p in DITHER_PRESETS.items()
+    }
+    return jsonify({
+        "config": {
+            "timezone": _config["timezone"],
+            "refresh_image_at_time": _config["refresh_image_at_time"],
+            "port": _config["port"],
+            "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
+            "orientation": _config.get("orientation", "landscape"),
+            "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
+            "debug_fast_refresh_seconds": DEBUG_FAST_REFRESH_SECONDS,
+            "dither": _config["dither"],
+            "upload_dir": str(_get_upload_dir()),
+            "cache_dir": str(_get_cache_dir()),
+        },
+        "dither_presets": presets,
+        "default_preset": DEFAULT_PRESET,
+    })
 
 
 # Formats browsers can display natively — everything else gets converted to JPEG
@@ -1524,14 +1796,6 @@ def _ensure_thumbnail(img_path):
             from PIL import ImageOps
             thumb_path.parent.mkdir(parents=True, exist_ok=True)
             img = Image.open(img_path)
-            # Ask libjpeg for a pre-decoded, already-downscaled buffer when the
-            # source is large — we only need 300x300 out, so a full decode of a
-            # 12MP phone photo is pure RAM waste on a Pi Zero 2 W. See the
-            # matching note in _convert_image.
-            try:
-                img.draft("RGB", (600, 600))
-            except Exception:
-                pass
             img = ImageOps.exif_transpose(img)
             # JPEG can't encode alpha — flatten RGBA / LA / P-with-transparency
             # onto a white canvas before saving.
@@ -1605,6 +1869,9 @@ def api_config():
         return jsonify({"error": "No JSON body"}), 400
 
     changed = False
+    if "timezone" in data:
+        _config["timezone"] = data["timezone"]
+        changed = True
     if "refresh_image_at_time" in data:
         _config["refresh_image_at_time"] = data["refresh_image_at_time"]
         changed = True
@@ -1627,17 +1894,12 @@ def api_config():
         _config["debug_fast_refresh"] = bool(data["debug_fast_refresh"])
         changed = True
 
-    algorithm_changed = False
-    if "dither_algorithm" in data:
-        val = data["dither_algorithm"]
-        # Silently migrate deprecated names to the current default
-        if val in _DEPRECATED_ALGORITHMS:
-            val = DEFAULT_CONFIG["dither_algorithm"]
-        if val not in VALID_DITHER_ALGORITHMS:
-            return jsonify({"error": f"Unknown dither_algorithm: {val}"}), 400
-        if _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"]) != val:
-            algorithm_changed = True
-        _config["dither_algorithm"] = val
+    dither_changed = False
+    if "dither" in data:
+        new_dither = _normalize_dither_config(data["dither"])
+        if _dither_config_hash(_config["dither"]) != _dither_config_hash(new_dither):
+            dither_changed = True
+        _config["dither"] = new_dither
         changed = True
 
     if changed:
@@ -1649,22 +1911,49 @@ def api_config():
         with _lock:
             _pool.clear()
         threading.Thread(target=_sync_pool, daemon=True).start()
-    elif algorithm_changed:
-        # Algorithm change: cache key changes so pool entries won't find matching
-        # renders. Drop the pool to force _sync_pool to re-run _convert_and_store,
-        # which hits cache for algorithms we've rendered before (instant) and
-        # falls through to _convert_image for new ones.
+    elif dither_changed:
+        # Dither config change: cache key changes so pool entries won't find
+        # matching renders. Drop the pool to force _sync_pool to re-run
+        # _convert_and_store.
         with _lock:
             _pool.clear()
         threading.Thread(target=_sync_pool, daemon=True).start()
 
     return jsonify({"status": "ok", "config": {
+        "timezone": _config["timezone"],
         "refresh_image_at_time": _config["refresh_image_at_time"],
         "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
         "orientation": _config.get("orientation", "landscape"),
         "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
-        "dither_algorithm": _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"]),
+        "dither": _config["dither"],
     }})
+
+
+@app.route("/hokku/api/dither/preview", methods=["POST"])
+def api_dither_preview():
+    """Render a preview PNG using an *unsaved* dither config.
+
+    Body: {"filename": "<image in upload dir>", "dither": {<dither config>}}
+    Returns: PNG bytes. Does not touch the pool or disk cache."""
+    data = request.get_json(silent=True) or {}
+    filename = data.get("filename")
+    dither_cfg = data.get("dither")
+    if not filename or not isinstance(dither_cfg, dict):
+        return jsonify({"error": "Expected JSON {filename, dither}"}), 400
+
+    upload_dir = _get_upload_dir()
+    img_path = upload_dir / filename
+    if not img_path.exists() or not img_path.is_file():
+        abort(404)
+    if img_path.suffix.lower() not in IMAGE_EXTENSIONS:
+        abort(404)
+
+    try:
+        preview_bytes = _render_dither_preview(img_path, dither_cfg)
+    except Exception as e:
+        print(f"  Dither preview error for {filename}: {e}")
+        return jsonify({"error": str(e)}), 500
+    return send_file(BytesIO(preview_bytes), mimetype="image/png")
 
 
 @app.route("/hokku/api/upload", methods=["POST"])
@@ -1757,28 +2046,6 @@ def api_delete_image(filename):
     return jsonify({"status": "ok", "deleted": safe_name})
 
 
-@app.route("/hokku/api/image/<filename>/retry", methods=["POST"])
-def api_retry_image(filename):
-    """Remove the .failed quarantine marker for an image and re-trigger a sync
-    so the dither pipeline picks it up again."""
-    safe_name = secure_filename(filename)
-    if not safe_name:
-        return jsonify({"error": "Invalid filename"}), 400
-    img_path = _get_upload_dir() / safe_name
-    if not img_path.exists() or not img_path.is_file():
-        return jsonify({"error": "Image not found"}), 404
-    marker = _failed_marker(img_path)
-    if not marker.exists():
-        return jsonify({"error": "Image is not in the failed state"}), 400
-    try:
-        marker.unlink()
-    except OSError as e:
-        return jsonify({"error": f"Failed to remove marker: {e.strerror or e}"}), 500
-    print(f"  Retry: unquarantined {safe_name}")
-    threading.Thread(target=_sync_pool, daemon=True).start()
-    return jsonify({"status": "ok", "retrying": safe_name})
-
-
 @app.route("/hokku/api/clear_cache", methods=["POST"])
 def api_clear_cache():
     """Wipe cache and trigger re-conversion."""
@@ -1791,18 +2058,16 @@ def api_clear_cache():
 
 @app.route("/hokku/api/time")
 def api_time():
-    """Return current server time in the system timezone."""
-    now = datetime.now()
-    # Read the host's configured zone for informational purposes only. Falls
-    # back to the empty string if not resolvable (e.g. stripped container).
+    """Return current server time in configured timezone."""
     try:
-        import time as _time
-        tz_name = _time.tzname[_time.daylight and _time.localtime().tm_isdst > 0]
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo(_config["timezone"])
+        now = datetime.now(tz)
     except Exception:
-        tz_name = ""
+        now = datetime.now()
     return jsonify({
         "time": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "timezone": tz_name,
+        "timezone": _config["timezone"],
     })
 
 
@@ -1824,17 +2089,13 @@ def main():
     print(f"Hokku image server (full resolution: {VISUAL_W}x{VISUAL_H})")
     print(f"  Upload dir: {upload_dir}")
     print(f"  Cache dir:  {cache_dir}")
-    print(f"  Timezone:   system ({datetime.now().astimezone().tzinfo})")
+    print(f"  Timezone:   {_config['timezone']}")
     print(f"  Refresh at: {_config['refresh_image_at_time']}")
     print(f"  Poll interval: {poll}s")
     print(f"  Output: {TOTAL_BYTES} bytes per image ({PANEL_BYTES} per panel)")
     print(f"  Endpoints:")
     print(f"    GET /hokku/screen/      — 960K binary (fair rotation) + X-Sleep-Seconds header")
     print(f"    GET /hokku/ui           — Web GUI")
-
-    # Quarantine any image whose .processing marker survived a crash —
-    # otherwise we restart-loop on a bad image forever.
-    _promote_processing_markers_to_failed()
 
     images = _list_images()
     if images:
