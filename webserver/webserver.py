@@ -190,11 +190,20 @@ def _dither_config_hash(dither_cfg):
 
 # ── Configuration ──────────────────────────────────────────────────
 
+# Single source of truth for where images and cache live. Used by both the
+# Debian install (StateDirectory=hokku; DynamicUser can write here) and dev
+# runs from source. Dev users who want a different location override in their
+# own config.json.
+_DEFAULT_UPLOAD_DIR = "/var/lib/hokku/upload"
+_DEFAULT_CACHE_DIR = "/var/lib/hokku/cache"
+
 DEFAULT_CONFIG = {
-    "timezone": "America/Chicago",
+    # Timezone is read from the host OS at runtime (set via `timedatectl` on
+    # the Pi install, or the dev's workstation zone otherwise). No longer
+    # a stored config key — the server always follows system-local time.
     "refresh_image_at_time": ["0600", "1200", "1800"],
-    "upload_dir": "/images/upload",
-    "cache_dir": "/images/cache",
+    "upload_dir": _DEFAULT_UPLOAD_DIR,
+    "cache_dir": _DEFAULT_CACHE_DIR,
     "port": 8080,
     "poll_interval_seconds": 10,
     "orientation": "landscape",
@@ -212,7 +221,7 @@ DEBUG_FAST_REFRESH_SECONDS = 180
 _config_file_path = None  # set during load, used for saving
 
 
-_SAVE_KEYS = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir",
+_SAVE_KEYS = ["refresh_image_at_time", "upload_dir", "cache_dir",
               "port", "poll_interval_seconds", "orientation",
               "debug_fast_refresh", "dither"]
 
@@ -258,6 +267,18 @@ def _load_config():
                 # — the default preset applies. Users reselect a preset once.
                 config.pop("dither_algorithm", None)
                 config["dither"] = _normalize_dither_config(config.get("dither"))
+                # Legacy /images/* paths (pre-2.1.21) come from a release with
+                # bad defaults; under the Debian service they're not writable.
+                # Migrate silently to the StateDirectory paths.
+                if config.get("upload_dir") == "/images/upload":
+                    config["upload_dir"] = _DEFAULT_UPLOAD_DIR
+                    print(f"  Migrating upload_dir /images/upload -> {_DEFAULT_UPLOAD_DIR}")
+                if config.get("cache_dir") == "/images/cache":
+                    config["cache_dir"] = _DEFAULT_CACHE_DIR
+                    print(f"  Migrating cache_dir /images/cache -> {_DEFAULT_CACHE_DIR}")
+                # Timezone is no longer a server setting — strip any stale
+                # value from older configs so it doesn't end up in saves.
+                config.pop("timezone", None)
                 print(f"  Config loaded from: {path}")
                 break
             except (json.JSONDecodeError, OSError) as e:
@@ -317,16 +338,9 @@ def _calculate_sleep_seconds(config):
     if config.get("debug_fast_refresh"):
         return DEBUG_FAST_REFRESH_SECONDS
 
-    try:
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo(config["timezone"])
-    except (ImportError, KeyError, Exception):
-        tz = None
-
-    if tz:
-        now = datetime.now(tz)
-    else:
-        now = datetime.now()
+    # System-local time — host's timezone is set via timedatectl on the Pi,
+    # or the dev workstation's zone otherwise. No longer a config setting.
+    now = datetime.now()
 
     times = config.get("refresh_image_at_time", ["0600", "1200", "1800"])
     if not times:
@@ -873,12 +887,64 @@ def _get_upload_dir():
 def _get_cache_dir():
     return Path(_config["cache_dir"])
 
-def _list_images():
+def _failed_marker(img_path):
+    return img_path.with_name(img_path.name + ".failed")
+
+
+def _processing_marker(img_path):
+    return img_path.with_name(img_path.name + ".processing")
+
+
+def _promote_processing_markers_to_failed():
+    """At startup: any leftover .processing markers mean the last run crashed
+    mid-conversion. Rename each to .failed so _list_images excludes them and
+    the service stops restart-looping on the same image."""
+    upload_dir = _get_upload_dir()
+    if not upload_dir.exists():
+        return
+    for f in upload_dir.iterdir():
+        if f.is_file() and f.name.endswith(".processing"):
+            img_name = f.name[:-len(".processing")]
+            failed = upload_dir / (img_name + ".failed")
+            try:
+                f.replace(failed)
+                print(f"  WARNING: {img_name} failed on a previous run "
+                      f"(crash or OOM mid-convert). Marked as .failed; "
+                      f"use the Web UI's 'Retry' button or delete the .failed "
+                      f"marker to retry.")
+            except OSError as e:
+                print(f"  Could not promote {f.name} -> {failed.name}: {e}")
+
+
+def _list_failed():
+    """Return the names of images that were quarantined after a prior crash
+    (i.e. have a .failed sibling). Used by the web UI's failed list."""
     upload_dir = _get_upload_dir()
     if not upload_dir.exists():
         return []
-    return [f for f in upload_dir.iterdir()
-            if f.suffix.lower() in IMAGE_EXTENSIONS and f.is_file()]
+    out = []
+    for f in upload_dir.iterdir():
+        if f.is_file() and f.name.endswith(".failed"):
+            out.append(f.name[:-len(".failed")])
+    out.sort()
+    return out
+
+
+def _list_images():
+    """List images in the upload dir, excluding any marked as previously
+    failed. A .failed sibling next to an image (e.g. photo.jpg.failed) means
+    a prior conversion attempt crashed or was killed by the OS; we refuse
+    to retry automatically so one bad image can't restart-loop the service.
+    Hit Retry in the UI (or delete the .failed marker) to retry."""
+    upload_dir = _get_upload_dir()
+    if not upload_dir.exists():
+        return []
+    return [
+        f for f in upload_dir.iterdir()
+        if f.suffix.lower() in IMAGE_EXTENSIONS
+        and f.is_file()
+        and not _failed_marker(f).exists()
+    ]
 
 
 def _prepare_canvas(img, dither_cfg, portrait, canvas_w, canvas_h):
@@ -1362,9 +1428,22 @@ def _convert_and_store(img_path, content_hash):
             with _lock:
                 _converting_count += 1
                 _converting_name = img_path.name
+            # Drop a .processing marker BEFORE attempting conversion. If
+            # the process gets OOM-killed mid-dither this marker survives
+            # the crash; startup then promotes it to .failed so we don't
+            # restart-loop on the same image.
+            marker = _processing_marker(img_path)
+            try:
+                marker.touch()
+            except OSError:
+                pass
             try:
                 raw_bytes, preview_bytes = _convert_image(img_path)
                 _save_to_cache(cache_dir, img_path, content_hash, raw_bytes, preview_bytes)
+                try:
+                    marker.unlink(missing_ok=True)
+                except OSError:
+                    pass
             finally:
                 with _lock:
                     _converting_count -= 1
@@ -1672,12 +1751,8 @@ def web_gui():
 @app.route("/hokku/api/status")
 def api_status():
     """JSON API for the web GUI — includes enriched serve_data with formatted durations."""
-    try:
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo(_config["timezone"])
-        now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S %Z")
-    except Exception:
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Time only — the top-right display doesn't need the date.
+    now_str = datetime.now().strftime("%H:%M:%S %Z").strip()
 
     with _lock:
         pool_files = sorted(Path(k).name for k in _pool.keys())
@@ -1703,9 +1778,12 @@ def api_status():
 
         screens = _database.get("screens", {})
 
+        failed_files = _list_failed()
+
         return jsonify({
             "pool_files": pool_files,
             "upload_files": upload_files,
+            "failed_files": failed_files,
             "pool_size": len(_pool),
             "upload_size": len(upload_files),
             "serve_data": enriched,
@@ -1731,7 +1809,6 @@ def api_config_get():
     }
     return jsonify({
         "config": {
-            "timezone": _config["timezone"],
             "refresh_image_at_time": _config["refresh_image_at_time"],
             "port": _config["port"],
             "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
@@ -1796,6 +1873,12 @@ def _ensure_thumbnail(img_path):
             from PIL import ImageOps
             thumb_path.parent.mkdir(parents=True, exist_ok=True)
             img = Image.open(img_path)
+            # Hint libjpeg to decode at 1/4 or so — we only need 300x300 out,
+            # full decode of a 12 MP source is pure RAM waste on a Pi Zero 2 W.
+            try:
+                img.draft("RGB", (600, 600))
+            except Exception:
+                pass
             img = ImageOps.exif_transpose(img)
             # JPEG can't encode alpha — flatten RGBA / LA / P-with-transparency
             # onto a white canvas before saving.
@@ -1869,9 +1952,8 @@ def api_config():
         return jsonify({"error": "No JSON body"}), 400
 
     changed = False
-    if "timezone" in data:
-        _config["timezone"] = data["timezone"]
-        changed = True
+    # Timezone is no longer configurable here — host OS owns it. Silently
+    # ignore stale clients still posting it.
     if "refresh_image_at_time" in data:
         _config["refresh_image_at_time"] = data["refresh_image_at_time"]
         changed = True
@@ -1920,7 +2002,6 @@ def api_config():
         threading.Thread(target=_sync_pool, daemon=True).start()
 
     return jsonify({"status": "ok", "config": {
-        "timezone": _config["timezone"],
         "refresh_image_at_time": _config["refresh_image_at_time"],
         "poll_interval_seconds": _config.get("poll_interval_seconds", 10),
         "orientation": _config.get("orientation", "landscape"),
@@ -2046,6 +2127,28 @@ def api_delete_image(filename):
     return jsonify({"status": "ok", "deleted": safe_name})
 
 
+@app.route("/hokku/api/image/<filename>/retry", methods=["POST"])
+def api_retry_image(filename):
+    """Remove the .failed quarantine marker for an image and re-trigger a sync
+    so the dither pipeline picks it up again."""
+    safe_name = secure_filename(filename)
+    if not safe_name:
+        return jsonify({"error": "Invalid filename"}), 400
+    img_path = _get_upload_dir() / safe_name
+    if not img_path.exists() or not img_path.is_file():
+        return jsonify({"error": "Image not found"}), 404
+    marker = _failed_marker(img_path)
+    if not marker.exists():
+        return jsonify({"error": "Image is not in the failed state"}), 400
+    try:
+        marker.unlink()
+    except OSError as e:
+        return jsonify({"error": f"Failed to remove marker: {e.strerror or e}"}), 500
+    print(f"  Retry: unquarantined {safe_name}")
+    threading.Thread(target=_sync_pool, daemon=True).start()
+    return jsonify({"status": "ok", "retrying": safe_name})
+
+
 @app.route("/hokku/api/clear_cache", methods=["POST"])
 def api_clear_cache():
     """Wipe cache and trigger re-conversion."""
@@ -2058,16 +2161,16 @@ def api_clear_cache():
 
 @app.route("/hokku/api/time")
 def api_time():
-    """Return current server time in configured timezone."""
+    """Return current server time in the system timezone."""
+    now = datetime.now()
     try:
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo(_config["timezone"])
-        now = datetime.now(tz)
+        import time as _time
+        tz_name = _time.tzname[_time.daylight and _time.localtime().tm_isdst > 0]
     except Exception:
-        now = datetime.now()
+        tz_name = ""
     return jsonify({
         "time": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "timezone": _config["timezone"],
+        "timezone": tz_name,
     })
 
 
@@ -2089,13 +2192,17 @@ def main():
     print(f"Hokku image server (full resolution: {VISUAL_W}x{VISUAL_H})")
     print(f"  Upload dir: {upload_dir}")
     print(f"  Cache dir:  {cache_dir}")
-    print(f"  Timezone:   {_config['timezone']}")
+    print(f"  Timezone:   system ({datetime.now().astimezone().tzinfo})")
     print(f"  Refresh at: {_config['refresh_image_at_time']}")
     print(f"  Poll interval: {poll}s")
     print(f"  Output: {TOTAL_BYTES} bytes per image ({PANEL_BYTES} per panel)")
     print(f"  Endpoints:")
     print(f"    GET /hokku/screen/      — 960K binary (fair rotation) + X-Sleep-Seconds header")
     print(f"    GET /hokku/ui           — Web GUI")
+
+    # Quarantine any image whose .processing marker survived a crash —
+    # otherwise the service restart-loops on a bad image forever.
+    _promote_processing_markers_to_failed()
 
     images = _list_images()
     if images:

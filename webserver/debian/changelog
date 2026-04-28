@@ -1,3 +1,35 @@
+hokku-server (2.2.2-1) unstable; urgency=low
+
+  * Pi-deployment fixes carried over from the parallel pi2w branch on
+    top of the 2.2.x dither rewrite:
+      - upload_dir/cache_dir defaults moved to /var/lib/hokku/upload
+        and /var/lib/hokku/cache so DynamicUser StateDirectory writes
+        work out of the box. Stale /images/* paths in older
+        config.json files are migrated silently on load.
+      - Timezone is no longer a stored config key. The server reads
+        the host OS zone (set via timedatectl on the Pi). Removed
+        from DEFAULT_CONFIG, _SAVE_KEYS, /api/config, /api/status,
+        and the Configuration card in the web GUI; /api/time still
+        returns the system zone for display.
+      - Crash quarantine: a .processing marker is dropped before
+        each conversion and removed on success. Orphans at startup
+        are renamed to .failed. _list_images skips .failed entries
+        so one bad image can't restart-loop the service after an
+        OOM kill.
+      - New failed-conversions UI: /hokku/api/status returns
+        failed_files; /hokku/api/image/<name>/retry removes the
+        marker and re-queues the image. The web UI renders an
+        amber "Failed conversions" section with one-click Retry.
+      - Web UI: server time moved to the top-right corner and
+        trimmed to HH:MM:SS. Bulk upload is now sequential per-file
+        instead of one giant multipart POST (fixes "Failed to
+        fetch" on slow links). Non-images dropped via drag-drop
+        are silently filtered.
+      - _ensure_thumbnail uses Image.draft() to keep RAM bounded
+        when generating a 300x300 thumbnail from a 12 MP source.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 23 Apr 2026 00:00:00 +0000
+
 hokku-server (2.2.1-1) unstable; urgency=low
 
   * Dither pipeline memory footprint cut from ~490 MB to ~68 MB peak at
