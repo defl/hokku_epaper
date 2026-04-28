@@ -916,35 +916,51 @@ def _promote_processing_markers_to_failed():
                 print(f"  Could not promote {f.name} -> {failed.name}: {e}")
 
 
-def _list_failed():
-    """Return the names of images that were quarantined after a prior crash
-    (i.e. have a .failed sibling). Used by the web UI's failed list."""
+def _scan_upload_dir():
+    """Single pass over the upload dir, returning (image_files, failed_names).
+
+    image_files: list of Path objects for live image files (extension matches
+        IMAGE_EXTENSIONS) that don't have a .failed sibling.
+    failed_names: sorted list of image filenames that have a .failed sibling
+        AND a corresponding live image file. Markers without an underlying
+        image are skipped so they don't render as un-retryable ghost rows.
+
+    One pass + a set lookup beats N stat() calls per listing — material on a
+    Pi Zero W with SD-card storage and 100+ images.
+    """
     upload_dir = _get_upload_dir()
     if not upload_dir.exists():
-        return []
-    out = []
+        return [], []
+    images = []
+    failed_markers = set()
+    image_names = set()
     for f in upload_dir.iterdir():
-        if f.is_file() and f.name.endswith(".failed"):
-            out.append(f.name[:-len(".failed")])
-    out.sort()
-    return out
+        if not f.is_file():
+            continue
+        if f.name.endswith(".failed"):
+            failed_markers.add(f.name[:-len(".failed")])
+        elif f.suffix.lower() in IMAGE_EXTENSIONS:
+            images.append(f)
+            image_names.add(f.name)
+    # Live images = image files without a .failed marker.
+    live = [f for f in images if f.name not in failed_markers]
+    # Failed = .failed markers whose underlying image still exists.
+    failed = sorted(name for name in failed_markers if name in image_names)
+    return live, failed
+
+
+def _list_failed():
+    """Return the names of images quarantined after a prior crash that still
+    have an underlying image file to retry."""
+    return _scan_upload_dir()[1]
 
 
 def _list_images():
-    """List images in the upload dir, excluding any marked as previously
-    failed. A .failed sibling next to an image (e.g. photo.jpg.failed) means
-    a prior conversion attempt crashed or was killed by the OS; we refuse
-    to retry automatically so one bad image can't restart-loop the service.
-    Hit Retry in the UI (or delete the .failed marker) to retry."""
-    upload_dir = _get_upload_dir()
-    if not upload_dir.exists():
-        return []
-    return [
-        f for f in upload_dir.iterdir()
-        if f.suffix.lower() in IMAGE_EXTENSIONS
-        and f.is_file()
-        and not _failed_marker(f).exists()
-    ]
+    """List image files in the upload dir, excluding anything quarantined
+    after a previous crashed conversion. A .failed sibling next to an image
+    (e.g. photo.jpg.failed) means the dither crashed before; the user has
+    to hit Retry in the UI (or delete the .failed marker) to try again."""
+    return _scan_upload_dir()[0]
 
 
 def _prepare_canvas(img, dither_cfg, portrait, canvas_w, canvas_h):
@@ -1759,10 +1775,11 @@ def api_status():
         pool_set = set(pool_files)
         serve_data = _database.get("serve_data", {})
 
-        # Include every file in the upload dir, marking whether the dithered
-        # conversion is ready yet. The frontend uses this to render a card
-        # for pending images with a "generating preview" badge.
-        all_upload = sorted(p.name for p in _list_images())
+        # Single iterdir() pass — produces both the live image list and the
+        # quarantined-failed list. Avoids two stat-storming loops over the
+        # upload dir per status poll on a Pi Zero W.
+        live_images, failed_files = _scan_upload_dir()
+        all_upload = sorted(p.name for p in live_images)
         upload_files = [{"name": n, "dithered": n in pool_set} for n in all_upload]
 
         enriched = {}
@@ -1777,8 +1794,6 @@ def api_status():
             }
 
         screens = _database.get("screens", {})
-
-        failed_files = _list_failed()
 
         return jsonify({
             "pool_files": pool_files,
@@ -2119,6 +2134,17 @@ def api_delete_image(filename):
     except OSError as e:
         print(f"  Delete error: {img_path}: {e}")
         return jsonify({"error": f"Failed to delete {safe_name}: {e.strerror or e}"}), 500
+
+    # Also clean up the crash-quarantine sibling markers so we don't leave
+    # orphan .failed / .processing files behind. An orphaned .failed would
+    # show up as a ghost row in the UI's failed list with no retryable image
+    # behind it; an orphaned .processing would get promoted to .failed at
+    # the next startup, again as a ghost.
+    for sib in (_failed_marker(img_path), _processing_marker(img_path)):
+        try:
+            sib.unlink(missing_ok=True)
+        except OSError:
+            pass
     print(f"  Delete: removed {safe_name}")
 
     # _sync_pool drops the pool entry and purges the matching cache .bin/.png

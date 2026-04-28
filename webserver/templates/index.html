@@ -985,12 +985,20 @@ function renderFailedList(failed) {
   }
   section.style.display = 'block';
   list.className = 'failed-list';
+  // Attach the filename via data-name (HTML-attribute-safe) and bind the
+  // click via addEventListener — avoids the JS-string-injection footgun
+  // when filenames contain apostrophes (e.g. O'Brien.jpg). Inline onclick
+  // would HTML-decode the attribute first and the apostrophe would break
+  // out of the JS string literal.
   list.innerHTML = failed.map(name => `
-    <div class="failed-row" data-name="${escapeHtml(name)}">
+    <div class="failed-row">
       <span class="fname">${escapeHtml(name)}</span>
-      <button onclick="retryFailed('${escapeHtml(name)}', this)">Retry</button>
+      <button class="retry-btn" data-name="${escapeHtml(name)}">Retry</button>
     </div>
   `).join('');
+  list.querySelectorAll('.retry-btn').forEach(btn => {
+    btn.addEventListener('click', () => retryFailed(btn.dataset.name, btn));
+  });
 }
 
 async function retryFailed(name, btn) {

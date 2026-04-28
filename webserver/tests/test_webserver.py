@@ -952,6 +952,53 @@ class TestDeleteImage:
         assert resp.status_code == 200
         assert (upload_dir / "keep.jpg").exists()
 
+    def test_delete_cleans_up_quarantine_markers(self, client_with_image):
+        """Deleting a quarantined image must also remove its .failed and
+        .processing siblings, otherwise the failed-list UI shows ghost
+        rows that can never be retried (the underlying image is gone)."""
+        client, upload_dir, _ = client_with_image
+        (upload_dir / "victim.jpg.failed").write_bytes(b"")
+        (upload_dir / "victim.jpg.processing").write_bytes(b"")
+        resp = client.delete("/hokku/api/image/victim.jpg")
+        assert resp.status_code == 200
+        assert not (upload_dir / "victim.jpg").exists()
+        assert not (upload_dir / "victim.jpg.failed").exists()
+        assert not (upload_dir / "victim.jpg.processing").exists()
+
+
+class TestFailedListing:
+    """Coverage for the .failed/.processing scanner used by /api/status."""
+
+    def _setup(self, tmp_path):
+        upload_dir = tmp_path / "upload"; upload_dir.mkdir()
+        cfg = {**webserver.DEFAULT_CONFIG, "upload_dir": str(upload_dir)}
+        return upload_dir, cfg
+
+    def test_failed_marker_with_image_is_listed(self, tmp_path):
+        upload_dir, cfg = self._setup(tmp_path)
+        (upload_dir / "img.jpg").write_bytes(b"")
+        (upload_dir / "img.jpg.failed").write_bytes(b"")
+        with patch.object(webserver, "_config", cfg):
+            assert webserver._list_failed() == ["img.jpg"]
+
+    def test_orphan_failed_marker_without_image_is_skipped(self, tmp_path):
+        """If the user deleted the underlying image but a .failed marker
+        leaked, do not list it — the Retry endpoint would 404 anyway, so
+        showing it is just a UI footgun."""
+        upload_dir, cfg = self._setup(tmp_path)
+        (upload_dir / "ghost.jpg.failed").write_bytes(b"")
+        with patch.object(webserver, "_config", cfg):
+            assert webserver._list_failed() == []
+
+    def test_failed_image_excluded_from_live_list(self, tmp_path):
+        upload_dir, cfg = self._setup(tmp_path)
+        (upload_dir / "ok.jpg").write_bytes(b"")
+        (upload_dir / "bad.jpg").write_bytes(b"")
+        (upload_dir / "bad.jpg.failed").write_bytes(b"")
+        with patch.object(webserver, "_config", cfg):
+            names = sorted(p.name for p in webserver._list_images())
+        assert names == ["ok.jpg"]
+
 
 # ── Config + clear-cache + time endpoints ─────────────────────────
 
