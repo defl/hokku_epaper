@@ -1,3 +1,23 @@
+hokku-server (2.2.2-2) unstable; urgency=low
+
+  * Lookup endpoints (DELETE / retry / original / thumbnail) no
+    longer mutate the URL filename through werkzeug.secure_filename
+    before look-up. secure_filename is right for upload (we want to
+    rename unsafe characters before writing), wrong for lookup (we
+    must match the on-disk name exactly — Samba- and SCP-uploaded
+    files keep spaces, accents, parens, etc.). New _safe_lookup_name
+    validator validates without mutating: rejects empty, '.', '..',
+    null bytes, and any path separator. Fixes "Retry failed: Image
+    not found" on filenames like 'Marieke Dennis Fam008.jpg'.
+  * Web GUI: dither preset description moved into a (?) popover next
+    to the preset selector (was a permanent inline span that bloated
+    the row). Advanced dithering pipeline replaced the native
+    <details> foldout with a [Custom...] button next to [Reset to
+    preset]; the button toggles a hidden panel and label flips to
+    [Hide advanced]; an x close button at panel top-right mirrors it.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 23 Apr 2026 00:00:00 +0000
+
 hokku-server (2.2.2-1) unstable; urgency=low
 
   * Pi-deployment fixes carried over from the parallel pi2w branch on
