@@ -1010,6 +1010,83 @@ class TestSafeLookupName:
             assert webserver._safe_lookup_name(n) is None
 
 
+class TestRetryEndpoint:
+    """End-to-end coverage for /hokku/api/image/<name>/retry — the user-facing
+    Retry button on the failed-conversions list."""
+
+    @pytest.fixture
+    def client(self, tmp_path):
+        webserver.app.config["TESTING"] = True
+        upload_dir = tmp_path / "upload"; upload_dir.mkdir()
+        cfg = {**webserver.DEFAULT_CONFIG,
+               "upload_dir": str(upload_dir),
+               "cache_dir": str(tmp_path / "cache")}
+        with patch.object(webserver, "_config", cfg), \
+             patch("webserver._sync_pool"), \
+             webserver.app.test_client() as c:
+            yield c, upload_dir
+
+    def test_retry_unquarantines_a_normal_file(self, client):
+        c, upload_dir = client
+        (upload_dir / "img.jpg").write_bytes(b"fake")
+        (upload_dir / "img.jpg.failed").write_bytes(b"")
+        resp = c.post("/hokku/api/image/img.jpg/retry")
+        assert resp.status_code == 200, resp.get_json()
+        assert resp.get_json() == {"status": "ok", "retrying": "img.jpg"}
+        assert not (upload_dir / "img.jpg.failed").exists()
+        assert (upload_dir / "img.jpg").exists()  # image untouched
+
+    def test_retry_filename_with_spaces(self, client):
+        """Reproduces the user's bug — Samba-uploaded files keep spaces;
+        secure_filename would have looked up 'Marieke_Dennis_Fam008.jpg'
+        and 404'd. After the _safe_lookup_name fix, the on-disk name is
+        used verbatim."""
+        c, upload_dir = client
+        name = "Marieke Dennis Fam008.jpg"
+        (upload_dir / name).write_bytes(b"fake")
+        (upload_dir / (name + ".failed")).write_bytes(b"")
+        resp = c.post(f"/hokku/api/image/{name}/retry")
+        assert resp.status_code == 200, resp.get_json()
+        assert resp.get_json()["retrying"] == name
+        assert not (upload_dir / (name + ".failed")).exists()
+
+    def test_retry_filename_with_accents_and_parens(self, client):
+        c, upload_dir = client
+        name = "Café (Paris).jpg"
+        (upload_dir / name).write_bytes(b"fake")
+        (upload_dir / (name + ".failed")).write_bytes(b"")
+        resp = c.post(f"/hokku/api/image/{name}/retry")
+        assert resp.status_code == 200, resp.get_json()
+        assert not (upload_dir / (name + ".failed")).exists()
+
+    def test_retry_404_when_image_missing(self, client):
+        """Orphan .failed without underlying image — Retry should 404 with
+        a clean error, not silently succeed by removing the marker."""
+        c, upload_dir = client
+        (upload_dir / "ghost.jpg.failed").write_bytes(b"")
+        resp = c.post("/hokku/api/image/ghost.jpg/retry")
+        assert resp.status_code == 404
+        assert "not found" in resp.get_json()["error"].lower()
+        # Marker must NOT be removed on 404 — leaves the orphan as-is for
+        # _list_failed's filter to hide.
+        assert (upload_dir / "ghost.jpg.failed").exists()
+
+    def test_retry_400_when_no_failed_marker(self, client):
+        """Image exists but isn't quarantined — Retry should refuse rather
+        than silently no-op and trigger a redundant sync."""
+        c, upload_dir = client
+        (upload_dir / "ok.jpg").write_bytes(b"fake")
+        resp = c.post("/hokku/api/image/ok.jpg/retry")
+        assert resp.status_code == 400
+        assert "not in the failed state" in resp.get_json()["error"]
+
+    def test_retry_rejects_path_traversal(self, client):
+        c, _ = client
+        # Werkzeug routes block slashes; '..' alone reaches the handler.
+        resp = c.post("/hokku/api/image/../retry")
+        assert resp.status_code == 400
+
+
 class TestFailedListing:
     """Coverage for the .failed/.processing scanner used by /api/status."""
 
