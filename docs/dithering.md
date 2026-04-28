@@ -117,32 +117,39 @@ acquired a visible pink cast on skin highlights.
 **Fix: detect near-grayscale images and use a conservative preset.** Covered
 in §4.
 
-## 3. The shipped algorithms
+## 3. The shipped presets
 
-Users can pick between these four options in the web UI. The first three exist
-primarily for comparison / user preference; the first one is what you want.
+The web UI exposes the pipeline as three named **presets** plus a fully
+editable "Advanced dithering" panel. Selecting a preset loads its full
+configuration into the knobs; touching any knob flips the preset label to
+"Custom (your edits)" without changing values. Saving writes the complete
+nested config to `config.json`.
 
-| Value                  | UI label                                        | Default |
-|------------------------|-------------------------------------------------|---------|
-| `atkinson_hue_aware`   | Atkinson + hue-aware (best for photos)          | **Yes** |
-| `atkinson`             | Atkinson (no hue correction)                    |         |
-| `floyd_steinberg`      | Floyd–Steinberg (classic)                       |         |
+| Preset key                 | UI label                                         | Default |
+|----------------------------|--------------------------------------------------|---------|
+| `atkinson_hue_aware`       | Atkinson — hue-aware (default)                   | **Yes** |
+| `atkinson_soft`            | Atkinson — soft, warm                            |         |
+| `floyd_steinberg_vivid`    | Floyd–Steinberg — vivid, warm (pre-2.0)          |         |
 
-There is also `fs_hue_aware`, which is **deprecated**. Loading a config or
-posting an API value of `fs_hue_aware` silently migrates to the default. It
-was briefly the default in an earlier PR iteration; its failure mode on
-near-white regions (§2c) was the main reason we did the full benchmark that
-produced the current default.
+Presets live in `DITHER_PRESETS` in `webserver/webserver.py`; each one is a
+full dither-config literal (no partials — every stage has an explicit value
+in every preset so the behaviour is inspectable at a glance).
+
+The pre-2.0 schema stored a single string key `dither_algorithm`; that key
+was dropped when the nested per-stage schema landed. Old config files with
+the legacy string are silently normalised to the default preset on load.
 
 ## 4. The default pipeline in detail
 
-The default algorithm (`atkinson_hue_aware` as implemented today) is a
-four-step pipeline:
+The default preset (`atkinson_hue_aware`) drives a ten-stage pipeline. Every
+stage is addressable from the UI; the values below are the defaults and the
+full schema lives in `DITHER_PRESETS["atkinson_hue_aware"]["dither"]`.
 
-### Step 1 — `_prepare_canvas()`
+### Stage 1 — `_prepare_canvas()` tonal chain
 
 Resize the image to fit 1200×1600 (portrait native) or 1600×1200 (landscape,
-rotated at the end), then apply standard PIL image adjustments in order:
+rotated at the end), then apply the tonal adjustments in order. Every row
+below is toggleable/tunable per preset:
 
 1. `ImageOps.autocontrast(cutoff=0.5)` — stretch histogram ignoring the
    darkest/brightest 0.5% of pixels.
@@ -230,20 +237,23 @@ Code: `_atkinson_dither()` and `_build_rgb_lut_hue_aware()` in `webserver/webser
 
 ### Step 4 — B&W detection and fallback
 
-Before any of the above, `_is_near_grayscale()` samples the source at 200-pixel
-thumbnail resolution and checks the 95th-percentile Lab chroma. If it's below
-`_GRAYSCALE_CHROMA_THRESHOLD = 8.0`, we assume the image is intentionally B&W
-(scan, film, monochrome edit) and the pipeline switches to a conservative
-preset for that image only:
+Before any of the above, `_maybe_apply_bw_fallback()` samples the source at
+200-pixel thumbnail resolution and checks the Nth-percentile Lab chroma. If
+it's below the configured threshold (defaults: 95th percentile, chroma 8),
+the image is treated as intentionally B&W (scan, film, monochrome edit) and
+the pipeline switches to a conservative override for that image only:
 
-- `color_enhance = 1.05` (instead of 1.25, applied uniformly)
-- `adaptive_saturate = False`
-- `adaptive_vivid = False`
-- `scale_chroma = False`
+- Saturation → `mode: "global", value: 1.05` (flat 1.05× chroma)
+- DRC `chroma_mode` → `"off"` (no chroma compression)
+- Every other stage (palette LUT, kernel, tonal chain) runs exactly as
+  configured.
 
 This preserves pure grayscale B&W photos without the pink cast described in §2d.
 
-Code: `_is_near_grayscale()` and the branch at the top of `_convert_image()`.
+The B&W check itself is a user-visible knob: it can be disabled, and both
+the threshold and the percentile are editable.
+
+Code: `_maybe_apply_bw_fallback()` and the branch at the top of `_convert_image()`.
 
 ## 5. How the default was chosen
 
@@ -303,17 +313,27 @@ Key ideas from published work:
 ## 7. Where the code lives
 
 - `webserver/webserver.py` — the production pipeline. Search for:
-  - `VALID_DITHER_ALGORITHMS`, `_DEPRECATED_ALGORITHMS`, `DEFAULT_CONFIG`
-  - `_adaptive_saturate()`
-  - `_compress_dynamic_range()` (takes `scale_chroma` and `adaptive_vivid`)
-  - `_build_rgb_lut()` (Lab-Euclidean) and `_build_rgb_lut_hue_aware()`
+  - `DITHER_PRESETS`, `DEFAULT_PRESET`, `DEFAULT_CONFIG`
+  - `_default_dither_config()`, `_normalize_dither_config()`, `_dither_config_hash()`
+  - `_prepare_canvas()` — tonal chain (autocontrast, gamma, brightness,
+    contrast, sharpness, saturation)
+  - `_adaptive_saturate()` — Lab-space chroma-gated saturation boost
+  - `_compress_dynamic_range()` — takes `scale_chroma`, `adaptive_vivid`,
+    `vivid_low`, `vivid_high`
+  - `_build_rgb_lut()` (Lab-Euclidean) and `_build_rgb_lut_hue_aware()` with
+    memoisation in `_get_lut()`
   - `_floyd_steinberg_dither()` and `_atkinson_dither()`
-  - `_dither_for_algorithm()` returns an `_AlgoConfig` bundle per algorithm
-  - `_is_near_grayscale()` + the fallback branch in `_convert_image()`
+  - `_maybe_apply_bw_fallback()` + the branch in `_convert_image()`
+  - `_run_dither_pipeline()` — shared pipeline used by both full render and
+    `_render_dither_preview()` (the /api/dither/preview endpoint)
   - `_cache_key()` and `_CACHE_VERSION`
-- `webserver/templates/index.html` — dropdown + help popover.
-- `webserver/tests/test_webserver.py` — 54 tests including coverage of the
-  pipeline knobs above.
+- `webserver/templates/index.html` — preset dropdown, collapsible Advanced
+  panel (rendered dynamically from `ditherState`), per-knob (?) help
+  popovers, preview button. The settings form is now loaded **once** at
+  page open (`/api/config`); the `/api/status` poll deliberately omits
+  config so user edits can't be clobbered mid-typing.
+- `webserver/tests/test_webserver.py` — unit tests covering the pipeline
+  knobs and preset semantics.
 - `dither_test2/` (untracked scratch area, can be deleted) — the benchmark
   harness that chose V10, kept for reproduction.
 

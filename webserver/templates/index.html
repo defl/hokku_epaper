@@ -122,6 +122,7 @@
   .help-icon { width: 22px; height: 22px; border-radius: 50%; border: 1px solid #ccc; background: #fff; color: #555; font-size: 0.85em; font-weight: 700; cursor: pointer; padding: 0; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
   .help-icon:hover { background: #f0f0f0; border-color: #999; color: #333; }
   .help-icon[aria-expanded="true"] { background: #2563eb; border-color: #2563eb; color: #fff; }
+  .help-icon-inline { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid #ccc; background: #fff; color: #555; font-size: 0.75em; font-weight: 700; vertical-align: middle; }
   .help-popover { position: absolute; z-index: 100; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 14px 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 480px; font-size: 0.88em; line-height: 1.45; margin-top: 6px; }
   .help-popover[hidden] { display: none; }
   .help-popover h3 { font-size: 0.95em; margin-bottom: 8px; color: #333; }
@@ -130,6 +131,26 @@
   .help-popover strong { color: #1d4ed8; }
   .help-popover em { color: #666; font-style: italic; }
   .help-popover-note { padding-top: 8px; border-top: 1px solid #eee; color: #666 !important; font-size: 0.92em; }
+
+  /* Advanced dither panel */
+  .dither-advanced { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 16px; margin: 12px 0; }
+  .dither-advanced > summary { cursor: pointer; font-weight: 600; color: #333; padding: 4px 0; user-select: none; }
+  .dither-advanced > summary:hover { color: #2563eb; }
+  .dither-advanced[open] > summary { margin-bottom: 12px; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; }
+  .dither-advanced-intro { color: #666; font-size: 0.85em; margin-bottom: 14px; line-height: 1.45; }
+  .dither-stage { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; }
+  .dither-stage-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-weight: 600; color: #333; font-size: 0.9em; }
+  .dither-stage-header .stage-num { color: #888; font-weight: 500; min-width: 18px; }
+  .dither-stage-body { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-left: 26px; font-size: 0.88em; }
+  .dither-stage-body label.field { display: inline-flex; align-items: center; gap: 6px; color: #555; }
+  .dither-stage-body input[type="number"] { width: 72px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.88em; }
+  .dither-stage-body select { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.88em; }
+  .dither-stage-body input[type="checkbox"] { width: 14px; height: 14px; accent-color: #2563eb; }
+  .dither-stage.disabled .dither-stage-body { opacity: 0.4; pointer-events: none; }
+  .dither-stage .dither-field-help { position: relative; display: inline-block; }
+  .dither-preview-block { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #e5e7eb; }
+  .dither-preview-result { margin-top: 10px; background: #f0f0f0; border-radius: 6px; padding: 10px; text-align: center; }
+  .dither-preview-result img { max-width: 100%; max-height: 480px; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
 </style>
 </head>
 <body>
@@ -194,21 +215,28 @@
   </div>
 
   <div class="config-row">
-    <label>Dither algorithm:</label>
-    <select id="dither-algorithm">
-      <option value="atkinson_hue_aware">Atkinson + hue-aware (best for photos)</option>
-      <option value="atkinson">Atkinson (no hue correction)</option>
-      <option value="floyd_steinberg">Floyd–Steinberg (classic)</option>
-    </select>
-    <button type="button" class="help-icon" id="dither-help-btn" aria-label="Dither algorithm help" aria-expanded="false">?</button>
-    <div id="dither-help-popover" class="help-popover" role="dialog" aria-label="Dither algorithm explanation" hidden>
-      <h3>Dither algorithms</h3>
-      <p><strong>Atkinson + hue-aware</strong> — Atkinson error diffusion with a hue-aware palette rule (forbids large hue jumps like Red→Blue, so warm skin tones stay warm) plus adaptive saturation (boosts only pixels that already have meaningful chroma, so small features like lips and tongues stay vivid without amplifying tiny tints in near-white regions into phantom speckle) and adaptive vividness compression (compresses chroma only for near-neutrals). Benchmarked best overall for photos. <em>Default.</em> B&amp;W inputs are auto-detected and rendered with a neutral preset.</p>
-      <p><strong>Atkinson (no hue correction)</strong> — Plain Atkinson against Lab-nearest palette matching. Softer noise texture, but warm skin tones may drift toward blue.</p>
-      <p><strong>Floyd–Steinberg (classic)</strong> — Full-strength error diffusion against Lab-nearest palette matching. Highest contrast but can show visible blue speckles on skin.</p>
-      <p class="help-popover-note">Switching triggers re-conversion of every image for the new algorithm — can take several seconds per image. Cached renders for the other algorithms are preserved, so switching back is instant.</p>
-    </div>
+    <label>Dither preset:</label>
+    <select id="dither-preset"></select>
+    <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset()" title="Reset all dither knobs to the preset's default values">Reset to preset</button>
+    <span class="info" id="dither-preset-description"></span>
   </div>
+
+  <details class="dither-advanced" id="dither-advanced-details">
+    <summary>Advanced dithering pipeline</summary>
+    <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Untick a stage to skip it. Each <span class="help-icon-inline">?</span> button explains what the knob does and how output changes when you move it.</p>
+    <div id="dither-advanced-panel"></div>
+    <div class="dither-preview-block">
+      <div class="config-row">
+        <label>Preview on:</label>
+        <select id="dither-preview-image"></select>
+        <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview()" id="dither-preview-btn">Preview</button>
+        <span class="info" id="dither-preview-status"></span>
+      </div>
+      <div id="dither-preview-result" class="dither-preview-result" hidden>
+        <img id="dither-preview-img" alt="Dither preview">
+      </div>
+    </div>
+  </details>
 
   <div class="config-row">
     <label>Poll interval:</label>
@@ -296,6 +324,352 @@
 let currentConfig = {};
 let refreshTimes = [];
 
+// Dither config UI state. `ditherState` is the form's working copy; it's
+// initialised once by loadConfig() and never overwritten by status polling.
+// `ditherPresets` is the catalog from /api/config so we don't have to mirror
+// the backend's preset definitions in JS.
+let ditherState = null;
+let ditherPresets = {};
+
+// Per-knob help text shown in (?) popovers. Short, user-facing, explains
+// what changes in the output when the knob moves — not the implementation.
+const DITHER_HELP = {
+  autocontrast: `<p><strong>Autocontrast</strong> stretches brightness so the darkest pixel becomes black and the brightest becomes white. Helps images that were already faded or low-contrast.</p><p><code>cutoff</code> discards that many percent of pixels at each extreme before stretching, so a few rogue bright/dark pixels can't prevent the stretch.</p>`,
+  gamma: `<p><strong>Gamma</strong> lifts or darkens midtones without touching black or white. Values &lt; 1 brighten midtones, &gt; 1 darken them.</p><p>E-ink panels lose midtone contrast; 0.85 recovers some of that.</p>`,
+  brightness: `<p>Flat multiplier on every pixel's brightness. 1.0 = no change. Usually leave at 1.0 — gamma is a better place to boost midtones.</p>`,
+  contrast: `<p>Flat contrast multiplier. 1.0 = no change. &gt;1 pushes dark pixels darker and bright pixels brighter. Helps compensate for the display's compressed dynamic range.</p>`,
+  sharpness: `<p>Edge sharpening. 1.0 = no change. Helps recover detail softened by downscaling the original to panel resolution (1200×1600).</p>`,
+  saturation_mode: `<p>How much to boost each pixel's colour.</p><p><strong>off</strong> — no saturation change.</p><p><strong>global</strong> — flat multiplier on every pixel's chroma. Simple, but amplifies tiny tints in near-white regions into visible pink/yellow speckle.</p><p><strong>adaptive</strong> — only boosts pixels that already have meaningful chroma; near-neutrals stay neutral. Cleaner whites, less vivid skin tones.</p>`,
+  saturation_value: `<p>Saturation boost multiplier. 1.0 = no change. 1.2 matches the pre-2.0 default; 1.25 is the current hue-aware default.</p>`,
+  saturation_thresholds: `<p>Chroma thresholds for adaptive mode only.</p><p>Pixels with chroma &lt; <code>low</code> get no boost; chroma &gt; <code>high</code> get the full boost; smooth ramp between.</p><p>In Lab space: skin chroma ≈ 8–12, vivid reds ≈ 40+.</p>`,
+  drc_enabled: `<p><strong>Dynamic range compression</strong> remaps input luminance [0, 100] into the display's actual L* range (~21 to ~87 for Spectra 6). Without this the dither wastes its palette trying to reproduce brightness levels the panel can't show.</p><p>Disabling this is rarely useful — it exists for debugging.</p>`,
+  drc_chroma: `<p>How the DRC treats chroma alongside its luminance remap.</p><p><strong>off</strong> — L* compressed, chroma untouched. Can look oversaturated.</p><p><strong>flat</strong> — multiplies all chroma by the same ratio (~0.66). Muted overall, keeps colours inside the gamut.</p><p><strong>adaptive_vivid</strong> — near-neutrals get full chroma compression (keeps whites clean); already-colourful pixels keep full chroma (keeps tongues and logos vivid).</p>`,
+  drc_thresholds: `<p>Chroma ramp for <code>adaptive_vivid</code> mode. Pixels with chroma &lt; <code>vivid_low</code> get full compression; chroma &gt; <code>vivid_high</code> keep full chroma.</p>`,
+  palette_mode: `<p>How each pixel is mapped to a palette entry after dithering.</p><p><strong>euclidean</strong> — nearest palette entry by plain Lab distance. Occasionally snaps a warm-white pixel to red, which error diffusion then cascades into neighbouring pixels.</p><p><strong>hue-aware</strong> — same, but refuses palette picks whose hue differs from the source by more than <code>hue_cutoff_deg</code>. Prevents the warm-white → red → cascading-blue failure mode.</p>`,
+  palette_hue_cutoff: `<p>Maximum hue difference (in degrees) between a source pixel and its palette pick. Lower = stricter. 180° allows anything; 95° is the default and keeps skin tones from drifting.</p>`,
+  palette_neutral: `<p>Pixels and palette entries with chroma below this are treated as neutral — black, white, and gray stay candidates for every pixel, so the hue rule can never paint over them.</p>`,
+  bw_fallback: `<p>Detects near-grayscale images and switches to a conservative pipeline (flat 1.05 saturation, no adaptive chroma tricks). Without this, tiny sensor tints in B&amp;W photos get amplified into a visible pink cast.</p><p>The rest of the pipeline (LUT, kernel, tonal stages) still runs as configured.</p>`,
+  bw_fallback_params: `<p>An image counts as B&amp;W if the Nth-percentile Lab chroma (across a 200px thumbnail) stays below the threshold. Defaults: 95th percentile, chroma 8.</p>`,
+  kernel: `<p>The error-diffusion rule.</p><p><strong>floyd_steinberg</strong> — full error distributed to 4 neighbours (7/16, 3/16, 5/16, 1/16). Highest contrast; finer diagonal noise.</p><p><strong>atkinson</strong> — only 6/8 of error distributed to 6 neighbours (1/8 each). Softer gradients, less hue-shift cascade, slightly lower max contrast.</p>`,
+};
+
+function deepCopy(o) { return JSON.parse(JSON.stringify(o)); }
+
+function populatePresetDropdown() {
+  const sel = document.getElementById('dither-preset');
+  sel.innerHTML = '';
+  Object.entries(ditherPresets).forEach(([key, p]) => {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = p.label;
+    sel.appendChild(opt);
+  });
+  const customOpt = document.createElement('option');
+  customOpt.value = '__custom__';
+  customOpt.textContent = 'Custom (your edits)';
+  sel.appendChild(customOpt);
+  sel.onchange = () => {
+    const v = sel.value;
+    if (v !== '__custom__' && ditherPresets[v]) {
+      ditherState = deepCopy(ditherPresets[v].dither);
+      renderDitherPanel();
+      updatePresetDescription();
+    }
+  };
+}
+
+// Pick the preset whose dither config matches ditherState verbatim; fall back
+// to "Custom" if none match. Used on page load so a user-saved custom config
+// doesn't accidentally show a preset name that no longer fits.
+function selectPresetMatching(state) {
+  const sel = document.getElementById('dither-preset');
+  const stateJson = JSON.stringify(state);
+  let matched = '__custom__';
+  for (const [key, p] of Object.entries(ditherPresets)) {
+    if (JSON.stringify(p.dither) === stateJson) { matched = key; break; }
+  }
+  sel.value = matched;
+  updatePresetDescription();
+}
+
+function updatePresetDescription() {
+  const sel = document.getElementById('dither-preset');
+  const info = document.getElementById('dither-preset-description');
+  const v = sel.value;
+  if (v === '__custom__') {
+    info.textContent = 'Your edits have diverged from every built-in preset.';
+  } else if (ditherPresets[v]) {
+    info.textContent = ditherPresets[v].description;
+  } else {
+    info.textContent = '';
+  }
+}
+
+function resetToPreset() {
+  const sel = document.getElementById('dither-preset');
+  let key = sel.value;
+  if (key === '__custom__') {
+    // Reset Custom back to the default preset.
+    key = Object.keys(ditherPresets)[0];
+    sel.value = key;
+  }
+  if (ditherPresets[key]) {
+    ditherState = deepCopy(ditherPresets[key].dither);
+    renderDitherPanel();
+    updatePresetDescription();
+    showToast('Reset to preset: ' + ditherPresets[key].label);
+  }
+}
+
+function markCustom() {
+  document.getElementById('dither-preset').value = '__custom__';
+  updatePresetDescription();
+}
+
+// Build a single knob/row. kind in:
+//   "check"  — single checkbox bound to state[path...]
+//   "num"    — number input bound to state[path...]
+//   "select" — <select> bound to state[path...] with options [[value,label],...]
+function fieldNum(labelText, path, {min, max, step, help}) {
+  const id = 'df_' + path.join('_');
+  const val = pathGet(ditherState, path);
+  const attrs = [`id="${id}"`, `type="number"`, `value="${val}"`];
+  if (min !== undefined) attrs.push(`min="${min}"`);
+  if (max !== undefined) attrs.push(`max="${max}"`);
+  if (step !== undefined) attrs.push(`step="${step}"`);
+  return `<label class="field">${labelText}
+    <input ${attrs.join(' ')} onchange="onKnobChange(${JSON.stringify(path).replace(/"/g,'&quot;')}, 'num', this)">
+    ${help ? helpIcon(help) : ''}
+  </label>`;
+}
+function fieldSelect(labelText, path, options, help) {
+  const id = 'df_' + path.join('_');
+  const val = pathGet(ditherState, path);
+  const opts = options.map(([v, lab]) =>
+    `<option value="${v}"${v === val ? ' selected' : ''}>${lab}</option>`).join('');
+  return `<label class="field">${labelText}
+    <select id="${id}" onchange="onKnobChange(${JSON.stringify(path).replace(/"/g,'&quot;')}, 'select', this)">${opts}</select>
+    ${help ? helpIcon(help) : ''}
+  </label>`;
+}
+function fieldCheck(labelText, path, help) {
+  const id = 'df_' + path.join('_');
+  const val = !!pathGet(ditherState, path);
+  return `<label class="field">
+    <input id="${id}" type="checkbox"${val ? ' checked' : ''} onchange="onKnobChange(${JSON.stringify(path).replace(/"/g,'&quot;')}, 'check', this)">
+    ${labelText}
+    ${help ? helpIcon(help) : ''}
+  </label>`;
+}
+function helpIcon(helpKey) {
+  return `<span class="dither-field-help"><button type="button" class="help-icon" aria-label="Help" data-help="${helpKey}">?</button></span>`;
+}
+
+function pathGet(obj, path) {
+  let o = obj;
+  for (const k of path) { if (o == null) return undefined; o = o[k]; }
+  return o;
+}
+function pathSet(obj, path, value) {
+  let o = obj;
+  for (let i = 0; i < path.length - 1; i++) {
+    if (o[path[i]] == null || typeof o[path[i]] !== 'object') o[path[i]] = {};
+    o = o[path[i]];
+  }
+  o[path[path.length - 1]] = value;
+}
+
+function onKnobChange(path, kind, el) {
+  let val;
+  if (kind === 'check') val = el.checked;
+  else if (kind === 'num') val = parseFloat(el.value);
+  else val = el.value;
+  pathSet(ditherState, path, val);
+  markCustom();
+  // Re-render so stages toggling `enabled` grey out the right body, and so
+  // conditional fields (e.g. saturation thresholds only if mode=adaptive)
+  // appear/disappear.
+  renderDitherPanel();
+}
+
+// The pipeline in order. Stages carry their own renderer so we can pull in
+// conditional fields based on current ditherState (e.g. saturation low/high
+// only when mode === 'adaptive').
+function renderDitherPanel() {
+  if (!ditherState) return;
+  const d = ditherState;
+  const sections = [];
+
+  const stage = (num, title, enabledPath, bodyHtml, headerHelpKey) => {
+    const enabled = enabledPath ? !!pathGet(d, enabledPath) : true;
+    const toggle = enabledPath
+      ? `<input type="checkbox"${enabled ? ' checked' : ''} onchange="onKnobChange(${JSON.stringify(enabledPath).replace(/"/g,'&quot;')}, 'check', this)">`
+      : '';
+    return `<div class="dither-stage${enabled ? '' : ' disabled'}">
+      <div class="dither-stage-header">
+        <span class="stage-num">${num}.</span>
+        ${toggle}
+        <span>${title}</span>
+        ${headerHelpKey ? helpIcon(headerHelpKey) : ''}
+      </div>
+      <div class="dither-stage-body">${bodyHtml}</div>
+    </div>`;
+  };
+
+  sections.push(stage(1, 'Autocontrast', ['autocontrast', 'enabled'],
+    fieldNum('cutoff', ['autocontrast', 'cutoff'], {min: 0, max: 49, step: 0.5}),
+    'autocontrast'));
+
+  sections.push(stage(2, 'Gamma', ['gamma', 'enabled'],
+    fieldNum('value', ['gamma', 'value'], {min: 0.1, max: 3, step: 0.05}),
+    'gamma'));
+
+  sections.push(stage(3, 'Brightness', null,
+    fieldNum('multiplier', ['brightness'], {min: 0.1, max: 3, step: 0.05, help: 'brightness'}),
+    null));
+
+  sections.push(stage(4, 'Contrast', null,
+    fieldNum('multiplier', ['contrast'], {min: 0.1, max: 3, step: 0.05, help: 'contrast'}),
+    null));
+
+  sections.push(stage(5, 'Sharpness', null,
+    fieldNum('multiplier', ['sharpness'], {min: 0.1, max: 3, step: 0.05, help: 'sharpness'}),
+    null));
+
+  // Saturation — conditional thresholds only for adaptive mode
+  let satBody = fieldSelect('mode', ['saturation', 'mode'], [
+    ['off', 'off'], ['global', 'global'], ['adaptive', 'adaptive'],
+  ], 'saturation_mode');
+  if (d.saturation.mode !== 'off') {
+    satBody += fieldNum('value', ['saturation', 'value'], {min: 0.5, max: 3, step: 0.05, help: 'saturation_value'});
+  }
+  if (d.saturation.mode === 'adaptive') {
+    satBody += fieldNum('low', ['saturation', 'low'], {min: 0, max: 100, step: 0.5, help: 'saturation_thresholds'});
+    satBody += fieldNum('high', ['saturation', 'high'], {min: 0, max: 100, step: 0.5});
+  }
+  sections.push(stage(6, 'Saturation', null, satBody, null));
+
+  // DRC — conditional vivid thresholds only for adaptive_vivid chroma mode
+  let drcBody = fieldSelect('chroma', ['drc', 'chroma_mode'], [
+    ['off', 'off'], ['flat', 'flat'], ['adaptive_vivid', 'adaptive_vivid'],
+  ], 'drc_chroma');
+  if (d.drc.chroma_mode === 'adaptive_vivid') {
+    drcBody += fieldNum('vivid_low', ['drc', 'vivid_low'], {min: 0, max: 100, step: 0.5, help: 'drc_thresholds'});
+    drcBody += fieldNum('vivid_high', ['drc', 'vivid_high'], {min: 0, max: 100, step: 0.5});
+  }
+  sections.push(stage(7, 'Spectra 6 dynamic-range compression', ['drc', 'enabled'], drcBody, 'drc_enabled'));
+
+  // Palette LUT — hue-aware specific fields conditional on mode
+  let lutBody = fieldSelect('mode', ['palette_lut', 'mode'], [
+    ['euclidean', 'euclidean'], ['hue_aware', 'hue_aware'],
+  ], 'palette_mode');
+  if (d.palette_lut.mode === 'hue_aware') {
+    lutBody += fieldNum('hue_cutoff_deg', ['palette_lut', 'hue_cutoff_deg'], {min: 10, max: 180, step: 1, help: 'palette_hue_cutoff'});
+    lutBody += fieldNum('neutral_chroma', ['palette_lut', 'neutral_chroma'], {min: 0, max: 50, step: 0.5, help: 'palette_neutral'});
+  }
+  sections.push(stage(8, 'Palette mapping (LUT)', null, lutBody, null));
+
+  // B&W fallback
+  let bwBody = fieldNum('chroma_threshold', ['bw_fallback', 'chroma_threshold'], {min: 0, max: 50, step: 0.5, help: 'bw_fallback_params'});
+  bwBody += fieldNum('percentile', ['bw_fallback', 'percentile'], {min: 50, max: 100, step: 1});
+  sections.push(stage(9, 'B&W (near-grayscale) fallback', ['bw_fallback', 'enabled'], bwBody, 'bw_fallback'));
+
+  // Kernel
+  const kernelBody = fieldSelect('kernel', ['kernel'], [
+    ['floyd_steinberg', 'floyd_steinberg'], ['atkinson', 'atkinson'],
+  ], 'kernel');
+  sections.push(stage(10, 'Dither kernel', null, kernelBody, null));
+
+  document.getElementById('dither-advanced-panel').innerHTML = sections.join('');
+  wireHelpIcons();
+}
+
+// Single delegated handler for every dither-panel (?) button. Position the
+// popover absolutely relative to the clicked button, close on Esc or click-out.
+let currentHelpPopover = null;
+function closeHelpPopover() {
+  if (currentHelpPopover) { currentHelpPopover.remove(); currentHelpPopover = null; }
+}
+function wireHelpIcons() {
+  document.querySelectorAll('#dither-advanced-panel .help-icon[data-help]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const key = btn.getAttribute('data-help');
+      const html = DITHER_HELP[key] || '<p>(no help written yet)</p>';
+      if (currentHelpPopover) { closeHelpPopover(); return; }
+      const pop = document.createElement('div');
+      pop.className = 'help-popover';
+      pop.innerHTML = html;
+      document.body.appendChild(pop);
+      const r = btn.getBoundingClientRect();
+      pop.style.top = (window.scrollY + r.bottom + 4) + 'px';
+      pop.style.left = Math.max(8, Math.min(window.innerWidth - 500, window.scrollX + r.left - 200)) + 'px';
+      currentHelpPopover = pop;
+    });
+  });
+}
+document.addEventListener('click', (e) => {
+  if (currentHelpPopover && !currentHelpPopover.contains(e.target)) closeHelpPopover();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeHelpPopover();
+});
+
+// ── Preview button ────────────────────────────────────────────────
+function updatePreviewImageOptions(uploadList) {
+  const sel = document.getElementById('dither-preview-image');
+  if (!sel) return;
+  const current = sel.value;
+  const ready = (uploadList || []).filter(e => e.dithered).map(e => e.name);
+  if (!ready.length) {
+    sel.innerHTML = '<option value="">(upload an image first)</option>';
+    return;
+  }
+  // Only rebuild the list if it actually changed — otherwise we blow away
+  // the user's selection on every poll.
+  const newKey = ready.join('|');
+  if (sel.dataset.key === newKey) return;
+  sel.dataset.key = newKey;
+  sel.innerHTML = ready.map(n => `<option value="${n}">${n}</option>`).join('');
+  if (ready.includes(current)) sel.value = current;
+}
+
+async function runDitherPreview() {
+  const imgSel = document.getElementById('dither-preview-image');
+  const filename = imgSel.value;
+  if (!filename) { showToast('Pick an image to preview'); return; }
+
+  const btn = document.getElementById('dither-preview-btn');
+  const status = document.getElementById('dither-preview-status');
+  btn.disabled = true;
+  status.textContent = 'Rendering preview...';
+  try {
+    const resp = await fetch('/hokku/api/dither/preview', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({filename, dither: ditherState}),
+    });
+    if (!resp.ok) {
+      let err = `HTTP ${resp.status}`;
+      try { const j = await resp.json(); if (j && j.error) err = j.error; } catch (_) {}
+      throw new Error(err);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const resultImg = document.getElementById('dither-preview-img');
+    // Revoke the previous object URL so we don't leak.
+    if (resultImg.dataset.url) URL.revokeObjectURL(resultImg.dataset.url);
+    resultImg.dataset.url = url;
+    resultImg.src = url;
+    document.getElementById('dither-preview-result').hidden = false;
+    status.textContent = 'Preview at half resolution — saved config applies at full 1200×1600.';
+  } catch (e) {
+    status.textContent = 'Preview failed: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -350,7 +724,7 @@ async function saveConfig() {
     poll_interval_seconds: parseInt(document.getElementById('poll-interval').value) || 10,
     orientation: document.getElementById('orientation').value,
     debug_fast_refresh: document.getElementById('debug-fast-refresh').checked,
-    dither_algorithm: document.getElementById('dither-algorithm').value,
+    dither: ditherState,
   };
   try {
     const resp = await fetch('/hokku/api/config', {
@@ -360,6 +734,9 @@ async function saveConfig() {
     });
     if (resp.ok) {
       showToast('Configuration saved');
+      // Only refresh the volatile status (queue / screens) — DON'T reload the
+      // form from the server, since the server now reflects exactly what the
+      // user just submitted.
       refreshStatus();
     } else {
       showToast('Failed to save configuration');
@@ -649,15 +1026,23 @@ function renderImageGrid(uploadFiles, serveData) {
   });
 }
 
-async function refreshStatus() {
-  try {
-    const resp = await fetch('/hokku/api/status');
-    const data = await resp.json();
+// Split into two passes:
+//   loadConfig()    — called ONCE at page load. Fills every form field
+//                     (timezone, refresh times, orientation, dither, etc.)
+//                     and populates the preset dropdown + dither panel.
+//   refreshStatus() — called on an interval. Touches ONLY volatile display
+//                     state (pool/queue/screens/server time). Never writes
+//                     to form inputs, so user edits can't be clobbered
+//                     mid-typing.
 
-    // Update config UI
-    const tz = document.getElementById('timezone');
+async function loadConfig() {
+  try {
+    const resp = await fetch('/hokku/api/config');
+    const data = await resp.json();
     const cfg = data.config;
-    // Set timezone
+
+    // Timezone
+    const tz = document.getElementById('timezone');
     let found = false;
     for (let opt of tz.options) {
       if (opt.value === cfg.timezone) { opt.selected = true; found = true; break; }
@@ -674,10 +1059,7 @@ async function refreshStatus() {
     renderRefreshTimes();
     document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
     document.getElementById('orientation').value = cfg.orientation || 'landscape';
-    document.getElementById('dither-algorithm').value = cfg.dither_algorithm || 'atkinson_hue_aware';
-    document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
 
-    // Debug Fast Refresh toggle state + banner
     const debugOn = !!cfg.debug_fast_refresh;
     const debugSecs = cfg.debug_fast_refresh_seconds || 180;
     document.getElementById('debug-fast-refresh').checked = debugOn;
@@ -685,6 +1067,27 @@ async function refreshStatus() {
       ? `On — ${debugSecs}s cycle` : 'Off';
     document.getElementById('debug-active-banner').style.display = debugOn ? 'block' : 'none';
     document.getElementById('debug-secs').textContent = debugSecs;
+
+    // Dither presets + current state
+    ditherPresets = data.dither_presets || {};
+    ditherState = JSON.parse(JSON.stringify(cfg.dither));
+    populatePresetDropdown();
+    selectPresetMatching(ditherState);
+    renderDitherPanel();
+
+    currentConfig = cfg;
+  } catch (e) {
+    console.error('Config load failed:', e);
+    showToast('Failed to load configuration');
+  }
+}
+
+async function refreshStatus() {
+  try {
+    const resp = await fetch('/hokku/api/status');
+    const data = await resp.json();
+
+    document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
 
     // Status bar — show both total uploaded and how many are dithered & ready
     const uploaded = data.upload_size != null ? data.upload_size : data.pool_size;
@@ -718,8 +1121,9 @@ async function refreshStatus() {
     renderScreens(data.screens);
 
     // Image grid — render every uploaded file (dithered or pending)
-    renderImageGrid(data.upload_files || data.pool_files.map(n => ({name: n, dithered: true})), data.serve_data);
-    currentConfig = cfg;
+    const uploadList = data.upload_files || data.pool_files.map(n => ({name: n, dithered: true}));
+    renderImageGrid(uploadList, data.serve_data);
+    updatePreviewImageOptions(uploadList);
   } catch (e) {
     console.error('Status refresh failed:', e);
   }
@@ -902,34 +1306,8 @@ window.addEventListener('drop', e => {
   uploadFiles(e.dataTransfer.files);
 });
 
-// Dither help popover toggle (click icon to open, Esc or click-outside to close)
-(function() {
-  const btn = document.getElementById('dither-help-btn');
-  const pop = document.getElementById('dither-help-popover');
-  if (!btn || !pop) return;
-
-  function open() {
-    pop.hidden = false;
-    btn.setAttribute('aria-expanded', 'true');
-  }
-  function close() {
-    pop.hidden = true;
-    btn.setAttribute('aria-expanded', 'false');
-  }
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    pop.hidden ? open() : close();
-  });
-  document.addEventListener('click', (e) => {
-    if (!pop.hidden && !pop.contains(e.target) && e.target !== btn) close();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !pop.hidden) close();
-  });
-})();
-
-// Initial load + auto-refresh every 5 seconds
-refreshStatus();
+// Initial load: fetch config once, then start polling volatile status only.
+loadConfig().then(refreshStatus);
 setInterval(refreshStatus, 5000);
 </script>
 </body>

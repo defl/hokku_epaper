@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hokku-server"
-version = "2.1.20"
+version = "2.2.1"
 description = "Spectra 6 e-ink image server for Hokku EL133UF1 display"
 requires-python = ">=3.9"
 license = {text = "GPL-3.0 (non-commercial)"}
@@ -20,3 +20,8 @@ hokku-server = "webserver:main"
 
 [tool.setuptools]
 py-modules = ["webserver"]
+
+[tool.pytest.ini_options]
+markers = [
+    "memory: slow (~3 min) peak-memory regression tests; excluded with `-m 'not memory'`",
+]
