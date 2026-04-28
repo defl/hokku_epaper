@@ -887,6 +887,31 @@ def _get_upload_dir():
 def _get_cache_dir():
     return Path(_config["cache_dir"])
 
+def _safe_lookup_name(filename):
+    """Validate a filename from a URL path parameter for a lookup endpoint
+    (DELETE / retry / thumbnail / original-fetch).
+
+    Unlike upload — where we want to RENAME unsafe characters via
+    werkzeug.secure_filename so the on-disk name is sanitised — lookup
+    endpoints must match the filename EXACTLY against whatever is on disk.
+    Files dropped via Samba / SCP / SSH keep spaces, accents, parentheses,
+    etc., which secure_filename would mutate (spaces → underscores), causing
+    a 404 even though we just listed the file in /api/status.
+
+    Returns the filename unchanged if safe, or None if it could escape
+    the upload dir (path separators, null byte, '.' / '..').
+    """
+    if not filename or filename in (".", ".."):
+        return None
+    if any(c in filename for c in "\x00/\\"):
+        return None
+    # Defense in depth: even if the routing converter let something weird
+    # through, Path(name).name strips any trailing dir components.
+    if Path(filename).name != filename:
+        return None
+    return filename
+
+
 def _failed_marker(img_path):
     return img_path.with_name(img_path.name + ".failed")
 
@@ -1845,7 +1870,10 @@ _BROWSER_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg",
 @app.route("/hokku/api/original/<filename>")
 def api_original(filename):
     """Serve the original uploaded image, converting to JPEG if the browser can't display it."""
-    img_path = _get_upload_dir() / filename
+    safe_name = _safe_lookup_name(filename)
+    if not safe_name:
+        abort(400)
+    img_path = _get_upload_dir() / safe_name
     if not img_path.exists() or not img_path.is_file():
         abort(404)
     if img_path.suffix.lower() in _BROWSER_IMAGE_EXTS:
@@ -1914,7 +1942,10 @@ def _ensure_thumbnail(img_path):
 @app.route("/hokku/api/thumbnail/<filename>")
 def api_thumbnail(filename):
     """Serve a cached thumbnail of the original image (~300px wide)."""
-    img_path = _get_upload_dir() / filename
+    safe_name = _safe_lookup_name(filename)
+    if not safe_name:
+        abort(400)
+    img_path = _get_upload_dir() / safe_name
     if not img_path.exists() or not img_path.is_file():
         abort(404)
     thumb_path = _ensure_thumbnail(img_path)
@@ -2113,7 +2144,7 @@ def api_upload():
 @app.route("/hokku/api/image/<filename>", methods=["DELETE"])
 def api_delete_image(filename):
     """Delete an uploaded image and its associated cache files."""
-    safe_name = secure_filename(filename)
+    safe_name = _safe_lookup_name(filename)
     if not safe_name:
         return jsonify({"error": "Invalid filename"}), 400
 
@@ -2157,7 +2188,7 @@ def api_delete_image(filename):
 def api_retry_image(filename):
     """Remove the .failed quarantine marker for an image and re-trigger a sync
     so the dither pipeline picks it up again."""
-    safe_name = secure_filename(filename)
+    safe_name = _safe_lookup_name(filename)
     if not safe_name:
         return jsonify({"error": "Invalid filename"}), 400
     img_path = _get_upload_dir() / safe_name

@@ -952,6 +952,31 @@ class TestDeleteImage:
         assert resp.status_code == 200
         assert (upload_dir / "keep.jpg").exists()
 
+    def test_delete_filename_with_spaces(self, tmp_path):
+        """Files written via Samba/SCP keep spaces and other characters that
+        secure_filename would mutate. DELETE must look up the file by its
+        actual on-disk name, not the secure_filename'd version."""
+        webserver.app.config["TESTING"] = True
+        upload_dir = tmp_path / "upload"; upload_dir.mkdir()
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        (cache_dir / "thumbs").mkdir()
+        (upload_dir / "Marieke Dennis Fam008.jpg").write_bytes(b"fake")
+        cfg = {**webserver.DEFAULT_CONFIG,
+               "upload_dir": str(upload_dir), "cache_dir": str(cache_dir)}
+        with patch.object(webserver, "_config", cfg), \
+             patch("webserver._sync_pool"), \
+             webserver.app.test_client() as client:
+            resp = client.delete("/hokku/api/image/Marieke Dennis Fam008.jpg")
+            assert resp.status_code == 200, resp.get_json()
+            assert not (upload_dir / "Marieke Dennis Fam008.jpg").exists()
+
+    def test_delete_rejects_path_traversal(self, client_with_image):
+        client, upload_dir, _ = client_with_image
+        # Werkzeug's URL converter blocks slashes, but '..' alone reaches the
+        # handler — make sure we reject it before touching the filesystem.
+        resp = client.delete("/hokku/api/image/..")
+        assert resp.status_code == 400
+
     def test_delete_cleans_up_quarantine_markers(self, client_with_image):
         """Deleting a quarantined image must also remove its .failed and
         .processing siblings, otherwise the failed-list UI shows ghost
@@ -964,6 +989,25 @@ class TestDeleteImage:
         assert not (upload_dir / "victim.jpg").exists()
         assert not (upload_dir / "victim.jpg.failed").exists()
         assert not (upload_dir / "victim.jpg.processing").exists()
+
+
+class TestSafeLookupName:
+    """The lookup-side filename validator. Must accept exact filenames as
+    they exist on disk (including spaces/accents from Samba uploads) and
+    reject anything that could escape the upload dir."""
+
+    def test_passes_through_normal_names(self):
+        for n in ["foo.jpg", "Marieke Dennis Fam008.jpg",
+                  "café.png", "a (1).jpg", "img-2024_01_07.heic"]:
+            assert webserver._safe_lookup_name(n) == n
+
+    def test_rejects_empty_and_dotdot(self):
+        for n in ["", ".", ".."]:
+            assert webserver._safe_lookup_name(n) is None
+
+    def test_rejects_path_separators(self):
+        for n in ["a/b.jpg", "..\\b.jpg", "a\x00.jpg"]:
+            assert webserver._safe_lookup_name(n) is None
 
 
 class TestFailedListing:
