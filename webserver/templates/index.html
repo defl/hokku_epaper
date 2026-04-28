@@ -140,11 +140,14 @@
   .help-popover em { color: #666; font-style: italic; }
   .help-popover-note { padding-top: 8px; border-top: 1px solid #eee; color: #666 !important; font-size: 0.92em; }
 
-  /* Advanced dither panel */
-  .dither-advanced { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 16px; margin: 12px 0; }
-  .dither-advanced > summary { cursor: pointer; font-weight: 600; color: #333; padding: 4px 0; user-select: none; }
-  .dither-advanced > summary:hover { color: #2563eb; }
-  .dither-advanced[open] > summary { margin-bottom: 12px; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; }
+  /* Advanced dither panel — shown / hidden by the [Custom] button next to
+     [Reset to preset]. No native <details> foldout; cleaner toggle UX. */
+  .dither-advanced { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 14px 16px; margin: 12px 0; }
+  .dither-advanced[hidden] { display: none; }
+  .dither-advanced-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #e5e7eb; }
+  .dither-advanced-header h3 { margin: 0; font-size: 1em; color: #333; font-weight: 600; }
+  .dither-advanced-header .close-btn { background: transparent; border: none; color: #666; font-size: 1.2em; cursor: pointer; padding: 0 4px; line-height: 1; }
+  .dither-advanced-header .close-btn:hover { color: #2563eb; }
   .dither-advanced-intro { color: #666; font-size: 0.85em; margin-bottom: 14px; line-height: 1.45; }
   .dither-stage { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; }
   .dither-stage-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-weight: 600; color: #333; font-size: 0.9em; }
@@ -187,15 +190,26 @@
     <span class="info">changing orientation re-converts all images</span>
   </div>
 
-  <div class="config-row">
+  <div class="config-row" style="position: relative;">
     <label>Dither preset:</label>
     <select id="dither-preset"></select>
-    <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset()" title="Reset all dither knobs to the preset's default values">Reset to preset</button>
-    <span class="info" id="dither-preset-description"></span>
+    <button type="button" class="info-btn" id="dither-preset-info-btn"
+            title="What does this preset do?" aria-label="Preset description"
+            aria-expanded="false">?</button>
+    <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset()"
+            title="Reset all dither knobs to the preset's default values">Reset to preset</button>
+    <button type="button" class="btn btn-secondary btn-small" id="dither-custom-btn"
+            onclick="toggleAdvancedPanel()"
+            title="Open the advanced pipeline editor and tune individual knobs">Custom…</button>
+    <div class="help-popover" id="dither-preset-popover" hidden></div>
   </div>
 
-  <details class="dither-advanced" id="dither-advanced-details">
-    <summary>Advanced dithering pipeline</summary>
+  <div class="dither-advanced" id="dither-advanced" hidden>
+    <div class="dither-advanced-header">
+      <h3>Advanced dithering pipeline</h3>
+      <button type="button" class="close-btn" onclick="toggleAdvancedPanel()"
+              aria-label="Close advanced pipeline">×</button>
+    </div>
     <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Untick a stage to skip it. Each <span class="help-icon-inline">?</span> button explains what the knob does and how output changes when you move it.</p>
     <div id="dither-advanced-panel"></div>
     <div class="dither-preview-block">
@@ -209,7 +223,7 @@
         <img id="dither-preview-img" alt="Dither preview">
       </div>
     </div>
-  </details>
+  </div>
 
   <div class="config-row">
     <label>Poll interval:</label>
@@ -376,16 +390,32 @@ function selectPresetMatching(state) {
 }
 
 function updatePresetDescription() {
+  // Populate the (?) popover. Description text used to live as an inline
+  // <span class="info">, but it bloated the row visually. Now hidden behind
+  // a help button next to the preset selector.
   const sel = document.getElementById('dither-preset');
-  const info = document.getElementById('dither-preset-description');
+  const pop = document.getElementById('dither-preset-popover');
+  if (!pop) return;
   const v = sel.value;
+  let html;
   if (v === '__custom__') {
-    info.textContent = 'Your edits have diverged from every built-in preset.';
+    html = '<p>Your edits have diverged from every built-in preset.</p>';
   } else if (ditherPresets[v]) {
-    info.textContent = ditherPresets[v].description;
+    html = '<h3>' + escapeHtml(ditherPresets[v].label || v) + '</h3>'
+         + '<p>' + escapeHtml(ditherPresets[v].description || '') + '</p>';
   } else {
-    info.textContent = '';
+    html = '';
   }
+  pop.innerHTML = html;
+}
+
+function toggleAdvancedPanel() {
+  const panel = document.getElementById('dither-advanced');
+  if (!panel) return;
+  panel.hidden = !panel.hidden;
+  const btn = document.getElementById('dither-custom-btn');
+  if (btn) btn.textContent = panel.hidden ? 'Custom…' : 'Hide advanced';
+  if (!panel.hidden) panel.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
 function resetToPreset() {
@@ -595,7 +625,39 @@ document.addEventListener('click', (e) => {
   if (currentHelpPopover && !currentHelpPopover.contains(e.target)) closeHelpPopover();
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeHelpPopover();
+  if (e.key === 'Escape') {
+    closeHelpPopover();
+    closePresetPopover();
+  }
+});
+
+// Preset (?) popover — toggles a permanent <div> next to the preset selector
+// rather than creating a transient one like the per-knob popovers do.
+function closePresetPopover() {
+  const pop = document.getElementById('dither-preset-popover');
+  const btn = document.getElementById('dither-preset-info-btn');
+  if (pop) pop.hidden = true;
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('dither-preset-info-btn');
+  const pop = document.getElementById('dither-preset-popover');
+  if (!btn || !pop) return;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!pop.hidden) { closePresetPopover(); return; }
+    // Position under the button, clamped to the viewport.
+    const r = btn.getBoundingClientRect();
+    pop.style.top = (window.scrollY + r.bottom + 6) + 'px';
+    pop.style.left = Math.max(8, Math.min(window.innerWidth - 500,
+                                           window.scrollX + r.left - 100)) + 'px';
+    pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+  });
+  document.addEventListener('click', (e) => {
+    if (pop.hidden) return;
+    if (!pop.contains(e.target) && e.target !== btn) closePresetPopover();
+  });
 });
 
 // ── Preview button ────────────────────────────────────────────────
