@@ -960,15 +960,15 @@ class TestDeleteImage:
         upload_dir = tmp_path / "upload"; upload_dir.mkdir()
         cache_dir = tmp_path / "cache"; cache_dir.mkdir()
         (cache_dir / "thumbs").mkdir()
-        (upload_dir / "Marieke Dennis Fam008.jpg").write_bytes(b"fake")
+        (upload_dir / "Family Photo 008.jpg").write_bytes(b"fake")
         cfg = {**webserver.DEFAULT_CONFIG,
                "upload_dir": str(upload_dir), "cache_dir": str(cache_dir)}
         with patch.object(webserver, "_config", cfg), \
              patch("webserver._sync_pool"), \
              webserver.app.test_client() as client:
-            resp = client.delete("/hokku/api/image/Marieke Dennis Fam008.jpg")
+            resp = client.delete("/hokku/api/image/Family Photo 008.jpg")
             assert resp.status_code == 200, resp.get_json()
-            assert not (upload_dir / "Marieke Dennis Fam008.jpg").exists()
+            assert not (upload_dir / "Family Photo 008.jpg").exists()
 
     def test_delete_rejects_path_traversal(self, client_with_image):
         client, upload_dir, _ = client_with_image
@@ -997,7 +997,7 @@ class TestSafeLookupName:
     reject anything that could escape the upload dir."""
 
     def test_passes_through_normal_names(self):
-        for n in ["foo.jpg", "Marieke Dennis Fam008.jpg",
+        for n in ["foo.jpg", "Family Photo 008.jpg",
                   "café.png", "a (1).jpg", "img-2024_01_07.heic"]:
             assert webserver._safe_lookup_name(n) == n
 
@@ -1038,11 +1038,11 @@ class TestRetryEndpoint:
 
     def test_retry_filename_with_spaces(self, client):
         """Reproduces the user's bug — Samba-uploaded files keep spaces;
-        secure_filename would have looked up 'Marieke_Dennis_Fam008.jpg'
+        secure_filename would have looked up 'Family_Photo_008.jpg'
         and 404'd. After the _safe_lookup_name fix, the on-disk name is
         used verbatim."""
         c, upload_dir = client
-        name = "Marieke Dennis Fam008.jpg"
+        name = "Family Photo 008.jpg"
         (upload_dir / name).write_bytes(b"fake")
         (upload_dir / (name + ".failed")).write_bytes(b"")
         resp = c.post(f"/hokku/api/image/{name}/retry")
