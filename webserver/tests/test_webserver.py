@@ -1368,7 +1368,6 @@ class TestOrientation:
         for algo in webserver.VALID_DITHER_ALGORITHMS:
             with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "dither_algorithm": algo}):
                 keys[algo] = webserver._cache_key(path, content_hash)
-        # All three must be distinct
         assert len(set(keys.values())) == len(keys), f"Cache keys collided: {keys}"
         # Algorithm name must appear in each key
         for algo, key in keys.items():
@@ -1384,6 +1383,26 @@ class TestOrientation:
         assert "floyd_steinberg" in key_active
         assert "atkinson" in key_other
         assert key_active != key_other
+
+    def test_cache_key_differs_by_serpentine(self):
+        """Cache keys must differ when serpentine scan is on vs off."""
+        path = Path("/images/test.jpg")
+        content_hash = "abcdef123456"
+        base = {**webserver.DEFAULT_CONFIG, "dither_algorithm": "atkinson_hue_aware"}
+        with patch.object(webserver, "_config", {**base, "dither_serpentine": False}):
+            key_off = webserver._cache_key(path, content_hash)
+        with patch.object(webserver, "_config", {**base, "dither_serpentine": True}):
+            key_on = webserver._cache_key(path, content_hash)
+        assert key_off != key_on
+        assert "_s0_" in key_off
+        assert "_s1_" in key_on
+
+    def test_cache_key_serpentine_override(self):
+        path = Path("/images/test.jpg")
+        content_hash = "abcdef123456"
+        with patch.object(webserver, "_config", {**webserver.DEFAULT_CONFIG, "dither_serpentine": True}):
+            k = webserver._cache_key(path, content_hash, serpentine=False)
+        assert "_s0_" in k
 
     def test_default_is_atkinson_hue_aware(self):
         """atkinson_hue_aware is the current default after the V10 benchmark study."""
@@ -1411,6 +1430,13 @@ class TestOrientation:
         cfg_fs = webserver._dither_for_algorithm("floyd_steinberg")
         assert cfg_fs.adaptive_saturate is False
         assert cfg_fs.adaptive_vivid is False
+        cfg_stucki_h = webserver._dither_for_algorithm("stucki_hue_aware")
+        assert cfg_stucki_h.dither_fn is webserver._stucki_dither
+        assert cfg_stucki_h.adaptive_saturate is True
+        assert cfg_stucki_h.adaptive_vivid is True
+        cfg_stucki = webserver._dither_for_algorithm("stucki")
+        assert cfg_stucki.dither_fn is webserver._stucki_dither
+        assert cfg_stucki.adaptive_saturate is False
 
     def test_deprecated_algorithm_migration(self):
         """Loading a config with fs_hue_aware should migrate to the current default."""

@@ -7,6 +7,25 @@ attribution requirements still apply. Any dithered or otherwise modified
 copies distributed from this repo are derivative works and inherit the
 ShareAlike obligations of the source license where applicable.
 
+## Albrecht_Duerer_Hare_1502_Google_Art_Project.jpg
+
+- **Category:** fine art / high-frequency texture (fur, paper grain)
+- **Direct file URL (original resolution):**
+  https://upload.wikimedia.org/wikipedia/commons/4/44/Albrecht_D%C3%BCrer_-_Hare%2C_1502_-_Google_Art_Project.jpg
+- **Commons file page:** https://commons.wikimedia.org/wiki/File:Albrecht_D%C3%BCrer_-_Hare,_1502_-_Google_Art_Project.jpg
+- **Work:** *Young Hare* (*Feldhase*), 1502 — watercolor and gouache on paper.
+  **Artist:** Albrecht Dürer (1471–1528). **Collection:** Albertina Museum, Vienna
+  (accession 3073).
+- **Digital photograph:** Google Arts & Culture (Google Art Project), as credited
+  on the Commons file page — https://artsandculture.google.com/asset/1QHEnzUGYMDG_w
+- **License:** The underlying work is in the **public domain** (author died 1528).
+  Wikimedia Commons applies the **Public Domain Mark 1.0** to this faithful
+  photographic reproduction of a two-dimensional public domain work of art —
+  https://creativecommons.org/publicdomain/mark/1.0/ — and states that such
+  reproductions are treated as public domain in the United States. **Other
+  jurisdictions** may impose restrictions on reusing photographs of PD works;
+  see https://commons.wikimedia.org/wiki/Commons:Reuse_of_PD-Art_photographs
+
 ## Actress_Anna_Unterberger-2.jpg
 
 - **Source:** https://commons.wikimedia.org/wiki/File:Actress_Anna_Unterberger-2.jpg

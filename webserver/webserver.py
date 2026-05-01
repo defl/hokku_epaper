@@ -70,7 +70,13 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif", "
 
 # ── Configuration ──────────────────────────────────────────────────
 
-VALID_DITHER_ALGORITHMS = ("floyd_steinberg", "atkinson", "atkinson_hue_aware")
+VALID_DITHER_ALGORITHMS = (
+    "floyd_steinberg",
+    "atkinson",
+    "atkinson_hue_aware",
+    "stucki",
+    "stucki_hue_aware",
+)
 # Deprecated algorithms — silently migrated to DEFAULT_CONFIG["dither_algorithm"].
 # fs_hue_aware was tried as a default but had a near-neutral amplification failure
 # mode (white umbrellas, light clothing picked up pink speckle). The current
@@ -93,6 +99,10 @@ DEFAULT_CONFIG = {
     # hard — not for production use. Toggled from the web GUI.
     "debug_fast_refresh": False,
     "dither_algorithm": "atkinson_hue_aware",
+    # Serpentine (boustrophedon) error-diffusion scan: alternate row direction and
+    # mirror the kernel so error is not always pushed the same way — reduces
+    # directional streaks. Applies to Floyd–Steinberg and Atkinson only.
+    "dither_serpentine": False,
 }
 
 DEBUG_FAST_REFRESH_SECONDS = 180
@@ -102,7 +112,7 @@ _config_file_path = None  # set during load, used for saving
 
 _SAVE_KEYS = ["timezone", "refresh_image_at_time", "upload_dir", "cache_dir",
               "port", "poll_interval_seconds", "orientation",
-              "debug_fast_refresh", "dither_algorithm"]
+              "debug_fast_refresh", "dither_algorithm", "dither_serpentine"]
 
 
 def _load_config():
@@ -430,11 +440,14 @@ def _hash_file(img_path):
 # Old cached renders with a different version are ignored and re-rendered.
 _CACHE_VERSION = "v2"
 
-def _cache_key(img_path, content_hash, algorithm=None):
+def _cache_key(img_path, content_hash, algorithm=None, serpentine=None):
     orientation = _config.get("orientation", "landscape")
     if algorithm is None:
         algorithm = _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"])
-    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}_{algorithm}_{_CACHE_VERSION}"
+    if serpentine is None:
+        serpentine = bool(_config.get("dither_serpentine", False))
+    serp_tag = "s1" if serpentine else "s0"
+    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}_{algorithm}_{serp_tag}_{_CACHE_VERSION}"
 
 def _load_from_cache(cache_dir, img_path, content_hash):
     key = _cache_key(img_path, content_hash)
@@ -749,9 +762,13 @@ _RGB_LUT_EUCLID, _LUT_SCALE = _build_rgb_lut()
 _RGB_LUT_HUE_AWARE, _ = _build_rgb_lut_hue_aware()
 
 
-def _floyd_steinberg_dither(canvas, lut=None, lut_scale=None):
+def _floyd_steinberg_dither(canvas, lut=None, lut_scale=None, serpentine=False):
     """Floyd–Steinberg error diffusion. Full error distributed to 4 neighbors
-    (7/16 right, 3/16 down-left, 5/16 down, 1/16 down-right)."""
+    (7/16 right, 3/16 down-left, 5/16 down, 1/16 down-right).
+
+    serpentine: on even scanlines (y=0,2,4,...) process right-to-left and mirror
+    the kernel so diffusion still targets unvisited pixels (reduces streaking).
+    """
     if lut is None:
         lut = _RGB_LUT_EUCLID
     if lut_scale is None:
@@ -763,7 +780,9 @@ def _floyd_steinberg_dither(canvas, lut=None, lut_scale=None):
     lut_max = lut.shape[0] - 1
 
     for y in range(h):
-        for x in range(w):
+        reverse = serpentine and (y % 2 == 0)
+        x_iter = range(w - 1, -1, -1) if reverse else range(w)
+        for x in x_iter:
             r = min(max(pixels[y, x, 0], 0.0), 255.0)
             g = min(max(pixels[y, x, 1], 0.0), 255.0)
             b = min(max(pixels[y, x, 2], 0.0), 255.0)
@@ -775,31 +794,53 @@ def _floyd_steinberg_dither(canvas, lut=None, lut_scale=None):
             er = r - pal_rgb[idx, 0]
             eg = g - pal_rgb[idx, 1]
             eb = b - pal_rgb[idx, 2]
-            if x + 1 < w:
-                pixels[y, x + 1, 0] += er * 0.4375
-                pixels[y, x + 1, 1] += eg * 0.4375
-                pixels[y, x + 1, 2] += eb * 0.4375
-            if y + 1 < h:
+            if reverse:
                 if x - 1 >= 0:
-                    pixels[y + 1, x - 1, 0] += er * 0.1875
-                    pixels[y + 1, x - 1, 1] += eg * 0.1875
-                    pixels[y + 1, x - 1, 2] += eb * 0.1875
-                pixels[y + 1, x, 0] += er * 0.3125
-                pixels[y + 1, x, 1] += eg * 0.3125
-                pixels[y + 1, x, 2] += eb * 0.3125
+                    pixels[y, x - 1, 0] += er * 0.4375
+                    pixels[y, x - 1, 1] += eg * 0.4375
+                    pixels[y, x - 1, 2] += eb * 0.4375
+                if y + 1 < h:
+                    if x + 1 < w:
+                        pixels[y + 1, x + 1, 0] += er * 0.1875
+                        pixels[y + 1, x + 1, 1] += eg * 0.1875
+                        pixels[y + 1, x + 1, 2] += eb * 0.1875
+                    pixels[y + 1, x, 0] += er * 0.3125
+                    pixels[y + 1, x, 1] += eg * 0.3125
+                    pixels[y + 1, x, 2] += eb * 0.3125
+                    if x - 1 >= 0:
+                        pixels[y + 1, x - 1, 0] += er * 0.0625
+                        pixels[y + 1, x - 1, 1] += eg * 0.0625
+                        pixels[y + 1, x - 1, 2] += eb * 0.0625
+            else:
                 if x + 1 < w:
-                    pixels[y + 1, x + 1, 0] += er * 0.0625
-                    pixels[y + 1, x + 1, 1] += eg * 0.0625
-                    pixels[y + 1, x + 1, 2] += eb * 0.0625
+                    pixels[y, x + 1, 0] += er * 0.4375
+                    pixels[y, x + 1, 1] += eg * 0.4375
+                    pixels[y, x + 1, 2] += eb * 0.4375
+                if y + 1 < h:
+                    if x - 1 >= 0:
+                        pixels[y + 1, x - 1, 0] += er * 0.1875
+                        pixels[y + 1, x - 1, 1] += eg * 0.1875
+                        pixels[y + 1, x - 1, 2] += eb * 0.1875
+                    pixels[y + 1, x, 0] += er * 0.3125
+                    pixels[y + 1, x, 1] += eg * 0.3125
+                    pixels[y + 1, x, 2] += eb * 0.3125
+                    if x + 1 < w:
+                        pixels[y + 1, x + 1, 0] += er * 0.0625
+                        pixels[y + 1, x + 1, 1] += eg * 0.0625
+                        pixels[y + 1, x + 1, 2] += eb * 0.0625
         if y % 200 == 0:
             print(f"  Dithering: {y}/{h}")
     return result_idx
 
 
-def _atkinson_dither(canvas, lut=None, lut_scale=None):
+def _atkinson_dither(canvas, lut=None, lut_scale=None, serpentine=False):
     """Atkinson dither. Distributes only 6/8 of the quantization error, 1/8 each
     into 6 neighbors: (+1,0), (+2,0), (-1,+1), (0,+1), (+1,+1), (0,+2). Softer
-    gradients, less hue-shift cascade, slightly lower max contrast than FS."""
+    gradients, less hue-shift cascade, slightly lower max contrast than FS.
+
+    serpentine: alternate row direction and negate horizontal offsets on even
+    scanlines (see _floyd_steinberg_dither).
+    """
     if lut is None:
         lut = _RGB_LUT_EUCLID
     if lut_scale is None:
@@ -814,7 +855,9 @@ def _atkinson_dither(canvas, lut=None, lut_scale=None):
     w_coef = 1.0 / 8.0
 
     for y in range(h):
-        for x in range(w):
+        reverse = serpentine and (y % 2 == 0)
+        x_iter = range(w - 1, -1, -1) if reverse else range(w)
+        for x in x_iter:
             r = min(max(pixels[y, x, 0], 0.0), 255.0)
             g = min(max(pixels[y, x, 1], 0.0), 255.0)
             b = min(max(pixels[y, x, 2], 0.0), 255.0)
@@ -827,11 +870,73 @@ def _atkinson_dither(canvas, lut=None, lut_scale=None):
             eg = (g - pal_rgb[idx, 1]) * w_coef
             eb = (b - pal_rgb[idx, 2]) * w_coef
             for dx, dy in offsets:
-                nx, ny = x + dx, y + dy
+                eff_dx = -dx if reverse else dx
+                nx, ny = x + eff_dx, y + dy
                 if 0 <= nx < w and 0 <= ny < h:
                     pixels[ny, nx, 0] += er
                     pixels[ny, nx, 1] += eg
                     pixels[ny, nx, 2] += eb
+        if y % 200 == 0:
+            print(f"  Dithering: {y}/{h}")
+    return result_idx
+
+
+# Stucki error diffusion — weights sum to 42/42 (full error).
+_STUCKI_OFFSETS = (
+    (1, 0, 8 / 42.0),
+    (2, 0, 4 / 42.0),
+    (-2, 1, 2 / 42.0),
+    (-1, 1, 4 / 42.0),
+    (0, 1, 8 / 42.0),
+    (1, 1, 4 / 42.0),
+    (2, 1, 2 / 42.0),
+    (-2, 2, 1 / 42.0),
+    (-1, 2, 2 / 42.0),
+    (0, 2, 4 / 42.0),
+    (1, 2, 2 / 42.0),
+    (2, 2, 1 / 42.0),
+)
+
+
+def _stucki_dither(canvas, lut=None, lut_scale=None, serpentine=False):
+    """Stucki error diffusion — larger neighborhood than Floyd–Steinberg; tends
+    toward sharper detail and a slightly different noise grain.
+
+    serpentine: alternate row direction and negate horizontal offsets on even
+    scanlines (same convention as Atkinson).
+    """
+    if lut is None:
+        lut = _RGB_LUT_EUCLID
+    if lut_scale is None:
+        lut_scale = _LUT_SCALE
+    pixels = np.array(canvas, dtype=np.float32)
+    h, w, _ = pixels.shape
+    result_idx = np.zeros((h, w), dtype=np.uint8)
+    pal_rgb = PALETTE_MEASURED_RGB
+    lut_max = lut.shape[0] - 1
+
+    for y in range(h):
+        reverse = serpentine and (y % 2 == 0)
+        x_iter = range(w - 1, -1, -1) if reverse else range(w)
+        for x in x_iter:
+            r = min(max(pixels[y, x, 0], 0.0), 255.0)
+            g = min(max(pixels[y, x, 1], 0.0), 255.0)
+            b = min(max(pixels[y, x, 2], 0.0), 255.0)
+            ri = min(int(r / lut_scale), lut_max)
+            gi = min(int(g / lut_scale), lut_max)
+            bi = min(int(b / lut_scale), lut_max)
+            idx = int(lut[ri, gi, bi])
+            result_idx[y, x] = idx
+            er = r - pal_rgb[idx, 0]
+            eg = g - pal_rgb[idx, 1]
+            eb = b - pal_rgb[idx, 2]
+            for dx, dy, wgt in _STUCKI_OFFSETS:
+                eff_dx = -dx if reverse else dx
+                nx, ny = x + eff_dx, y + dy
+                if 0 <= nx < w and 0 <= ny < h:
+                    pixels[ny, nx, 0] += er * wgt
+                    pixels[ny, nx, 1] += eg * wgt
+                    pixels[ny, nx, 2] += eb * wgt
         if y % 200 == 0:
             print(f"  Dithering: {y}/{h}")
     return result_idx
@@ -870,6 +975,10 @@ def _dither_for_algorithm(algorithm):
         return _AlgoConfig(_atkinson_dither, _RGB_LUT_EUCLID, 1.2, False, False, False)
     if algorithm == "atkinson_hue_aware":
         return _AlgoConfig(_atkinson_dither, _RGB_LUT_HUE_AWARE, 1.25, False, True, True)
+    if algorithm == "stucki":
+        return _AlgoConfig(_stucki_dither, _RGB_LUT_EUCLID, 1.2, False, False, False)
+    if algorithm == "stucki_hue_aware":
+        return _AlgoConfig(_stucki_dither, _RGB_LUT_HUE_AWARE, 1.25, False, True, True)
     # Unknown algorithm falls back to the default recipe so unfamiliar config
     # values don't hard-fail the server.
     return _AlgoConfig(_atkinson_dither, _RGB_LUT_HUE_AWARE, 1.25, False, True, True)
@@ -932,7 +1041,8 @@ def _convert_image(img_path):
         adaptive_vivid=cfg.adaptive_vivid,
     )
     canvas = Image.fromarray(canvas_array.astype(np.uint8))
-    result_idx = cfg.dither_fn(canvas, cfg.lut, _LUT_SCALE)
+    serpentine = bool(_config.get("dither_serpentine", False))
+    result_idx = cfg.dither_fn(canvas, cfg.lut, _LUT_SCALE, serpentine=serpentine)
 
     # Force padding areas to pure white (palette index 1) — without this,
     # the enhancement + dithering pipeline turns pure white into a slightly
@@ -1068,7 +1178,10 @@ def _sync_pool_inner():
             # Keep cached renders for every algorithm, not just the active one,
             # so toggling the dither dropdown is instant on a re-visit.
             for algo in VALID_DITHER_ALGORITHMS:
-                valid_cache_keys.add(_cache_key(Path(key), entry["hash"], algorithm=algo))
+                for serp in (False, True):
+                    valid_cache_keys.add(
+                        _cache_key(Path(key), entry["hash"], algorithm=algo, serpentine=serp)
+                    )
     _purge_stale_cache(cache_dir, valid_cache_keys)
 
 
@@ -1339,6 +1452,7 @@ def api_status():
                 "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
                 "debug_fast_refresh_seconds": DEBUG_FAST_REFRESH_SECONDS,
                 "dither_algorithm": _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"]),
+                "dither_serpentine": bool(_config.get("dither_serpentine", False)),
                 "upload_dir": str(_get_upload_dir()),
                 "cache_dir": str(_get_cache_dir()),
             },
@@ -1505,6 +1619,14 @@ def api_config():
         _config["dither_algorithm"] = val
         changed = True
 
+    serpentine_changed = False
+    if "dither_serpentine" in data:
+        val = bool(data["dither_serpentine"])
+        if bool(_config.get("dither_serpentine", False)) != val:
+            serpentine_changed = True
+        _config["dither_serpentine"] = val
+        changed = True
+
     if changed:
         _save_config(_config)
 
@@ -1514,7 +1636,7 @@ def api_config():
         with _lock:
             _pool.clear()
         threading.Thread(target=_sync_pool, daemon=True).start()
-    elif algorithm_changed:
+    elif algorithm_changed or serpentine_changed:
         # Algorithm change: cache key changes so pool entries won't find matching
         # renders. Drop the pool to force _sync_pool to re-run _convert_and_store,
         # which hits cache for algorithms we've rendered before (instant) and
@@ -1530,6 +1652,7 @@ def api_config():
         "orientation": _config.get("orientation", "landscape"),
         "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
         "dither_algorithm": _config.get("dither_algorithm", DEFAULT_CONFIG["dither_algorithm"]),
+        "dither_serpentine": bool(_config.get("dither_serpentine", False)),
     }})
 
 

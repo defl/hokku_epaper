@@ -156,7 +156,7 @@ Server configuration lives in one JSON file. Relevant keys:
 | `timezone` | IANA zone, e.g. `Europe/Amsterdam` |
 | `refresh_times` | List of `"HHMM"` strings, e.g. `["0600","1200","1800"]` |
 | `orientation` | `landscape` or `portrait` |
-| `dither_algorithm` | `atkinson_hue_aware`, `atkinson`, or `floyd_steinberg` |
+| `dither_algorithm` | `atkinson_hue_aware`, `atkinson`, `stucki_hue_aware`, `stucki`, or `floyd_steinberg` |
 | `poll_interval_s` | (advanced) server-side polling granularity |
 | `debug_fast_refresh` | Overrides the schedule to 180 s intervals |
 

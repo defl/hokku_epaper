@@ -36,8 +36,16 @@ Two key properties:
   than L\*=80 in the source has to be mapped down.
 
 Dithering is how we fake the missing colors: we alternate palette pixels in a
-pattern so the eye perceives an average. Floyd–Steinberg and Atkinson error
-diffusion are the classical tools for this.
+pattern so the eye perceives an average. Floyd–Steinberg, Atkinson, and **Stucki**
+error diffusion are available; Stucki uses a larger neighborhood (12 neighbors,
+weights summing to 1) and tends to a different noise texture than Atkinson.
+
+**Serpentine scan** (optional, `dither_serpentine` in config / “Serpentine scan”
+in the web UI): alternate rows are processed right-to-left instead of
+left-to-right, with the error kernel mirrored so quantization error still flows
+only into unvisited pixels. This reduces directional streaking that a fixed
+left-to-right pass can leave in smooth gradients. Default is off for backward
+compatibility with renders produced before the option existed.
 
 ## 2. Why the obvious approach fails
 
@@ -119,13 +127,15 @@ in §4.
 
 ## 3. The shipped algorithms
 
-Users can pick between these four options in the web UI. The first three exist
-primarily for comparison / user preference; the first one is what you want.
+Users pick a dither algorithm in the web UI. **`atkinson_hue_aware`** remains
+the default; the others exist for comparison and taste.
 
 | Value                  | UI label                                        | Default |
 |------------------------|-------------------------------------------------|---------|
 | `atkinson_hue_aware`   | Atkinson + hue-aware (best for photos)          | **Yes** |
 | `atkinson`             | Atkinson (no hue correction)                    |         |
+| `stucki_hue_aware`     | Stucki + hue-aware                              |         |
+| `stucki`               | Stucki (no hue correction)                      |         |
 | `floyd_steinberg`      | Floyd–Steinberg (classic)                       |         |
 
 There is also `fs_hue_aware`, which is **deprecated**. Loading a config or
@@ -304,15 +314,16 @@ Key ideas from published work:
 
 - `webserver/webserver.py` — the production pipeline. Search for:
   - `VALID_DITHER_ALGORITHMS`, `_DEPRECATED_ALGORITHMS`, `DEFAULT_CONFIG`
+    (includes `dither_serpentine`)
   - `_adaptive_saturate()`
   - `_compress_dynamic_range()` (takes `scale_chroma` and `adaptive_vivid`)
   - `_build_rgb_lut()` (Lab-Euclidean) and `_build_rgb_lut_hue_aware()`
-  - `_floyd_steinberg_dither()` and `_atkinson_dither()`
+  - `_floyd_steinberg_dither()`, `_atkinson_dither()`, and `_stucki_dither()`
   - `_dither_for_algorithm()` returns an `_AlgoConfig` bundle per algorithm
   - `_is_near_grayscale()` + the fallback branch in `_convert_image()`
   - `_cache_key()` and `_CACHE_VERSION`
-- `webserver/templates/index.html` — dropdown + help popover.
-- `webserver/tests/test_webserver.py` — 54 tests including coverage of the
+- `webserver/templates/index.html` — dither dropdown, serpentine toggle, help popovers.
+- `webserver/tests/test_webserver.py` — tests including coverage of the
   pipeline knobs above.
 - `dither_test2/` (untracked scratch area, can be deleted) — the benchmark
   harness that chose V10, kept for reproduction.

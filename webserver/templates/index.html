@@ -130,6 +130,7 @@
   .help-popover strong { color: #1d4ed8; }
   .help-popover em { color: #666; font-style: italic; }
   .help-popover-note { padding-top: 8px; border-top: 1px solid #eee; color: #666 !important; font-size: 0.92em; }
+  .config-row.popover-anchor { position: relative; align-items: flex-start; }
 </style>
 </head>
 <body>
@@ -193,11 +194,13 @@
     <span class="info">changing orientation re-converts all images</span>
   </div>
 
-  <div class="config-row">
+  <div class="config-row popover-anchor">
     <label>Dither algorithm:</label>
     <select id="dither-algorithm">
       <option value="atkinson_hue_aware">Atkinson + hue-aware (best for photos)</option>
       <option value="atkinson">Atkinson (no hue correction)</option>
+      <option value="stucki_hue_aware">Stucki + hue-aware</option>
+      <option value="stucki">Stucki (no hue correction)</option>
       <option value="floyd_steinberg">Floyd–Steinberg (classic)</option>
     </select>
     <button type="button" class="help-icon" id="dither-help-btn" aria-label="Dither algorithm help" aria-expanded="false">?</button>
@@ -205,8 +208,25 @@
       <h3>Dither algorithms</h3>
       <p><strong>Atkinson + hue-aware</strong> — Atkinson error diffusion with a hue-aware palette rule (forbids large hue jumps like Red→Blue, so warm skin tones stay warm) plus adaptive saturation (boosts only pixels that already have meaningful chroma, so small features like lips and tongues stay vivid without amplifying tiny tints in near-white regions into phantom speckle) and adaptive vividness compression (compresses chroma only for near-neutrals). Benchmarked best overall for photos. <em>Default.</em> B&amp;W inputs are auto-detected and rendered with a neutral preset.</p>
       <p><strong>Atkinson (no hue correction)</strong> — Plain Atkinson against Lab-nearest palette matching. Softer noise texture, but warm skin tones may drift toward blue.</p>
+      <p><strong>Stucki + hue-aware</strong> — Same pipeline knobs as Atkinson + hue-aware (hue-aware LUT, adaptive saturation, adaptive vividness), but <strong>Stucki</strong> error diffusion: a wider 12-neighbor kernel (weights 1/42…8/42) that spreads error farther than Atkinson. Often a bit sharper and a different grain; slightly heavier work per row.</p>
+      <p><strong>Stucki (no hue correction)</strong> — Plain Stucki with Lab-Euclidean palette matching; same tradeoffs as plain Atkinson vs hue-aware.</p>
       <p><strong>Floyd–Steinberg (classic)</strong> — Full-strength error diffusion against Lab-nearest palette matching. Highest contrast but can show visible blue speckles on skin.</p>
       <p class="help-popover-note">Switching triggers re-conversion of every image for the new algorithm — can take several seconds per image. Cached renders for the other algorithms are preserved, so switching back is instant.</p>
+    </div>
+  </div>
+
+  <div class="config-row popover-anchor">
+    <label>Serpentine scan:</label>
+    <label class="toggle">
+      <input type="checkbox" id="dither-serpentine">
+      <span id="dither-serpentine-label">Off</span>
+    </label>
+    <button type="button" class="help-icon" id="serpentine-help-btn" aria-label="Serpentine scan help" aria-expanded="false">?</button>
+    <div id="serpentine-help-popover" class="help-popover" role="dialog" aria-label="Serpentine scan explanation" hidden>
+      <h3>Serpentine error diffusion</h3>
+      <p><strong>What it does:</strong> Normally each row is scanned left-to-right, so quantization error is always pushed ahead in the same direction. With serpentine (boustrophedon) scanning, <strong>every other row is processed right-to-left</strong>, and the error-diffusion pattern is <strong>mirrored horizontally</strong> so error still flows only into pixels that have not been finalized yet.</p>
+      <p><strong>Why use it:</strong> A single scan direction can leave <strong>visible directional streaks or “combing”</strong> in smooth areas. Alternating direction breaks that bias and often looks more even, similar to the default recommendation in mature dithering libraries.</p>
+      <p class="help-popover-note">Applies to Floyd–Steinberg, Atkinson, and Stucki. Turning it on or off re-converts images (cached results for both settings are kept). Default is off for backward compatibility with earlier renders.</p>
     </div>
   </div>
 
@@ -351,6 +371,7 @@ async function saveConfig() {
     orientation: document.getElementById('orientation').value,
     debug_fast_refresh: document.getElementById('debug-fast-refresh').checked,
     dither_algorithm: document.getElementById('dither-algorithm').value,
+    dither_serpentine: document.getElementById('dither-serpentine').checked,
   };
   try {
     const resp = await fetch('/hokku/api/config', {
@@ -675,6 +696,9 @@ async function refreshStatus() {
     document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
     document.getElementById('orientation').value = cfg.orientation || 'landscape';
     document.getElementById('dither-algorithm').value = cfg.dither_algorithm || 'atkinson_hue_aware';
+    const serpOn = !!cfg.dither_serpentine;
+    document.getElementById('dither-serpentine').checked = serpOn;
+    document.getElementById('dither-serpentine-label').textContent = serpOn ? 'On' : 'Off';
     document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
 
     // Debug Fast Refresh toggle state + banner
@@ -902,10 +926,9 @@ window.addEventListener('drop', e => {
   uploadFiles(e.dataTransfer.files);
 });
 
-// Dither help popover toggle (click icon to open, Esc or click-outside to close)
-(function() {
-  const btn = document.getElementById('dither-help-btn');
-  const pop = document.getElementById('dither-help-popover');
+function bindHelpPopover(btnId, popId) {
+  const btn = document.getElementById(btnId);
+  const pop = document.getElementById(popId);
   if (!btn || !pop) return;
 
   function open() {
@@ -926,7 +949,14 @@ window.addEventListener('drop', e => {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !pop.hidden) close();
   });
-})();
+}
+
+bindHelpPopover('dither-help-btn', 'dither-help-popover');
+bindHelpPopover('serpentine-help-btn', 'serpentine-help-popover');
+
+document.getElementById('dither-serpentine').addEventListener('change', function() {
+  document.getElementById('dither-serpentine-label').textContent = this.checked ? 'On' : 'Off';
+});
 
 // Initial load + auto-refresh every 5 seconds
 refreshStatus();
