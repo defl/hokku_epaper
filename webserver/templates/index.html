@@ -381,7 +381,7 @@ async function saveConfig() {
     });
     if (resp.ok) {
       showToast('Configuration saved');
-      refreshStatus();
+      await refreshStatus();
     } else {
       showToast('Failed to save configuration');
     }
@@ -670,10 +670,16 @@ function renderImageGrid(uploadFiles, serveData) {
   });
 }
 
+// Ignore stale /hokku/api/status responses when several fetches overlap (5s poll +
+// post-save refresh); the last-started request wins so the DOM never reverts.
+let _statusRefreshGen = 0;
+
 async function refreshStatus() {
+  const gen = ++_statusRefreshGen;
   try {
     const resp = await fetch('/hokku/api/status');
     const data = await resp.json();
+    if (gen !== _statusRefreshGen) return;
 
     // Update config UI
     const tz = document.getElementById('timezone');
@@ -695,8 +701,8 @@ async function refreshStatus() {
     renderRefreshTimes();
     document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
     document.getElementById('orientation').value = cfg.orientation || 'landscape';
-    document.getElementById('dither-algorithm').value = cfg.dither_algorithm || 'atkinson_hue_aware';
-    const serpOn = !!cfg.dither_serpentine;
+    document.getElementById('dither-algorithm').value = cfg.image_preset || 'atkinson_hue_aware';
+    const serpOn = !!(cfg.image && cfg.image.dither && cfg.image.dither.serpentine);
     document.getElementById('dither-serpentine').checked = serpOn;
     document.getElementById('dither-serpentine-label').textContent = serpOn ? 'On' : 'Off';
     document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
@@ -745,7 +751,7 @@ async function refreshStatus() {
     renderImageGrid(data.upload_files || data.pool_files.map(n => ({name: n, dithered: true})), data.serve_data);
     currentConfig = cfg;
   } catch (e) {
-    console.error('Status refresh failed:', e);
+    if (gen === _statusRefreshGen) console.error('Status refresh failed:', e);
   }
 }
 

@@ -6,33 +6,13 @@ set -e
 # here end up owned by the dynamic user once they're inside that tree.
 mkdir -p /var/lib/hokku/upload /var/lib/hokku/cache
 
-# Config file deliberately NOT created here. The service (running as
-# DynamicUser) creates it itself on first load, which ensures correct
-# ownership. Legacy configs at /etc/hokku/config.json are auto-migrated
-# into /var/lib/hokku/config.json by the webserver on first run, and
-# the legacy file is left in place as a backup.
-#
-# If this postinst wrote config.json as root, subsequent saves from
-# the web UI would fail with PermissionError because DynamicUser's
-# transient UID doesn't match root. StateDirectory only chowns top-
-# level entries it creates — not files seeded by postinst.
-#
-# Clean up any stale root-owned config.json left by earlier package
-# versions (2.1.13, 2.1.14) so the service recreates it fresh on
-# startup. Preserve the content via the legacy path so the webserver
-# can migrate user settings forward.
+# Config is not created here: the service creates $HOKKU_CONFIG on first load
+# with correct ownership. Remove a root-owned config left by older package
+# versions so the DynamicUser can write a fresh file.
 if [ -f /var/lib/hokku/config.json ] && [ ! -w /var/lib/hokku/config.json ] 2>/dev/null; then
-    # In practice this is either root-owned from a 2.1.13/2.1.14 install,
-    # or has been correctly chowned to the dynamic UID already. Leave
-    # correctly-owned ones alone; migrate root-owned ones to /etc/hokku
-    # so the webserver's legacy-path migration picks them up.
     if [ "$(stat -c %U /var/lib/hokku/config.json 2>/dev/null)" = "root" ]; then
-        mkdir -p /etc/hokku
-        if [ ! -f /etc/hokku/config.json ]; then
-            cp /var/lib/hokku/config.json /etc/hokku/config.json
-        fi
         rm -f /var/lib/hokku/config.json
-        echo "Stashed root-owned config to /etc/hokku/config.json; service will migrate it on start."
+        echo "Removed root-owned config.json; service will recreate defaults on start."
     fi
 fi
 

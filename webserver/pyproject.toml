@@ -16,7 +16,20 @@ dependencies = [
 ]
 
 [project.scripts]
-hokku-server = "webserver:main"
+hokku-server = "webserver.flask_app:main"
 
-[tool.setuptools]
-py-modules = ["webserver"]
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "psutil>=5.9",
+]
+
+[tool.pytest.ini_options]
+addopts = ["-m", "not time_intensive"]
+markers = [
+    "time_intensive: slow tests (fixture image dithers, full-res RSS checks). Run: pytest -m time_intensive",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["webserver*"]

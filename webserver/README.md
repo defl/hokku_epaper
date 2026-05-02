@@ -12,16 +12,18 @@ The deb installs dependencies, creates the config, and starts the service automa
 
 **From source**:
 ```bash
-pip install flask pillow numpy pillow-heif
-python webserver.py
+cd webserver
+pip install -e .
+HOKKU_CONFIG=./config.json hokku-server
+# or: HOKKU_CONFIG=./config.json python -m webserver.flask_app
 ```
 
 ## Usage
 
 Drop images into the upload directory and they are automatically converted. The web GUI is available at `http://server:8080/`.
 
-- **Debian install**: images go in `/var/lib/hokku/upload/`, config at `/etc/hokku/config.json`
-- **From source**: images go in `/images/upload/`, config at `./config.json`
+- **Debian install**: images in `/var/lib/hokku/upload/`, config at `/var/lib/hokku/config.json` (`HOKKU_CONFIG` in the systemd unit).
+- **From source**: set `HOKKU_CONFIG` to your JSON path (defaults in code use `/images/upload` and `/images/cache` until you override them in that file).
 
 ## Web GUI
 
@@ -51,7 +53,7 @@ Config file (`config.json`):
 }
 ```
 
-Config is loaded from (in order): `HOKKU_CONFIG` env var, `./config.json`, `/etc/hokku/config.json`. Changes made via the web GUI are saved back to the same file.
+Config is read and written only at the path in `HOKKU_CONFIG` (required). The Debian package sets it to `/var/lib/hokku/config.json`. Changes from the web GUI save to that file.
 
 ## Image processing
 
