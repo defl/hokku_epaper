@@ -1,5 +1,11 @@
 This is a project where you're writing firmware for an ESP32 that drives an e-ink display.
 
+Releases
+========
+- **NEVER** upload, replace, or delete GitHub release assets without an explicit "yes, publish" (or equivalent) from the user for that specific change. Building a `.deb` or merged firmware locally is fine; `gh release upload`, `gh release delete-asset`, `gh release create`, `gh release edit`, and any force-pushed tag are not.
+- "I see the fix works" or "tests pass" are NOT release authorisations. Ask first, every time, even after several successful releases in a row in the same session.
+- After the user confirms, state exactly what will be uploaded/removed (filenames, release tag) before running the `gh` commands, so the user has a last chance to veto.
+
 Hardware
 ========
 - The known facts are in docs/hardware_facts.md, though this might be wrong so treat with caution
@@ -20,6 +26,55 @@ Display driver
 - GPIO7 (BUSY) has an external pull-up on the PCB. gpio_reset_pin enables an internal pull-up too. Both are needed for correct BUSY signaling. Do not skip gpio_reset_pin for BUSY.
 - display_message() must use split_and_display() — the exact same function used for downloaded images. The buffer layout must be identical: first 480K = panel 1, second 480K = panel 2.
 - After flashing the factory firmware dump (.private/flash_dump.bin) before our firmware, wait 30s for the display controller to fully reset. The factory restore puts the display in a known good state.
+
+Firmware packaging (single merged file)
+=======================================
+- Every firmware build **must** produce a single merged file named `hokku-firmware_<version>.bin` (e.g. `hokku-firmware_v2.1.20.bin`). The setup tool flashes this file at offset 0x0 — it contains bootloader + partition table + app at their correct offsets.
+- **Do not** commit or release the individual `bootloader.bin` / `partition-table.bin` / `hokku_epaper.bin` parts. The tool does not support the split layout; it looks only for `hokku-firmware_*.bin`.
+- Build the merged file with esptool's `merge-bin` after `idf.py build`:
+  ```
+  esptool --chip esp32s3 merge-bin --output firmware/release/hokku-firmware_<version>.bin \
+      --flash-mode dio --flash-freq 80m --flash-size 16MB \
+      0x0      firmware/build/bootloader/bootloader.bin \
+      0x8000   firmware/build/partition_table/partition-table.bin \
+      0x10000  firmware/build/hokku_epaper.bin
+  ```
+- `build.bat` / `build_worktree.bat` should run `idf.py build` then this merge step. Keep only the merged file under `firmware/release/`.
+- When tagging a GitHub release, attach the merged file as the single firmware asset. The setup tool downloads it from the latest release if `firmware/release/` is empty. If no `hokku-firmware_*.bin` asset is found the tool aborts — never publish a release missing this file.
+
+Building the hokku-server .deb on Windows (via Docker)
+======================================================
+`webserver/build-deb.sh` needs Debian tooling (`dpkg-buildpackage`, `debhelper`, `pybuild-plugin-pyproject`) that isn't available on Windows. Use Docker Desktop with a `debian:trixie` container. One-shot command that works from Git Bash:
+
+```
+MSYS_NO_PATHCONV=1 docker run --rm \
+    -v "/c/Users/defl/workspace/hokku_epaper/.claude/worktrees/<worktree>":/src \
+    debian:trixie bash -c '
+set -e
+apt-get update -qq
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    debhelper dh-python python3-all python3-setuptools \
+    pybuild-plugin-pyproject >/dev/null 2>&1
+cp -r /src/webserver /build
+cd /build
+chmod -x debian/* 2>/dev/null || true
+chmod +x debian/rules debian/postinst
+./build-deb.sh
+cp /*.deb /src/
+'
+```
+
+The finished `.deb` lands at the worktree root (e.g. `hokku-server_2.1.21-3_all.deb`). Upload with `gh release upload <tag> <file> --clobber` and delete the stale `.deb` with `gh release delete-asset <tag> <old_file> --yes`.
+
+**Bumping the Debian revision on every rebuild.** Whenever you rebuild the `.deb` without changing the upstream version (`2.2.2`, etc.), bump the trailing `-N` revision in `webserver/debian/changelog` and `webserver/pyproject.toml` (if it tracks the revision) by one — never overwrite an existing revision number with new contents. Example: a rebuild after `2.2.2-1` becomes `hokku-server_2.2.2-2_all.deb`, the next rebuild after that becomes `-3`, etc. Reason: each revision must have a unique build artifact so users can tell from the filename / `dpkg -l` output exactly which build they're running. Reusing `-1` for two different sets of bytes makes "I have hokku-server 2.2.2-1 installed" ambiguous and breaks the only easy way to verify the user has the version we think they do.
+
+Things that look harmless but break the build — lessons learned:
+- **Path translation.** Git Bash auto-rewrites `/src/webserver` (a container path) into `C:/Program Files/Git/src/webserver` during `docker run -w /src/webserver`, which errors out with "invalid working directory". Prefix the entire docker invocation with `MSYS_NO_PATHCONV=1` to disable the rewrite.
+- **Executable bits on the Windows volume.** The `debian/` config files (`install`, `control`, `changelog`) appear as mode 0755 through the bind mount because NTFS has no POSIX bit. `debhelper` treats any executable `debian/install` as an executable config (to be run as a script) rather than the plain list-of-files format, and blows up. Copy the `webserver/` dir *out* of the mount to `/build` inside the container first, then `chmod -x debian/*` and re-add `+x` on `debian/rules` and `debian/postinst` only. Never `chmod` on the mount itself — it's a no-op through the Windows bind.
+- **Missing pybuild plugin.** Trixie's `debhelper` doesn't pull `pybuild-plugin-pyproject` by default; without it `dh_auto_configure` fails with "PEP517 plugin dependencies are not available". Install it explicitly.
+- **`pip install --break-system-packages` in postinst.** Trixie's python3 is externally-managed; if the `.deb`'s postinst calls `pip install` (e.g. for pillow-heif) it must pass `--break-system-packages`, otherwise installation fails on the target Pi.
+
+After upload, run hokku_setup.bat → Advanced → Clear .cache on the dev machine so the next install fetches the new `.deb` rather than reusing an old cached one.
 
 Flashing procedure
 ==================

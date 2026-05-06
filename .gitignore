@@ -3,6 +3,7 @@ __pycache__/
 .claude/
 .private/
 build/
+.cache/
 
 # Debian build artifacts
 *.deb

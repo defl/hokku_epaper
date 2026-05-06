@@ -23,7 +23,7 @@ import webserver
 class TestConfigLoading:
     def test_default_config(self):
         config = webserver.DEFAULT_CONFIG
-        assert "timezone" in config
+        assert "timezone" not in config  # timezone removed — host OS controls it
         assert "refresh_image_at_time" in config
         assert "upload_dir" in config
         assert "cache_dir" in config
@@ -32,12 +32,11 @@ class TestConfigLoading:
 
     def test_load_config_from_file(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump({"timezone": "Europe/London", "port": 9090, "poll_interval_seconds": 30}, f)
+            json.dump({"port": 9090, "poll_interval_seconds": 30}, f)
             temp_path = f.name
         try:
             with patch.dict(os.environ, {"HOKKU_CONFIG": temp_path}):
                 config = webserver._load_config()
-            assert config["timezone"] == "Europe/London"
             assert config["port"] == 9090
             assert config["poll_interval_seconds"] == 30
         finally:
@@ -45,12 +44,12 @@ class TestConfigLoading:
 
     def test_load_config_env_var(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump({"timezone": "Asia/Tokyo"}, f)
+            json.dump({"orientation": "portrait"}, f)
             temp_path = f.name
         try:
             with patch.dict(os.environ, {"HOKKU_CONFIG": temp_path}):
                 config = webserver._load_config()
-            assert config["timezone"] == "Asia/Tokyo"
+            assert config["orientation"] == "portrait"
         finally:
             os.unlink(temp_path)
 
@@ -64,22 +63,22 @@ class TestConfigLoading:
 
 class TestSleepCalculation:
     def test_next_time_today(self):
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0600", "1200", "1800"]}
+        config = {"refresh_image_at_time": ["0600", "1200", "1800"]}
         sleep = webserver._calculate_sleep_seconds(config)
         assert sleep >= 60
 
     def test_empty_times_fallback(self):
-        config = {"timezone": "UTC", "refresh_image_at_time": []}
+        config = {"refresh_image_at_time": []}
         sleep = webserver._calculate_sleep_seconds(config)
         assert sleep == 21600
 
     def test_minimum_sleep(self):
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0000", "0001", "0002"]}
+        config = {"refresh_image_at_time": ["0000", "0001", "0002"]}
         sleep = webserver._calculate_sleep_seconds(config)
         assert sleep >= 60
 
     def test_hhmm_parsing(self):
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0930", "1845"]}
+        config = {"refresh_image_at_time": ["0930", "1845"]}
         sleep = webserver._calculate_sleep_seconds(config)
         assert isinstance(sleep, int)
         assert sleep >= 60
@@ -529,12 +528,12 @@ class TestBatteryReporting:
 
 class TestDebugFastRefresh:
     def test_calculate_sleep_seconds_bypasses_schedule(self):
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0600"],
+        config = {"refresh_image_at_time": ["0600"],
                   "debug_fast_refresh": True}
         assert webserver._calculate_sleep_seconds(config) == webserver.DEBUG_FAST_REFRESH_SECONDS
 
     def test_calculate_sleep_seconds_normal_when_disabled(self):
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0600"],
+        config = {"refresh_image_at_time": ["0600"],
                   "debug_fast_refresh": False}
         val = webserver._calculate_sleep_seconds(config)
         assert val != webserver.DEBUG_FAST_REFRESH_SECONDS
@@ -771,7 +770,7 @@ class TestBusyRetrySeconds:
         must still return at most 300s so the screen comes back soon
         when conversion finishes."""
         # 300s cap is min(300, delta-to-next-refresh). Use a far-future schedule.
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0600"]}
+        config = {"refresh_image_at_time": ["0600"]}
         with patch.object(webserver, "_config", config):
             val = webserver._busy_retry_seconds()
         assert 60 <= val <= 300
@@ -782,7 +781,7 @@ class TestBusyRetrySeconds:
         # Hack: set refresh_at a minute in the future relative to now.
         # Use a schedule that's only a minute or two away via the UTC now.
         # Easier: verify val never exceeds _calculate_sleep_seconds.
-        config = {"timezone": "UTC", "refresh_image_at_time": ["0600", "1200", "1800"]}
+        config = {"refresh_image_at_time": ["0600", "1200", "1800"]}
         with patch.object(webserver, "_config", config):
             normal = webserver._calculate_sleep_seconds(config)
             busy = webserver._busy_retry_seconds()
@@ -953,6 +952,174 @@ class TestDeleteImage:
         assert resp.status_code == 200
         assert (upload_dir / "keep.jpg").exists()
 
+    def test_delete_filename_with_spaces(self, tmp_path):
+        """Files written via Samba/SCP keep spaces and other characters that
+        secure_filename would mutate. DELETE must look up the file by its
+        actual on-disk name, not the secure_filename'd version."""
+        webserver.app.config["TESTING"] = True
+        upload_dir = tmp_path / "upload"; upload_dir.mkdir()
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        (cache_dir / "thumbs").mkdir()
+        (upload_dir / "Family Photo 008.jpg").write_bytes(b"fake")
+        cfg = {**webserver.DEFAULT_CONFIG,
+               "upload_dir": str(upload_dir), "cache_dir": str(cache_dir)}
+        with patch.object(webserver, "_config", cfg), \
+             patch("webserver._sync_pool"), \
+             webserver.app.test_client() as client:
+            resp = client.delete("/hokku/api/image/Family Photo 008.jpg")
+            assert resp.status_code == 200, resp.get_json()
+            assert not (upload_dir / "Family Photo 008.jpg").exists()
+
+    def test_delete_rejects_path_traversal(self, client_with_image):
+        client, upload_dir, _ = client_with_image
+        # Werkzeug's URL converter blocks slashes, but '..' alone reaches the
+        # handler — make sure we reject it before touching the filesystem.
+        resp = client.delete("/hokku/api/image/..")
+        assert resp.status_code == 400
+
+    def test_delete_cleans_up_quarantine_markers(self, client_with_image):
+        """Deleting a quarantined image must also remove its .failed and
+        .processing siblings, otherwise the failed-list UI shows ghost
+        rows that can never be retried (the underlying image is gone)."""
+        client, upload_dir, _ = client_with_image
+        (upload_dir / "victim.jpg.failed").write_bytes(b"")
+        (upload_dir / "victim.jpg.processing").write_bytes(b"")
+        resp = client.delete("/hokku/api/image/victim.jpg")
+        assert resp.status_code == 200
+        assert not (upload_dir / "victim.jpg").exists()
+        assert not (upload_dir / "victim.jpg.failed").exists()
+        assert not (upload_dir / "victim.jpg.processing").exists()
+
+
+class TestSafeLookupName:
+    """The lookup-side filename validator. Must accept exact filenames as
+    they exist on disk (including spaces/accents from Samba uploads) and
+    reject anything that could escape the upload dir."""
+
+    def test_passes_through_normal_names(self):
+        for n in ["foo.jpg", "Family Photo 008.jpg",
+                  "café.png", "a (1).jpg", "img-2024_01_07.heic"]:
+            assert webserver._safe_lookup_name(n) == n
+
+    def test_rejects_empty_and_dotdot(self):
+        for n in ["", ".", ".."]:
+            assert webserver._safe_lookup_name(n) is None
+
+    def test_rejects_path_separators(self):
+        for n in ["a/b.jpg", "..\\b.jpg", "a\x00.jpg"]:
+            assert webserver._safe_lookup_name(n) is None
+
+
+class TestRetryEndpoint:
+    """End-to-end coverage for /hokku/api/image/<name>/retry — the user-facing
+    Retry button on the failed-conversions list."""
+
+    @pytest.fixture
+    def client(self, tmp_path):
+        webserver.app.config["TESTING"] = True
+        upload_dir = tmp_path / "upload"; upload_dir.mkdir()
+        cfg = {**webserver.DEFAULT_CONFIG,
+               "upload_dir": str(upload_dir),
+               "cache_dir": str(tmp_path / "cache")}
+        with patch.object(webserver, "_config", cfg), \
+             patch("webserver._sync_pool"), \
+             webserver.app.test_client() as c:
+            yield c, upload_dir
+
+    def test_retry_unquarantines_a_normal_file(self, client):
+        c, upload_dir = client
+        (upload_dir / "img.jpg").write_bytes(b"fake")
+        (upload_dir / "img.jpg.failed").write_bytes(b"")
+        resp = c.post("/hokku/api/image/img.jpg/retry")
+        assert resp.status_code == 200, resp.get_json()
+        assert resp.get_json() == {"status": "ok", "retrying": "img.jpg"}
+        assert not (upload_dir / "img.jpg.failed").exists()
+        assert (upload_dir / "img.jpg").exists()  # image untouched
+
+    def test_retry_filename_with_spaces(self, client):
+        """Reproduces the user's bug — Samba-uploaded files keep spaces;
+        secure_filename would have looked up 'Family_Photo_008.jpg'
+        and 404'd. After the _safe_lookup_name fix, the on-disk name is
+        used verbatim."""
+        c, upload_dir = client
+        name = "Family Photo 008.jpg"
+        (upload_dir / name).write_bytes(b"fake")
+        (upload_dir / (name + ".failed")).write_bytes(b"")
+        resp = c.post(f"/hokku/api/image/{name}/retry")
+        assert resp.status_code == 200, resp.get_json()
+        assert resp.get_json()["retrying"] == name
+        assert not (upload_dir / (name + ".failed")).exists()
+
+    def test_retry_filename_with_accents_and_parens(self, client):
+        c, upload_dir = client
+        name = "Café (Paris).jpg"
+        (upload_dir / name).write_bytes(b"fake")
+        (upload_dir / (name + ".failed")).write_bytes(b"")
+        resp = c.post(f"/hokku/api/image/{name}/retry")
+        assert resp.status_code == 200, resp.get_json()
+        assert not (upload_dir / (name + ".failed")).exists()
+
+    def test_retry_404_when_image_missing(self, client):
+        """Orphan .failed without underlying image — Retry should 404 with
+        a clean error, not silently succeed by removing the marker."""
+        c, upload_dir = client
+        (upload_dir / "ghost.jpg.failed").write_bytes(b"")
+        resp = c.post("/hokku/api/image/ghost.jpg/retry")
+        assert resp.status_code == 404
+        assert "not found" in resp.get_json()["error"].lower()
+        # Marker must NOT be removed on 404 — leaves the orphan as-is for
+        # _list_failed's filter to hide.
+        assert (upload_dir / "ghost.jpg.failed").exists()
+
+    def test_retry_400_when_no_failed_marker(self, client):
+        """Image exists but isn't quarantined — Retry should refuse rather
+        than silently no-op and trigger a redundant sync."""
+        c, upload_dir = client
+        (upload_dir / "ok.jpg").write_bytes(b"fake")
+        resp = c.post("/hokku/api/image/ok.jpg/retry")
+        assert resp.status_code == 400
+        assert "not in the failed state" in resp.get_json()["error"]
+
+    def test_retry_rejects_path_traversal(self, client):
+        c, _ = client
+        # Werkzeug routes block slashes; '..' alone reaches the handler.
+        resp = c.post("/hokku/api/image/../retry")
+        assert resp.status_code == 400
+
+
+class TestFailedListing:
+    """Coverage for the .failed/.processing scanner used by /api/status."""
+
+    def _setup(self, tmp_path):
+        upload_dir = tmp_path / "upload"; upload_dir.mkdir()
+        cfg = {**webserver.DEFAULT_CONFIG, "upload_dir": str(upload_dir)}
+        return upload_dir, cfg
+
+    def test_failed_marker_with_image_is_listed(self, tmp_path):
+        upload_dir, cfg = self._setup(tmp_path)
+        (upload_dir / "img.jpg").write_bytes(b"")
+        (upload_dir / "img.jpg.failed").write_bytes(b"")
+        with patch.object(webserver, "_config", cfg):
+            assert webserver._list_failed() == ["img.jpg"]
+
+    def test_orphan_failed_marker_without_image_is_skipped(self, tmp_path):
+        """If the user deleted the underlying image but a .failed marker
+        leaked, do not list it — the Retry endpoint would 404 anyway, so
+        showing it is just a UI footgun."""
+        upload_dir, cfg = self._setup(tmp_path)
+        (upload_dir / "ghost.jpg.failed").write_bytes(b"")
+        with patch.object(webserver, "_config", cfg):
+            assert webserver._list_failed() == []
+
+    def test_failed_image_excluded_from_live_list(self, tmp_path):
+        upload_dir, cfg = self._setup(tmp_path)
+        (upload_dir / "ok.jpg").write_bytes(b"")
+        (upload_dir / "bad.jpg").write_bytes(b"")
+        (upload_dir / "bad.jpg.failed").write_bytes(b"")
+        with patch.object(webserver, "_config", cfg):
+            names = sorted(p.name for p in webserver._list_images())
+        assert names == ["ok.jpg"]
+
 
 # ── Config + clear-cache + time endpoints ─────────────────────────
 
@@ -971,11 +1138,13 @@ class TestConfigEndpoints:
              webserver.app.test_client() as client:
             yield client, cfg
 
-    def test_config_update_timezone(self, client):
+    def test_config_update_ignores_timezone(self, client):
+        """Timezone is no longer configurable via the API — it follows the host OS.
+        Posting one should be silently ignored, not accepted."""
         client_, cfg = client
         resp = client_.post("/hokku/api/config", json={"timezone": "Asia/Tokyo"})
         assert resp.status_code == 200
-        assert cfg["timezone"] == "Asia/Tokyo"
+        assert "timezone" not in cfg
 
     def test_config_update_refresh_times(self, client):
         client_, cfg = client

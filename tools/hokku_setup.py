@@ -1,611 +1,490 @@
 #!/usr/bin/env python3
-"""Hokku/Huessen E-Ink Frame Setup
+"""Hokku/Huessen E-Ink Frame Setup.
 
-Interactive installer that detects ESP32-S3 devices, reads/writes configuration,
-and flashes firmware. Combines device detection, NVS configuration, and firmware
-flashing into a single friendly tool.
+Main-menu driven installer that orchestrates:
+  - Raspberry Pi OS SD card imaging + webserver install (optional)
+  - ESP32-S3 frame configuration / firmware flashing (full or partial)
+  - Cache management (prefetch all release assets, wipe cache)
 
 Usage:
     python hokku_setup.py
 """
-import os
+import shutil
 import sys
-import tempfile
+import urllib.error
 from pathlib import Path
 
-import serial.tools.list_ports
-
-# Import NVS functions from hokku_config
-from hokku_config import (
-    ESP32S3_VID, ESP32S3_PID,
-    NVS_OFFSET, NVS_SIZE, CONFIG_VERSION,
-    _build_nvs_binary, _read_nvs,
-    find_esp32_port, backup_dir,
-)
-
-# Firmware binary locations (relative to this script)
-SCRIPT_DIR = Path(__file__).parent
-FIRMWARE_DIR = SCRIPT_DIR.parent / "firmware" / "release"
-
-# Flash addresses
-BOOTLOADER_OFFSET = 0x0
-PARTITION_TABLE_OFFSET = 0x8000
-APP_OFFSET = 0x10000
+import esp32_setup
+import pi_installer
+import release_cache
 
 
-def print_header():
+def _banner():
     print()
     print("  Hokku/Huessen E-Ink Frame Setup")
     print("  ================================")
     print()
 
 
-def scan_devices():
-    """Scan for ESP32-S3 devices and read their NVS config.
-
-    Returns list of dicts: {port, description, is_esp32, config}
-    """
-    all_ports = serial.tools.list_ports.comports()
-    devices = []
-
-    for port in all_ports:
-        is_esp32 = (port.vid == ESP32S3_VID and port.pid == ESP32S3_PID)
-        device = {
-            "port": port.device,
-            "description": port.description or port.device,
-            "is_esp32": is_esp32,
-            "config": None,
-            "has_hokku_firmware": False,  # True if firmware on device matches a Hokku build
-            "config_version_ok": False,
-            "firmware_current": None,  # None=unknown, True=matches release, False=differs
-        }
-
-        if is_esp32:
-            # Single flash read: NVS partition + app header in one esptool call
-            nvs_data, app_header = read_device_flash(port.device)
-            state = parse_device_state(nvs_data, app_header)
-            device["config"] = state["config"]
-            device["has_hokku_firmware"] = state["has_hokku_firmware"]
-            device["config_version_ok"] = state["config_version_ok"]
-            device["firmware_current"] = state["firmware_current"]
-            device["device_version"] = state.get("device_version")
-            device["release_version"] = state.get("release_version")
-
-        devices.append(device)
-
-    return devices
+def _fmt_size(n):
+    if n < 1024:
+        return f"{n} B"
+    for unit, div in [("KB", 1024), ("MB", 1024**2), ("GB", 1024**3)]:
+        v = n / div
+        if v < 1024:
+            return f"{v:.1f} {unit}"
+    return f"{n / 1024**3:.1f} GB"
 
 
-def read_device_flash(port):
-    """Read NVS partition and app header from device in a single esptool session.
+# ---------- startup state scan ----------
 
-    Returns (nvs_data: bytes, app_header: bytes) or (None, None) on failure.
-    We read one continuous block from NVS_OFFSET (0x9000) through the first
-    256 bytes of the app partition (0x10000 + 256 = 0x10100), which covers
-    both the NVS partition and the app header in a single read.
-    """
+def _scan_device_status():
+    """Scan for an attached ESP32-S3 and return a dict summarising state, or
+    None if no candidate device is attached. Any esptool/serial failure is
+    swallowed so the menu always renders."""
     try:
-        import esptool
-    except ImportError:
-        return None, None
-
-    # Read from 0x9000 to 0x10100 (NVS partition + app header) in one call
-    read_start = NVS_OFFSET
-    read_end = APP_OFFSET + 256
-    read_size = read_end - read_start
-
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-        tmp_path = f.name
-
-    try:
-        old_stdout = sys.stdout
-        sys.stdout = open(os.devnull, 'w')
-        try:
-            esptool.main([
-                "--chip", "esp32s3",
-                "--port", port,
-                "--baud", "921600",
-                "read-flash",
-                hex(read_start), hex(read_size), tmp_path,
-            ])
-        finally:
-            sys.stdout.close()
-            sys.stdout = old_stdout
-
-        with open(tmp_path, "rb") as f:
-            data = f.read()
-
-        # Split into NVS partition and app header
-        nvs_data = data[:NVS_SIZE]
-        app_header = data[APP_OFFSET - NVS_OFFSET:][:256]
-        return nvs_data, app_header
-    except Exception:
-        return None, None
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        devices = esp32_setup.scan_devices()
+    except Exception as e:
+        return {"error": str(e)}
+    # Prefer a real ESP32-S3; fall back to "some serial device" for diagnostics.
+    esp32s = [d for d in devices if d["is_esp32"]]
+    if esp32s:
+        return {"device": esp32s[0]}
+    if devices:
+        return {"other_devices": devices}
+    return None
 
 
-def parse_device_state(nvs_data, app_header):
-    """Parse device state from raw flash data.
-
-    Returns dict with: config, has_hokku_firmware, config_version_ok, firmware_current
-    """
-    result = {
-        "config": None,
-        "has_hokku_firmware": False,
-        "config_version_ok": False,
-        "firmware_current": None,
-        "device_version": None,
-        "release_version": None,
-    }
-
-    # Check for Hokku firmware: project name "hokku_epaper" in app header
-    if app_header and b"hokku_epaper" in app_header:
-        result["has_hokku_firmware"] = True
-
-    # Extract version strings (bytes 48-79 of app binary, null-terminated)
-    if app_header and len(app_header) >= 80:
-        ver = app_header[48:80].split(b"\x00")[0].decode("ascii", errors="replace")
-        if ver:
-            result["device_version"] = ver
-
-    app_bin = FIRMWARE_DIR / "hokku_epaper.bin"
-    if app_bin.exists():
-        with open(app_bin, "rb") as f:
-            release_header = f.read(160)
-        if len(release_header) >= 80:
-            ver = release_header[48:80].split(b"\x00")[0].decode("ascii", errors="replace")
-            if ver:
-                result["release_version"] = ver
-
-    # Compare firmware with release binary
-    # Skip first 24 bytes (esp_image_header_t) which esptool modifies during flash
-    # (flash mode, freq, size, SHA digest fields are updated by esptool)
-    if app_header and app_bin.exists():
-        with open(app_bin, "rb") as f:
-            release_header = f.read(256)
-        # Compare bytes 24-255 (app descriptor, segment headers — stable across flash)
-        if len(app_header) >= 256 and len(release_header) >= 256:
-            result["firmware_current"] = (app_header[24:] == release_header[24:])
-
-    # Read NVS config
-    if nvs_data:
-        config = _read_nvs(nvs_data)
-        if config and config.get("cfg_ver") == CONFIG_VERSION:
-            result["config"] = config
-            result["config_version_ok"] = True
-        elif config and "cfg_ver" in config:
-            result["config_version_ok"] = False
-
-    return result
-
-
-def format_device_line(idx, device):
-    """Format a device for display in the selection list."""
-    parts = [f"  [{idx}] {device['port']}"]
-
-    if device["is_esp32"]:
-        if device["has_hokku_firmware"] and device["config_version_ok"]:
-            cfg = device["config"]
-            name = cfg.get("screen_name", "")
-            ssid = cfg.get("wifi_ssid", "")
-            detail = "Hokku firmware"
-            if name:
-                detail += f", name={name}"
-            if ssid:
-                detail += f", ssid={ssid}"
-            if device["firmware_current"] is False:
-                detail += ", firmware update available"
-            parts.append(f"ESP32-S3 ({detail})")
-        elif device["has_hokku_firmware"] and not device["config_version_ok"]:
-            parts.append("ESP32-S3 (Hokku firmware, needs configuration)")
-        elif device["has_hokku_firmware"]:
-            parts.append("ESP32-S3 (Hokku firmware)")
-        else:
-            parts.append("ESP32-S3 (no Hokku firmware)")
-    else:
-        parts.append(device["description"])
-
-    return " - ".join(parts)
-
-
-def select_device(devices):
-    """Let user pick a device. Returns selected device dict or None."""
-    esp32_devices = [d for d in devices if d["is_esp32"]]
-
-    if len(esp32_devices) == 1:
-        dev = esp32_devices[0]
-        print(f"  Found device: {dev['port']}", end="")
-        if dev["has_hokku_firmware"]:
-            cfg = dev.get("config") or {}
-            name = cfg.get("screen_name", "")
-            if dev["config_version_ok"] and name:
-                print(f" (Hokku firmware, name={name})")
-            elif dev["config_version_ok"]:
-                print(f" (Hokku firmware, configured)")
-            else:
-                print(f" (Hokku firmware, needs configuration)")
-        else:
-            print(" (ESP32-S3)")
-        print()
-        return dev
-
-    if len(esp32_devices) > 1:
-        print(f"  Found {len(esp32_devices)} ESP32-S3 devices:")
-        for i, dev in enumerate(esp32_devices, 1):
-            print(format_device_line(i, dev))
-        print()
-        while True:
-            choice = input(f"  Select device [1-{len(esp32_devices)}]: ").strip()
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(esp32_devices):
-                    return esp32_devices[idx]
-            except ValueError:
-                pass
-            print("  Invalid choice, try again.")
-
-    # No ESP32-S3 found
-    if not devices:
-        print("  No serial devices found.")
-        print("  Make sure the frame is connected via USB.")
-        return None
-
-    print("  No ESP32-S3 devices found. Available serial ports:")
-    for i, dev in enumerate(devices, 1):
-        print(format_device_line(i, dev))
-    print()
-    print("  WARNING: None of these appear to be an ESP32-S3.")
-    while True:
-        choice = input(f"  Select port anyway [1-{len(devices)}] or 'q' to quit: ").strip()
-        if choice.lower() == 'q':
-            return None
-        try:
-            idx = int(choice) - 1
-            if 0 <= idx < len(devices):
-                return devices[idx]
-        except ValueError:
-            pass
-        print("  Invalid choice, try again.")
-
-
-def _parse_server_url(url):
-    """Extract IP and port from image_url like http://1.2.3.4:8080/hokku/screen/"""
-    if not url:
-        return None, None
-    try:
-        from urllib.parse import urlparse
-        p = urlparse(url)
-        return p.hostname, p.port or 8080
-    except Exception:
-        return None, None
-
-
-def show_current_config(config):
-    """Display current device configuration."""
-    if not config:
-        print("  No configuration found on device.")
+def _print_device_status(status):
+    print("  Connected frame")
+    print("  ---------------")
+    if status is None:
+        print("  No serial devices detected. Connect the frame via USB to enable")
+        print("  ESP32 options.")
+        return
+    if "error" in status:
+        print(f"  Scan error: {status['error']}")
+        return
+    if "other_devices" in status:
+        print("  No ESP32-S3 detected. Other serial ports present:")
+        for d in status["other_devices"]:
+            print(f"    {d['port']} — {d['description']}")
         return
 
-    ip, port = _parse_server_url(config.get("image_url", ""))
-    print("  Current configuration:")
-    print(f"    WiFi SSID:     {config.get('wifi_ssid', '(not set)')}")
-    print(f"    WiFi Password: {'****' if config.get('wifi_pass') else '(not set)'}")
-    print(f"    Server:        {ip or '(not set)'}:{port or 8080}")
-    print(f"    Screen Name:   {config.get('screen_name', '(not set)')}")
-    print()
+    dev = status["device"]
+    cfg = dev.get("config") or {}
+    print(f"  Port:      {dev['port']}")
+    if dev.get("has_hokku_firmware"):
+        dv = dev.get("device_version") or "(unknown)"
+        rv = dev.get("release_version")
+        if rv and dev.get("firmware_current") is True:
+            print(f"  Firmware:  {dv}  (up to date)")
+        elif rv and dev.get("firmware_current") is False:
+            print(f"  Firmware:  {dv}  (UPDATE AVAILABLE → {rv})")
+        else:
+            print(f"  Firmware:  {dv}")
+    else:
+        print("  Firmware:  (not Hokku firmware — will be overwritten)")
+
+    if dev.get("config_version_ok") and cfg:
+        ssid = cfg.get("wifi_ssid") or "(not set)"
+        screen = cfg.get("screen_name") or "(unnamed)"
+        url = cfg.get("image_url") or ""
+        # Strip to "<ip>:<port>" for a compact line.
+        server = url.replace("http://", "").split("/")[0] if url else "(not set)"
+        print(f"  Config:    WiFi={ssid}, server={server}, name={screen}")
+    elif dev.get("has_hokku_firmware"):
+        print("  Config:    (none — device needs configuration)")
+    else:
+        print("  Config:    n/a")
 
 
-def prompt_config(existing_config=None):
-    """Interactively prompt for configuration values. Returns config dict."""
-    cfg = dict(existing_config or {})
+# ---------- cache actions ----------
 
-    print("  Enter new values (press Enter to keep current):")
-    print()
+CACHE_PATTERNS = [
+    ("Pi OS images",     "*raspios*.img*"),
+    ("hokku-server deb", "hokku-server_*.deb"),
+    ("firmware bundles", "firmware/**/*"),
+    ("install settings", "settings.json"),
+    ("partial downloads", "**/*.part"),
+]
 
-    # WiFi SSID
-    current = cfg.get("wifi_ssid", "")
-    prompt = f"  WiFi SSID [{current}]: " if current else "  WiFi SSID: "
-    val = input(prompt).strip()
-    if val:
-        cfg["wifi_ssid"] = val
-    elif not current:
-        print("  WiFi SSID is required.")
-        val = input("  WiFi SSID: ").strip()
-        if not val:
-            print("  Aborted.")
-            return None
-        cfg["wifi_ssid"] = val
 
-    # WiFi Password
-    current = cfg.get("wifi_pass", "")
-    prompt = f"  WiFi Password [****]: " if current else "  WiFi Password: "
-    val = input(prompt).strip()
-    if val:
-        cfg["wifi_pass"] = val
+def _cache_entries():
+    """Walk .cache/ and return a list of {path, size, label} for display."""
+    cache = release_cache.CACHE_DIR
+    if not cache.exists():
+        return []
+    entries = []
+    for label, pattern in CACHE_PATTERNS:
+        for p in sorted(cache.glob(pattern)):
+            if p.is_file():
+                entries.append({"path": p, "size": p.stat().st_size, "label": label})
+    return entries
 
-    # Server IP and Port (builds http://<ip>:<port>/hokku/screen/ internally)
-    current_ip, current_port = _parse_server_url(cfg.get("image_url", ""))
 
-    prompt = f"  Server IP [{current_ip}]: " if current_ip else "  Server IP (e.g. 192.168.1.10): "
-    val = input(prompt).strip()
-    if val:
-        current_ip = val
-    elif not current_ip:
-        print("  Server IP is required.")
-        val = input("  Server IP: ").strip()
-        if not val:
-            print("  Aborted.")
-            return None
-        current_ip = val
+def _parse_firmware_tag(filename):
+    """Extract the tag from 'hokku-firmware_<tag>.bin'. Returns tag or 'local'."""
+    stem = Path(filename).stem  # drops .bin
+    if stem.startswith("hokku-firmware_"):
+        return stem[len("hokku-firmware_"):]
+    return "local"
 
-    prompt = f"  Server Port [{current_port or 8080}]: " if current_port else "  Server Port [8080]: "
-    val = input(prompt).strip()
-    if val:
-        current_port = int(val)
-    elif not current_port:
-        current_port = 8080
 
-    cfg["image_url"] = f"http://{current_ip}:{current_port}/hokku/screen/"
-
-    # Check if server is reachable
-    print(f"  Checking server at {current_ip}:{current_port}...", end=" ", flush=True)
+def _fetch_firmware_from_github():
+    """Download the merged firmware asset from the latest GitHub release into
+    .cache/firmware/<tag>/. Returns the cached Path or None on failure."""
     try:
-        import urllib.request
-        urllib.request.urlopen(f"http://{current_ip}:{current_port}/hokku/api/time", timeout=5)
-        print("OK")
-    except Exception:
-        print("NOT REACHABLE")
-        print(f"  WARNING: Could not connect to {current_ip}:{current_port}")
-        print("  Make sure the webserver is running before the frame tries to connect.")
-        val = input("  Continue anyway? [Y/n]: ").strip().lower()
-        if val == "n":
-            print("  Aborted.")
-            return None
-
-    # Screen Name
-    current = cfg.get("screen_name", "")
-    prompt = f"  Screen Name [{current}]: " if current else "  Screen Name (optional, e.g. Living Room): "
-    val = input(prompt).strip()
-    if val:
-        if len(val.encode("utf-8")) > 64:
-            print(f"  ERROR: Screen name is {len(val.encode('utf-8'))} bytes, maximum is 64.")
-            return None
-        cfg["screen_name"] = val
-
-    return cfg
-
-
-def write_config(port, config):
-    """Write NVS config to device."""
-    print("  Writing configuration...", end=" ", flush=True)
-    nvs_binary = _build_nvs_binary(config)
-
-    try:
-        import esptool
-    except ImportError:
-        print("FAILED")
-        print("  Error: esptool not installed. Run: pip install esptool")
-        return False
-
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-        f.write(nvs_binary)
-        tmp_path = f.name
-
-    try:
-        old_stdout = sys.stdout
-        sys.stdout = open(os.devnull, 'w')
-        try:
-            esptool.main([
-                "--chip", "esp32s3",
-                "--port", port,
-                "--baud", "921600",
-                "write-flash",
-                "--flash-mode", "dio",
-                hex(NVS_OFFSET), tmp_path,
-            ])
-        finally:
-            sys.stdout.close()
-            sys.stdout = old_stdout
-        print("done.")
-        return True
+        rel = release_cache.get_latest_release()
+    except urllib.error.HTTPError as e:
+        print(f"  ERROR: GitHub API returned {e.code} {e.reason}")
+        return None
     except Exception as e:
-        print("FAILED")
-        print(f"  Error: {e}")
-        return False
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        print(f"  ERROR: could not reach GitHub: {e}")
+        return None
+
+    tag = rel.get("tag_name", "latest")
+    asset = release_cache.find_asset(rel, esp32_setup._is_merged_firmware_asset)
+    if asset is None:
+        print(f"  ERROR: release {tag} has no hokku-firmware_*.bin asset.")
+        return None
+
+    target_dir = esp32_setup.FIRMWARE_CACHE_DIR / tag
+    return release_cache.ensure_cached_asset(asset, target_dir, label=f"(release {tag})")
 
 
-def flash_firmware(port):
-    """Flash firmware binaries to device."""
-    bootloader = FIRMWARE_DIR / "bootloader.bin"
-    partition_table = FIRMWARE_DIR / "partition-table.bin"
-    app = FIRMWARE_DIR / "hokku_epaper.bin"
-
-    # Check firmware files exist
-    missing = []
-    for name, path in [("bootloader.bin", bootloader),
-                        ("partition-table.bin", partition_table),
-                        ("hokku_epaper.bin", app)]:
-        if not path.exists():
-            missing.append(name)
-
-    if missing:
-        print(f"  ERROR: Firmware files not found in {FIRMWARE_DIR}/")
-        for m in missing:
-            print(f"    Missing: {m}")
-        print()
-        print("  Build the firmware first, or copy pre-built binaries to:")
-        print(f"    {FIRMWARE_DIR}/")
-        return False
-
+def _import_firmware_from_local(local_path):
+    """Copy a locally-built merged firmware into .cache/firmware/<tag>/.
+    Returns the cached Path or None on failure."""
+    tag = _parse_firmware_tag(local_path.name)
+    target_dir = esp32_setup.FIRMWARE_CACHE_DIR / tag
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / local_path.name
     try:
-        import esptool
-    except ImportError:
-        print("  Error: esptool not installed. Run: pip install esptool")
-        return False
+        if target.resolve() != local_path.resolve():
+            shutil.copy2(local_path, target)
+            print(f"  Imported {local_path} -> {target} ({_fmt_size(target.stat().st_size)})")
+        else:
+            print(f"  Already at target path: {target}")
+        return target
+    except OSError as e:
+        print(f"  ERROR: could not copy: {e}")
+        return None
 
-    print("  Flashing firmware (this takes about 30 seconds)...")
-    print(f"    Bootloader:      {bootloader.name}")
-    print(f"    Partition table:  {partition_table.name}")
-    print(f"    Application:     {app.name}")
+
+def _fetch_firmware_with_local_choice():
+    """If a local firmware build exists, ask whether to import or download.
+    Otherwise go straight to GitHub. Returns cached Path or None."""
+    local = esp32_setup._merged_firmware_file(esp32_setup.LOCAL_FIRMWARE_DIR)
+    if local is None:
+        print("  No local firmware build found; downloading from GitHub.")
+        return _fetch_firmware_from_github()
+
+    print(f"  Local firmware build: {local}  ({_fmt_size(local.stat().st_size)})")
+    print("    [L]  import the local build into .cache")
+    print("    [D]  download the latest release from GitHub instead")
+    print("    [S]  skip")
+    while True:
+        choice = input("    [L]> ").strip().lower() or "l"
+        if choice in ("l", "local"):
+            return _import_firmware_from_local(local)
+        if choice in ("d", "download"):
+            return _fetch_firmware_from_github()
+        if choice in ("s", "skip"):
+            print("  Firmware: skipped.")
+            return None
+        print(f"    Unknown choice {choice!r}; pick L, D, or S.")
+
+
+def action_download_everything():
+    """Prefetch the Pi OS image, hokku-server .deb, and merged firmware into
+    .cache/. Each asset skips its download if already cached at the expected
+    size. Returns 0 on success, 1 if any required asset failed."""
+    print()
+    print("  Download everything into .cache")
+    print("  -------------------------------")
+    release_cache.CACHE_DIR.mkdir(exist_ok=True)
+
+    # 1. Pi OS image — separate API (downloads.raspberrypi.com)
+    print()
+    print("  [1/3] Pi OS Lite 64-bit image")
+    try:
+        image = pi_installer.prompt_image_path()  # handles cache + download, prompts for path
+    except Exception as e:
+        print(f"  ERROR: {e}")
+        image = None
+    if image is None:
+        print("  Pi OS image: SKIPPED or failed.")
+
+    # 2. hokku-server .deb — GitHub release
+    print()
+    print("  [2/3] hokku-server .deb")
+    deb = pi_installer.fetch_latest_release_deb()
+    if deb is None:
+        print("  .deb: FAILED")
+
+    # 3. Firmware merged bin.
+    # If a local build exists (firmware/release/hokku-firmware_*.bin) ask the
+    # user whether to import it or pull the latest release from GitHub —
+    # they might be running this to capture a dev build in .cache/, or to
+    # refresh an old cache from the official release. Don't guess.
+    print()
+    print("  [3/3] Merged firmware")
+    merged = _fetch_firmware_with_local_choice()
+    if merged is None:
+        print("  Firmware: FAILED")
+
+    print()
+    print("  Cache contents after download:")
+    for e in _cache_entries():
+        print(f"    {e['path']}  ({_fmt_size(e['size'])})")
+    return 0 if (deb and merged) else 1
+
+
+def action_clear_cache():
+    """Delete recognised asset files from .cache/. Leaves unrecognised files
+    alone so a user who drops something in there by hand doesn't lose it."""
+    print()
+    print("  Clear .cache")
+    print("  ------------")
+    entries = _cache_entries()
+    if not entries:
+        print("  .cache/ is already empty (or contains only files the installer doesn't manage).")
+        return 0
+    total = sum(e["size"] for e in entries)
+    print(f"  Will delete {len(entries)} file(s), {_fmt_size(total)} total:")
+    for e in entries:
+        print(f"    {e['path']}  ({_fmt_size(e['size'])})")
+    print()
+    ans = input("  Proceed? [y/N]: ").strip().lower()
+    if ans not in ("y", "yes"):
+        print("  Aborted.")
+        return 0
+    for e in entries:
+        try:
+            e["path"].unlink()
+        except OSError as err:
+            print(f"    failed to delete {e['path']}: {err}")
+    # Also remove now-empty firmware/<tag>/ dirs.
+    fw_base = release_cache.CACHE_DIR / "firmware"
+    if fw_base.exists():
+        for sub in fw_base.iterdir():
+            if sub.is_dir() and not any(sub.iterdir()):
+                sub.rmdir()
+    print("  Done.")
+    return 0
+
+
+# ---------- main menu ----------
+
+def _menu_default(status):
+    """Pick a sensible default option based on device state."""
+    if status is None or "device" not in status:
+        return "1"  # no device → full Pi install likely
+    dev = status["device"]
+    if not dev.get("has_hokku_firmware"):
+        return "3"  # configure + flash
+    if not dev.get("config_version_ok"):
+        return "4"  # has firmware, needs config
+    if dev.get("firmware_current") is False:
+        return "5"  # firmware update
+    return "1"
+
+
+def _print_menu(default):
+    print("  What would you like to do?")
+    options = [
+        ("1", "Full install — image SD card, then configure + flash ESP32"),
+        ("2", "Server only — image SD card with hokku-server, skip ESP32"),
+        ("3", "ESP32: configure + flash firmware"),
+        ("4", "ESP32: configure only (keep existing firmware)"),
+        ("5", "ESP32: flash firmware only (keep existing config)"),
+        ("6", "Advanced — install settings, cache management"),
+        ("7", "Exit"),
+    ]
+    for num, label in options:
+        marker = "  <-- default" if num == default else ""
+        print(f"    [{num}] {label}{marker}")
     print()
 
-    try:
-        esptool.main([
-            "--chip", "esp32s3",
-            "--port", port,
-            "--baud", "921600",
-            "write-flash",
-            "--flash-mode", "dio",
-            "--flash-freq", "80m",
-            "--flash-size", "16MB",
-            hex(BOOTLOADER_OFFSET), str(bootloader),
-            hex(PARTITION_TABLE_OFFSET), str(partition_table),
-            hex(APP_OFFSET), str(app),
-        ])
-        print()
-        print("  Firmware flashed successfully.")
-        return True
-    except Exception as e:
-        print()
-        print(f"  ERROR: Flash failed: {e}")
-        return False
+
+# ---------- advanced submenu ----------
+
+def _render_settings(s, reveal):
+    """Print the sticky-settings block. If `reveal` is True, show password
+    values in the clear; otherwise print '(set)' for anything non-empty."""
+    def _show(label, key, sensitive=False):
+        val = s.get(key)
+        if val is None or val == "":
+            display = "(unset)"
+        elif sensitive and not reveal:
+            display = "(set)"
+        else:
+            display = val
+        print(f"    {label:15s} {display}")
+    _show("wifi_ssid:",    "wifi_ssid")
+    _show("wifi_pass:",    "wifi_pass",  sensitive=True)
+    _show("user:",         "user")
+    _show("password:",     "password",   sensitive=True)
+    _show("ssh_enabled:",  "ssh_enabled")
+    _show("samba:",        "samba")
+    _show("country:",      "country")
+    _show("timezone:",     "timezone")
 
 
-def _refresh_device_state(port):
-    """Re-read NVS config and firmware status from device."""
-    nvs_data, app_header = read_device_flash(port)
-    state = parse_device_state(nvs_data, app_header)
-    return state["config"], state["firmware_current"], state.get("device_version"), state.get("release_version")
-
-
-def main_menu(device):
-    """Show the main menu and handle user choice."""
-    port = device["port"]
-    config = device.get("config") or {}
-    firmware_current = device.get("firmware_current")
-    device_version = device.get("device_version")
-    release_version = device.get("release_version")
-
+def action_show_settings():
+    """Show cached install settings and offer edit / clear / reveal-passwords."""
+    reveal = False
     while True:
         print()
-        show_current_config(config)
-
-        # Show firmware version and status
-        if device_version:
-            print(f"  Firmware on device:  {device_version}")
-        if release_version:
-            print(f"  Firmware available:  {release_version}")
-        if firmware_current is True:
-            print("  Status: up to date")
-        elif firmware_current is False:
-            print("  Status: UPDATE AVAILABLE")
-        elif device_version:
-            print("  Status: installed")
+        print("  Install settings (from .cache/settings.json)")
+        print("  --------------------------------------------")
+        s = release_cache.load_settings()
+        if not s:
+            print("  No cached settings yet — running the installer will create some.")
         else:
-            print("  Status: not detected")
+            _render_settings(s, reveal=reveal)
+
         print()
-
-        # Determine default option
-        if firmware_current is False and not config:
-            default = "2"  # need both firmware and config
-        elif firmware_current is False and config:
-            default = "3"  # firmware outdated but config is fine
-        elif not config:
-            default = "2"  # need config (and might as well flash too)
-        else:
-            default = "1"  # everything up to date
-
-        print("  What would you like to do?")
-        for num, label in [("1", "Update configuration"),
-                           ("2", "Configure + flash firmware"),
-                           ("3", "Flash firmware only" + (" (keep existing config)" if config else "")),
-                           ("4", "Exit")]:
-            marker = " <-- default" if num == default else ""
-            print(f"    [{num}] {label}{marker}")
-        print()
-
-        choice = input(f"  [{default}]> ").strip()
-        if choice == "":
-            choice = default
+        print("    [1] Re-enter all settings (prompts with current values as defaults)")
+        print("    [2] Clear all settings (next install starts from built-in defaults)")
+        print(f"    [3] {'Hide' if reveal else 'Show'} passwords")
+        print("    [4] Back")
+        choice = input("    [4]> ").strip() or "4"
 
         if choice == "1":
-            new_config = prompt_config(config)
-            if new_config:
-                if write_config(port, new_config):
-                    config = new_config
-                    print("  Device will restart with new configuration.")
+            # collect_install_config reads sticky, prompts, saves. Discard
+            # the return value — we only want the save side-effect.
+            pi_installer.collect_install_config()
+            return 0
+        if choice == "2":
+            try:
+                release_cache.SETTINGS_FILE.unlink(missing_ok=True)
+                print("  Cleared.")
+            except OSError as e:
+                print(f"  Failed to clear: {e}")
+                return 1
+            return 0
+        if choice == "3":
+            reveal = not reveal
+            continue  # redisplay with toggled reveal
+        if choice == "4":
+            return 0
+        print(f"    Unknown choice {choice!r}.")
 
+
+def _print_advanced_menu():
+    print()
+    print("  Advanced")
+    print("  --------")
+    for num, label in [
+        ("1", "Show / edit install settings"),
+        ("2", "Download everything into .cache"),
+        ("3", "Clear .cache"),
+        ("4", "Back to main menu"),
+    ]:
+        print(f"    [{num}] {label}")
+    print()
+
+
+def action_advanced():
+    """Advanced submenu loop — stays here until the user picks Back."""
+    while True:
+        _print_advanced_menu()
+        choice = input("    [4]> ").strip() or "4"
+        if choice == "1":
+            action_show_settings()
         elif choice == "2":
-            # Configure FIRST, then flash — config is written to NVS,
-            # then firmware is flashed on top. This way the device boots
-            # with valid config immediately after the flash reset.
-            print()
-            print("  First, let's configure the device.")
-            print()
-            new_config = prompt_config(config)
-            if new_config:
-                write_config(port, new_config)
-                config = new_config
-                print()
-                if flash_firmware(port):
-                    print("  Setup complete! Device will restart.")
-            # Re-read device state after flashing
-            print("  Re-reading device state...")
-            config, firmware_current, device_version, release_version = _refresh_device_state(port)
-            config = config or {}
-            # If we just flashed successfully but can't read the device
-            # (it rebooted), we know the firmware matches the release
-            if firmware_current is None:
-                firmware_current = True
-                device_version = release_version
-
+            action_download_everything()
         elif choice == "3":
-            if flash_firmware(port):
-                # Re-read device state after flashing
-                print("  Re-reading device state...")
-                config, firmware_current, device_version, release_version = _refresh_device_state(port)
-                config = config or {}
-                if firmware_current is None:
-                    firmware_current = True
-                    device_version = release_version
-
+            action_clear_cache()
         elif choice == "4":
-            print("  Bye!")
-            break
-
+            return 0
         else:
-            print("  Invalid choice.")
+            print(f"    Unknown choice {choice!r}.")
+
+
+def _dispatch(choice):
+    """Run the chosen action. Returns ('continue', rc) to re-display the menu,
+    or ('exit', rc) to quit."""
+    if choice == "1":
+        # Full install: Pi OS SD, then ESP32 config+flash with pre-fill.
+        result = pi_installer.run()
+        pi_install_ran = result is not None
+        pi_credentials = None
+        if pi_install_ran:
+            pi_credentials = {
+                "wifi_ssid": result.get("wifi_ssid"),
+                "wifi_pass": result.get("wifi_pass"),
+                "server_ip": result.get("server_ip"),
+            }
+        else:
+            print()
+            print("  Pi install did not complete. Continuing to ESP32 phase anyway.")
+        print()
+        print("  ESP32 phase")
+        print("  -----------")
+        return "continue", esp32_setup.run(pi_credentials=pi_credentials,
+                                           pi_install_ran=pi_install_ran)
+    if choice == "2":
+        # Server only: image the SD card, run through mDNS/HTTP wait, then stop.
+        result = pi_installer.run()
+        if result is None:
+            print()
+            print("  Pi install did not complete.")
+            return "continue", 1
+        print()
+        if result.get("webserver_ok"):
+            print(f"  Server ready at http://{result['hostname']}.local:8080/ "
+                  f"(IP {result.get('server_ip') or '?'}).")
+        else:
+            print("  Server install submitted but HTTP probe timed out — "
+                  "check the Pi directly.")
+        return "continue", 0
+    if choice == "3":
+        return "continue", esp32_setup.run_configure_and_flash()
+    if choice == "4":
+        return "continue", esp32_setup.run_configure_only()
+    if choice == "5":
+        return "continue", esp32_setup.run_flash_only()
+    if choice == "6":
+        return "continue", action_advanced()
+    if choice == "7":
+        print("  Bye!")
+        return "exit", 0
+    print(f"  Unknown choice {choice!r}.")
+    return "continue", 1
 
 
 def main():
-    print_header()
+    _pause_on_exit = "--pause-on-exit" in sys.argv
+    _banner()
 
-    # Check esptool is available
-    try:
-        import esptool
-    except ImportError:
-        print("  ERROR: esptool is not installed.")
-        print("  Run: pip install esptool pyserial")
-        sys.exit(1)
+    last_rc = 0
+    first = True
+    while True:
+        # Rescan on every iteration — running an action (flash, configure,
+        # imaging) changes device state, so a stale status line would mislead.
+        if not first:
+            print()
+            print()
+        first = False
 
-    print("  Scanning for devices...")
-    devices = scan_devices()
-    print()
+        status = _scan_device_status()
+        _print_device_status(status)
+        print()
 
-    device = select_device(devices)
-    if device is None:
-        sys.exit(1)
+        default = _menu_default(status)
+        _print_menu(default)
 
-    main_menu(device)
+        choice = input(f"  [{default}]> ").strip() or default
+        action, last_rc = _dispatch(choice)
+        if action == "exit":
+            break
+
+    if _pause_on_exit:
+        input("\n  Press Enter to close this window. ")
+    sys.exit(last_rc or 0)
 
 
 if __name__ == "__main__":

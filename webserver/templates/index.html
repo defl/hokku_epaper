@@ -28,7 +28,15 @@
   .btn-danger { background: #dc2626; color: #fff; }
   .btn-danger:hover { background: #b91c1c; }
   .btn-small { padding: 4px 10px; font-size: 0.8em; }
-  .server-time { font-size: 0.9em; color: #666; margin-left: 8px; }
+  .server-time { font-size: 0.85em; color: #666; position: absolute; top: 16px; right: 24px; font-family: ui-monospace, 'SF Mono', Consolas, monospace; }
+  /* Failed-conversion list */
+  .failed-section { background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; padding: 16px 18px; margin-top: 24px; }
+  .failed-list .failed-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid #fde68a; font-size: 0.9em; }
+  .failed-list .failed-row:last-child { border-bottom: none; }
+  .failed-list .failed-row .fname { word-break: break-all; color: #7c2d12; }
+  .failed-list .failed-row button { background: #2563eb; color: #fff; border: none; border-radius: 4px; padding: 6px 14px; font-size: 0.85em; cursor: pointer; }
+  .failed-list .failed-row button:hover { background: #1d4ed8; }
+  .failed-list .failed-row button:disabled { background: #9ca3af; cursor: not-allowed; }
   .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9em; cursor: pointer; user-select: none; }
   .toggle input[type="checkbox"] { width: 16px; height: 16px; accent-color: #dc2626; cursor: pointer; }
   .info-btn { width: 22px; height: 22px; border-radius: 50%; border: 1px solid #ccc; background: #fff; color: #555; font-weight: 700; font-size: 0.85em; cursor: pointer; line-height: 1; padding: 0; }
@@ -132,11 +140,14 @@
   .help-popover em { color: #666; font-style: italic; }
   .help-popover-note { padding-top: 8px; border-top: 1px solid #eee; color: #666 !important; font-size: 0.92em; }
 
-  /* Advanced dither panel */
-  .dither-advanced { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 16px; margin: 12px 0; }
-  .dither-advanced > summary { cursor: pointer; font-weight: 600; color: #333; padding: 4px 0; user-select: none; }
-  .dither-advanced > summary:hover { color: #2563eb; }
-  .dither-advanced[open] > summary { margin-bottom: 12px; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; }
+  /* Advanced dither panel — shown / hidden by the [Custom] button next to
+     [Reset to preset]. No native <details> foldout; cleaner toggle UX. */
+  .dither-advanced { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 14px 16px; margin: 12px 0; }
+  .dither-advanced[hidden] { display: none; }
+  .dither-advanced-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #e5e7eb; }
+  .dither-advanced-header h3 { margin: 0; font-size: 1em; color: #333; font-weight: 600; }
+  .dither-advanced-header .close-btn { background: transparent; border: none; color: #666; font-size: 1.2em; cursor: pointer; padding: 0 4px; line-height: 1; }
+  .dither-advanced-header .close-btn:hover { color: #2563eb; }
   .dither-advanced-intro { color: #666; font-size: 0.85em; margin-bottom: 14px; line-height: 1.45; }
   .dither-stage { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; }
   .dither-stage-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-weight: 600; color: #333; font-size: 0.9em; }
@@ -155,48 +166,13 @@
 </head>
 <body>
 
+<span class="server-time" id="server-time"></span>
+
 <h1>Hokku Image Server</h1>
 
 <!-- Config Section -->
 <div class="config-section">
   <h2>Configuration</h2>
-
-  <div class="config-row">
-    <label>Timezone:</label>
-    <select id="timezone">
-      <option>America/New_York</option>
-      <option>America/Chicago</option>
-      <option>America/Denver</option>
-      <option>America/Los_Angeles</option>
-      <option>America/Anchorage</option>
-      <option>Pacific/Honolulu</option>
-      <option>America/Toronto</option>
-      <option>America/Vancouver</option>
-      <option>America/Sao_Paulo</option>
-      <option>Europe/London</option>
-      <option>Europe/Paris</option>
-      <option>Europe/Berlin</option>
-      <option>Europe/Amsterdam</option>
-      <option>Europe/Rome</option>
-      <option>Europe/Madrid</option>
-      <option>Europe/Stockholm</option>
-      <option>Europe/Helsinki</option>
-      <option>Europe/Moscow</option>
-      <option>Asia/Dubai</option>
-      <option>Asia/Kolkata</option>
-      <option>Asia/Bangkok</option>
-      <option>Asia/Shanghai</option>
-      <option>Asia/Tokyo</option>
-      <option>Asia/Seoul</option>
-      <option>Asia/Singapore</option>
-      <option>Australia/Sydney</option>
-      <option>Australia/Melbourne</option>
-      <option>Australia/Perth</option>
-      <option>Pacific/Auckland</option>
-      <option>UTC</option>
-    </select>
-    <span class="server-time" id="server-time"></span>
-  </div>
 
   <div class="config-row">
     <label>Refresh times:</label>
@@ -214,15 +190,26 @@
     <span class="info">changing orientation re-converts all images</span>
   </div>
 
-  <div class="config-row">
+  <div class="config-row" style="position: relative;">
     <label>Dither preset:</label>
     <select id="dither-preset"></select>
-    <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset()" title="Reset all dither knobs to the preset's default values">Reset to preset</button>
-    <span class="info" id="dither-preset-description"></span>
+    <button type="button" class="info-btn" id="dither-preset-info-btn"
+            title="What does this preset do?" aria-label="Preset description"
+            aria-expanded="false">?</button>
+    <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset()"
+            title="Reset all dither knobs to the preset's default values">Reset to preset</button>
+    <button type="button" class="btn btn-secondary btn-small" id="dither-custom-btn"
+            onclick="toggleAdvancedPanel()"
+            title="Open the advanced pipeline editor and tune individual knobs">Custom…</button>
+    <div class="help-popover" id="dither-preset-popover" hidden></div>
   </div>
 
-  <details class="dither-advanced" id="dither-advanced-details">
-    <summary>Advanced dithering pipeline</summary>
+  <div class="dither-advanced" id="dither-advanced" hidden>
+    <div class="dither-advanced-header">
+      <h3>Advanced dithering pipeline</h3>
+      <button type="button" class="close-btn" onclick="toggleAdvancedPanel()"
+              aria-label="Close advanced pipeline">×</button>
+    </div>
     <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Untick a stage to skip it. Each <span class="help-icon-inline">?</span> button explains what the knob does and how output changes when you move it.</p>
     <div id="dither-advanced-panel"></div>
     <div class="dither-preview-block">
@@ -236,7 +223,7 @@
         <img id="dither-preview-img" alt="Dither preview">
       </div>
     </div>
-  </details>
+  </div>
 
   <div class="config-row">
     <label>Poll interval:</label>
@@ -292,6 +279,16 @@
 <div class="upload-progress" id="upload-progress"></div>
 
 <div class="image-grid" id="image-grid"></div>
+
+<div class="failed-section" id="failed-section" style="display:none;">
+  <h2 style="margin:0 0 10px 0; font-size:1.1em; color:#b45309;">Failed conversions</h2>
+  <p style="margin:0 0 12px 0; font-size:0.9em; color:#92400e;">
+    These images crashed the dither pipeline (usually out-of-memory on a low-RAM host).
+    Use "Retry" to unquarantine — if it crashes again, consider deleting the image and
+    re-uploading a smaller resolution.
+  </p>
+  <div id="failed-list"></div>
+</div>
 
 <div class="drag-overlay" id="drag-overlay"><div class="drag-msg">Drop images to upload</div></div>
 
@@ -393,16 +390,32 @@ function selectPresetMatching(state) {
 }
 
 function updatePresetDescription() {
+  // Populate the (?) popover. Description text used to live as an inline
+  // <span class="info">, but it bloated the row visually. Now hidden behind
+  // a help button next to the preset selector.
   const sel = document.getElementById('dither-preset');
-  const info = document.getElementById('dither-preset-description');
+  const pop = document.getElementById('dither-preset-popover');
+  if (!pop) return;
   const v = sel.value;
+  let html;
   if (v === '__custom__') {
-    info.textContent = 'Your edits have diverged from every built-in preset.';
+    html = '<p>Your edits have diverged from every built-in preset.</p>';
   } else if (ditherPresets[v]) {
-    info.textContent = ditherPresets[v].description;
+    html = '<h3>' + escapeHtml(ditherPresets[v].label || v) + '</h3>'
+         + '<p>' + escapeHtml(ditherPresets[v].description || '') + '</p>';
   } else {
-    info.textContent = '';
+    html = '';
   }
+  pop.innerHTML = html;
+}
+
+function toggleAdvancedPanel() {
+  const panel = document.getElementById('dither-advanced');
+  if (!panel) return;
+  panel.hidden = !panel.hidden;
+  const btn = document.getElementById('dither-custom-btn');
+  if (btn) btn.textContent = panel.hidden ? 'Custom…' : 'Hide advanced';
+  if (!panel.hidden) panel.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
 function resetToPreset() {
@@ -612,7 +625,39 @@ document.addEventListener('click', (e) => {
   if (currentHelpPopover && !currentHelpPopover.contains(e.target)) closeHelpPopover();
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeHelpPopover();
+  if (e.key === 'Escape') {
+    closeHelpPopover();
+    closePresetPopover();
+  }
+});
+
+// Preset (?) popover — toggles a permanent <div> next to the preset selector
+// rather than creating a transient one like the per-knob popovers do.
+function closePresetPopover() {
+  const pop = document.getElementById('dither-preset-popover');
+  const btn = document.getElementById('dither-preset-info-btn');
+  if (pop) pop.hidden = true;
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('dither-preset-info-btn');
+  const pop = document.getElementById('dither-preset-popover');
+  if (!btn || !pop) return;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!pop.hidden) { closePresetPopover(); return; }
+    // Position under the button, clamped to the viewport.
+    const r = btn.getBoundingClientRect();
+    pop.style.top = (window.scrollY + r.bottom + 6) + 'px';
+    pop.style.left = Math.max(8, Math.min(window.innerWidth - 500,
+                                           window.scrollX + r.left - 100)) + 'px';
+    pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+  });
+  document.addEventListener('click', (e) => {
+    if (pop.hidden) return;
+    if (!pop.contains(e.target) && e.target !== btn) closePresetPopover();
+  });
 });
 
 // ── Preview button ────────────────────────────────────────────────
@@ -719,7 +764,6 @@ function removeTime(idx) {
 
 async function saveConfig() {
   const data = {
-    timezone: document.getElementById('timezone').value,
     refresh_image_at_time: refreshTimes,
     poll_interval_seconds: parseInt(document.getElementById('poll-interval').value) || 10,
     orientation: document.getElementById('orientation').value,
@@ -989,6 +1033,54 @@ async function showScreenDetails(name) {
   document.addEventListener('keydown', onKey);
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderFailedList(failed) {
+  const section = document.getElementById('failed-section');
+  const list = document.getElementById('failed-list');
+  if (!failed || failed.length === 0) {
+    section.style.display = 'none';
+    list.innerHTML = '';
+    return;
+  }
+  section.style.display = 'block';
+  list.className = 'failed-list';
+  // Attach the filename via data-name (HTML-attribute-safe) and bind the
+  // click via addEventListener — avoids the JS-string-injection footgun
+  // when filenames contain apostrophes (e.g. O'Brien.jpg). Inline onclick
+  // would HTML-decode the attribute first and the apostrophe would break
+  // out of the JS string literal.
+  list.innerHTML = failed.map(name => `
+    <div class="failed-row">
+      <span class="fname">${escapeHtml(name)}</span>
+      <button class="retry-btn" data-name="${escapeHtml(name)}">Retry</button>
+    </div>
+  `).join('');
+  list.querySelectorAll('.retry-btn').forEach(btn => {
+    btn.addEventListener('click', () => retryFailed(btn.dataset.name, btn));
+  });
+}
+
+async function retryFailed(name, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Retrying…';
+  try {
+    const resp = await fetch(`/hokku/api/image/${encodeURIComponent(name)}/retry`, {method: 'POST'});
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({error: `HTTP ${resp.status}`}));
+      throw new Error(err.error || `HTTP ${resp.status}`);
+    }
+    showToast(`Retrying ${name}`);
+    refreshStatus();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Retry';
+    showToast('Retry failed: ' + e.message);
+  }
+}
+
 function renderImageGrid(uploadFiles, serveData) {
   const grid = document.getElementById('image-grid');
   grid.innerHTML = '';
@@ -1041,20 +1133,6 @@ async function loadConfig() {
     const data = await resp.json();
     const cfg = data.config;
 
-    // Timezone
-    const tz = document.getElementById('timezone');
-    let found = false;
-    for (let opt of tz.options) {
-      if (opt.value === cfg.timezone) { opt.selected = true; found = true; break; }
-    }
-    if (!found) {
-      const opt = document.createElement('option');
-      opt.value = cfg.timezone;
-      opt.textContent = cfg.timezone;
-      opt.selected = true;
-      tz.appendChild(opt);
-    }
-
     refreshTimes = cfg.refresh_image_at_time || [];
     renderRefreshTimes();
     document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
@@ -1087,7 +1165,7 @@ async function refreshStatus() {
     const resp = await fetch('/hokku/api/status');
     const data = await resp.json();
 
-    document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
+    document.getElementById('server-time').textContent = data.server_time || '';
 
     // Status bar — show both total uploaded and how many are dithered & ready
     const uploaded = data.upload_size != null ? data.upload_size : data.pool_size;
@@ -1123,6 +1201,7 @@ async function refreshStatus() {
     // Image grid — render every uploaded file (dithered or pending)
     const uploadList = data.upload_files || data.pool_files.map(n => ({name: n, dithered: true}));
     renderImageGrid(uploadList, data.serve_data);
+    renderFailedList(data.failed_files || []);
     updatePreviewImageOptions(uploadList);
   } catch (e) {
     console.error('Status refresh failed:', e);
@@ -1207,70 +1286,70 @@ function renderUploadProgress(rows) {
   el.innerHTML = rows.map(r => `<div class="upload-row ${r.status}"><span>${r.name}</span><span>${r.message}</span></div>`).join('');
 }
 
-async function uploadFiles(fileList) {
-  const files = Array.from(fileList || []);
-  if (!files.length) return;
-
-  const rows = files.map(f => ({name: f.name, status: 'pending', message: 'Uploading...'}));
-  renderUploadProgress(rows);
-
+async function uploadOneFile(file, row, renderAll) {
+  // One file per request. Big batches as a single multipart POST tend to fail
+  // with "Failed to fetch" on slow Pis (the connection drops long before all
+  // bytes are read); per-file keeps each request short and lets one failure
+  // not doom the batch.
   const form = new FormData();
-  let anyValid = false;
-  files.forEach((f, i) => {
-    const ext = '.' + (f.name.split('.').pop() || '').toLowerCase();
-    if (!ALLOWED_EXTS.includes(ext)) {
-      rows[i].status = 'error';
-      rows[i].message = 'Unsupported type';
-    } else {
-      form.append('files', f);
-      anyValid = true;
-    }
-  });
-  renderUploadProgress(rows);
-
-  if (!anyValid) {
-    setTimeout(() => renderUploadProgress([]), 4000);
-    return;
-  }
-
+  form.append('files', file);
   try {
     const resp = await fetch('/hokku/api/upload', {method: 'POST', body: form});
     if (!resp.ok) {
-      // Server returned a non-2xx (likely an HTML error page from Flask).
-      // Surface a meaningful message instead of the JSON parser's "Unexpected token '<'".
       let detail = `HTTP ${resp.status}`;
       try { const j = await resp.json(); if (j && j.error) detail = j.error; } catch (_) {}
       throw new Error(detail);
     }
     const data = await resp.json();
-    const savedSet = new Set(data.saved || []);
-    const skippedMap = {};
-    (data.skipped || []).forEach(s => { skippedMap[s.filename] = s.reason; });
-
-    rows.forEach(r => {
-      if (r.status === 'error') return;
-      // Server may rename to avoid clobbering — match on prefix as best-effort
-      const matched = (data.saved || []).find(n => n === r.name || n.startsWith(r.name.replace(/\.[^.]+$/, '') + '_'));
-      if (matched) {
-        r.status = 'ok';
-        r.message = matched === r.name ? 'Uploaded' : 'Uploaded as ' + matched;
-      } else if (skippedMap[r.name]) {
-        r.status = 'error';
-        r.message = skippedMap[r.name];
-      } else {
-        r.status = 'error';
-        r.message = 'Failed';
-      }
-    });
-    renderUploadProgress(rows);
-    showToast(`Uploaded ${(data.saved || []).length} file(s) — converting in background`);
-    refreshStatus();
-    setTimeout(() => renderUploadProgress([]), 6000);
+    const saved = (data.saved || [])[0];
+    const skipped = (data.skipped || [])[0];
+    if (saved) {
+      row.status = 'ok';
+      row.message = saved === file.name ? 'Uploaded' : 'Uploaded as ' + saved;
+    } else if (skipped) {
+      row.status = 'error';
+      row.message = skipped.reason;
+    } else {
+      row.status = 'error';
+      row.message = 'Failed';
+    }
   } catch (e) {
-    rows.forEach(r => { if (r.status === 'pending') { r.status = 'error'; r.message = e.message; } });
-    renderUploadProgress(rows);
-    showToast('Upload error: ' + e.message);
+    row.status = 'error';
+    row.message = e.message;
   }
+  renderAll();
+}
+
+async function uploadFiles(fileList) {
+  const all = Array.from(fileList || []);
+  // Silently drop non-images — don't clutter the progress panel with rejects
+  // for whatever else got caught in a bulk drag (Thumbs.db, .DS_Store, folders).
+  const files = all.filter(f => {
+    const ext = '.' + (f.name.split('.').pop() || '').toLowerCase();
+    return ALLOWED_EXTS.includes(ext);
+  });
+  if (!files.length) return;
+
+  const rows = files.map(f => ({name: f.name, status: 'pending', message: 'Uploading...'}));
+  const render = () => renderUploadProgress(rows);
+  render();
+
+  // Sequential — predictable RAM usage on the Pi, one failure doesn't doom
+  // the batch.
+  for (let i = 0; i < files.length; i++) {
+    await uploadOneFile(files[i], rows[i], render);
+  }
+
+  const okCount = rows.filter(r => r.status === 'ok').length;
+  const failCount = rows.filter(r => r.status === 'error').length;
+  if (okCount) {
+    showToast(`Uploaded ${okCount} file(s) — converting in background`);
+    refreshStatus();
+  }
+  if (failCount) {
+    showToast(`${failCount} file(s) failed — see panel for details`);
+  }
+  setTimeout(() => renderUploadProgress([]), 6000);
 }
 
 document.getElementById('file-input').addEventListener('change', e => {

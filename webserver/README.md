@@ -20,14 +20,14 @@ python webserver.py
 
 Drop images into the upload directory and they are automatically converted. The web GUI is available at `http://server:8080/`.
 
-- **Debian install**: images go in `/var/lib/hokku/upload/`, config at `/etc/hokku/config.json`
-- **From source**: images go in `/images/upload/`, config at `./config.json`
+- **Debian install**: images go in `/var/lib/hokku/upload/`, config at `/var/lib/hokku/config.json`
+- **From source**: same defaults (`/var/lib/hokku/upload/`, `/var/lib/hokku/cache/`). Override `upload_dir` / `cache_dir` in `./config.json` if you need a different location.
 
 ## Web GUI
 
 The web GUI at `http://server:8080/` lets you:
 
-- **Configure**: timezone, refresh schedule (HHMM format), orientation (landscape/portrait), poll interval
+- **Configure**: refresh schedule (HHMM format), orientation (landscape/portrait), poll interval (timezone follows the host OS — set it with `timedatectl` on the Pi)
 - **Browse images**: thumbnails with original and dithered views, show counts, total display time
 - **Upload images**: drag and drop files anywhere on the page, or click the upload zone to browse
 - **Pending-dither indicator**: every uploaded image appears in the grid immediately. Files still being converted to the e-ink palette show a yellow "Dithering…" badge and a faded thumbnail; the status bar shows `ready / total` until the batch finishes
@@ -41,17 +41,16 @@ The web GUI at `http://server:8080/` lets you:
 Config file (`config.json`):
 ```json
 {
-  "timezone": "America/Chicago",
   "refresh_image_at_time": ["0600", "1200", "1800"],
-  "upload_dir": "/images/upload",
-  "cache_dir": "/images/cache",
+  "upload_dir": "/var/lib/hokku/upload",
+  "cache_dir": "/var/lib/hokku/cache",
   "port": 8080,
   "poll_interval_seconds": 10,
   "orientation": "landscape"
 }
 ```
 
-Config is loaded from (in order): `HOKKU_CONFIG` env var, `./config.json`, `/etc/hokku/config.json`. Changes made via the web GUI are saved back to the same file.
+Config is loaded from (in order): `HOKKU_CONFIG` env var, `./config.json`, `/var/lib/hokku/config.json`, `/etc/hokku/config.json`. Changes made via the web GUI are saved back to the same file. Timezone is the host OS timezone — adjust with `sudo timedatectl set-timezone <IANA>`.
 
 ## Image processing
 
@@ -95,7 +94,7 @@ If you delete `database.json`, the server starts fresh — all images get equal 
 | `/hokku/api/image/<name>` | DELETE | Delete an uploaded image and its cached conversion |
 | `/hokku/api/config` | POST | Update configuration |
 | `/hokku/api/clear_cache` | POST | Wipe cache and re-convert |
-| `/hokku/api/time` | GET | Current server time in configured timezone |
+| `/hokku/api/time` | GET | Current server time in the host's system timezone |
 
 ## Supported image formats
 
