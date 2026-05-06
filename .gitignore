@@ -2,6 +2,7 @@ __pycache__/
 .venv/
 .claude/
 .private/
+build/
 
 # Debian build artifacts
 *.deb
