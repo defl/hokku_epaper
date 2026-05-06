@@ -36,8 +36,16 @@ Two key properties:
   than L\*=80 in the source has to be mapped down.
 
 Dithering is how we fake the missing colors: we alternate palette pixels in a
-pattern so the eye perceives an average. Floyd–Steinberg and Atkinson error
-diffusion are the classical tools for this.
+pattern so the eye perceives an average. Floyd–Steinberg, Atkinson, and **Stucki**
+error diffusion are available; Stucki uses a larger neighborhood (12 neighbors,
+weights summing to 1) and tends to a different noise texture than Atkinson.
+
+**Serpentine scan** (optional, `dither_serpentine` in config / “Serpentine scan”
+in the web UI): alternate rows are processed right-to-left instead of
+left-to-right, with the error kernel mirrored so quantization error still flows
+only into unvisited pixels. This reduces directional streaking that a fixed
+left-to-right pass can leave in smooth gradients. Default is off for backward
+compatibility with renders produced before the option existed.
 
 ## 2. Why the obvious approach fails
 
@@ -119,7 +127,7 @@ in §4.
 
 ## 3. The shipped presets
 
-The web UI exposes the pipeline as three named **presets** plus a fully
+The web UI exposes the pipeline as named **presets** plus a fully
 editable "Advanced dithering" panel. Selecting a preset loads its full
 configuration into the knobs; touching any knob flips the preset label to
 "Custom (your edits)" without changing values. Saving writes the complete
@@ -130,6 +138,15 @@ nested config to `config.json`.
 | `atkinson_hue_aware`       | Atkinson — hue-aware (default)                   | **Yes** |
 | `atkinson_soft`            | Atkinson — soft, warm                            |         |
 | `floyd_steinberg_vivid`    | Floyd–Steinberg — vivid, warm (pre-2.0)          |         |
+| `stucki_hue_aware`         | Stucki — hue-aware                               |         |
+| `stucki`                   | Stucki (no hue correction)                       |         |
+
+**Serpentine scan** (optional, `dither_serpentine` in config / "Serpentine scan"
+in the web UI): alternate rows are processed right-to-left instead of
+left-to-right, with the error kernel mirrored so quantization error still flows
+only into unvisited pixels. This reduces directional streaking that a fixed
+left-to-right pass can leave in smooth gradients. Default is off for backward
+compatibility with renders produced before the option existed.
 
 Presets live in `DITHER_PRESETS` in `webserver/webserver.py`; each one is a
 full dither-config literal (no partials — every stage has an explicit value
@@ -322,16 +339,17 @@ Key ideas from published work:
     `vivid_low`, `vivid_high`
   - `_build_rgb_lut()` (Lab-Euclidean) and `_build_rgb_lut_hue_aware()` with
     memoisation in `_get_lut()`
-  - `_floyd_steinberg_dither()` and `_atkinson_dither()`
+  - `_floyd_steinberg_dither()`, `_atkinson_dither()`, and `_stucki_dither()`
+  - `_get_kernel_fn()` — maps preset kernel name to dither function
   - `_maybe_apply_bw_fallback()` + the branch in `_convert_image()`
   - `_run_dither_pipeline()` — shared pipeline used by both full render and
     `_render_dither_preview()` (the /api/dither/preview endpoint)
   - `_cache_key()` and `_CACHE_VERSION`
 - `webserver/templates/index.html` — preset dropdown, collapsible Advanced
   panel (rendered dynamically from `ditherState`), per-knob (?) help
-  popovers, preview button. The settings form is now loaded **once** at
-  page open (`/api/config`); the `/api/status` poll deliberately omits
-  config so user edits can't be clobbered mid-typing.
+  popovers, preview button, serpentine toggle. The settings form is now loaded
+  **once** at page open (`/api/config`); the `/api/status` poll deliberately
+  omits config so user edits can't be clobbered mid-typing.
 - `webserver/tests/test_webserver.py` — unit tests covering the pipeline
   knobs and preset semantics.
 - `dither_test2/` (untracked scratch area, can be deleted) — the benchmark

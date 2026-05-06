@@ -151,6 +151,56 @@ DITHER_PRESETS = {
             "kernel":       "atkinson",
         },
     },
+    "stucki_hue_aware": {
+        "label": "Stucki — hue-aware",
+        "description": (
+            "Stucki error diffusion with the same V10 pipeline knobs as "
+            "Atkinson + hue-aware (hue-aware LUT, adaptive saturation, "
+            "adaptive vividness). The wider 12-neighbor kernel spreads "
+            "error farther than Atkinson — often a bit sharper with a "
+            "different noise grain."
+        ),
+        "dither": {
+            "autocontrast": {"enabled": True, "cutoff": 0.5},
+            "gamma":        {"enabled": True, "value": 0.85},
+            "brightness":   1.0,
+            "contrast":     1.1,
+            "sharpness":    1.3,
+            "saturation":   {"mode": "adaptive", "value": 1.25,
+                             "low": 5.0, "high": 15.0},
+            "drc":          {"enabled": True, "chroma_mode": "adaptive_vivid",
+                             "vivid_low": 5.0, "vivid_high": 15.0},
+            "palette_lut":  {"mode": "hue_aware",
+                             "hue_cutoff_deg": 95.0, "neutral_chroma": 8.0},
+            "bw_fallback":  {"enabled": True,
+                             "chroma_threshold": 8.0, "percentile": 95},
+            "kernel":       "stucki",
+        },
+    },
+    "stucki": {
+        "label": "Stucki (no hue correction)",
+        "description": (
+            "Plain Stucki with Lab-Euclidean palette matching. Same "
+            "tradeoffs as plain Atkinson vs hue-aware — sharper detail "
+            "but may show blue speckle on warm skin tones."
+        ),
+        "dither": {
+            "autocontrast": {"enabled": True, "cutoff": 0.5},
+            "gamma":        {"enabled": True, "value": 0.85},
+            "brightness":   1.0,
+            "contrast":     1.1,
+            "sharpness":    1.3,
+            "saturation":   {"mode": "global", "value": 1.2,
+                             "low": 5.0, "high": 15.0},
+            "drc":          {"enabled": True, "chroma_mode": "off",
+                             "vivid_low": 5.0, "vivid_high": 15.0},
+            "palette_lut":  {"mode": "euclidean",
+                             "hue_cutoff_deg": 95.0, "neutral_chroma": 8.0},
+            "bw_fallback":  {"enabled": False,
+                             "chroma_threshold": 8.0, "percentile": 95},
+            "kernel":       "stucki",
+        },
+    },
 }
 
 DEFAULT_PRESET = "atkinson_hue_aware"
@@ -214,6 +264,10 @@ DEFAULT_CONFIG = {
     # hard — not for production use. Toggled from the web GUI.
     "debug_fast_refresh": False,
     "dither": _default_dither_config(),
+    # Serpentine (boustrophedon) error-diffusion scan: alternate row direction and
+    # mirror the kernel so error is not always pushed the same way — reduces
+    # directional streaks. Applies to all dither kernels.
+    "dither_serpentine": False,
 }
 
 DEBUG_FAST_REFRESH_SECONDS = 180
@@ -223,7 +277,7 @@ _config_file_path = None  # set during load, used for saving
 
 _SAVE_KEYS = ["refresh_image_at_time", "upload_dir", "cache_dir",
               "port", "poll_interval_seconds", "orientation",
-              "debug_fast_refresh", "dither"]
+              "debug_fast_refresh", "dither", "dither_serpentine"]
 
 
 def _load_config():
@@ -698,7 +752,8 @@ _CACHE_VERSION = "v3"
 def _cache_key(img_path, content_hash):
     orientation = _config.get("orientation", "landscape")
     dither_hash = _dither_config_hash(_config["dither"])
-    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}_{dither_hash}_{_CACHE_VERSION}"
+    serp_tag = "s1" if _config.get("dither_serpentine", False) else "s0"
+    return f"{img_path.stem}_{content_hash[:12]}_{orientation[0]}_{dither_hash}_{serp_tag}_{_CACHE_VERSION}"
 
 def _load_from_cache(cache_dir, img_path, content_hash):
     key = _cache_key(img_path, content_hash)
@@ -1113,9 +1168,13 @@ _RGB_LUT_EUCLID, _LUT_SCALE = _build_rgb_lut()
 _RGB_LUT_HUE_AWARE, _ = _build_rgb_lut_hue_aware()
 
 
-def _floyd_steinberg_dither(canvas, lut=None, lut_scale=None):
+def _floyd_steinberg_dither(canvas, lut=None, lut_scale=None, serpentine=False):
     """Floyd–Steinberg error diffusion. Full error distributed to 4 neighbors
-    (7/16 right, 3/16 down-left, 5/16 down, 1/16 down-right)."""
+    (7/16 right, 3/16 down-left, 5/16 down, 1/16 down-right).
+
+    serpentine: on even scanlines (y=0,2,4,...) process right-to-left and mirror
+    the kernel so diffusion still targets unvisited pixels (reduces streaking).
+    """
     if lut is None:
         lut = _RGB_LUT_EUCLID
     if lut_scale is None:
@@ -1127,7 +1186,9 @@ def _floyd_steinberg_dither(canvas, lut=None, lut_scale=None):
     lut_max = lut.shape[0] - 1
 
     for y in range(h):
-        for x in range(w):
+        reverse = serpentine and (y % 2 == 0)
+        x_iter = range(w - 1, -1, -1) if reverse else range(w)
+        for x in x_iter:
             r = min(max(pixels[y, x, 0], 0.0), 255.0)
             g = min(max(pixels[y, x, 1], 0.0), 255.0)
             b = min(max(pixels[y, x, 2], 0.0), 255.0)
@@ -1139,31 +1200,53 @@ def _floyd_steinberg_dither(canvas, lut=None, lut_scale=None):
             er = r - pal_rgb[idx, 0]
             eg = g - pal_rgb[idx, 1]
             eb = b - pal_rgb[idx, 2]
-            if x + 1 < w:
-                pixels[y, x + 1, 0] += er * 0.4375
-                pixels[y, x + 1, 1] += eg * 0.4375
-                pixels[y, x + 1, 2] += eb * 0.4375
-            if y + 1 < h:
+            if reverse:
                 if x - 1 >= 0:
-                    pixels[y + 1, x - 1, 0] += er * 0.1875
-                    pixels[y + 1, x - 1, 1] += eg * 0.1875
-                    pixels[y + 1, x - 1, 2] += eb * 0.1875
-                pixels[y + 1, x, 0] += er * 0.3125
-                pixels[y + 1, x, 1] += eg * 0.3125
-                pixels[y + 1, x, 2] += eb * 0.3125
+                    pixels[y, x - 1, 0] += er * 0.4375
+                    pixels[y, x - 1, 1] += eg * 0.4375
+                    pixels[y, x - 1, 2] += eb * 0.4375
+                if y + 1 < h:
+                    if x + 1 < w:
+                        pixels[y + 1, x + 1, 0] += er * 0.1875
+                        pixels[y + 1, x + 1, 1] += eg * 0.1875
+                        pixels[y + 1, x + 1, 2] += eb * 0.1875
+                    pixels[y + 1, x, 0] += er * 0.3125
+                    pixels[y + 1, x, 1] += eg * 0.3125
+                    pixels[y + 1, x, 2] += eb * 0.3125
+                    if x - 1 >= 0:
+                        pixels[y + 1, x - 1, 0] += er * 0.0625
+                        pixels[y + 1, x - 1, 1] += eg * 0.0625
+                        pixels[y + 1, x - 1, 2] += eb * 0.0625
+            else:
                 if x + 1 < w:
-                    pixels[y + 1, x + 1, 0] += er * 0.0625
-                    pixels[y + 1, x + 1, 1] += eg * 0.0625
-                    pixels[y + 1, x + 1, 2] += eb * 0.0625
+                    pixels[y, x + 1, 0] += er * 0.4375
+                    pixels[y, x + 1, 1] += eg * 0.4375
+                    pixels[y, x + 1, 2] += eb * 0.4375
+                if y + 1 < h:
+                    if x - 1 >= 0:
+                        pixels[y + 1, x - 1, 0] += er * 0.1875
+                        pixels[y + 1, x - 1, 1] += eg * 0.1875
+                        pixels[y + 1, x - 1, 2] += eb * 0.1875
+                    pixels[y + 1, x, 0] += er * 0.3125
+                    pixels[y + 1, x, 1] += eg * 0.3125
+                    pixels[y + 1, x, 2] += eb * 0.3125
+                    if x + 1 < w:
+                        pixels[y + 1, x + 1, 0] += er * 0.0625
+                        pixels[y + 1, x + 1, 1] += eg * 0.0625
+                        pixels[y + 1, x + 1, 2] += eb * 0.0625
         if y % 200 == 0:
             print(f"  Dithering: {y}/{h}")
     return result_idx
 
 
-def _atkinson_dither(canvas, lut=None, lut_scale=None):
+def _atkinson_dither(canvas, lut=None, lut_scale=None, serpentine=False):
     """Atkinson dither. Distributes only 6/8 of the quantization error, 1/8 each
     into 6 neighbors: (+1,0), (+2,0), (-1,+1), (0,+1), (+1,+1), (0,+2). Softer
-    gradients, less hue-shift cascade, slightly lower max contrast than FS."""
+    gradients, less hue-shift cascade, slightly lower max contrast than FS.
+
+    serpentine: alternate row direction and negate horizontal offsets on even
+    scanlines (see _floyd_steinberg_dither).
+    """
     if lut is None:
         lut = _RGB_LUT_EUCLID
     if lut_scale is None:
@@ -1178,7 +1261,9 @@ def _atkinson_dither(canvas, lut=None, lut_scale=None):
     w_coef = 1.0 / 8.0
 
     for y in range(h):
-        for x in range(w):
+        reverse = serpentine and (y % 2 == 0)
+        x_iter = range(w - 1, -1, -1) if reverse else range(w)
+        for x in x_iter:
             r = min(max(pixels[y, x, 0], 0.0), 255.0)
             g = min(max(pixels[y, x, 1], 0.0), 255.0)
             b = min(max(pixels[y, x, 2], 0.0), 255.0)
@@ -1191,7 +1276,8 @@ def _atkinson_dither(canvas, lut=None, lut_scale=None):
             eg = (g - pal_rgb[idx, 1]) * w_coef
             eb = (b - pal_rgb[idx, 2]) * w_coef
             for dx, dy in offsets:
-                nx, ny = x + dx, y + dy
+                eff_dx = -dx if reverse else dx
+                nx, ny = x + eff_dx, y + dy
                 if 0 <= nx < w and 0 <= ny < h:
                     pixels[ny, nx, 0] += er
                     pixels[ny, nx, 1] += eg
@@ -1207,29 +1293,89 @@ def _atkinson_dither(canvas, lut=None, lut_scale=None):
 _hue_aware_lut_cache = {}
 _hue_aware_lut_lock = threading.Lock()
 
+# Stucki error diffusion — weights sum to 42/42 (full error).
+_STUCKI_OFFSETS = (
+    (1, 0, 8 / 42.0),
+    (2, 0, 4 / 42.0),
+    (-2, 1, 2 / 42.0),
+    (-1, 1, 4 / 42.0),
+    (0, 1, 8 / 42.0),
+    (1, 1, 4 / 42.0),
+    (2, 1, 2 / 42.0),
+    (-2, 2, 1 / 42.0),
+    (-1, 2, 2 / 42.0),
+    (0, 2, 4 / 42.0),
+    (1, 2, 2 / 42.0),
+    (2, 2, 1 / 42.0),
+)
+)
 
-def _get_lut(dither_cfg):
-    """Pick the RGB→palette-index LUT for this pipeline config. Memoizes
-    hue-aware LUTs by (cutoff, neutral_chroma) so repeated tweaks are cheap."""
-    lut_cfg = dither_cfg.get("palette_lut", {})
-    mode = lut_cfg.get("mode", "hue_aware")
-    if mode == "euclidean":
-        return _RGB_LUT_EUCLID
-    cutoff = float(lut_cfg.get("hue_cutoff_deg", 95.0))
-    neutral = float(lut_cfg.get("neutral_chroma", 8.0))
-    if cutoff == 95.0 and neutral == 8.0:
-        return _RGB_LUT_HUE_AWARE
-    key = (round(cutoff, 3), round(neutral, 3))
-    with _hue_aware_lut_lock:
-        lut = _hue_aware_lut_cache.get(key)
-        if lut is None:
-            lut, _ = _build_rgb_lut_hue_aware(hue_cutoff_deg=cutoff, neutral_chroma=neutral)
-            _hue_aware_lut_cache[key] = lut
-        return lut
+
+def _stucki_dither(canvas, lut=None, lut_scale=None, serpentine=False):
+    """Stucki error diffusion — larger neighborhood than Floyd–Steinberg; tends
+    toward sharper detail and a slightly different noise grain.
+
+    serpentine: alternate row direction and negate horizontal offsets on even
+    scanlines (same convention as Atkinson).
+    """
+    if lut is None:
+        lut = _RGB_LUT_EUCLID
+    if lut_scale is None:
+        lut_scale = _LUT_SCALE
+    pixels = np.array(canvas, dtype=np.float32)
+    h, w, _ = pixels.shape
+    result_idx = np.zeros((h, w), dtype=np.uint8)
+    pal_rgb = PALETTE_MEASURED_RGB
+    lut_max = lut.shape[0] - 1
+
+    for y in range(h):
+        reverse = serpentine and (y % 2 == 0)
+        x_iter = range(w - 1, -1, -1) if reverse else range(w)
+        for x in x_iter:
+            r = min(max(pixels[y, x, 0], 0.0), 255.0)
+            g = min(max(pixels[y, x, 1], 0.0), 255.0)
+            b = min(max(pixels[y, x, 2], 0.0), 255.0)
+            ri = min(int(r / lut_scale), lut_max)
+            gi = min(int(g / lut_scale), lut_max)
+            bi = min(int(b / lut_scale), lut_max)
+            idx = int(lut[ri, gi, bi])
+            result_idx[y, x] = idx
+            er = r - pal_rgb[idx, 0]
+            eg = g - pal_rgb[idx, 1]
+            eb = b - pal_rgb[idx, 2]
+            for dx, dy, wgt in _STUCKI_OFFSETS:
+                eff_dx = -dx if reverse else dx
+                nx, ny = x + eff_dx, y + dy
+                if 0 <= nx < w and 0 <= ny < h:
+                    pixels[ny, nx, 0] += er * wgt
+                    pixels[ny, nx, 1] += eg * wgt
+                    pixels[ny, nx, 2] += eb * wgt
+        if y % 200 == 0:
+            print(f"  Dithering: {y}/{h}")
+    return result_idx
+
+
+class _AlgoConfig:
+    """Bundle of per-algorithm pipeline parameters."""
+    __slots__ = ("dither_fn", "lut", "color_enhance", "scale_chroma",
+                 "adaptive_saturate", "adaptive_vivid")
+    def __init__(self, dither_fn, lut, color_enhance, scale_chroma,
+                 adaptive_saturate, adaptive_vivid):
+        self.dither_fn = dither_fn
+        self.lut = lut
+        self.color_enhance = color_enhance
+        self.scale_chroma = scale_chroma
+        self.adaptive_saturate = adaptive_saturate
+        self.adaptive_vivid = adaptive_vivid
 
 
 def _get_kernel_fn(dither_cfg):
-    return _floyd_steinberg_dither if dither_cfg.get("kernel") == "floyd_steinberg" else _atkinson_dither
+    kernel = dither_cfg.get("kernel", "atkinson")
+    if kernel == "floyd_steinberg":
+        return _floyd_steinberg_dither
+    elif kernel == "stucki":
+        return _stucki_dither
+    return _atkinson_dither
 
 
 def _maybe_apply_bw_fallback(dither_cfg, img):
@@ -1329,19 +1475,22 @@ def _apply_lab_stage(canvas, sat_cfg, drc_cfg):
     return result
 
 
-def _dither_prepared_canvas(canvas, padding_mask, dither_cfg):
+def _dither_prepared_canvas(canvas, padding_mask, dither_cfg, serpentine=False):
     """Run the Lab-stage pipeline (fused saturation+DRC) then the dither
     kernel on an already-prepared canvas. Split out from
     _run_dither_pipeline so callers can drop their source-image
     reference before the Lab-space transforms allocate — on large JPEGs
     that saves 20–50 MB of peak footprint.
+
+    serpentine: pass True to enable boustrophedon scan (alternate row
+    direction) in the dither kernel.
     """
     canvas = _apply_lab_stage(canvas, dither_cfg.get("saturation", {}),
                                dither_cfg.get("drc", {}))
 
     kernel_fn = _get_kernel_fn(dither_cfg)
     lut = _get_lut(dither_cfg)
-    result_idx = kernel_fn(canvas, lut, _LUT_SCALE)
+    result_idx = kernel_fn(canvas, lut, _LUT_SCALE, serpentine=serpentine)
     del canvas
     result_idx[padding_mask] = 1  # force padding to pure white
     return result_idx
@@ -1354,7 +1503,8 @@ def _run_dither_pipeline(img, dither_cfg, orientation, canvas_w, canvas_h):
     it can drop its source-image reference before DRC peaks."""
     portrait = (orientation == "portrait")
     canvas, padding_mask = _prepare_canvas(img, dither_cfg, portrait, canvas_w, canvas_h)
-    result_idx = _dither_prepared_canvas(canvas, padding_mask, dither_cfg)
+    serpentine = bool(_config.get("dither_serpentine", False))
+    result_idx = _dither_prepared_canvas(canvas, padding_mask, dither_cfg, serpentine=serpentine)
     return result_idx, padding_mask
 
 
@@ -1412,7 +1562,8 @@ def _convert_image(img_path):
     canvas, padding_mask = _prepare_canvas(img, dither_cfg, portrait,
                                            canvas_w=FULL_W, canvas_h=PANEL_H)
     del img  # source no longer needed; release its RGB buffer
-    result_idx = _dither_prepared_canvas(canvas, padding_mask, dither_cfg)
+    serpentine = bool(_config.get("dither_serpentine", False))
+    result_idx = _dither_prepared_canvas(canvas, padding_mask, dither_cfg, serpentine=serpentine)
     del canvas, padding_mask
 
     nibbles = PALETTE_NIBBLE[result_idx]
@@ -1574,7 +1725,13 @@ def _sync_pool_inner():
     with _lock:
         valid_cache_keys = set()
         for key, entry in _pool.items():
-            valid_cache_keys.add(_cache_key(Path(key), entry["hash"]))
+            # Keep cached renders for both serpentine states so toggling
+            # the serpentine checkbox is instant on a re-visit.
+            for serp in (False, True):
+                old_serp = _config.get("dither_serpentine", False)
+                _config["dither_serpentine"] = serp
+                valid_cache_keys.add(_cache_key(Path(key), entry["hash"]))
+                _config["dither_serpentine"] = old_serp
     _purge_stale_cache(cache_dir, valid_cache_keys)
 
 
@@ -2030,6 +2187,14 @@ def api_config():
         _config["dither"] = new_dither
         changed = True
 
+    serpentine_changed = False
+    if "dither_serpentine" in data:
+        val = bool(data["dither_serpentine"])
+        if bool(_config.get("dither_serpentine", False)) != val:
+            serpentine_changed = True
+        _config["dither_serpentine"] = val
+        changed = True
+
     if changed:
         _save_config(_config)
 
@@ -2039,10 +2204,10 @@ def api_config():
         with _lock:
             _pool.clear()
         threading.Thread(target=_sync_pool, daemon=True).start()
-    elif dither_changed:
-        # Dither config change: cache key changes so pool entries won't find
-        # matching renders. Drop the pool to force _sync_pool to re-run
-        # _convert_and_store.
+    elif dither_changed or serpentine_changed:
+        # Dither config or serpentine change: cache key changes so pool entries
+        # won't find matching renders. Drop the pool to force _sync_pool to
+        # re-run _convert_and_store.
         with _lock:
             _pool.clear()
         threading.Thread(target=_sync_pool, daemon=True).start()
@@ -2053,6 +2218,7 @@ def api_config():
         "orientation": _config.get("orientation", "landscape"),
         "debug_fast_refresh": bool(_config.get("debug_fast_refresh", False)),
         "dither": _config["dither"],
+        "dither_serpentine": bool(_config.get("dither_serpentine", False)),
     }})
 
 

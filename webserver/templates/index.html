@@ -162,6 +162,7 @@
   .dither-preview-block { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #e5e7eb; }
   .dither-preview-result { margin-top: 10px; background: #f0f0f0; border-radius: 6px; padding: 10px; text-align: center; }
   .dither-preview-result img { max-width: 100%; max-height: 480px; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
+  .config-row.popover-anchor { position: relative; align-items: flex-start; }
 </style>
 </head>
 <body>
@@ -222,6 +223,21 @@
       <div id="dither-preview-result" class="dither-preview-result" hidden>
         <img id="dither-preview-img" alt="Dither preview">
       </div>
+    </div>
+  </div>
+
+  <div class="config-row popover-anchor">
+    <label>Serpentine scan:</label>
+    <label class="toggle">
+      <input type="checkbox" id="dither-serpentine">
+      <span id="dither-serpentine-label">Off</span>
+    </label>
+    <button type="button" class="help-icon" id="serpentine-help-btn" aria-label="Serpentine scan help" aria-expanded="false">?</button>
+    <div id="serpentine-help-popover" class="help-popover" role="dialog" aria-label="Serpentine scan explanation" hidden>
+      <h3>Serpentine error diffusion</h3>
+      <p><strong>What it does:</strong> Normally each row is scanned left-to-right, so quantization error is always pushed ahead in the same direction. With serpentine (boustrophedon) scanning, <strong>every other row is processed right-to-left</strong>, and the error-diffusion pattern is <strong>mirrored horizontally</strong> so error still flows only into pixels that have not been finalized yet.</p>
+      <p><strong>Why use it:</strong> A single scan direction can leave <strong>visible directional streaks or "combing"</strong> in smooth areas. Alternating direction breaks that bias and often looks more even, similar to the default recommendation in mature dithering libraries.</p>
+      <p class="help-popover-note">Applies to Floyd–Steinberg, Atkinson, and Stucki. Turning it on or off re-converts images (cached results for both settings are kept). Default is off for backward compatibility with earlier renders.</p>
     </div>
   </div>
 
@@ -1069,7 +1085,7 @@ async function retryFailed(name, btn) {
   try {
     const resp = await fetch(`/hokku/api/image/${encodeURIComponent(name)}/retry`, {method: 'POST'});
     if (!resp.ok) {
-      const err = await resp.json().catch(() => ({error: `HTTP ${resp.status}`}));
+      const err = await resp.json().catch(() => ({}));
       throw new Error(err.error || `HTTP ${resp.status}`);
     }
     showToast(`Retrying ${name}`);
@@ -1137,6 +1153,11 @@ async function loadConfig() {
     renderRefreshTimes();
     document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
     document.getElementById('orientation').value = cfg.orientation || 'landscape';
+    document.getElementById('dither-algorithm').value = cfg.dither_algorithm || 'atkinson_hue_aware';
+    const serpOn = !!cfg.dither_serpentine;
+    document.getElementById('dither-serpentine').checked = serpOn;
+    document.getElementById('dither-serpentine-label').textContent = serpOn ? 'On' : 'Off';
+    document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
 
     const debugOn = !!cfg.debug_fast_refresh;
     const debugSecs = cfg.debug_fast_refresh_seconds || 180;

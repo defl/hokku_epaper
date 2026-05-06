@@ -1569,12 +1569,27 @@ class TestOrientation:
             key_after = webserver._cache_key(path, content_hash)
         assert key_before != key_after
 
+    def test_cache_key_differs_by_serpentine(self):
+        """Cache keys must differ when serpentine scan is on vs off."""
+        path = Path("/images/test.jpg")
+        content_hash = "abcdef123456"
+        base = {**webserver.DEFAULT_CONFIG, "dither": webserver._default_dither_config()}
+        with patch.object(webserver, "_config", {**base, "dither_serpentine": False}):
+            key_off = webserver._cache_key(path, content_hash)
+        with patch.object(webserver, "_config", {**base, "dither_serpentine": True}):
+            key_on = webserver._cache_key(path, content_hash)
+        assert key_off != key_on
+        assert "_s0_" in key_off
+        assert "_s1_" in key_on
+
     def test_default_preset_is_atkinson_hue_aware(self):
         """atkinson_hue_aware remains the shipping default after the preset refactor."""
         assert webserver.DEFAULT_PRESET == "atkinson_hue_aware"
         assert "atkinson_hue_aware" in webserver.DITHER_PRESETS
         assert "floyd_steinberg_vivid" in webserver.DITHER_PRESETS
         assert "atkinson_soft" in webserver.DITHER_PRESETS
+        assert "stucki_hue_aware" in webserver.DITHER_PRESETS
+        assert "stucki" in webserver.DITHER_PRESETS
         # DEFAULT_CONFIG["dither"] is a deep-copy of the default preset's dither.
         assert webserver.DEFAULT_CONFIG["dither"] == webserver.DITHER_PRESETS["atkinson_hue_aware"]["dither"]
 
@@ -1588,7 +1603,7 @@ class TestOrientation:
             assert d["saturation"]["mode"] in {"off", "global", "adaptive"}
             assert d["drc"]["chroma_mode"] in {"off", "flat", "adaptive_vivid"}
             assert d["palette_lut"]["mode"] in {"euclidean", "hue_aware"}
-            assert d["kernel"] in {"floyd_steinberg", "atkinson"}
+            assert d["kernel"] in {"floyd_steinberg", "atkinson", "stucki"}
 
     def test_atkinson_hue_aware_preset_is_v10_recipe(self):
         """The default preset encodes the V10 recipe: adaptive saturation + adaptive vividness."""
