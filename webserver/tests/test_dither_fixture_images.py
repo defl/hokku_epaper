@@ -77,7 +77,7 @@ def test_dither_fixture_images_resized_outputs_for_visual_qa(
 
         for preset_name in sorted(webserver.PRESET_DITHER_ALGORITHMS.keys()):
             preset = webserver.PRESET_DITHER_ALGORITHMS[preset_name]
-            recipe = replace(preset, dither=replace(preset.dither, serpentine=False))
+            recipe = replace(preset.image, dither=replace(preset.image.dither, serpentine=False))
             canvas = apply_prepare_enhancements(resized.copy(), recipe)
             assert canvas.size == resized.size
             arr = np.asarray(canvas, dtype=np.float32)
@@ -124,7 +124,7 @@ def test_dither_fullsize_images_stay_within_memory_budget_per_preset(
 
         for preset_name in sorted(webserver.PRESET_DITHER_ALGORITHMS.keys()):
             preset = webserver.PRESET_DITHER_ALGORITHMS[preset_name]
-            recipe = replace(preset, dither=replace(preset.dither, serpentine=False))
+            recipe = replace(preset.image, dither=replace(preset.image.dither, serpentine=False))
 
             gc.collect()
             before = rss()

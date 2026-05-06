@@ -21,7 +21,7 @@ class TestConfigLoading:
         assert config.port == 8080
         assert config.poll_interval_seconds == 10
         assert config.debug_fast_refresh is False
-        assert config.image == webserver.PRESET_DITHER_ALGORITHMS["atkinson_hue_aware"]
+        assert config.display == webserver.PRESET_DITHER_ALGORITHMS["atkinson_hue_aware"]
 
     def test_load_config_from_file(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -77,17 +77,20 @@ class TestConfigLoading:
             webserver.AppConfig(),
             timezone="Europe/Berlin",
             port=7777,
-            image=replace(
-                webserver.DEFAULT_CONFIG.image,
-                dither=replace(webserver.DEFAULT_CONFIG.image.dither, serpentine=True),
+            display=replace(
+                webserver.DEFAULT_CONFIG.display,
+                image=replace(
+                    webserver.DEFAULT_CONFIG.display.image,
+                    dither=replace(webserver.DEFAULT_CONFIG.display.image.dither, serpentine=True),
+                ),
             ),
         )
         original.save_to_file(path)
         loaded = webserver.AppConfig.load_from_file(path)
         assert loaded.timezone == "Europe/Berlin"
         assert loaded.port == 7777
-        assert loaded.image.dither.serpentine is True
-        assert loaded.image == original.image
+        assert loaded.display.image.dither.serpentine is True
+        assert loaded.display == original.display
 
     def test_save_to_file_requires_path_or_env(self):
         cfg = webserver.AppConfig()
@@ -100,17 +103,17 @@ class TestConfigLoading:
 class TestFromDictAndMergeDither:
     def test_from_dict_partial_dither_merges_with_defaults(self):
         cfg = webserver.AppConfig.from_dict({"dither": {"serpentine": True}})
-        assert cfg.image.dither.serpentine is True
-        assert cfg.image.dither.algorithm == webserver.DEFAULT_CONFIG.image.dither.algorithm
-        assert cfg.image.dither.lut_name == webserver.DEFAULT_CONFIG.image.dither.lut_name
+        assert cfg.display.image.dither.serpentine is True
+        assert cfg.display.image.dither.algorithm == webserver.DEFAULT_CONFIG.display.image.dither.algorithm
+        assert cfg.display.image.dither.lut_name == webserver.DEFAULT_CONFIG.display.image.dither.lut_name
 
     def test_from_dict_nested_dither_takes_precedence_over_legacy_algorithm(self):
         cfg = webserver.AppConfig.from_dict({
             "dither": {"serpentine": False},
             "dither_algorithm": "floyd_steinberg",
         })
-        assert cfg.image.dither.serpentine is False
-        assert cfg.image.dither.algorithm == webserver.DEFAULT_CONFIG.image.dither.algorithm
+        assert cfg.display.image.dither.serpentine is False
+        assert cfg.display.image.dither.algorithm == webserver.DEFAULT_CONFIG.display.image.dither.algorithm
 
     def test_from_dict_legacy_dither_algorithm_and_serpentine(self):
         cfg = webserver.AppConfig.from_dict({
@@ -118,43 +121,60 @@ class TestFromDictAndMergeDither:
             "dither_serpentine": True,
         })
         stucki = webserver.PRESET_DITHER_ALGORITHMS["stucki"]
-        want = replace(stucki, dither=replace(stucki.dither, serpentine=True))
-        assert cfg.image == want
+        want = replace(
+            stucki,
+            image=replace(
+                stucki.image,
+                dither=replace(stucki.image.dither, serpentine=True),
+            ),
+        )
+        assert cfg.display == want
 
     def test_from_dict_full_image_round_trip_via_asdict(self):
         floyd = webserver.PRESET_DITHER_ALGORITHMS["floyd_steinberg"]
         base = replace(
             webserver.AppConfig(),
-            image=replace(floyd, dither=replace(floyd.dither, serpentine=True)),
+            display=replace(
+                floyd,
+                image=replace(floyd.image, dither=replace(floyd.image.dither, serpentine=True)),
+            ),
         )
         raw = asdict(base)
         cfg = webserver.AppConfig.from_dict(raw)
         assert cfg == base
 
     def test_merge_dither_slim_ignores_unknown_keys(self):
-        base = webserver.DEFAULT_CONFIG.image.dither
+        base = webserver.DEFAULT_CONFIG.display.image.dither
         merged = merge_dither_slim(base, {"serpentine": True, "extra": 1, "not_a_field": "x"})
         assert merged.serpentine is True
         assert merged.algorithm == base.algorithm
 
     def test_merge_image_applies_top_level_and_nested_dither(self):
-        base = webserver.DEFAULT_CONFIG.image
+        base = webserver.DEFAULT_CONFIG.display.image
         merged = merge_image(base, {"color_enhance": 1.1, "dither": {"serpentine": True}})
         assert merged.color_enhance == 1.1
         assert merged.dither.serpentine is True
+
+    def test_from_dict_top_level_orientation_merges_into_image(self):
+        cfg = webserver.AppConfig.from_dict({"orientation": "portrait"})
+        assert cfg.display.orientation == "portrait"
 
 
 class TestAppConfigCacheSlug:
     def test_cache_slug_changes_with_orientation_dither_and_debug(self):
         base = webserver.DEFAULT_CONFIG
-        assert replace(base, orientation="portrait").cache_slug() != base.cache_slug()
+        portrait_disp = replace(base.display, orientation="portrait")
+        assert replace(base, display=portrait_disp).cache_slug() != base.cache_slug()
         assert replace(base, debug_fast_refresh=True).cache_slug() != base.cache_slug()
         assert (
             replace(
                 base,
-                image=replace(
-                    base.image,
-                    dither=replace(base.image.dither, serpentine=True),
+                display=replace(
+                    base.display,
+                    image=replace(
+                        base.display.image,
+                        dither=replace(base.display.image.dither, serpentine=True),
+                    ),
                 ),
             ).cache_slug()
             != base.cache_slug()
@@ -203,9 +223,9 @@ class TestConfigEndpoints:
 
     def test_config_update_rejects_invalid_orientation(self, client):
         client_, cfg = client
-        before = cfg.orientation
+        before = cfg.display.orientation
         client_.post("/hokku/api/config", json={"orientation": "diagonal"})
-        assert cfg.orientation == before
+        assert cfg.display.orientation == before
 
     def test_config_update_empty_body_400(self, client):
         client_, _ = client
@@ -214,12 +234,12 @@ class TestConfigEndpoints:
 
     def test_config_update_orientation_change_clears_cache(self, client, tmp_path):
         client_, cfg = client
-        cfg.orientation = "landscape"
+        cfg.display = replace(cfg.display, orientation="landscape")
         with patch("webserver.flask_app._clear_cache_files") as mock_clear:
             resp = client_.post("/hokku/api/config", json={"orientation": "portrait"})
             assert resp.status_code == 200
             mock_clear.assert_called_once()
-        assert cfg.orientation == "portrait"
+        assert cfg.display.orientation == "portrait"
 
     def test_clear_cache_endpoint(self, client):
         client_, _ = client
@@ -240,34 +260,34 @@ class TestConfigEndpoints:
         client_, cfg = client
         resp = client_.post("/hokku/api/config", json={"dither_algorithm": "floyd_steinberg"})
         assert resp.status_code == 200
-        assert cfg.image == webserver.PRESET_DITHER_ALGORITHMS["floyd_steinberg"]
+        assert cfg.display == webserver.PRESET_DITHER_ALGORITHMS["floyd_steinberg"]
 
     def test_config_update_dither_preset_key(self, client):
         client_, cfg = client
         resp = client_.post("/hokku/api/config", json={"dither_preset": "atkinson"})
         assert resp.status_code == 200
-        assert cfg.image == webserver.PRESET_DITHER_ALGORITHMS["atkinson"]
+        assert cfg.display == webserver.PRESET_DITHER_ALGORITHMS["atkinson"]
 
     def test_config_update_dither_unknown_preset_400(self, client):
         client_, cfg = client
-        before = cfg.image
+        before = cfg.display
         resp = client_.post("/hokku/api/config", json={"dither_algorithm": "not_a_real_preset"})
         assert resp.status_code == 400
-        assert cfg.image == before
+        assert cfg.display == before
 
     def test_config_update_dither_nested_merge(self, client):
         client_, cfg = client
         resp = client_.post("/hokku/api/config", json={"dither": {"serpentine": True}})
         assert resp.status_code == 200
-        assert cfg.image.dither.serpentine is True
-        assert cfg.image.dither.algorithm == webserver.DEFAULT_CONFIG.image.dither.algorithm
+        assert cfg.display.image.dither.serpentine is True
+        assert cfg.display.image.dither.algorithm == webserver.DEFAULT_CONFIG.display.image.dither.algorithm
 
     def test_config_update_dither_serpentine_only(self, client):
         client_, cfg = client
-        assert cfg.image.dither.serpentine is False
+        assert cfg.display.image.dither.serpentine is False
         resp = client_.post("/hokku/api/config", json={"dither_serpentine": True})
         assert resp.status_code == 200
-        assert cfg.image.dither.serpentine is True
+        assert cfg.display.image.dither.serpentine is True
 
     def test_config_update_dither_preset_with_serpentine(self, client):
         client_, cfg = client
@@ -277,8 +297,14 @@ class TestConfigEndpoints:
         })
         assert resp.status_code == 200
         stucki = webserver.PRESET_DITHER_ALGORITHMS["stucki"]
-        want = replace(stucki, dither=replace(stucki.dither, serpentine=True))
-        assert cfg.image == want
+        want = replace(
+            stucki,
+            image=replace(
+                stucki.image,
+                dither=replace(stucki.image.dither, serpentine=True),
+            ),
+        )
+        assert cfg.display == want
 
     def test_config_nested_dither_wins_over_preset_in_same_request(self, client):
         client_, cfg = client
@@ -287,5 +313,5 @@ class TestConfigEndpoints:
             "dither_algorithm": "floyd_steinberg",
         })
         assert resp.status_code == 200
-        assert cfg.image.dither.serpentine is True
-        assert cfg.image.dither.algorithm == webserver.DEFAULT_CONFIG.image.dither.algorithm
+        assert cfg.display.image.dither.serpentine is True
+        assert cfg.display.image.dither.algorithm == webserver.DEFAULT_CONFIG.display.image.dither.algorithm

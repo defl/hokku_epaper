@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 import webserver
+from webserver.image_manager import ImageManager
 
 
 class TestEnsureThumbnail:
@@ -20,7 +21,9 @@ class TestEnsureThumbnail:
             cache_dir=str(cache_dir),
             upload_dir=str(upload_dir),
         )
-        with patch.object(webserver.flask_app, "_config", cfg):
+        with patch.object(webserver.flask_app, "_config", cfg), patch.object(
+            webserver.flask_app, "_image_manager", ImageManager(cfg)
+        ):
             yield {"cache_dir": cache_dir, "upload_dir": upload_dir}
 
     def _save(self, upload_dir, name, img):

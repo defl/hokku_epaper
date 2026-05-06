@@ -1,9 +1,9 @@
 """Hokku image server package (Spectra 6 e-ink pipeline + Flask API)."""
 from webserver import dither
 from webserver import image
-from webserver.image import PRESET_IMAGE_CONFIGS
+from webserver.image import PRESET_DISPLAY_IMAGE_CONFIGS
 
-PRESET_DITHER_ALGORITHMS = PRESET_IMAGE_CONFIGS
+PRESET_DITHER_ALGORITHMS = PRESET_DISPLAY_IMAGE_CONFIGS
 from webserver.image import IMAGE_EXTENSIONS
 from webserver.config import AppConfig, DEFAULT_CONFIG
 from webserver.display_constants import (
@@ -18,7 +18,6 @@ from webserver.display_constants import (
     VISUAL_H,
     VISUAL_W,
 )
-from webserver.disk_cache import CACHE_VERSION as _CACHE_VERSION, hash_file as _hash_file
 from webserver.flask_app import app
 from webserver.screen_headers import (
     BATTERY_MV_EMPTY,

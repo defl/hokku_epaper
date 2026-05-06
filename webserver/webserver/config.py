@@ -9,17 +9,15 @@ from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import ClassVar
 
+from webserver.display_image_config_presets import PRESET_DISPLAY_IMAGE_CONFIGS
 from webserver.image import (
+    DisplayImageConfig,
     ImageConfig,
-    PRESET_IMAGE_CONFIGS,
-    default_image_config,
+    default_display_image_config,
     image_config_from_legacy_fat_dither_dict,
+    merge_display_image,
     merge_image,
 )
-
-
-def default_image() -> ImageConfig:
-    return default_image_config()
 
 
 @dataclass
@@ -36,16 +34,14 @@ class AppConfig:
     cache_dir: str = "/images/cache"
     port: int = 8080
     poll_interval_seconds: int = 10
-    orientation: str = "landscape"
     debug_fast_refresh: bool = False
-    image: ImageConfig = field(default_factory=default_image)
+    display: DisplayImageConfig = field(default_factory=default_display_image_config)
 
     def cache_slug(self) -> str:
         """Path-safe short fingerprint of fields that affect cached panel output."""
         payload = {
             "debug_fast_refresh": self.debug_fast_refresh,
-            "image": self.image.cache_slug(),
-            "orientation": self.orientation,
+            "display": self.display.cache_slug(),
         }
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(raw.encode()).hexdigest()[:14]
@@ -53,33 +49,57 @@ class AppConfig:
     @classmethod
     def from_dict(cls, data: dict) -> AppConfig:
         base = cls()
-        image_cfg: ImageConfig | None = None
-        if isinstance(data.get("image"), dict):
-            image_cfg = merge_image(base.image, data["image"])
-        elif isinstance(data.get("dither"), dict):
-            if "prepare_autocontrast_cutoff" in data["dither"]:
-                image_cfg = image_config_from_legacy_fat_dither_dict(data["dither"])
-            else:
-                image_cfg = merge_image(base.image, {"dither": data["dither"]})
-        elif "dither_algorithm" in data or "dither_serpentine" in data:
-            algo = data.get("dither_algorithm", "atkinson_hue_aware")
-            serp = bool(data.get("dither_serpentine", False))
-            preset = PRESET_IMAGE_CONFIGS.get(algo) or PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
-            image_cfg = replace(preset, dither=replace(preset.dither, serpentine=serp))
+        disp = base.display
+        used_display_key = False
+
+        if isinstance(data.get("display"), dict):
+            d = data["display"]
+            patch: dict = {}
+            if isinstance(d.get("image"), dict):
+                patch["image"] = d["image"]
+            if isinstance(d.get("orientation"), str) and d["orientation"] in ("landscape", "portrait"):
+                patch["orientation"] = d["orientation"]
+            if patch:
+                disp = merge_display_image(base.display, patch)
+            used_display_key = bool(patch)
+
+        if not used_display_key:
+            if isinstance(data.get("image"), dict):
+                disp = merge_display_image(base.display, {"image": data["image"]})
+            elif isinstance(data.get("dither"), dict):
+                if "prepare_autocontrast_cutoff" in data["dither"]:
+                    new_img = image_config_from_legacy_fat_dither_dict(data["dither"])
+                else:
+                    new_img = merge_image(base.display.image, {"dither": data["dither"]})
+                disp = replace(base.display, image=new_img)
+            elif "dither_algorithm" in data or "dither_serpentine" in data:
+                algo = data.get("dither_algorithm", "atkinson_hue_aware")
+                serp = bool(data.get("dither_serpentine", False))
+                preset = PRESET_DISPLAY_IMAGE_CONFIGS.get(algo) or PRESET_DISPLAY_IMAGE_CONFIGS["atkinson_hue_aware"]
+                new_img = replace(
+                    preset.image,
+                    dither=replace(preset.image.dither, serpentine=serp),
+                )
+                disp = replace(base.display, image=new_img)
+
+        flat_ori = data.get("orientation")
+        if isinstance(flat_ori, str) and flat_ori in ("landscape", "portrait"):
+            disp = replace(disp, orientation=flat_ori)
 
         allowed = {f.name for f in fields(cls)}
         kwargs: dict = {}
         for k, v in data.items():
             if k not in allowed or k in (
+                "display",
                 "image",
                 "dither",
                 "dither_algorithm",
                 "dither_serpentine",
+                "orientation",
             ):
                 continue
             kwargs[k] = v
-        if image_cfg is not None:
-            kwargs["image"] = image_cfg
+        kwargs["display"] = disp
         return replace(base, **kwargs)
 
     @classmethod

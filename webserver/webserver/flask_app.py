@@ -13,7 +13,6 @@ from werkzeug.utils import secure_filename
 from pillow_heif import register_heif_opener
 
 from webserver.config import AppConfig, DEFAULT_CONFIG
-from webserver.disk_cache import ImageDiskCache, hash_file
 from webserver.display_constants import (
     PANEL_BYTES,
     TOTAL_BYTES,
@@ -22,18 +21,17 @@ from webserver.display_constants import (
 )
 from webserver.image import (
     IMAGE_EXTENSIONS,
-    ImageConfig,
-    ImageConverter,
-    PRESET_IMAGE_CONFIGS,
+    PRESET_DISPLAY_IMAGE_CONFIGS,
+    merge_display_image,
     merge_image,
     prepare_panel_canvas,
-    preset_name_for_image,
+    preset_name_for_display,
     image_config_from_legacy_fat_dither_dict,
 )
+from webserver.image_manager import ImageManager
 from webserver.serve_data import ServeDataStore, pick_next_image, _save_database
 from webserver.screen_headers import _parse_battery_header, _parse_frame_state
 from webserver.telemetry import ScreenTelemetry
-from webserver.thumbnail_cache import ThumbnailCache
 from webserver.time import (
     DEBUG_FAST_REFRESH_SECONDS,
     calculate_sleep_seconds as _calculate_sleep_seconds,
@@ -73,52 +71,45 @@ def _get_cache_dir():
     return Path(_config.cache_dir)
 
 
-_disk_cache = ImageDiskCache(lambda: _config, total_bytes=TOTAL_BYTES)
+_image_manager: ImageManager | None = None
 _serve_store = ServeDataStore(_get_cache_dir)
 _telemetry = ScreenTelemetry()
-_thumbnail_cache = ThumbnailCache(_get_cache_dir)
-_image_converter = ImageConverter()
+
+
+def _reload_image_manager() -> None:
+    global _image_manager
+    _image_manager = ImageManager(_config)
+
+
+def _get_image_manager() -> ImageManager:
+    if _image_manager is None:
+        _reload_image_manager()
+    assert _image_manager is not None
+    return _image_manager
 
 
 def _list_images():
     upload_dir = _get_upload_dir()
     if not upload_dir.exists():
         return []
-    return [f for f in upload_dir.iterdir()
-            if f.suffix.lower() in IMAGE_EXTENSIONS and f.is_file()]
-
-
-def _pipeline_cache_slug(*, image: ImageConfig | None = None):
-    return (image if image is not None else _config.image).cache_slug()
-
-
-def _cache_key(img_path, content_hash, image: ImageConfig | None = None):
-    return _disk_cache.cache_key(
-        img_path, content_hash,
-        dither_slug=_pipeline_cache_slug(image=image),
+    return sorted(
+        [f for f in upload_dir.iterdir() if f.suffix.lower() in IMAGE_EXTENSIONS and f.is_file()],
+        key=lambda p: p.name.lower(),
     )
 
 
 def _read_cached_binary(img_path, content_hash):
-    return _disk_cache.read_binary(
-        img_path, content_hash,
-        dither_slug=_pipeline_cache_slug(),
-    )
+    del content_hash  # pool metadata only; paths are stem + display slug
+    return _get_image_manager().read_panel_bin(Path(img_path))
 
 
 def _read_cached_preview(img_path, content_hash):
-    return _disk_cache.read_preview(
-        img_path, content_hash,
-        dither_slug=_pipeline_cache_slug(),
-    )
-
-
-def _purge_stale_cache(valid_keys):
-    _disk_cache.purge_stale(valid_keys)
+    del content_hash
+    return _get_image_manager().read_preview_png(Path(img_path))
 
 
 def _clear_cache_files():
-    _disk_cache.clear_binaries_and_previews()
+    _get_image_manager().clear_managed_caches()
 
 
 def _pick_next_image(pool, db):
@@ -126,15 +117,15 @@ def _pick_next_image(pool, db):
 
 
 def _prepare_canvas(img):
-    return prepare_panel_canvas(img, _config.image, _config.orientation)
+    return prepare_panel_canvas(img, _config.display)
 
 
 def _thumb_path_for(img_path):
-    return _thumbnail_cache.thumb_path_for(img_path)
+    return _get_image_manager().path_thumb_jpg(Path(img_path))
 
 
 def _ensure_thumbnail(img_path):
-    return _thumbnail_cache.ensure(img_path)
+    return _get_image_manager().ensure_thumb_jpg(Path(img_path))
 
 
 def _record_screen_call(screen_name, screen_ip, sleep_seconds, served_name=None,
@@ -149,34 +140,30 @@ def _busy_retry_seconds():
     return min(300, _calculate_sleep_seconds(_config))
 
 
-def _convert_image(img_path):
-    return _image_converter.convert(Path(img_path), _config)
-
-
 def _convert_and_store(img_path, content_hash):
-    global _converting_count, _converting_name
-    dither_slug = _pipeline_cache_slug()
+    m = _get_image_manager()
     try:
-        cached = _disk_cache.try_load(img_path, content_hash, dither_slug=dither_slug)
-        if cached:
-            raw_bytes, preview_bytes = cached
+        if m.panel_cache_hit(Path(img_path)):
             print(f"  Cache hit: {img_path.name}")
         else:
-            with _lock:
-                _converting_count += 1
-                _converting_name = img_path.name
-            try:
-                raw_bytes, preview_bytes = _convert_image(img_path)
-                _disk_cache.save_pair(
-                    img_path, content_hash,
-                    dither_slug=dither_slug,
-                    raw_bytes=raw_bytes, preview_bytes=preview_bytes,
-                )
-            finally:
+            def on_begin(name: str) -> None:
+                global _converting_count, _converting_name
+                with _lock:
+                    _converting_count += 1
+                    _converting_name = name
+
+            def on_end() -> None:
+                global _converting_count, _converting_name
                 with _lock:
                     _converting_count -= 1
                     if _converting_count == 0:
                         _converting_name = None
+
+            m.materialize_panel_cache(
+                Path(img_path),
+                on_convert_begin=on_begin,
+                on_convert_end=on_end,
+            )
 
         with _lock:
             _pool[str(img_path)] = {"hash": content_hash}
@@ -206,7 +193,9 @@ def _sync_pool():
 
 def _sync_pool_inner():
     global _converting_total, _converting_done
-    image_paths = _list_images()
+    m = _get_image_manager()
+    m.refresh_image_files()
+    image_paths = list(m.upload_paths)
     current_paths = set()
 
     for img_path in image_paths:
@@ -217,7 +206,7 @@ def _sync_pool_inner():
     for img_path in image_paths:
         key = str(img_path)
         current_paths.add(key)
-        content_hash = hash_file(img_path)
+        content_hash = m.sha1_hex(img_path)
         with _lock:
             existing = _pool.get(key)
             if existing and existing["hash"] == content_hash:
@@ -243,19 +232,6 @@ def _sync_pool_inner():
             if key not in current_paths:
                 del _pool[key]
                 print(f"  Pool: removed deleted file {key}")
-
-    with _lock:
-        valid_cache_keys = set()
-        for key, entry in _pool.items():
-            for name in PRESET_IMAGE_CONFIGS:
-                for serp in (False, True):
-                    preset = PRESET_IMAGE_CONFIGS[name]
-                    img_cfg = replace(
-                        preset,
-                        dither=replace(preset.dither, serpentine=serp),
-                    )
-                    valid_cache_keys.add(_cache_key(Path(key), entry["hash"], image=img_cfg))
-    _purge_stale_cache(valid_cache_keys)
 
 
 _BROWSER_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif"}
@@ -394,11 +370,11 @@ def api_status():
                 "refresh_image_at_time": _config.refresh_image_at_time,
                 "port": _config.port,
                 "poll_interval_seconds": _config.poll_interval_seconds,
-                "orientation": _config.orientation,
+                "orientation": _config.display.orientation,
                 "debug_fast_refresh": _config.debug_fast_refresh,
                 "debug_fast_refresh_seconds": DEBUG_FAST_REFRESH_SECONDS,
-                "image": asdict(_config.image),
-                "image_preset": preset_name_for_image(_config.image),
+                "image": asdict(_config.display.image),
+                "image_preset": preset_name_for_display(_config.display),
                 "upload_dir": str(_get_upload_dir()),
                 "cache_dir": str(_get_cache_dir()),
             },
@@ -476,6 +452,7 @@ def api_config():
         return jsonify({"error": "No JSON body"}), 400
 
     changed = False
+    prev_orientation = _config.display.orientation
     if "timezone" in data:
         _config.timezone = data["timezone"]
         changed = True
@@ -488,13 +465,10 @@ def api_config():
             _config.poll_interval_seconds = val
             changed = True
 
-    orientation_changed = False
     if "orientation" in data:
         val = data["orientation"]
         if val in ("landscape", "portrait"):
-            if _config.orientation != val:
-                orientation_changed = True
-            _config.orientation = val
+            _config.display = merge_display_image(_config.display, {"orientation": val})
             changed = True
 
     if "debug_fast_refresh" in data:
@@ -503,68 +477,75 @@ def api_config():
 
     dither_changed = False
     if "image" in data and isinstance(data["image"], dict):
-        new_i = merge_image(_config.image, data["image"])
-        if new_i != _config.image:
+        new_disp = merge_display_image(_config.display, {"image": data["image"]})
+        if new_disp.image != _config.display.image:
             dither_changed = True
-        _config.image = new_i
+        _config.display = new_disp
         changed = True
     elif "dither" in data and isinstance(data["dither"], dict):
         if "prepare_autocontrast_cutoff" in data["dither"]:
             new_i = image_config_from_legacy_fat_dither_dict(data["dither"])
         else:
-            new_i = merge_image(_config.image, {"dither": data["dither"]})
-        if new_i != _config.image:
+            new_i = merge_image(_config.display.image, {"dither": data["dither"]})
+        if new_i != _config.display.image:
             dither_changed = True
-        _config.image = new_i
+        _config.display = replace(_config.display, image=new_i)
         changed = True
     else:
         preset_key = data.get("dither_preset") or data.get("dither_algorithm")
         if preset_key is not None:
-            if preset_key not in PRESET_IMAGE_CONFIGS:
+            if preset_key not in PRESET_DISPLAY_IMAGE_CONFIGS:
                 return jsonify({"error": f"Unknown dither preset: {preset_key}"}), 400
             serp = (
                 bool(data["dither_serpentine"])
                 if "dither_serpentine" in data
-                else _config.image.dither.serpentine
+                else _config.display.image.dither.serpentine
             )
-            preset = PRESET_IMAGE_CONFIGS[preset_key]
-            new_i = replace(preset, dither=replace(preset.dither, serpentine=serp))
-            if new_i != _config.image:
+            preset = PRESET_DISPLAY_IMAGE_CONFIGS[preset_key]
+            new_i = replace(
+                preset.image,
+                dither=replace(preset.image.dither, serpentine=serp),
+            )
+            new_disp = replace(_config.display, image=new_i)
+            if new_disp.image != _config.display.image:
                 dither_changed = True
-            _config.image = new_i
+            _config.display = new_disp
             changed = True
         elif "dither_serpentine" in data:
             val = bool(data["dither_serpentine"])
             new_i = replace(
-                _config.image,
-                dither=replace(_config.image.dither, serpentine=val),
+                _config.display.image,
+                dither=replace(_config.display.image.dither, serpentine=val),
             )
-            if new_i != _config.image:
+            if new_i != _config.display.image:
                 dither_changed = True
-            _config.image = new_i
+            _config.display = replace(_config.display, image=new_i)
             changed = True
 
     if changed:
         _config.save_to_file()
 
+    orientation_changed = _config.display.orientation != prev_orientation
     if orientation_changed:
         _clear_cache_files()
         with _lock:
             _pool.clear()
+        _reload_image_manager()
         threading.Thread(target=_sync_pool, daemon=True).start()
     elif dither_changed:
         with _lock:
             _pool.clear()
+        _reload_image_manager()
         threading.Thread(target=_sync_pool, daemon=True).start()
 
     return jsonify({"status": "ok", "config": {
         "timezone": _config.timezone,
         "refresh_image_at_time": _config.refresh_image_at_time,
         "poll_interval_seconds": _config.poll_interval_seconds,
-        "orientation": _config.orientation,
+        "orientation": _config.display.orientation,
         "debug_fast_refresh": _config.debug_fast_refresh,
-        "image": asdict(_config.image),
-        "image_preset": preset_name_for_image(_config.image),
+        "image": asdict(_config.display.image),
+        "image_preset": preset_name_for_display(_config.display),
     }})
 
 
@@ -615,6 +596,7 @@ def api_upload():
         print(f"  Upload: saved {dest.name}")
 
     if saved:
+        _get_image_manager().refresh_image_files()
         threading.Thread(target=_sync_pool, daemon=True).start()
 
     return jsonify({"status": "ok", "saved": saved, "skipped": skipped})
@@ -630,13 +612,6 @@ def api_delete_image(filename):
     if not img_path.exists() or not img_path.is_file():
         return jsonify({"error": "Image not found"}), 404
 
-    thumb_path = _get_cache_dir() / "thumbs" / (img_path.stem + "_thumb.jpg")
-    if thumb_path.exists():
-        try:
-            thumb_path.unlink()
-        except OSError:
-            pass
-
     try:
         img_path.unlink()
     except OSError as e:
@@ -644,6 +619,7 @@ def api_delete_image(filename):
         return jsonify({"error": f"Failed to delete {safe_name}: {e.strerror or e}"}), 500
     print(f"  Delete: removed {safe_name}")
 
+    _get_image_manager().refresh_image_files()
     threading.Thread(target=_sync_pool, daemon=True).start()
 
     return jsonify({"status": "ok", "deleted": safe_name})
@@ -673,7 +649,7 @@ def api_time():
 
 
 def main():
-    global _config, _database
+    global _config, _database, _image_manager
 
     _config = AppConfig.load_from_file()
     upload_dir = _get_upload_dir()
@@ -682,6 +658,9 @@ def main():
     cache_dir.mkdir(parents=True, exist_ok=True)
     _database.clear()
     _database.update(_serve_store.load())
+
+    _image_manager = None
+    _reload_image_manager()
 
     port = _config.port
     poll = _config.poll_interval_seconds

@@ -5,5 +5,8 @@
   "cache_dir": "/images/cache",
   "port": 8080,
   "poll_interval_seconds": 10,
-  "orientation": "landscape"
+  "display": {
+    "orientation": "landscape",
+    "image": {}
+  }
 }

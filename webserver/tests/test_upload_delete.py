@@ -113,15 +113,16 @@ class TestDeleteImage:
         webserver.app.config["TESTING"] = True
         upload_dir = tmp_path / "upload"; upload_dir.mkdir()
         cache_dir = tmp_path / "cache"; cache_dir.mkdir()
-        (cache_dir / "thumbs").mkdir()
         (upload_dir / "victim.jpg").write_bytes(b"fake-image")
-        (cache_dir / "thumbs" / "victim_thumb.jpg").write_bytes(b"fake-thumb")
+        (cache_dir / "victim_thumb.jpg").write_bytes(b"fake-thumb")
         cfg = replace(
             webserver.DEFAULT_CONFIG,
             upload_dir=str(upload_dir),
             cache_dir=str(cache_dir),
         )
+        from webserver.image_manager import ImageManager
         with patch.object(webserver.flask_app, "_config", cfg), \
+             patch.object(webserver.flask_app, "_image_manager", ImageManager(cfg)), \
              patch("webserver.flask_app._sync_pool"), \
              webserver.app.test_client() as client:
             yield client, upload_dir, cache_dir
@@ -132,7 +133,7 @@ class TestDeleteImage:
         assert resp.status_code == 200
         assert resp.get_json()["deleted"] == "victim.jpg"
         assert not (upload_dir / "victim.jpg").exists()
-        assert not (cache_dir / "thumbs" / "victim_thumb.jpg").exists()
+        assert not (cache_dir / "victim_thumb.jpg").exists()
 
     def test_delete_missing_file_returns_404(self, client_with_image):
         client, _, _ = client_with_image

@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 
 import webserver
+from webserver.image_manager import ImageManager
 
 
 class TestOrientation:
@@ -18,49 +19,49 @@ class TestOrientation:
 
     def test_landscape_canvas_dimensions(self):
         img = self._make_image(800, 600)
-        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, orientation="landscape")):
+        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, display=replace(webserver.DEFAULT_CONFIG.display, orientation="landscape"))):
             canvas, mask = webserver.flask_app._prepare_canvas(img)
         assert canvas.size == (webserver.FULL_W, webserver.PANEL_H)
         assert mask.shape == (webserver.PANEL_H, webserver.FULL_W)
 
     def test_portrait_canvas_dimensions(self):
         img = self._make_image(600, 800)
-        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, orientation="portrait")):
+        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, display=replace(webserver.DEFAULT_CONFIG.display, orientation="portrait"))):
             canvas, mask = webserver.flask_app._prepare_canvas(img)
         assert canvas.size == (webserver.FULL_W, webserver.PANEL_H)
         assert mask.shape == (webserver.PANEL_H, webserver.FULL_W)
 
     def test_landscape_padding_mask_pillarbox(self):
         img = self._make_image(600, 800)
-        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, orientation="landscape")):
+        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, display=replace(webserver.DEFAULT_CONFIG.display, orientation="landscape"))):
             canvas, mask = webserver.flask_app._prepare_canvas(img)
         assert mask.any(), "Should have some padding pixels"
         assert not mask.all(), "Should have some image pixels"
 
     def test_portrait_padding_mask_letterbox(self):
         img = self._make_image(800, 600)
-        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, orientation="portrait")):
+        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, display=replace(webserver.DEFAULT_CONFIG.display, orientation="portrait"))):
             canvas, mask = webserver.flask_app._prepare_canvas(img)
         assert mask.any(), "Should have some padding pixels"
         assert not mask.all(), "Should have some image pixels"
 
     def test_landscape_exact_fit_no_padding(self):
         img = self._make_image(1600, 1200)
-        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, orientation="landscape")):
+        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, display=replace(webserver.DEFAULT_CONFIG.display, orientation="landscape"))):
             canvas, mask = webserver.flask_app._prepare_canvas(img)
         assert not mask.any(), "Exact 4:3 landscape should have no padding"
 
     def test_portrait_exact_fit_no_padding(self):
         img = self._make_image(1200, 1600)
-        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, orientation="portrait")):
+        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, display=replace(webserver.DEFAULT_CONFIG.display, orientation="portrait"))):
             canvas, mask = webserver.flask_app._prepare_canvas(img)
         assert not mask.any(), "Exact 3:4 portrait should have no padding"
 
     def test_padding_forced_white_landscape(self):
         img = self._make_image(100, 100, color=(50, 50, 50))
-        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, orientation="landscape")):
+        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, display=replace(webserver.DEFAULT_CONFIG.display, orientation="landscape"))):
             canvas, mask = webserver.flask_app._prepare_canvas(img)
-            r = webserver.PRESET_DITHER_ALGORITHMS["floyd_steinberg"]
+            r = webserver.PRESET_DITHER_ALGORITHMS["floyd_steinberg"].image
             canvas_array = webserver.image.compress_dynamic_range(
                 np.array(canvas, dtype=np.float32),
                 scale_chroma=r.scale_chroma,
@@ -81,9 +82,9 @@ class TestOrientation:
 
     def test_padding_forced_white_portrait(self):
         img = self._make_image(100, 100, color=(50, 50, 50))
-        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, orientation="portrait")):
+        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, display=replace(webserver.DEFAULT_CONFIG.display, orientation="portrait"))):
             canvas, mask = webserver.flask_app._prepare_canvas(img)
-            r = webserver.PRESET_DITHER_ALGORITHMS["floyd_steinberg"]
+            r = webserver.PRESET_DITHER_ALGORITHMS["floyd_steinberg"].image
             canvas_array = webserver.image.compress_dynamic_range(
                 np.array(canvas, dtype=np.float32),
                 scale_chroma=r.scale_chroma,
@@ -107,124 +108,134 @@ class TestOrientation:
         assert "binary" not in entry
         assert "preview_png" not in entry
 
-    def test_cache_orientation_splits_storage_dir_not_key_string(self):
+    def test_cache_orientation_shares_directory_differs_basename(self):
         path = Path("/images/test.jpg")
-        content_hash = "abcdef123456"
-        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, orientation="landscape")):
-            key_l = webserver.flask_app._cache_key(path, content_hash)
-            dir_l = webserver.flask_app._disk_cache.cache_dir
-        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, orientation="portrait")):
-            key_p = webserver.flask_app._cache_key(path, content_hash)
-            dir_p = webserver.flask_app._disk_cache.cache_dir
-        assert key_l == key_p, "Same dither → same filename key; orientation uses different dc_ subfolder"
-        assert dir_l != dir_p
-        assert key_l.endswith(f"_{webserver._CACHE_VERSION}")
+        cfg_l = replace(
+            webserver.DEFAULT_CONFIG,
+            display=replace(webserver.DEFAULT_CONFIG.display, orientation="landscape"),
+        )
+        cfg_p = replace(
+            webserver.DEFAULT_CONFIG,
+            display=replace(webserver.DEFAULT_CONFIG.display, orientation="portrait"),
+        )
+        p_l = ImageManager(cfg_l).path_panel_bin(path)
+        p_p = ImageManager(cfg_p).path_panel_bin(path)
+        assert p_l.parent == p_p.parent
+        assert p_l.name != p_p.name
 
-    def test_cache_key_differs_by_dither_algorithm(self):
+    def test_cache_path_differs_by_dither_algorithm(self):
         path = Path("/images/test.jpg")
-        content_hash = "abcdef123456"
-        keys = {}
+        m = ImageManager(webserver.DEFAULT_CONFIG)
+        names = {}
         for name in webserver.PRESET_DITHER_ALGORITHMS:
             preset = webserver.PRESET_DITHER_ALGORITHMS[name]
-            img_cfg = replace(
+            disp = replace(
                 preset,
-                dither=replace(preset.dither, serpentine=False),
+                image=replace(
+                    preset.image,
+                    dither=replace(preset.image.dither, serpentine=False),
+                ),
             )
-            with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, image=img_cfg)):
-                keys[name] = webserver.flask_app._cache_key(path, content_hash)
-        assert len(set(keys.values())) == len(keys), f"Cache keys collided: {keys}"
+            names[name] = m.path_panel_bin(path, display=disp).name
+        assert len(set(names.values())) == len(names), f"cache basenames collided: {names}"
 
-    def test_cache_key_algorithm_override(self):
+    def test_cache_path_algorithm_override(self):
         path = Path("/images/test.jpg")
-        content_hash = "abcdef123456"
         floyd = webserver.PRESET_DITHER_ALGORITHMS["floyd_steinberg"]
         atkinson = webserver.PRESET_DITHER_ALGORITHMS["atkinson"]
-        with patch.object(webserver.flask_app, "_config", replace(webserver.DEFAULT_CONFIG, image=floyd)):
-            key_active = webserver.flask_app._cache_key(path, content_hash)
-            key_other = webserver.flask_app._cache_key(path, content_hash, image=atkinson)
-        assert key_active != key_other
-        assert "floyd_steinberg" not in key_active
-        assert "atkinson" not in key_other
+        m = ImageManager(replace(webserver.DEFAULT_CONFIG, display=floyd))
+        assert m.path_panel_bin(path).name != m.path_panel_bin(path, display=atkinson).name
 
-    def test_cache_key_differs_by_serpentine(self):
+    def test_cache_path_differs_by_serpentine(self):
         path = Path("/images/test.jpg")
-        content_hash = "abcdef123456"
         base_preset = webserver.PRESET_DITHER_ALGORITHMS["atkinson_hue_aware"]
-        with patch.object(
-            webserver.flask_app, "_config",
-            replace(
-                webserver.DEFAULT_CONFIG,
-                image=replace(base_preset, dither=replace(base_preset.dither, serpentine=False)),
+        cfg_off = replace(
+            webserver.DEFAULT_CONFIG,
+            display=replace(
+                base_preset,
+                image=replace(
+                    base_preset.image,
+                    dither=replace(base_preset.image.dither, serpentine=False),
+                ),
             ),
-        ):
-            key_off = webserver.flask_app._cache_key(path, content_hash)
-        with patch.object(
-            webserver.flask_app, "_config",
-            replace(
-                webserver.DEFAULT_CONFIG,
-                image=replace(base_preset, dither=replace(base_preset.dither, serpentine=True)),
+        )
+        cfg_on = replace(
+            webserver.DEFAULT_CONFIG,
+            display=replace(
+                base_preset,
+                image=replace(
+                    base_preset.image,
+                    dither=replace(base_preset.image.dither, serpentine=True),
+                ),
             ),
-        ):
-            key_on = webserver.flask_app._cache_key(path, content_hash)
-        assert key_off != key_on
+        )
+        off = ImageManager(cfg_off).path_panel_bin(path).name
+        on = ImageManager(cfg_on).path_panel_bin(path).name
+        assert off != on
 
-    def test_cache_key_serpentine_override(self):
+    def test_cache_path_serpentine_override(self):
         path = Path("/images/test.jpg")
-        content_hash = "abcdef123456"
         base_preset = webserver.PRESET_DITHER_ALGORITHMS["atkinson_hue_aware"]
-        with patch.object(
-            webserver.flask_app, "_config",
-            replace(
-                webserver.DEFAULT_CONFIG,
-                image=replace(base_preset, dither=replace(base_preset.dither, serpentine=True)),
+        cfg = replace(
+            webserver.DEFAULT_CONFIG,
+            display=replace(
+                base_preset,
+                image=replace(
+                    base_preset.image,
+                    dither=replace(base_preset.image.dither, serpentine=True),
+                ),
             ),
-        ):
-            k_default = webserver.flask_app._cache_key(path, content_hash)
-            k = webserver.flask_app._cache_key(
-                path,
-                content_hash,
-                image=replace(base_preset, dither=replace(base_preset.dither, serpentine=False)),
-            )
-        assert k != k_default
+        )
+        m = ImageManager(cfg)
+        n_default = m.path_panel_bin(path).name
+        disp_off = replace(
+            base_preset,
+            image=replace(
+                base_preset.image,
+                dither=replace(base_preset.image.dither, serpentine=False),
+            ),
+        )
+        assert m.path_panel_bin(path, display=disp_off).name != n_default
 
     def test_default_is_atkinson_hue_aware(self):
-        assert webserver.DEFAULT_CONFIG.image == webserver.PRESET_DITHER_ALGORITHMS["atkinson_hue_aware"]
+        assert webserver.DEFAULT_CONFIG.display == webserver.PRESET_DITHER_ALGORITHMS["atkinson_hue_aware"]
         assert "atkinson_hue_aware" in webserver.PRESET_DITHER_ALGORITHMS
         assert "floyd_steinberg_hue_aware" in webserver.PRESET_DITHER_ALGORITHMS
 
     def test_floyd_steinberg_hue_aware_is_floyd_with_hue_lut(self):
         r = webserver.PRESET_DITHER_ALGORITHMS["floyd_steinberg_hue_aware"]
-        assert r.dither.algorithm == "floyd_steinberg"
-        assert r.dither.lut_name == "hue_aware"
+        assert r.image.dither.algorithm == "floyd_steinberg"
+        assert r.image.dither.lut_name == "hue_aware"
 
     def test_preset_image_configs_embed_expected_dither(self):
-        for name, image_cfg in webserver.PRESET_DITHER_ALGORITHMS.items():
-            assert image_cfg is webserver.PRESET_DITHER_ALGORITHMS[name]
-            assert isinstance(image_cfg.color_enhance, float)
-            assert isinstance(image_cfg.scale_chroma, bool)
-            assert isinstance(image_cfg.use_adaptive_saturate, bool)
-            assert isinstance(image_cfg.adaptive_vivid, bool)
+        for name, disp in webserver.PRESET_DITHER_ALGORITHMS.items():
+            assert disp is webserver.PRESET_DITHER_ALGORITHMS[name]
+            ic = disp.image
+            assert isinstance(ic.color_enhance, float)
+            assert isinstance(ic.scale_chroma, bool)
+            assert isinstance(ic.use_adaptive_saturate, bool)
+            assert isinstance(ic.adaptive_vivid, bool)
             off = replace(
-                image_cfg,
-                dither=replace(image_cfg.dither, serpentine=False),
+                disp,
+                image=replace(ic, dither=replace(ic.dither, serpentine=False)),
             )
-            assert off.dither.serpentine is False
+            assert off.image.dither.serpentine is False
         ahu = webserver.PRESET_DITHER_ALGORITHMS["atkinson_hue_aware"]
-        r_ahu = replace(ahu, dither=replace(ahu.dither, serpentine=True))
-        assert r_ahu.use_adaptive_saturate is True
-        assert r_ahu.adaptive_vivid is True
-        assert r_ahu.scale_chroma is False
-        assert r_ahu.dither.serpentine is True
+        r_ahu = replace(ahu, image=replace(ahu.image, dither=replace(ahu.image.dither, serpentine=True)))
+        assert r_ahu.image.use_adaptive_saturate is True
+        assert r_ahu.image.adaptive_vivid is True
+        assert r_ahu.image.scale_chroma is False
+        assert r_ahu.image.dither.serpentine is True
         r_fs = webserver.PRESET_DITHER_ALGORITHMS["floyd_steinberg"]
-        assert r_fs.use_adaptive_saturate is False
-        assert r_fs.adaptive_vivid is False
+        assert r_fs.image.use_adaptive_saturate is False
+        assert r_fs.image.adaptive_vivid is False
         r_stucki_h = webserver.PRESET_DITHER_ALGORITHMS["stucki_hue_aware"]
-        assert webserver.dither._DITHER_FN[r_stucki_h.dither.algorithm] is webserver.dither.stucki_dither
-        assert r_stucki_h.use_adaptive_saturate is True
-        assert r_stucki_h.adaptive_vivid is True
+        assert webserver.dither._DITHER_FN[r_stucki_h.image.dither.algorithm] is webserver.dither.stucki_dither
+        assert r_stucki_h.image.use_adaptive_saturate is True
+        assert r_stucki_h.image.adaptive_vivid is True
         r_stucki = webserver.PRESET_DITHER_ALGORITHMS["stucki"]
-        assert webserver.dither._DITHER_FN[r_stucki.dither.algorithm] is webserver.dither.stucki_dither
-        assert r_stucki.use_adaptive_saturate is False
+        assert webserver.dither._DITHER_FN[r_stucki.image.dither.algorithm] is webserver.dither.stucki_dither
+        assert r_stucki.image.use_adaptive_saturate is False
 
     def test_floyd_steinberg_hue_aware_config_persists(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -233,14 +244,9 @@ class TestOrientation:
         try:
             with patch.dict(os.environ, {"HOKKU_CONFIG": temp_path}):
                 config = webserver.AppConfig.load_from_file()
-            assert config.image == webserver.PRESET_DITHER_ALGORITHMS["floyd_steinberg_hue_aware"]
+            assert config.display == webserver.PRESET_DITHER_ALGORITHMS["floyd_steinberg_hue_aware"]
         finally:
             os.unlink(temp_path)
-
-    def test_cache_key_includes_version(self):
-        path = Path("/images/test.jpg")
-        key = webserver.flask_app._cache_key(path, "abcdef123456")
-        assert webserver._CACHE_VERSION in key
 
     def test_is_near_grayscale_detects_bw(self):
         bw = Image.new("RGB", (400, 300))

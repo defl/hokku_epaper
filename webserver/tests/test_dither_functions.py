@@ -162,6 +162,7 @@ def _full_panel_canvas(fill: tuple[int, int, int] = (90, 120, 140)) -> Image.Ima
     return Image.new("RGB", (FULL_W, PANEL_H), fill)
 
 
+@pytest.mark.time_intensive
 @pytest.mark.parametrize("preset_name", sorted(PRESET_IMAGE_CONFIGS.keys()))
 def test_dither_each_preset_full_panel(preset_name: str) -> None:
     preset = PRESET_IMAGE_CONFIGS[preset_name]

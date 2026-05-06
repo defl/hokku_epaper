@@ -312,16 +312,9 @@ Key ideas from published work:
 
 ## 7. Where the code lives
 
-- `webserver/webserver.py` — the production pipeline. Search for:
-  - `VALID_DITHER_ALGORITHMS`, `_DEPRECATED_ALGORITHMS`, `DEFAULT_CONFIG`
-    (includes `dither_serpentine`)
-  - `_adaptive_saturate()`
-  - `_compress_dynamic_range()` (takes `scale_chroma` and `adaptive_vivid`)
-  - `_build_rgb_lut()` (Lab-Euclidean) and `_build_rgb_lut_hue_aware()`
-  - `_floyd_steinberg_dither()`, `_atkinson_dither()`, and `_stucki_dither()`
-  - `_dither_for_algorithm()` returns an `_AlgoConfig` bundle per algorithm
-  - `_is_near_grayscale()` + the fallback branch in `_convert_image()`
-  - `_cache_key()` and `_CACHE_VERSION`
+- `webserver/webserver/image.py` — ingest + dither helpers, `convert_image`, `DisplayImageConfig.cache_slug()`.
+- `webserver/webserver/image_manager.py` — flat on-disk panel cache (`{stem}_{slug}_panel.bin`, matching `_preview.png`), `refresh_image_files()` (rescan + scrub), thumbnails `{stem}_thumb.jpg`.
+- `webserver/webserver/flask_app.py` — HTTP API, pool sync, delegates materialization to `ImageManager`.
 - `webserver/templates/index.html` — dither dropdown, serpentine toggle, help popovers.
 - `webserver/tests/test_webserver.py` — tests including coverage of the
   pipeline knobs above.
