@@ -280,94 +280,42 @@ _SAVE_KEYS = ["refresh_image_at_time", "upload_dir", "cache_dir",
               "debug_fast_refresh", "dither", "dither_serpentine"]
 
 
-def _load_config():
-    """Load config and ensure the write destination is owned by us.
+def _load_config(config_path):
+    """Load config from *config_path* and ensure it is writable by us.
 
-    Search order for loading existing config:
-      1. HOKKU_CONFIG env var (set by the Debian service unit)
-      2. ./config.json (dev runs)
-      3. /var/lib/hokku/config.json (current Debian install path)
-      4. /etc/hokku/config.json (legacy pre-2.1.14 install path)
-
-    Write destination: HOKKU_CONFIG if set, else the path we loaded from,
-    else ./config.json.
-
-    If the write destination is missing OR not writable by us (common
-    after a Debian install where postinst created config.json as root
-    before systemd chowned StateDirectory to the DynamicUser), rewrite
-    it from the loaded content so it ends up owned by the service user.
-    This is what makes saves from the web UI actually work without
+    If the file doesn't exist it is created with defaults. If it exists
+    but isn't writable (common after a Debian install where postinst
+    created the file as root before systemd chowned StateDirectory to
+    the DynamicUser), it is rewritten so it ends up owned by the service
+    user — this is what makes saves from the web UI work without
     requiring the admin to manually chown anything."""
     global _config_file_path
-    config = dict(DEFAULT_CONFIG)
+    write_path = Path(config_path)
 
-    env_path = os.environ.get("HOKKU_CONFIG")
-    candidates = []
-    if env_path:
-        candidates.append(Path(env_path))
-    candidates.append(Path("./config.json"))
-    candidates.append(Path("/var/lib/hokku/config.json"))
-    candidates.append(Path("/etc/hokku/config.json"))
+    if not write_path.exists():
+        print(f"Error: config file not found: {write_path}")
+        exit(1)
 
-    loaded_path = None
-    for path in candidates:
-        if path.exists():
-            try:
-                with open(path) as f:
-                    user_config = json.load(f)
-                config.update(user_config)
-                loaded_path = path
-                # Legacy dither_algorithm string (pre-preset schema) is ignored
-                # — the default preset applies. Users reselect a preset once.
-                config.pop("dither_algorithm", None)
-                config["dither"] = _normalize_dither_config(config.get("dither"))
-                # Legacy /images/* paths (pre-2.1.21) come from a release with
-                # bad defaults; under the Debian service they're not writable.
-                # Migrate silently to the StateDirectory paths.
-                if config.get("upload_dir") == "/images/upload":
-                    config["upload_dir"] = _DEFAULT_UPLOAD_DIR
-                    print(f"  Migrating upload_dir /images/upload -> {_DEFAULT_UPLOAD_DIR}")
-                if config.get("cache_dir") == "/images/cache":
-                    config["cache_dir"] = _DEFAULT_CACHE_DIR
-                    print(f"  Migrating cache_dir /images/cache -> {_DEFAULT_CACHE_DIR}")
-                # Timezone is no longer a server setting — strip any stale
-                # value from older configs so it doesn't end up in saves.
-                config.pop("timezone", None)
-                print(f"  Config loaded from: {path}")
-                break
-            except (json.JSONDecodeError, OSError) as e:
-                print(f"  Warning: failed to load config from {path}: {e}")
+    try:
+        with open(write_path) as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"Error: failed to load config from {write_path}: {e}")
+        exit(1)
 
-    if loaded_path is None:
-        print("  No config file found, using defaults")
+    config.pop("dither_algorithm", None)
+    config["dither"] = _normalize_dither_config(config.get("dither"))
+    config.pop("timezone", None)
+    print(f"  Config loaded from: {write_path}")
 
-    # Pick where we're going to save. Prefer HOKKU_CONFIG so upgrades
-    # migrate legacy /etc/hokku/config.json into the new location.
-    if env_path:
-        write_path = Path(env_path)
-    elif loaded_path is not None:
-        write_path = loaded_path
-    else:
-        write_path = Path("./config.json")
-
-    # Heal ownership / create if missing. os.access follows POSIX perms
-    # which is what we care about here (the service's own dynamic UID).
-    need_rewrite = (not write_path.exists()) or (not os.access(write_path, os.W_OK))
-    if need_rewrite:
-        save_data = {k: config[k] for k in _SAVE_KEYS if k in config}
+    if not os.access(write_path, os.W_OK):
         try:
-            write_path.parent.mkdir(parents=True, exist_ok=True)
-            if write_path.exists():
-                # Root-owned legacy file — unlinking works because the parent
-                # (/var/lib/hokku) is the StateDirectory, owned by our UID.
-                write_path.unlink()
+            write_path.unlink()
             with open(write_path, "w") as f:
-                json.dump(save_data, f, indent=2)
-            action = "created" if loaded_path is None else "rewritten (ownership fix)"
-            print(f"  Config {action} at: {write_path}")
+                json.dump({k: config[k] for k in _SAVE_KEYS if k in config}, f, indent=2)
+            print(f"  Config rewritten (ownership fix) at: {write_path}")
         except OSError as e:
             print(f"  Warning: couldn't make config writable at {write_path}: {e}")
-            # Fall through — _save_config will surface the real error on first write.
 
     _config_file_path = write_path
     return config
@@ -1308,7 +1256,6 @@ _STUCKI_OFFSETS = (
     (1, 2, 2 / 42.0),
     (2, 2, 1 / 42.0),
 )
-)
 
 
 def _stucki_dither(canvas, lut=None, lut_scale=None, serpentine=False):
@@ -1367,6 +1314,26 @@ class _AlgoConfig:
         self.scale_chroma = scale_chroma
         self.adaptive_saturate = adaptive_saturate
         self.adaptive_vivid = adaptive_vivid
+
+
+def _get_lut(dither_cfg):
+    """Pick the RGB→palette-index LUT for this pipeline config. Memoizes
+    hue-aware LUTs by (cutoff, neutral_chroma) so repeated tweaks are cheap."""
+    lut_cfg = dither_cfg.get("palette_lut", {})
+    mode = lut_cfg.get("mode", "hue_aware")
+    if mode == "euclidean":
+        return _RGB_LUT_EUCLID
+    cutoff = float(lut_cfg.get("hue_cutoff_deg", 95.0))
+    neutral = float(lut_cfg.get("neutral_chroma", 8.0))
+    if cutoff == 95.0 and neutral == 8.0:
+        return _RGB_LUT_HUE_AWARE
+    key = (round(cutoff, 3), round(neutral, 3))
+    with _hue_aware_lut_lock:
+        lut = _hue_aware_lut_cache.get(key)
+        if lut is None:
+            lut, _ = _build_rgb_lut_hue_aware(hue_cutoff_deg=cutoff, neutral_chroma=neutral)
+            _hue_aware_lut_cache[key] = lut
+        return lut
 
 
 def _get_kernel_fn(dither_cfg):
@@ -1502,7 +1469,9 @@ def _run_dither_pipeline(img, dither_cfg, orientation, canvas_w, canvas_h):
     full-resolution _convert_image path splits the two calls manually so
     it can drop its source-image reference before DRC peaks."""
     portrait = (orientation == "portrait")
-    canvas, padding_mask = _prepare_canvas(img, dither_cfg, portrait, canvas_w, canvas_h)
+    canvas, padding_mask = _prepare_canvas(img, dither_cfg, portrait,
+                                           canvas_w=FULL_W, canvas_h=PANEL_H)
+    del img  # source no longer needed; release its RGB buffer
     serpentine = bool(_config.get("dither_serpentine", False))
     result_idx = _dither_prepared_canvas(canvas, padding_mask, dither_cfg, serpentine=serpentine)
     return result_idx, padding_mask
@@ -1885,11 +1854,17 @@ def serve_binary():
             _record_screen_call(screen_name, screen_ip, sleep_seconds,
                                 battery_mv=battery_mv, frame_state=frame_state)
             _save_database(_get_cache_dir(), _database)
-            status = 503 if _converting_count > 0 else 404
-            msg = "Converting images, try again shortly" if status == 503 else "No images in upload directory"
+            if _converting_count > 0:
+                status = 503
+                msg = "Converting images, try again shortly"
+                label = "Converting"
+            else:
+                status = 404
+                msg = "No images in upload directory"
+                label = "No images"
             resp = make_response(msg, status)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
-            print(f"  Busy: {screen_name} told to retry in {sleep_seconds}s (status={status})")
+            print(f"  {label}: {screen_name} told to retry in {sleep_seconds}s")
             return resp
 
         key = _pick_next_image(_pool, _database)
@@ -2402,11 +2377,24 @@ def api_time():
 def main():
     global _config, _database
 
-    _config = _load_config()
+    import argparse
+    parser = argparse.ArgumentParser(description="Hokku Spectra 6 image server")
+    parser.add_argument("config", help="Path to config.json")
+    args = parser.parse_args()
+
+    _config = _load_config(args.config)
     upload_dir = _get_upload_dir()
     cache_dir = _get_cache_dir()
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    if not upload_dir.is_dir():
+        print(f"Error: upload_dir does not exist: {upload_dir}")
+        exit(1)
+    if not cache_dir.is_dir():
+        print(f"Error: cache_dir does not exist: {cache_dir}")
+        exit(1)
+    if not os.access(cache_dir, os.W_OK):
+        print(f"Error: cache_dir is not writable: {cache_dir}")
+        exit(1)
     _database = _load_database(cache_dir)
 
     port = _config["port"]

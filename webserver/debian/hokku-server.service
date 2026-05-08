@@ -4,9 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/hokku-server
+ExecStart=/usr/bin/hokku-server /var/lib/hokku/config.json
 Environment="PYTHONUNBUFFERED=1"
-Environment="HOKKU_CONFIG=/var/lib/hokku/config.json"
 DynamicUser=yes
 StateDirectory=hokku
 CacheDirectory=hokku
