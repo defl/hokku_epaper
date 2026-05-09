@@ -68,10 +68,6 @@ class AppState:
         new_manager = ImageManager(new_config, new_classifier)
         new_scheduler = ServeScheduler(new_manager)
 
-        # Stop the old watcher thread before swapping in the new objects.
-        if self.watcher is not None:
-            self.watcher.stop()
-
         with self._lock:
             self.config = new_config
             self.classifier = new_classifier
