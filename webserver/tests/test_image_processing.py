@@ -51,7 +51,7 @@ from webserver.presets import PRESET_IMAGE_CONFIGS
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_IMAGES_DIR = _REPO_ROOT / "images" / "test"
 _BUILD_IMAGE_DIR = _REPO_ROOT / "build" / "test_image"
-_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff"}
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff", ".heic", ".heif"}
 
 # Noop-dither base config — pipeline runs, but the final dither step is a
 # nearest-palette quantize with no error diffusion.

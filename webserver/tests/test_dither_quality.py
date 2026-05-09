@@ -63,7 +63,7 @@ _TEST_IMAGES_DIR = _REPO_ROOT / "images" / "test"
 _BUILD_FULL_DIR = _REPO_ROOT / "build" / "test_dither_full"
 _BUILD_PREVIEW_DIR = _REPO_ROOT / "build" / "test_dither_preview"
 
-_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff"}
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff", ".heic", ".heif"}
 
 # Noop-kernel version of atkinson — instant dither, used for structural tests
 # that only care about output format/size, not visual quality.

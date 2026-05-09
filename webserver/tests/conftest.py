@@ -6,6 +6,11 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+from pillow_heif import register_heif_opener
+
+# Register the HEIF/HEIC opener once for the whole test session so that
+# PIL.Image.open() works on .heic files in the slow visual tests.
+register_heif_opener()
 
 from webserver.config import AppConfig
 from webserver.dither import DitherConfig
