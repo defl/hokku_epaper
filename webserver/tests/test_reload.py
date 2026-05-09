@@ -24,6 +24,7 @@ Fast tests (always run):
 from __future__ import annotations
 
 import json
+import unittest.mock
 from dataclasses import replace
 from pathlib import Path
 
@@ -172,8 +173,8 @@ def test_reload_manager_wired_with_new_classifier(app_config: AppConfig, tmp_pat
 
 # ── Watcher unit tests ────────────────────────────────────────────────────────
 
-def test_watcher_blocks_until_kick(app_config: AppConfig):
-    """Thread must not call sync() before kick() is called."""
+def test_watcher_blocks_until_start(app_config: AppConfig):
+    """Thread must not call sync() before start() is called."""
     import threading as _threading
     state = _make_state(app_config)
     sync_called = _threading.Event()
@@ -186,22 +187,20 @@ def test_watcher_blocks_until_kick(app_config: AppConfig):
 
     state.manager.sync = tracking_sync  # type: ignore[method-assign]
 
-    def fake_sleep(_seconds):
-        pass  # return so the loop idles; daemon thread exits when test ends
+    with unittest.mock.patch("webserver.watcher.time.sleep"):
+        w = Watcher(state)
 
-    w = Watcher(state, sleep=fake_sleep)
+        # Give the thread a moment — sync must NOT have been called yet.
+        assert not sync_called.wait(timeout=0.2), "sync() should not run before start()"
 
-    # Give the thread a moment — sync must NOT have been called yet.
-    assert not sync_called.wait(timeout=0.2), "sync() should not run before kick()"
+        w.start()
 
-    w.start()
-
-    # Now sync must fire promptly.
-    assert sync_called.wait(timeout=2.0), "sync() should run immediately after kick()"
+        # Now sync must fire promptly.
+        assert sync_called.wait(timeout=2.0), "sync() should run immediately after start()"
 
 
 def test_watcher_calls_sync_on_manager(app_config: AppConfig):
-    """Watcher daemon thread calls sync() on every tick after kick()."""
+    """Watcher daemon thread calls sync() repeatedly after start()."""
     import threading as _threading
     state = _make_state(app_config)
     sync_calls: list[str] = []
@@ -216,12 +215,10 @@ def test_watcher_calls_sync_on_manager(app_config: AppConfig):
 
     state.manager.sync = tracking_sync  # type: ignore[method-assign]
 
-    def fake_sleep(_seconds):
-        pass  # return immediately so the loop cycles fast in the test
-
-    w = Watcher(state, sleep=fake_sleep)
-    w.start()
-    assert done.wait(timeout=5.0), "Expected at least 2 sync() calls within 5 s"
+    with unittest.mock.patch("webserver.watcher.time.sleep"):
+        w = Watcher(state)
+        w.start()
+        assert done.wait(timeout=5.0), "Expected at least 2 sync() calls within 5 s"
     assert len(sync_calls) >= 2
 
 
@@ -245,12 +242,10 @@ def test_watcher_follows_new_manager_after_reload(app_config: AppConfig, tmp_pat
 
     new_manager.sync = tracking_sync  # type: ignore[method-assign]
 
-    def fake_sleep(_seconds):
-        pass
-
-    w = Watcher(state, sleep=fake_sleep)
-    w.start()
-    assert done.wait(timeout=5.0), "Watcher should have synced the new manager"
+    with unittest.mock.patch("webserver.watcher.time.sleep"):
+        w = Watcher(state)
+        w.start()
+        assert done.wait(timeout=5.0), "Watcher should have synced the new manager"
     assert len(synced) >= 1
 
 
@@ -264,13 +259,14 @@ def test_watcher_uses_new_poll_interval_after_reload(app_config: AppConfig, tmp_
     sleep_durations: list[float] = []
     done = _threading.Event()
 
-    def fake_sleep(seconds):
+    def capturing_sleep(seconds):
         sleep_durations.append(seconds)
         done.set()
 
-    w = Watcher(state, sleep=fake_sleep)
-    w.start()
-    assert done.wait(timeout=5.0), "Expected fake_sleep to be called"
+    with unittest.mock.patch("webserver.watcher.time.sleep", side_effect=capturing_sleep):
+        w = Watcher(state)
+        w.start()
+        assert done.wait(timeout=5.0), "Expected time.sleep to be called"
     assert sleep_durations[0] == 42
 
 
@@ -289,13 +285,11 @@ def test_watcher_stop_exits_after_sleep(app_config: AppConfig):
     Watcher.run_forever = patched_run_forever  # type: ignore[method-assign]
 
     try:
-        def fake_sleep(_seconds):
-            pass  # return immediately
-
-        w = Watcher(state, sleep=fake_sleep)
-        w.start()
-        w.stop()
-        assert exited.wait(timeout=5.0), "Thread should exit after stop()"
+        with unittest.mock.patch("webserver.watcher.time.sleep"):
+            w = Watcher(state)
+            w.start()
+            w.stop()
+            assert exited.wait(timeout=5.0), "Thread should exit after stop()"
     finally:
         Watcher.run_forever = original_run_forever  # type: ignore[method-assign]
 

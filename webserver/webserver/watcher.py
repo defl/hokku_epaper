@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import threading
-import time as _time
+import time
 
 from webserver.app_state import AppState
 
@@ -27,9 +27,8 @@ class Watcher:
         watcher.stop()    # signals thread to exit after its next sleep
     """
 
-    def __init__(self, state: AppState, sleep=_time.sleep) -> None:
+    def __init__(self, state: AppState) -> None:
         self._state = state
-        self._sleep = sleep
         self._run = True
         self._thread = threading.Thread(
             target=self.run_forever, daemon=True, name="watcher",
@@ -50,4 +49,4 @@ class Watcher:
                 manager.sync()
             except Exception as e:
                 print(f"  Watcher error: {e}")
-            self._sleep(manager.config.poll_interval_seconds)
+            time.sleep(manager.config.poll_interval_seconds)
