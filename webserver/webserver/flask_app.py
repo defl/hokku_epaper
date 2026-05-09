@@ -250,14 +250,18 @@ def create_app(
         records = manager.list()
         progress = manager.conversion_progress()
         last = scheduler.last_served()
+        classifier = state.classifier
         upload_files = []
         failed_files = []
         for r in records:
+            obs = classifier.observations_for(r.original_sha1) if r.original_sha1 else None
             entry = {
                 "name": r.name,
                 "dithered": r.convert_status == "ok",
                 "status": r.convert_status,
                 "size_bytes": r.original_size_bytes,
+                "is_bw": obs.is_bw if obs else None,
+                "has_face": obs.has_face if obs else None,
             }
             upload_files.append(entry)
             if r.convert_status == "failed":

@@ -56,11 +56,6 @@
   .image-card img { width: 100%; height: 200px; object-fit: contain; background: #f0f0f0; cursor: pointer; }
   .image-card .card-body { padding: 12px; }
   .image-card .filename { font-weight: 600; font-size: 0.9em; margin-bottom: 6px; word-break: break-all; }
-  .image-card .stats { font-size: 0.8em; color: #666; margin-bottom: 8px; }
-  .image-card .stats span { margin-right: 12px; }
-  .image-card .actions { display: flex; gap: 6px; flex-wrap: wrap; }
-  .image-card .actions a { font-size: 0.8em; color: #2563eb; text-decoration: none; }
-  .image-card .actions a:hover { text-decoration: underline; }
 
   /* Screens table */
   .screens-section { background: #fff; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
@@ -114,9 +109,7 @@
   /* Pending dither badge */
   .image-card.pending img { opacity: 0.6; }
   .image-card .pending-badge { position: absolute; top: 8px; left: 8px; z-index: 1; max-width: calc(100% - 60px); background: #fef3c7; color: #92400e; padding: 4px 10px; border-radius: 4px; font-size: 0.75em; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.15); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .image-card .actions .pending-note { font-size: 0.8em; color: #92400e; font-style: italic; }
-  .image-card .actions a.disabled, .image-card .actions button:disabled { color: #aaa; pointer-events: none; cursor: not-allowed; }
-  .image-card .actions button:disabled { background: #e5e7eb; }
+  .image-card .card-actions button:disabled { background: #e5e7eb; color: #aaa; cursor: not-allowed; }
 
   /* Confirmation modal */
   .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 3000; }
@@ -165,6 +158,26 @@
   .dither-preview-mask { position: absolute; inset: 0; background: rgba(255,255,255,0.75); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 1em; font-weight: 600; color: #555; letter-spacing: 0.02em; }
   .dither-preview-mask[hidden] { display: none; }
   .config-row.popover-anchor { position: relative; align-items: flex-start; }
+
+  /* Collapsible "Advanced" block inside config */
+  .config-advanced-toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 8px 0; border-top: 1px solid #e5e7eb; margin-top: 4px; user-select: none; }
+  .config-advanced-toggle .toggle-label { font-size: 0.9em; font-weight: 600; color: #555; }
+  .config-advanced-toggle .toggle-arrow { font-size: 0.8em; color: #888; transition: transform 0.2s; }
+  .config-advanced-toggle.open .toggle-arrow { transform: rotate(90deg); }
+  .config-advanced-body { display: none; padding-top: 12px; }
+  .config-advanced-body.open { display: block; }
+
+  /* Per-image details modal */
+  .img-detail-modal { max-width: 440px; }
+  .img-detail-modal .detail-thumb { width: 100%; max-height: 220px; object-fit: contain; background: #f0f0f0; border-radius: 6px; margin-bottom: 14px; cursor: pointer; }
+  .img-detail-modal table { width: 100%; border-collapse: collapse; font-size: 0.88em; }
+  .img-detail-modal td { padding: 5px 8px; border-bottom: 1px solid #f0f0f0; }
+  .img-detail-modal td:first-child { color: #555; width: 40%; font-weight: 500; }
+  .img-detail-modal .detail-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+
+  /* Inline status strip (replaces stats div) */
+  .image-card .card-body { padding: 10px 12px; }
+  .image-card .card-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -173,172 +186,10 @@
 
 <h1>Hokku Image Server</h1>
 
-<!-- Config Section -->
-<div class="config-section">
-  <h2>Configuration</h2>
-
-  <div class="config-row">
-    <label>Refresh times:</label>
-    <div id="refresh-times"></div>
-    <input type="text" id="add-time-input" placeholder="HHMM">
-    <button class="btn btn-secondary btn-small" onclick="addTime()">Add</button>
-  </div>
-
-  <div class="config-row">
-    <label>Orientation:</label>
-    <select id="orientation">
-      <option value="landscape">Landscape</option>
-      <option value="portrait">Portrait</option>
-    </select>
-    <span class="info">changing orientation re-converts all images</span>
-  </div>
-
-  <div class="config-row" style="position: relative;">
-    <label>Default dither preset:</label>
-    <select id="dither-preset"></select>
-    <button type="button" class="info-btn" id="dither-preset-info-btn"
-            title="What does this preset do?" aria-label="Preset description"
-            aria-expanded="false">?</button>
-    <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset()"
-            title="Reset all dither knobs to the preset's default values">Reset to preset</button>
-    <button type="button" class="btn btn-secondary btn-small" id="dither-custom-btn"
-            onclick="toggleAdvancedPanel()"
-            title="Open the advanced pipeline editor and tune individual knobs">Custom…</button>
-    <div class="help-popover" id="dither-preset-popover" hidden></div>
-  </div>
-
-  <div class="dither-advanced" id="dither-advanced" hidden>
-    <div class="dither-advanced-header">
-      <h3>Advanced dithering pipeline</h3>
-      <button type="button" class="close-btn" onclick="toggleAdvancedPanel()"
-              aria-label="Close advanced pipeline">×</button>
-    </div>
-    <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Untick a stage to skip it. Each <span class="help-icon-inline">?</span> button explains what the knob does and how output changes when you move it.</p>
-    <div id="dither-advanced-panel"></div>
-    <div class="dither-preview-block">
-      <div class="config-row">
-        <label>Preview on:</label>
-        <select id="dither-preview-image"></select>
-        <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview()" id="dither-preview-btn">Preview</button>
-        <span class="info" id="dither-preview-status"></span>
-      </div>
-      <div id="dither-preview-result" class="dither-preview-result" hidden>
-        <img id="dither-preview-img" alt="Dither preview">
-        <div class="dither-preview-mask" id="dither-preview-mask" hidden>Dithering…</div>
-      </div>
-    </div>
-  </div>
-
-  <div class="config-row">
-    <label>Detect B&amp;W photos:</label>
-    <label class="toggle">
-      <input type="checkbox" id="bw-detect-enabled" onchange="document.getElementById('bw-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('bw-config-panel').hidden=!this.checked;">
-      <span id="bw-detect-enabled-label">Off</span>
-    </label>
-    <span class="info">use a separate pipeline for monochrome images</span>
-  </div>
-
-  <div id="bw-config-panel" class="dither-advanced" hidden>
-    <div class="dither-advanced-header">
-      <h3>B&amp;W photo pipeline</h3>
-    </div>
-    <p class="dither-advanced-intro">Applied when a photo is detected as near-monochrome (95th-percentile Lab chroma below 8). Saturation boosters are disabled by default to avoid tinting film grain.</p>
-    <div class="config-row" style="position: relative;">
-      <label>Preset:</label>
-      <select id="bw-preset"></select>
-      <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset('bw')"
-              title="Reset all knobs to the preset's default values">Reset to preset</button>
-      <button type="button" class="btn btn-secondary btn-small" id="bw-custom-btn"
-              onclick="toggleAdvancedPanel('bw')"
-              title="Open the advanced pipeline editor">Custom…</button>
-    </div>
-    <div class="dither-advanced" id="bw-advanced" hidden>
-      <div class="dither-advanced-header">
-        <h3>Advanced B&amp;W pipeline</h3>
-        <button type="button" class="close-btn" onclick="toggleAdvancedPanel('bw')"
-                aria-label="Close">×</button>
-      </div>
-      <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Each <span class="help-icon-inline">?</span> explains what the knob does.</p>
-      <div id="bw-advanced-panel"></div>
-    </div>
-  </div>
-
-  <div class="config-row">
-    <label>Detect faces:</label>
-    <label class="toggle">
-      <input type="checkbox" id="face-detect-enabled" onchange="document.getElementById('face-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('face-config-panel').hidden=!this.checked;">
-      <span id="face-detect-enabled-label">Off</span>
-    </label>
-    <span class="info">use a separate pipeline for portrait photos</span>
-  </div>
-
-  <div id="face-config-panel" class="dither-advanced" hidden>
-    <div class="dither-advanced-header">
-      <h3>Face photo pipeline</h3>
-    </div>
-    <p class="dither-advanced-intro">Applied when ≥1 face is detected (YuNet, score ≥ 0.5). Atkinson dithering tends to look better on skin tones than Floyd–Steinberg.</p>
-    <div class="config-row" style="position: relative;">
-      <label>Preset:</label>
-      <select id="face-preset"></select>
-      <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset('face')"
-              title="Reset all knobs to the preset's default values">Reset to preset</button>
-      <button type="button" class="btn btn-secondary btn-small" id="face-custom-btn"
-              onclick="toggleAdvancedPanel('face')"
-              title="Open the advanced pipeline editor">Custom…</button>
-    </div>
-    <div class="dither-advanced" id="face-advanced" hidden>
-      <div class="dither-advanced-header">
-        <h3>Advanced face pipeline</h3>
-        <button type="button" class="close-btn" onclick="toggleAdvancedPanel('face')"
-                aria-label="Close">×</button>
-      </div>
-      <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Each <span class="help-icon-inline">?</span> explains what the knob does.</p>
-      <div id="face-advanced-panel"></div>
-    </div>
-  </div>
-
-  <div class="config-row">
-    <label>Poll interval:</label>
-    <input type="number" id="poll-interval" min="1" max="3600"> <span class="info">seconds between image directory checks</span>
-  </div>
-
-  <div class="config-row">
-    <label>Debug screen:</label>
-    <label class="toggle">
-      <input type="checkbox" id="debug-fast-refresh">
-      <span id="debug-fast-refresh-label">Off</span>
-    </label>
-    <button type="button" class="info-btn" onclick="showDebugInfo()" title="What does this do?" aria-label="Debug screen info">?</button>
-  </div>
-
-  <div class="config-row">
-    <label>Auto-clear cache:</label>
-    <label class="toggle">
-      <input type="checkbox" id="auto-clear-cache">
-      <span id="auto-clear-cache-label">Off</span>
-    </label>
-    <span class="info" id="cache-disk-info" style="font-variant-numeric: tabular-nums;"></span>
-  </div>
-
-  <div class="config-row">
-    <label></label>
-    <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
-    <button class="btn btn-danger" onclick="clearCache()">Clear Cache &amp; Re-convert</button>
-    <button class="btn btn-secondary" onclick="clearClassifierCache()" title="Wipe cached B&amp;W / face detection results. Panel .bin files are untouched.">Clear Classifier Cache</button>
-  </div>
-</div>
-
 <!-- Debug-mode banner (shown only when debug_fast_refresh is on) -->
 <div id="debug-active-banner" class="debug-active-banner" style="display:none">
   <strong>⚠ Debug Screen mode is ON.</strong>
   All screens are being told to refresh every <span id="debug-secs">180</span> s regardless of schedule. Turn off for normal use — this drains battery fast.
-</div>
-
-<!-- Status Bar -->
-<div class="status-bar">
-  <div class="stat">Images: <strong id="stat-pool-size">0</strong></div>
-  <div class="stat">Last served: <strong id="stat-last-served">-</strong></div>
-  <div id="processing-indicator" class="processing-indicator idle">Idle</div>
 </div>
 
 <!-- Connected Screens -->
@@ -351,6 +202,13 @@
 
 <!-- Image Grid -->
 <h2>Images</h2>
+
+<!-- Status strip — just below the Images heading -->
+<div class="status-bar" style="margin-bottom:12px;">
+  <div class="stat">Images: <strong id="stat-pool-size">0</strong></div>
+  <div class="stat">Last served: <strong id="stat-last-served">-</strong></div>
+  <div id="processing-indicator" class="processing-indicator idle">Idle</div>
+</div>
 
 <div class="upload-progress" id="upload-progress"></div>
 
@@ -372,9 +230,192 @@
   <input type="file" id="file-input" multiple accept="image/*,.heic,.heif,.avif,.tiff">
 </div>
 
+<!-- Configuration (below images) -->
+<div class="config-section" style="margin-top:28px;">
+  <h2>Configuration</h2>
+
+  <div class="config-row">
+    <label>Refresh times:</label>
+    <div id="refresh-times"></div>
+    <input type="text" id="add-time-input" placeholder="HHMM">
+    <button class="btn btn-secondary btn-small" onclick="addTime()">Add</button>
+  </div>
+
+  <div class="config-row">
+    <label>Orientation:</label>
+    <select id="orientation">
+      <option value="landscape">Landscape</option>
+      <option value="portrait">Portrait</option>
+    </select>
+    <span class="info">changing orientation re-converts all images</span>
+  </div>
+
+  <div class="config-row" style="margin-bottom:4px;">
+    <label></label>
+    <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+  </div>
+
+  <!-- Advanced toggle -->
+  <div class="config-advanced-toggle" id="cfg-advanced-toggle" onclick="toggleConfigAdvanced()">
+    <span class="toggle-arrow">▶</span>
+    <span class="toggle-label">Advanced</span>
+  </div>
+  <div class="config-advanced-body" id="cfg-advanced-body">
+
+    <!-- Dither pipelines -->
+    <div class="config-row" style="position: relative;">
+      <label>Default dither preset:</label>
+      <select id="dither-preset"></select>
+      <button type="button" class="info-btn" id="dither-preset-info-btn"
+              title="What does this preset do?" aria-label="Preset description"
+              aria-expanded="false">?</button>
+      <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset()"
+              title="Reset all dither knobs to the preset's default values">Reset to preset</button>
+      <button type="button" class="btn btn-secondary btn-small" id="dither-custom-btn"
+              onclick="toggleAdvancedPanel()"
+              title="Open the advanced pipeline editor and tune individual knobs">Custom…</button>
+      <div class="help-popover" id="dither-preset-popover" hidden></div>
+    </div>
+
+    <div class="dither-advanced" id="dither-advanced" hidden>
+      <div class="dither-advanced-header">
+        <h3>Advanced dithering pipeline</h3>
+        <button type="button" class="close-btn" onclick="toggleAdvancedPanel()"
+                aria-label="Close advanced pipeline">×</button>
+      </div>
+      <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Each <span class="help-icon-inline">?</span> button explains what the knob does and how output changes when you move it.</p>
+      <div id="dither-advanced-panel"></div>
+      <div class="dither-preview-block">
+        <div class="config-row">
+          <label>Preview on:</label>
+          <select id="dither-preview-image"></select>
+          <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview()" id="dither-preview-btn">Preview</button>
+          <span class="info" id="dither-preview-status"></span>
+        </div>
+        <div id="dither-preview-result" class="dither-preview-result" hidden>
+          <img id="dither-preview-img" alt="Dither preview">
+          <div class="dither-preview-mask" id="dither-preview-mask" hidden>Dithering…</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="config-row">
+      <label>Detect B&amp;W photos:</label>
+      <label class="toggle">
+        <input type="checkbox" id="bw-detect-enabled" onchange="document.getElementById('bw-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('bw-config-panel').hidden=!this.checked;">
+        <span id="bw-detect-enabled-label">Off</span>
+      </label>
+      <span class="info">use a separate pipeline for monochrome images</span>
+    </div>
+
+    <div id="bw-config-panel" class="dither-advanced" hidden>
+      <div class="dither-advanced-header">
+        <h3>B&amp;W photo pipeline</h3>
+      </div>
+      <p class="dither-advanced-intro">Applied when a photo is detected as near-monochrome (95th-percentile Lab chroma below 8). Saturation boosters are disabled by default to avoid tinting film grain.</p>
+      <div class="config-row" style="position: relative;">
+        <label>Preset:</label>
+        <select id="bw-preset"></select>
+        <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset('bw')"
+                title="Reset all knobs to the preset's default values">Reset to preset</button>
+        <button type="button" class="btn btn-secondary btn-small" id="bw-custom-btn"
+                onclick="toggleAdvancedPanel('bw')"
+                title="Open the advanced pipeline editor">Custom…</button>
+      </div>
+      <div class="dither-advanced" id="bw-advanced" hidden>
+        <div class="dither-advanced-header">
+          <h3>Advanced B&amp;W pipeline</h3>
+          <button type="button" class="close-btn" onclick="toggleAdvancedPanel('bw')"
+                  aria-label="Close">×</button>
+        </div>
+        <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Each <span class="help-icon-inline">?</span> explains what the knob does.</p>
+        <div id="bw-advanced-panel"></div>
+      </div>
+    </div>
+
+    <div class="config-row">
+      <label>Detect faces:</label>
+      <label class="toggle">
+        <input type="checkbox" id="face-detect-enabled" onchange="document.getElementById('face-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('face-config-panel').hidden=!this.checked;">
+        <span id="face-detect-enabled-label">Off</span>
+      </label>
+      <span class="info">use a separate pipeline for portrait photos</span>
+    </div>
+
+    <div id="face-config-panel" class="dither-advanced" hidden>
+      <div class="dither-advanced-header">
+        <h3>Face photo pipeline</h3>
+      </div>
+      <p class="dither-advanced-intro">Applied when ≥1 face is detected (YuNet, score ≥ 0.5). Atkinson dithering tends to look better on skin tones than Floyd–Steinberg.</p>
+      <div class="config-row" style="position: relative;">
+        <label>Preset:</label>
+        <select id="face-preset"></select>
+        <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset('face')"
+                title="Reset all knobs to the preset's default values">Reset to preset</button>
+        <button type="button" class="btn btn-secondary btn-small" id="face-custom-btn"
+                onclick="toggleAdvancedPanel('face')"
+                title="Open the advanced pipeline editor">Custom…</button>
+      </div>
+      <div class="dither-advanced" id="face-advanced" hidden>
+        <div class="dither-advanced-header">
+          <h3>Advanced face pipeline</h3>
+          <button type="button" class="close-btn" onclick="toggleAdvancedPanel('face')"
+                  aria-label="Close">×</button>
+        </div>
+        <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Each <span class="help-icon-inline">?</span> explains what the knob does.</p>
+        <div id="face-advanced-panel"></div>
+      </div>
+    </div>
+
+    <div class="config-row">
+      <label>Poll interval:</label>
+      <input type="number" id="poll-interval" min="1" max="3600">
+      <span class="info">seconds between image directory checks</span>
+    </div>
+
+    <div class="config-row">
+      <label>Debug screen:</label>
+      <label class="toggle">
+        <input type="checkbox" id="debug-fast-refresh">
+        <span id="debug-fast-refresh-label">Off</span>
+      </label>
+      <button type="button" class="info-btn" onclick="showDebugInfo()" title="What does this do?" aria-label="Debug screen info">?</button>
+    </div>
+
+    <div class="config-row">
+      <label>Auto-clear cache:</label>
+      <label class="toggle">
+        <input type="checkbox" id="auto-clear-cache">
+        <span id="auto-clear-cache-label">Off</span>
+      </label>
+      <span class="info" id="cache-disk-info" style="font-variant-numeric: tabular-nums;"></span>
+    </div>
+
+    <div class="config-row">
+      <label></label>
+      <button class="btn btn-danger" onclick="clearCache()">Clear Cache &amp; Re-convert</button>
+      <button class="btn btn-secondary" onclick="clearClassifierCache()" title="Wipe cached B&amp;W / face detection results. Panel .bin files are untouched.">Clear Classifier Cache</button>
+    </div>
+
+  </div><!-- /cfg-advanced-body -->
+</div><!-- /config-section -->
+
 <div class="drag-overlay" id="drag-overlay"><div class="drag-msg">Drop images to upload</div></div>
 
 <div class="toast" id="toast"></div>
+
+<!-- Per-image details modal -->
+<div class="modal-backdrop" id="img-detail-modal">
+  <div class="modal img-detail-modal">
+    <h3 id="img-detail-title" style="word-break:break-all;"></h3>
+    <img id="img-detail-thumb" class="detail-thumb" alt="">
+    <table id="img-detail-table"></table>
+    <div class="detail-actions" id="img-detail-actions"></div>
+    <div class="modal-actions" style="margin-top:14px;">
+      <button class="btn btn-secondary" id="img-detail-close">Close</button>
+    </div>
+  </div>
+</div>
 
 <div class="modal-backdrop" id="confirm-modal">
   <div class="modal">
@@ -400,6 +441,14 @@
 <script>
 let currentConfig = {};
 let refreshTimes = [];
+
+// Toggle the Advanced config section open/closed.
+function toggleConfigAdvanced() {
+  const toggle = document.getElementById('cfg-advanced-toggle');
+  const body   = document.getElementById('cfg-advanced-body');
+  const open   = body.classList.toggle('open');
+  toggle.classList.toggle('open', open);
+}
 
 // Dither config UI state. `ditherState` is the form's working copy; it's
 // initialised once by loadConfig() and never overwritten by status polling.
@@ -1243,41 +1292,96 @@ async function retryFailed(name, btn) {
   }
 }
 
+// Keep the last upload+serve snapshot so Details can read it without a round-trip.
+let lastUploadFiles = [];
+let lastServeData = {};
+
 function renderImageGrid(uploadFiles, serveData) {
+  lastUploadFiles = uploadFiles;
+  lastServeData   = serveData;
   const grid = document.getElementById('image-grid');
   grid.innerHTML = '';
   uploadFiles.forEach(entry => {
-    const fname = entry.name;
+    const fname    = entry.name;
     const dithered = entry.dithered;
-    const data = serveData[fname] || {};
     const card = document.createElement('div');
     card.className = 'image-card' + (dithered ? '' : ' pending');
-    const safeName = fname.replace(/'/g, "\\'");
     const pendingBadge = dithered ? '' : '<div class="pending-badge" title="Dithered version for the e-ink display is still being generated">Dithering…</div>';
-    const actions = dithered
-      ? `<a href="/hokku/api/original/${encodeURIComponent(fname)}" target="_blank">Original</a>
-         <a href="/hokku/api/dithered/${encodeURIComponent(fname)}" target="_blank">Dithered</a>
-         <button class="btn btn-primary btn-small" onclick="showNext('${safeName}')">Show Next</button>`
-      : `<a href="/hokku/api/original/${encodeURIComponent(fname)}" target="_blank">Original</a>`;
-    const lastDisplayed = formatLastDisplayed(data.last_request);
     card.innerHTML = `
-      <button class="delete-btn" onclick="deleteImage('${safeName}')" title="Delete this image">&#x1F5D1;</button>
+      <button class="delete-btn" data-name="" title="Delete this image">&#x1F5D1;</button>
       ${pendingBadge}
-      <img src="/hokku/api/thumbnail/${encodeURIComponent(fname)}" alt="${fname}"
-           onclick="window.open('/hokku/api/original/${encodeURIComponent(fname)}')"
+      <img src="/hokku/api/thumbnail/${encodeURIComponent(fname)}" alt="${escapeHtml(fname)}"
            style="cursor:pointer" title="Click to view original">
       <div class="card-body">
-        <div class="filename">${fname}</div>
-        <div class="stats">
-          <span>Shown: ${data.total_show_count || 0}x</span>
-          <span>Last: ${lastDisplayed}</span>
-          <span>Display time: ${data.total_show_formatted || '0m'}</span>
+        <div class="filename">${escapeHtml(fname)}</div>
+        <div class="card-actions">
+          <button class="btn btn-secondary btn-small details-btn" data-name="">Details</button>
+          ${dithered ? '<button class="btn btn-primary btn-small shownext-btn" data-name="">Show Next</button>' : ''}
         </div>
-        <div class="actions">${actions}</div>
       </div>
     `;
+    // Wire click handlers via data attributes to avoid injection from filenames.
+    const img = card.querySelector('img');
+    img.addEventListener('click', () => window.open('/hokku/api/original/' + encodeURIComponent(fname)));
+    const delBtn = card.querySelector('.delete-btn');
+    delBtn.dataset.name = fname;
+    delBtn.addEventListener('click', () => deleteImage(fname));
+    const detBtn = card.querySelector('.details-btn');
+    detBtn.dataset.name = fname;
+    detBtn.addEventListener('click', () => showImageDetails(fname));
+    const snBtn = card.querySelector('.shownext-btn');
+    if (snBtn) {
+      snBtn.dataset.name = fname;
+      snBtn.addEventListener('click', () => showNext(fname));
+    }
     grid.appendChild(card);
   });
+}
+
+function showImageDetails(fname) {
+  const entry   = (lastUploadFiles || []).find(e => e.name === fname) || {};
+  const sd      = (lastServeData   || {})[fname] || {};
+
+  const modal   = document.getElementById('img-detail-modal');
+  document.getElementById('img-detail-title').textContent = fname;
+
+  const thumb = document.getElementById('img-detail-thumb');
+  thumb.src = '/hokku/api/thumbnail/' + encodeURIComponent(fname);
+  thumb.onclick = () => window.open('/hokku/api/original/' + encodeURIComponent(fname));
+
+  const fmt = (v, fallback) => (v != null ? v : fallback);
+  const yesno = v => v === true ? '✓ Yes' : v === false ? '✗ No' : '–';
+
+  const rows = [
+    ['Shown', (sd.total_show_count || 0) + '×'],
+    ['Last displayed', formatLastDisplayed(sd.last_request)],
+    ['Display time', sd.total_show_formatted || '0m'],
+    ['B&amp;W detected', yesno(entry.is_bw)],
+    ['Face detected',  yesno(entry.has_face)],
+  ];
+  document.getElementById('img-detail-table').innerHTML =
+    rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+
+  const actions = document.getElementById('img-detail-actions');
+  if (entry.dithered) {
+    actions.innerHTML = `<a class="btn btn-secondary btn-small" href="/hokku/api/dithered/${encodeURIComponent(fname)}" target="_blank">View dithered</a>`;
+  } else {
+    actions.innerHTML = '<span style="color:#92400e;font-size:0.85em">Dithered version not ready yet</span>';
+  }
+
+  modal.classList.add('show');
+  const close = () => {
+    modal.classList.remove('show');
+    closeBtn.removeEventListener('click', close);
+    modal.removeEventListener('click', onBackdrop);
+    document.removeEventListener('keydown', onKey);
+  };
+  const closeBtn  = document.getElementById('img-detail-close');
+  const onBackdrop = e => { if (e.target === modal) close(); };
+  const onKey      = e => { if (e.key === 'Escape') close(); };
+  closeBtn.addEventListener('click', close);
+  modal.addEventListener('click', onBackdrop);
+  document.addEventListener('keydown', onKey);
 }
 
 // Split into two passes:

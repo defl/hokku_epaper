@@ -57,6 +57,11 @@ class ImageClassifier:
         chosen = self._image_config_for(path, sha1)
         return ScreenImageConfig(image_config=chosen, orientation=cfg.orientation)
 
+    def observations_for(self, sha1: str) -> Observations:
+        """Return the cached observations for *sha1*, or an all-None instance."""
+        with self._lock:
+            return self._cache.get(sha1, Observations())
+
     def clear_cache(self) -> None:
         """Wipe all cached observations (JSON deleted on disk, empty in memory)."""
         with self._lock:
