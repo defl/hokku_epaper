@@ -91,30 +91,26 @@ def test_returns_none_when_no_timing_data(app_config: AppConfig):
 
 def test_single_converted_single_pending(app_config: AppConfig):
     """Rate from one converted image applied to one pending image."""
-    # 2000 bytes converted in 4.0 s → rate = 0.002 s/byte
-    # Pending: 1000 bytes → estimate = 2.0 s
+    # 2000 px converted in 4.0 s → rate = 0.002 s/px
+    # Pending: 1000 px → estimate = 2.0 s
     records = [
-        _rec("done.png",    2000, "ok",      conversion_seconds=4.0),
-        _rec("pending.png", 1000, "pending"),
+        _rec("done.png",    1000, "ok",      conversion_seconds=4.0, width=2000, height=1),
+        _rec("pending.png", 1000, "pending",                          width=1000, height=1),
     ]
     mgr = _manager_with(app_config, records, _converting(total=1))
-    eta = mgr.estimate_remaining_seconds()
-    assert eta == pytest.approx(2.0)
+    assert mgr.estimate_remaining_seconds() == pytest.approx(2.0)
 
 
 # ── size proportionality ──────────────────────────────────────────────────────
 
 def test_larger_image_gets_proportionally_larger_estimate(app_config: AppConfig):
     """Two pending images: the 4× larger one must get a 4× larger estimate."""
-    # Establish rate: 1000 bytes → 1.0 s → 0.001 s/byte
+    # Establish rate: 1000 px → 1.0 s → 0.001 s/px
     records = [
-        _rec("done.png",  1000, "ok",      conversion_seconds=1.0),
-        _rec("small.png",  500, "pending"),
-        _rec("large.png", 2000, "pending"),
+        _rec("done.png",  1000, "ok",      conversion_seconds=1.0, width=1000, height=1),
+        _rec("small.png",  500, "pending",                          width=500,  height=1),
+        _rec("large.png", 2000, "pending",                          width=2000, height=1),
     ]
-    mgr = _manager_with(app_config, records, _converting(total=2))
-    # Can't inspect per-image breakdowns directly, but the ratio must hold.
-    # Build individual managers to isolate each pending image.
     mgr_small = _manager_with(app_config, [records[0], records[1]], _converting(total=1))
     mgr_large = _manager_with(app_config, [records[0], records[2]], _converting(total=1))
     eta_small = mgr_small.estimate_remaining_seconds()
@@ -126,12 +122,12 @@ def test_larger_image_gets_proportionally_larger_estimate(app_config: AppConfig)
 
 def test_estimates_sum_across_pending_images(app_config: AppConfig):
     """Total estimate is the per-image sum, not an average."""
-    # Rate: 1000 bytes → 2.0 s → 0.002 s/byte
-    # Pending: 500 bytes (1.0 s) + 3000 bytes (6.0 s) = 7.0 s total
+    # Rate: 1000 px → 2.0 s → 0.002 s/px
+    # Pending: 500 px (1.0 s) + 3000 px (6.0 s) = 7.0 s total
     records = [
-        _rec("done.png",  1000, "ok",      conversion_seconds=2.0),
-        _rec("a.png",      500, "pending"),
-        _rec("b.png",     3000, "pending"),
+        _rec("done.png",  1000, "ok",      conversion_seconds=2.0, width=1000, height=1),
+        _rec("a.png",      500, "pending",                          width=500,  height=1),
+        _rec("b.png",     3000, "pending",                          width=3000, height=1),
     ]
     mgr = _manager_with(app_config, records, _converting(total=2))
     assert mgr.estimate_remaining_seconds() == pytest.approx(7.0)
@@ -139,41 +135,38 @@ def test_estimates_sum_across_pending_images(app_config: AppConfig):
 
 # ── rate from multiple converted images ───────────────────────────────────────
 
-def test_rate_is_total_time_over_total_bytes(app_config: AppConfig):
-    """Rate = Σtime / Σbytes — not average of per-image rates.
+def test_rate_is_total_time_over_total_pixels(app_config: AppConfig):
+    """Rate = Σtime / Σpixels — not average of per-image rates.
 
     Two converted images with very different sizes:
-      small:  100 bytes → 0.1 s  (per-image rate: 0.001 s/byte)
-      large: 9900 bytes → 9.9 s  (per-image rate: 0.001 s/byte)
-    Σtime=10.0 s, Σbytes=10000 bytes → rate = 0.001 s/byte.
-    Pending 5000 bytes → 5.0 s.
-
-    A naive average-of-rates would give the same answer here, so we also
-    test with deliberately unequal per-image rates below.
+      small:  100 px → 0.1 s  (per-image rate: 0.001 s/px)
+      large: 9900 px → 9.9 s  (per-image rate: 0.001 s/px)
+    Σtime=10.0 s, Σpx=10000 → rate = 0.001 s/px.
+    Pending 5000 px → 5.0 s.
     """
     records = [
-        _rec("s.png",  100, "ok",      conversion_seconds=0.1),
-        _rec("l.png", 9900, "ok",      conversion_seconds=9.9),
-        _rec("p.png", 5000, "pending"),
+        _rec("s.png", 1000, "ok",      conversion_seconds=0.1, width=100,  height=1),
+        _rec("l.png", 1000, "ok",      conversion_seconds=9.9, width=9900, height=1),
+        _rec("p.png", 1000, "pending",                          width=5000, height=1),
     ]
     mgr = _manager_with(app_config, records, _converting(total=1))
     assert mgr.estimate_remaining_seconds() == pytest.approx(5.0)
 
 
-def test_rate_weighted_by_size_not_count(app_config: AppConfig):
-    """Σtime/Σbytes differs from mean(time/size) when sizes vary.
+def test_rate_weighted_by_pixels_not_count(app_config: AppConfig):
+    """Σtime/Σpx differs from mean(time/px) when pixel counts vary.
 
-    Image A: 100 bytes → 1.0 s  → individual rate 0.010 s/byte
-    Image B: 900 bytes → 0.9 s  → individual rate 0.001 s/byte
-    mean(individual rates) = 0.0055 s/byte  ← WRONG
-    Σtime/Σbytes = 1.9/1000 = 0.0019 s/byte  ← correct (size-weighted)
+    Image A:  100 px → 1.0 s  → individual rate 0.010 s/px
+    Image B:  900 px → 0.9 s  → individual rate 0.001 s/px
+    mean(individual rates) = 0.0055 s/px  ← WRONG
+    Σtime/Σpx = 1.9/1000 = 0.0019 s/px   ← correct (pixel-weighted)
 
-    Pending 1000 bytes should use the size-weighted rate → 1.9 s.
+    Pending 1000 px should use the pixel-weighted rate → 1.9 s.
     """
     records = [
-        _rec("a.png",  100, "ok",      conversion_seconds=1.0),
-        _rec("b.png",  900, "ok",      conversion_seconds=0.9),
-        _rec("p.png", 1000, "pending"),
+        _rec("a.png", 1000, "ok",      conversion_seconds=1.0, width=100,  height=1),
+        _rec("b.png", 1000, "ok",      conversion_seconds=0.9, width=900,  height=1),
+        _rec("p.png", 1000, "pending",                          width=1000, height=1),
     ]
     mgr = _manager_with(app_config, records, _converting(total=1))
     assert mgr.estimate_remaining_seconds() == pytest.approx(1.9)
@@ -182,27 +175,47 @@ def test_rate_weighted_by_size_not_count(app_config: AppConfig):
 # ── non-pending statuses are ignored ─────────────────────────────────────────
 
 def test_failed_images_not_counted_in_estimate(app_config: AppConfig):
-    """Failed images have no last_conversion_seconds and are not pending."""
+    """Failed images (no dims, no timing) are excluded from both rate and sum."""
     records = [
-        _rec("done.png",   1000, "ok",     conversion_seconds=2.0),
+        _rec("done.png",   1000, "ok",     conversion_seconds=2.0, width=1000, height=1),
         _rec("broken.png", 5000, "failed"),
-        _rec("p.png",      1000, "pending"),
+        _rec("p.png",      1000, "pending",                         width=1000, height=1),
     ]
     mgr = _manager_with(app_config, records, _converting(total=1))
-    # Only p.png (1000 bytes) at 0.002 s/byte → 2.0 s
+    # Rate = 0.002 s/px; pending 1000 px → 2.0 s
     assert mgr.estimate_remaining_seconds() == pytest.approx(2.0)
 
 
 def test_ok_images_not_double_counted(app_config: AppConfig):
     """Already-converted images contribute to rate but not to the remaining sum."""
     records = [
-        _rec("done1.png", 1000, "ok", conversion_seconds=1.0),
-        _rec("done2.png", 1000, "ok", conversion_seconds=1.0),
-        _rec("p.png",     1000, "pending"),
+        _rec("done1.png", 1000, "ok", conversion_seconds=1.0, width=1000, height=1),
+        _rec("done2.png", 1000, "ok", conversion_seconds=1.0, width=1000, height=1),
+        _rec("p.png",     1000, "pending",                     width=1000, height=1),
     ]
     mgr = _manager_with(app_config, records, _converting(total=1))
-    # Rate = 2.0 s / 2000 bytes = 0.001 s/byte; pending = 1000 bytes → 1.0 s
+    # Rate = 2.0 s / 2000 px = 0.001 s/px; pending 1000 px → 1.0 s
     assert mgr.estimate_remaining_seconds() == pytest.approx(1.0)
+
+
+def test_pending_without_dims_returns_none(app_config: AppConfig):
+    """Pending images without pixel dimensions will never convert → None."""
+    records = [
+        _rec("done.png",    1000, "ok",      conversion_seconds=2.0, width=1000, height=1),
+        _rec("pending.png", 1000, "pending"),  # no dims — failed to open
+    ]
+    mgr = _manager_with(app_config, records, _converting(total=1))
+    assert mgr.estimate_remaining_seconds() is None
+
+
+def test_no_converted_with_dims_returns_none(app_config: AppConfig):
+    """No timing data from pixel-dimensioned images → None (no bytes fallback)."""
+    records = [
+        _rec("done.png",    1000, "ok",      conversion_seconds=4.0),  # old row, no dims
+        _rec("pending.png", 1000, "pending",                            width=500, height=1),
+    ]
+    mgr = _manager_with(app_config, records, _converting(total=1))
+    assert mgr.estimate_remaining_seconds() is None
 
 
 # ── pixel-based estimation ────────────────────────────────────────────────────
@@ -255,26 +268,3 @@ def test_pixel_sum_across_multiple_pending(app_config: AppConfig):
     assert mgr.estimate_remaining_seconds() == pytest.approx(0.56)
 
 
-def test_falls_back_to_bytes_when_dims_missing_on_pending(app_config: AppConfig):
-    """If any pending image lacks dimensions, fall back to bytes-based rate."""
-    # Converted has pixel data, but the pending image does not.
-    # Bytes rate: 4000 bytes → 2.0 s → 0.0005 s/byte
-    # Pending: 2000 bytes → 1.0 s  (pixel path skipped)
-    records = [
-        _rec("done.png",    4000, "ok",      conversion_seconds=2.0, width=100, height=100),
-        _rec("pending.png", 2000, "pending"),  # no dims
-    ]
-    mgr = _manager_with(app_config, records, _converting(total=1))
-    assert mgr.estimate_remaining_seconds() == pytest.approx(1.0)
-
-
-def test_falls_back_to_bytes_when_no_converted_has_dims(app_config: AppConfig):
-    """Bytes fallback used when converted images have no pixel data (old DB rows)."""
-    # No width/height anywhere → falls back to bytes
-    records = [
-        _rec("done.png",    2000, "ok",      conversion_seconds=4.0),  # no dims
-        _rec("pending.png", 1000, "pending", width=500, height=500),
-    ]
-    mgr = _manager_with(app_config, records, _converting(total=1))
-    # Bytes rate: 4.0 / 2000 = 0.002 s/byte; pending 1000 bytes → 2.0 s
-    assert mgr.estimate_remaining_seconds() == pytest.approx(2.0)

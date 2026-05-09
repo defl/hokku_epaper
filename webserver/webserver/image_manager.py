@@ -314,31 +314,24 @@ class ImageManager:
         if not pending:
             return None
 
-        # ── pixel-based (preferred) ──────────────────────────────────────
+        # Images without pixel dimensions were never successfully opened and
+        # will never be converted, so exclude them from the estimate entirely.
+        pending_px = [r for r in pending if r.image_width and r.image_height]
+        if not pending_px:
+            return None
+
         converted_px = [
             r for r in self._records.values()
             if r.last_conversion_seconds is not None
             and r.image_width and r.image_height
         ]
-        pending_all_have_px = all(r.image_width and r.image_height for r in pending)
-
-        if converted_px and pending_all_have_px:
-            total_pixels = sum(r.image_width * r.image_height for r in converted_px)
-            total_time   = sum(r.last_conversion_seconds for r in converted_px)
-            rate = total_time / total_pixels  # seconds per pixel
-            return sum(r.image_width * r.image_height * rate for r in pending)
-
-        # ── bytes-based fallback ─────────────────────────────────────────
-        converted_bytes = [
-            r for r in self._records.values()
-            if r.last_conversion_seconds is not None and r.original_size_bytes > 0
-        ]
-        if not converted_bytes:
+        if not converted_px:
             return None
-        total_bytes = sum(r.original_size_bytes for r in converted_bytes)
-        total_time  = sum(r.last_conversion_seconds for r in converted_bytes)
-        rate = total_time / total_bytes  # seconds per byte
-        return sum(r.original_size_bytes * rate for r in pending)
+
+        total_pixels = sum(r.image_width * r.image_height for r in converted_px)
+        total_time   = sum(r.last_conversion_seconds for r in converted_px)
+        rate = total_time / total_pixels  # seconds per pixel
+        return sum(r.image_width * r.image_height * rate for r in pending_px)
 
     # ── Cache control ────────────────────────────────────────────
 
