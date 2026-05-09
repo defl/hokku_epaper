@@ -29,6 +29,8 @@ def _rec(
     size_bytes: int,
     status: str = "ok",
     conversion_seconds: float | None = None,
+    width: int | None = None,
+    height: int | None = None,
 ) -> ImageRecord:
     """Minimal ImageRecord for estimator tests."""
     return ImageRecord(
@@ -42,6 +44,8 @@ def _rec(
         convert_error=None,
         screen_image_config_slug="slug" if status == "ok" else None,
         last_conversion_seconds=conversion_seconds,
+        image_width=width,
+        image_height=height,
     )
 
 
@@ -199,3 +203,78 @@ def test_ok_images_not_double_counted(app_config: AppConfig):
     mgr = _manager_with(app_config, records, _converting(total=1))
     # Rate = 2.0 s / 2000 bytes = 0.001 s/byte; pending = 1000 bytes → 1.0 s
     assert mgr.estimate_remaining_seconds() == pytest.approx(1.0)
+
+
+# ── pixel-based estimation ────────────────────────────────────────────────────
+
+def test_pixel_rate_used_when_dims_available(app_config: AppConfig):
+    """When pixel dimensions are known, rate is seconds/pixel not seconds/byte."""
+    # 100×100 px converted in 1.0 s → rate = 0.0001 s/px
+    # Pending: 200×200 px → 0.0001 × 40000 = 4.0 s
+    records = [
+        _rec("done.png",    5000, "ok",      conversion_seconds=1.0, width=100, height=100),
+        _rec("pending.png", 9000, "pending",                          width=200, height=200),
+    ]
+    mgr = _manager_with(app_config, records, _converting(total=1))
+    assert mgr.estimate_remaining_seconds() == pytest.approx(4.0)
+
+
+def test_pixel_estimate_scales_with_pixel_count_not_file_size(app_config: AppConfig):
+    """Two pending images with the same file size but different resolutions
+    get different estimates when pixel dimensions are known."""
+    # Rate: 1000×1000 px → 2.0 s → 0.000002 s/px
+    # Small: 500×500 (250 000 px) → 0.5 s  (same file size as large)
+    # Large: 2000×500 (1 000 000 px) → 2.0 s
+    records = [
+        _rec("ref.png",   8000, "ok",      conversion_seconds=2.0, width=1000, height=1000),
+        _rec("small.png", 4000, "pending",                          width=500,  height=500),
+        _rec("large.png", 4000, "pending",                          width=2000, height=500),
+    ]
+    mgr_small = _manager_with(app_config, [records[0], records[1]], _converting(total=1))
+    mgr_large = _manager_with(app_config, [records[0], records[2]], _converting(total=1))
+    eta_small = mgr_small.estimate_remaining_seconds()
+    eta_large = mgr_large.estimate_remaining_seconds()
+    assert eta_small == pytest.approx(0.5)
+    assert eta_large == pytest.approx(2.0)
+    # Ratio matches pixel ratio (1M / 250K = 4×), not file size ratio (1×)
+    assert eta_large / eta_small == pytest.approx(4.0)
+
+
+def test_pixel_sum_across_multiple_pending(app_config: AppConfig):
+    """Total estimate sums per-image pixel estimates."""
+    # Rate: 1000×1000 px → 1.0 s → 0.000001 s/px
+    # Pending A: 200×300 (60 000 px) → 0.06 s
+    # Pending B: 1000×500 (500 000 px) → 0.5 s
+    # Total: 0.56 s
+    records = [
+        _rec("ref.png", 1000, "ok",      conversion_seconds=1.0, width=1000, height=1000),
+        _rec("a.png",   2000, "pending",                          width=200,  height=300),
+        _rec("b.png",   8000, "pending",                          width=1000, height=500),
+    ]
+    mgr = _manager_with(app_config, records, _converting(total=2))
+    assert mgr.estimate_remaining_seconds() == pytest.approx(0.56)
+
+
+def test_falls_back_to_bytes_when_dims_missing_on_pending(app_config: AppConfig):
+    """If any pending image lacks dimensions, fall back to bytes-based rate."""
+    # Converted has pixel data, but the pending image does not.
+    # Bytes rate: 4000 bytes → 2.0 s → 0.0005 s/byte
+    # Pending: 2000 bytes → 1.0 s  (pixel path skipped)
+    records = [
+        _rec("done.png",    4000, "ok",      conversion_seconds=2.0, width=100, height=100),
+        _rec("pending.png", 2000, "pending"),  # no dims
+    ]
+    mgr = _manager_with(app_config, records, _converting(total=1))
+    assert mgr.estimate_remaining_seconds() == pytest.approx(1.0)
+
+
+def test_falls_back_to_bytes_when_no_converted_has_dims(app_config: AppConfig):
+    """Bytes fallback used when converted images have no pixel data (old DB rows)."""
+    # No width/height anywhere → falls back to bytes
+    records = [
+        _rec("done.png",    2000, "ok",      conversion_seconds=4.0),  # no dims
+        _rec("pending.png", 1000, "pending", width=500, height=500),
+    ]
+    mgr = _manager_with(app_config, records, _converting(total=1))
+    # Bytes rate: 4.0 / 2000 = 0.002 s/byte; pending 1000 bytes → 2.0 s
+    assert mgr.estimate_remaining_seconds() == pytest.approx(2.0)

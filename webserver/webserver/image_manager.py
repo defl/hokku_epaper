@@ -57,6 +57,8 @@ class ImageRecord:
     convert_error: str | None
     screen_image_config_slug: str | None    # ScreenImageConfig slug at last successful conversion
     last_conversion_seconds: float | None = None  # wall-clock time of the last successful render
+    image_width: int | None = None          # pixel dimensions of the source image
+    image_height: int | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,23 @@ def _sha1_of_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _try_read_image_dims(path: Path) -> tuple[int | None, int | None, str | None]:
+    """Open *path* just far enough to read pixel dimensions.
+
+    PIL is lazy — for most formats it reads only the file header, not the
+    full pixel data, so this is fast even for large images.
+
+    Returns ``(width, height, None)`` on success or ``(None, None, error)``
+    on failure.
+    """
+    try:
+        with Image.open(path) as img:
+            w, h = img.size
+        return w, h, None
+    except Exception as e:
+        return None, None, f"{type(e).__name__}: {e}"
+
+
 def _atomic_write_json(path: Path, payload: dict) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     with open(tmp, "w") as f:
@@ -93,6 +112,7 @@ def _record_from_dict(d: dict) -> ImageRecord:
     # Support old DB files that used 'convert_pipeline_slug'.
     slug = d.get("screen_image_config_slug") or d.get("convert_pipeline_slug")
     raw_t = d.get("last_conversion_seconds")
+    raw_w, raw_h = d.get("image_width"), d.get("image_height")
     return ImageRecord(
         name=d["name"],
         name_hash=d["name_hash"],
@@ -104,6 +124,8 @@ def _record_from_dict(d: dict) -> ImageRecord:
         convert_error=d.get("convert_error"),
         screen_image_config_slug=slug,
         last_conversion_seconds=float(raw_t) if raw_t is not None else None,
+        image_width=int(raw_w) if raw_w is not None else None,
+        image_height=int(raw_h) if raw_h is not None else None,
     )
 
 
@@ -278,36 +300,45 @@ class ImageManager:
     def estimate_remaining_seconds(self) -> float | None:
         """Estimate seconds until the current conversion batch finishes.
 
-        Fits a seconds-per-byte rate from all images that have already been
-        converted (total_time / total_bytes), then multiplies each pending
-        image's known file size by that rate and sums the results.  This is
-        more accurate than a flat average because conversion time scales
-        roughly linearly with source image size.
+        Prefers a seconds-per-pixel rate fitted from converted images (more
+        accurate because dithering work scales with pixel count, not file
+        size).  Falls back to a seconds-per-byte rate when pixel dimensions
+        are not yet available for all relevant images (e.g. old DB rows).
 
-        Returns None when there is nothing pending or no timing data yet.
+        Returns None when nothing is pending or no timing data exists yet.
         """
-        progress = self._progress
-        if progress.total - progress.done <= 0:
+        if self._progress.total - self._progress.done <= 0:
             return None
 
-        # Fit rate from converted images: seconds per source byte.
-        total_bytes_fitted = 0
-        total_time_fitted = 0.0
-        for r in self._records.values():
-            if r.last_conversion_seconds is not None and r.original_size_bytes > 0:
-                total_bytes_fitted += r.original_size_bytes
-                total_time_fitted += r.last_conversion_seconds
-        if total_bytes_fitted == 0:
+        pending = [r for r in self._records.values() if r.convert_status == "pending"]
+        if not pending:
             return None
-        seconds_per_byte = total_time_fitted / total_bytes_fitted
 
-        # Sum per-image estimates for every image still pending (including
-        # the one currently rendering, whose status is still "pending").
-        return sum(
-            r.original_size_bytes * seconds_per_byte
-            for r in self._records.values()
-            if r.convert_status == "pending"
-        )
+        # ── pixel-based (preferred) ──────────────────────────────────────
+        converted_px = [
+            r for r in self._records.values()
+            if r.last_conversion_seconds is not None
+            and r.image_width and r.image_height
+        ]
+        pending_all_have_px = all(r.image_width and r.image_height for r in pending)
+
+        if converted_px and pending_all_have_px:
+            total_pixels = sum(r.image_width * r.image_height for r in converted_px)
+            total_time   = sum(r.last_conversion_seconds for r in converted_px)
+            rate = total_time / total_pixels  # seconds per pixel
+            return sum(r.image_width * r.image_height * rate for r in pending)
+
+        # ── bytes-based fallback ─────────────────────────────────────────
+        converted_bytes = [
+            r for r in self._records.values()
+            if r.last_conversion_seconds is not None and r.original_size_bytes > 0
+        ]
+        if not converted_bytes:
+            return None
+        total_bytes = sum(r.original_size_bytes for r in converted_bytes)
+        total_time  = sum(r.last_conversion_seconds for r in converted_bytes)
+        rate = total_time / total_bytes  # seconds per byte
+        return sum(r.original_size_bytes * rate for r in pending)
 
     # ── Cache control ────────────────────────────────────────────
 
@@ -386,6 +417,7 @@ class ImageManager:
 
     def _register_new(self, name: str, src_path: Path) -> None:
         st = src_path.stat()
+        w, h, dim_err = _try_read_image_dims(src_path)
         self._records[name] = ImageRecord(
             name=name,
             name_hash=_hash_name(name),
@@ -393,9 +425,11 @@ class ImageManager:
             original_size_bytes=st.st_size,
             original_mtime=st.st_mtime,
             added_at=time.time(),
-            convert_status="pending",
-            convert_error=None,
+            convert_status="failed" if dim_err else "pending",
+            convert_error=dim_err,
             screen_image_config_slug=None,
+            image_width=w,
+            image_height=h,
         )
 
     def _reconcile_with_disk(self) -> None:
@@ -443,14 +477,17 @@ class ImageManager:
                 new_sha = _sha1_of_file(src_path)
                 if new_sha != existing.original_sha1:
                     self._delete_cache_files(existing.name_hash)
+                    w, h, dim_err = _try_read_image_dims(src_path)
                     self._records[name] = replace(
                         existing,
                         original_sha1=new_sha,
                         original_size_bytes=st.st_size,
                         original_mtime=st.st_mtime,
-                        convert_status="pending",
-                        convert_error=None,
+                        convert_status="failed" if dim_err else "pending",
+                        convert_error=dim_err,
                         screen_image_config_slug=None,
+                        image_width=w,
+                        image_height=h,
                     )
                     print(f"  Detected content change: {name!r}")
                     continue
