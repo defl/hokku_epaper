@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from webserver.config import AppConfig
+from webserver.app_config import AppConfig
 from webserver.image_manager import ImageManager
 from webserver.serve_scheduler import ServeScheduler
 

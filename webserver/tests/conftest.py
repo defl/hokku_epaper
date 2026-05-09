@@ -12,9 +12,9 @@ from pillow_heif import register_heif_opener
 # PIL.Image.open() works on .heic files in the slow visual tests.
 register_heif_opener()
 
-from webserver.config import AppConfig
-from webserver.dither import DitherConfig
-from webserver.image import ImageConfig
+from webserver.app_config import AppConfig
+from webserver.dither_config import DitherConfig
+from webserver.image_config import ImageConfig
 from webserver.presets import PRESET_IMAGE_CONFIGS
 
 
@@ -41,7 +41,7 @@ def app_config(tmp_path: Path, fast_image_config: ImageConfig) -> AppConfig:
         port=18080,
         poll_interval_seconds=1,
         orientation="landscape",
-        image=fast_image_config,
+        image_config_default=fast_image_config,
     )
 
 

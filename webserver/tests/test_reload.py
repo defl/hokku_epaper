@@ -30,8 +30,9 @@ from pathlib import Path
 import pytest
 
 from webserver.app_state import AppState
-from webserver.config import AppConfig
+from webserver.app_config import AppConfig
 from webserver.flask_app import create_app
+from webserver.image_classifier import ImageClassifier
 from webserver.image_manager import ImageManager
 from webserver.serve_scheduler import ServeScheduler
 from webserver.watcher import Watcher
@@ -40,9 +41,10 @@ from webserver.watcher import Watcher
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _make_state(app_config: AppConfig) -> AppState:
-    mgr = ImageManager(app_config)
+    clf = ImageClassifier(app_config)
+    mgr = ImageManager(app_config, clf)
     sch = ServeScheduler(mgr)
-    return AppState(app_config, mgr, sch)
+    return AppState(app_config, clf, mgr, sch)
 
 
 def _alt_config(base: AppConfig, tmp_path: Path) -> AppConfig:
@@ -53,17 +55,19 @@ def _alt_config(base: AppConfig, tmp_path: Path) -> AppConfig:
     """
     return replace(
         base,
-        image=replace(base.image, prepare_brightness=0.9),
+        image_config_default=replace(base.image_config_default, prepare_brightness=0.9),
     )
 
 
 # ── AppState unit tests ───────────────────────────────────────────────────────
 
 def test_app_state_holds_initial_references(app_config: AppConfig):
-    mgr = ImageManager(app_config)
+    clf = ImageClassifier(app_config)
+    mgr = ImageManager(app_config, clf)
     sch = ServeScheduler(mgr)
-    state = AppState(app_config, mgr, sch)
+    state = AppState(app_config, clf, mgr, sch)
     assert state.config is app_config
+    assert state.classifier is clf
     assert state.manager is mgr
     assert state.scheduler is sch
 
@@ -76,7 +80,7 @@ def test_reload_swaps_config(app_config: AppConfig, tmp_path: Path):
     state.reload(new_cfg)
 
     assert state.config is new_cfg
-    assert state.config.image.prepare_brightness == pytest.approx(0.9)
+    assert state.config.image_config_default.prepare_brightness == pytest.approx(0.9)
 
 
 def test_reload_swaps_manager(app_config: AppConfig, tmp_path: Path):
@@ -143,6 +147,27 @@ def test_reload_is_idempotent(app_config: AppConfig, tmp_path: Path):
     state = _make_state(app_config)
     state.reload(app_config)
     assert state.config is app_config
+
+
+def test_reload_builds_new_classifier(app_config: AppConfig, tmp_path: Path):
+    """reload() produces a fresh ImageClassifier, not the old one."""
+    state = _make_state(app_config)
+    old_classifier = state.classifier
+    new_cfg = _alt_config(app_config, tmp_path)
+
+    state.reload(new_cfg)
+
+    assert state.classifier is not old_classifier
+
+
+def test_reload_manager_wired_with_new_classifier(app_config: AppConfig, tmp_path: Path):
+    """After reload, state.manager._classifier is state.classifier."""
+    state = _make_state(app_config)
+    new_cfg = _alt_config(app_config, tmp_path)
+
+    state.reload(new_cfg)
+
+    assert state.manager._classifier is state.classifier
 
 
 # ── Watcher unit tests ────────────────────────────────────────────────────────
@@ -275,34 +300,33 @@ def test_flask_config_post_reloads_state(flask_client, tmp_path: Path):
     client, state, _ = flask_client
     old_manager = state.manager
 
-    patch = {"image": {**state.config.image.__class__.__dataclass_fields__}}
-    # Simpler: just send a brightness change via the full image dict.
+    # Send a brightness change via the full image_config_default dict.
     from dataclasses import asdict
-    new_image = asdict(replace(state.config.image, prepare_brightness=0.8))
+    new_image = asdict(replace(state.config.image_config_default, prepare_brightness=0.8))
     resp = client.post(
         "/hokku/api/config",
-        data=json.dumps({"image": new_image}),
+        data=json.dumps({"image_config_default": new_image}),
         content_type="application/json",
     )
     assert resp.status_code == 200
     assert state.manager is not old_manager
-    assert state.config.image.prepare_brightness == pytest.approx(0.8)
+    assert state.config.image_config_default.prepare_brightness == pytest.approx(0.8)
 
 
 def test_flask_config_get_reflects_reloaded_config(flask_client, tmp_path: Path):
     """GET /hokku/api/config after a reload returns the new config, not the old one."""
     client, state, _ = flask_client
     from dataclasses import asdict
-    new_image = asdict(replace(state.config.image, prepare_brightness=0.75))
+    new_image = asdict(replace(state.config.image_config_default, prepare_brightness=0.75))
     client.post(
         "/hokku/api/config",
-        data=json.dumps({"image": new_image}),
+        data=json.dumps({"image_config_default": new_image}),
         content_type="application/json",
     )
 
     resp = client.get("/hokku/api/config")
     data = resp.get_json()
-    assert data["config"]["image"]["prepare_brightness"] == pytest.approx(0.75)
+    assert data["config"]["image_config_default"]["prepare_brightness"] == pytest.approx(0.75)
 
 
 def test_flask_config_post_bad_json_returns_400(flask_client):

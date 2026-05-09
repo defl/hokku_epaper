@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from webserver.config import AppConfig
+from webserver.app_config import AppConfig
 from webserver.display import TOTAL_BYTES
 from webserver.image_manager import ImageManager, _hash_name
 
@@ -23,11 +23,16 @@ def test_register_and_convert(app_config: AppConfig, make_test_image):
     mgr = ImageManager(app_config)
     mgr.sync()
 
+    from webserver.screen_image_config import ScreenImageConfig
     records = mgr.list()
     assert [r.name for r in records] == ["a.png", "b.png"]
     assert all(r.convert_status == "ok" for r in records)
     assert all(r.original_sha1 for r in records)
-    assert all(r.convert_pipeline_slug == app_config.cache_slug() for r in records)
+    expected_slug = ScreenImageConfig(
+        image_config=app_config.image_config_default,
+        orientation=app_config.orientation,
+    ).cache_slug()
+    assert all(r.screen_image_config_slug == expected_slug for r in records)
 
 
 def test_panel_bytes_after_sync(app_config: AppConfig, make_test_image):
@@ -77,7 +82,7 @@ def test_remove_clears_cache(app_config: AppConfig, make_test_image):
     mgr.sync()
     rec = mgr.status("a.png")
     assert rec is not None
-    panel_path = Path(app_config.cache_dir) / "images" / f"{rec.name_hash}_{rec.convert_pipeline_slug}_panel.bin"
+    panel_path = Path(app_config.cache_dir) / "images" / f"{rec.name_hash}_{rec.screen_image_config_slug}_panel.bin"
     assert panel_path.exists()
 
     mgr.remove("a.png")

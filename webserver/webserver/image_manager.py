@@ -20,11 +20,10 @@ from typing import Iterable, Literal
 
 from PIL import Image, ImageOps
 
-from webserver.config import AppConfig
+from webserver.app_config import AppConfig
 from webserver.display import TOTAL_BYTES
 from webserver.image import (
     IMAGE_EXTENSIONS,
-    ImageConfig,
     open_image_for_render,
     preview_png_from_panel_bytes,
     render_panel_bytes,
@@ -40,21 +39,23 @@ _NAME_HASH_LEN = 14
 _THUMB_MAX_PX = 300
 _THUMB_QUALITY = 85
 
+_KNOWN_SUFFIXES = (_PANEL_SUFFIX, _PREVIEW_SUFFIX, _THUMB_SUFFIX)
+
 
 ConvertStatus = Literal["ok", "failed", "pending"]
 
 
 @dataclass(frozen=True)
 class ImageRecord:
-    name: str                          # outside-world identifier
-    name_hash: str                     # sha1(name) — on-disk identifier
-    original_sha1: str                 # sha1 of file contents
+    name: str                               # outside-world identifier
+    name_hash: str                          # sha1(name) — on-disk identifier
+    original_sha1: str                      # sha1 of file contents
     original_size_bytes: int
     original_mtime: float
     added_at: float
     convert_status: ConvertStatus
     convert_error: str | None
-    convert_pipeline_slug: str | None  # cache_slug at successful conversion
+    screen_image_config_slug: str | None    # ScreenImageConfig slug at last successful conversion
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,8 @@ def _record_to_dict(rec: ImageRecord) -> dict:
 
 
 def _record_from_dict(d: dict) -> ImageRecord:
+    # Support old DB files that used 'convert_pipeline_slug'.
+    slug = d.get("screen_image_config_slug") or d.get("convert_pipeline_slug")
     return ImageRecord(
         name=d["name"],
         name_hash=d["name_hash"],
@@ -97,7 +100,7 @@ def _record_from_dict(d: dict) -> ImageRecord:
         added_at=float(d["added_at"]),
         convert_status=d["convert_status"],
         convert_error=d.get("convert_error"),
-        convert_pipeline_slug=d.get("convert_pipeline_slug"),
+        screen_image_config_slug=slug,
     )
 
 
@@ -110,7 +113,7 @@ class ImageManager:
     take ``_db_lock``.
     """
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, classifier=None) -> None:
         self._config = config
         self._upload_dir = Path(config.upload_dir).resolve()
         self._cache_dir = Path(config.cache_dir).resolve()
@@ -119,6 +122,11 @@ class ImageManager:
         self._db_lock = threading.RLock()
         self._records: dict[str, ImageRecord] = {}
         self._progress = ConversionProgress(current_name=None, done=0, total=0)
+
+        if classifier is None:
+            from webserver.image_classifier import ImageClassifier
+            classifier = ImageClassifier(config)
+        self._classifier = classifier
 
         self._images_dir.mkdir(parents=True, exist_ok=True)
         self._load_db()
@@ -283,7 +291,7 @@ class ImageManager:
                     rec,
                     convert_status="pending",
                     convert_error=None,
-                    convert_pipeline_slug=None,
+                    screen_image_config_slug=None,
                 )
             self._save_db()
             print("  Cache cleared")
@@ -307,11 +315,11 @@ class ImageManager:
     # ── Internals ────────────────────────────────────────────────
 
     def _panel_path(self, rec: ImageRecord) -> Path:
-        slug = rec.convert_pipeline_slug or self._config.cache_slug()
+        slug = rec.screen_image_config_slug or "unknown"
         return self._images_dir / f"{rec.name_hash}_{slug}{_PANEL_SUFFIX}"
 
     def _preview_path(self, rec: ImageRecord) -> Path:
-        slug = rec.convert_pipeline_slug or self._config.cache_slug()
+        slug = rec.screen_image_config_slug or "unknown"
         return self._images_dir / f"{rec.name_hash}_{slug}{_PREVIEW_SUFFIX}"
 
     def _thumb_path(self, rec: ImageRecord) -> Path:
@@ -334,8 +342,7 @@ class ImageManager:
 
     def _save_db(self) -> None:
         payload = {
-            "version": 1,
-            "pipeline_slug": self._config.cache_slug(),
+            "version": 2,
             "images": {n: _record_to_dict(r) for n, r in self._records.items()},
         }
         _atomic_write_json(self._db_path, payload)
@@ -351,7 +358,7 @@ class ImageManager:
             added_at=time.time(),
             convert_status="pending",
             convert_error=None,
-            convert_pipeline_slug=None,
+            screen_image_config_slug=None,
         )
 
     def _reconcile_with_disk(self) -> None:
@@ -360,7 +367,7 @@ class ImageManager:
         - Files present but not registered: register pending.
         - Registered but missing on disk: drop.
         - File on disk changed (sha1/size/mtime): mark pending and zap stale cache.
-        - Pipeline slug changed since last conversion: mark pending.
+        - ScreenImageConfig slug predicted by classifier changed: mark pending.
         """
         if not self._upload_dir.exists():
             print(f"  Warning: upload_dir missing: {self._upload_dir}")
@@ -377,8 +384,6 @@ class ImageManager:
                 rec = self._records.pop(name)
                 self._delete_cache_files(rec.name_hash)
                 print(f"  Removed {name!r} (no longer on disk)")
-
-        current_slug = self._config.cache_slug()
 
         # Add new + detect changes.
         for name, src_path in on_disk.items():
@@ -408,23 +413,22 @@ class ImageManager:
                         original_mtime=st.st_mtime,
                         convert_status="pending",
                         convert_error=None,
-                        convert_pipeline_slug=None,
+                        screen_image_config_slug=None,
                     )
                     print(f"  Detected content change: {name!r}")
                     continue
 
-            slug_changed = (
-                existing.convert_status == "ok"
-                and existing.convert_pipeline_slug != current_slug
-            )
-            if slug_changed:
-                self._records[name] = replace(
-                    existing,
-                    convert_status="pending",
-                    convert_error=None,
-                    convert_pipeline_slug=None,
-                )
-                print(f"  Pipeline slug changed for {name!r}: re-converting")
+            if existing.convert_status == "ok":
+                screen_cfg = self._classifier.screen_config_for(src_path, existing.original_sha1)
+                predicted_slug = screen_cfg.cache_slug()
+                if existing.screen_image_config_slug != predicted_slug:
+                    self._records[name] = replace(
+                        existing,
+                        convert_status="pending",
+                        convert_error=None,
+                        screen_image_config_slug=None,
+                    )
+                    print(f"  ScreenImageConfig slug changed for {name!r}: re-converting")
 
         self._save_db()
 
@@ -441,49 +445,29 @@ class ImageManager:
     def scrub_stale_cache(self) -> None:
         """Remove stale-slug panel/preview files for registered images now,
         regardless of the auto_clear_cache config setting.
-
-        Called by the API endpoint when the user enables auto-clear or changes
-        the preset with auto-clear enabled — so the effect is immediate without
-        requiring a config save + restart.
         """
         with self._db_lock:
             self._scrub_orphan_cache_files(force_auto_clear=True)
 
     def _scrub_orphan_cache_files(self, *, force_auto_clear: bool = False) -> None:
-        """Remove cache files according to the current policy.
+        """Remove cache files according to the three-rule policy.
 
-        Always:
-          - Remove .tmp files.
-          - Remove files with an unrecognised suffix.
-          - Remove files whose name_hash doesn't match any registered image
-            (the source image was deleted).
+        Rule 3 (always): unknown postfix → delete.
+        Rule 2 (always): name_hash not in DB → delete (orphan image).
+        Rule 1 (auto_clear only): filename slug ≠ this image's current slug → delete.
+          Thumbs (no embedded slug) are exempt from Rule 1.
 
-        If auto_clear_cache is True (in AppConfig) *or* force_auto_clear=True:
-          - Also remove panel/preview files for registered images whose
-            pipeline slug no longer matches the current slug (i.e. old-preset
-            cached results).  Thumbnails are never removed by this rule.
-
-        If auto_clear_cache is False and force_auto_clear is False:
-          - Keep every file that belongs to a registered image, regardless of
-            its pipeline slug.
+        ``auto_clear_cache=False`` applies only Rules 2 and 3.
         """
         if not self._images_dir.exists():
             return
 
+        # Map name_hash → current screen_image_config_slug for Rule 1.
         known_hashes: set[str] = {rec.name_hash for rec in self._records.values()}
-        current_slug = self._config.cache_slug()
+        records_by_hash: dict[str, ImageRecord] = {
+            rec.name_hash: rec for rec in self._records.values()
+        }
         auto_clear = self._config.auto_clear_cache or force_auto_clear
-
-        # Build the set of filenames that are valid under the current slug
-        # (only used when auto_clear is True).
-        current_slug_valid: set[str] = set()
-        if auto_clear:
-            for rec in self._records.values():
-                current_slug_valid.add(f"{rec.name_hash}_{current_slug}{_PANEL_SUFFIX}")
-                current_slug_valid.add(f"{rec.name_hash}_{current_slug}{_PREVIEW_SUFFIX}")
-                current_slug_valid.add(f"{rec.name_hash}{_THUMB_SUFFIX}")
-
-        _KNOWN_SUFFIXES = (_PANEL_SUFFIX, _PREVIEW_SUFFIX, _THUMB_SUFFIX)
 
         for f in list(self._images_dir.iterdir()):
             if not f.is_file():
@@ -497,19 +481,29 @@ class ImageManager:
                     pass
                 continue
 
-            # Always: remove files with an unrecognised suffix.
+            # Rule 3: unknown postfix.
             if not any(f.name.endswith(s) for s in _KNOWN_SUFFIXES):
                 self._scrub_file(f, "unknown suffix")
                 continue
 
-            # Always: remove files whose name_hash is not registered.
-            if not any(f.name.startswith(h + "_") for h in known_hashes):
+            # Rule 2: name_hash not in DB.
+            name_hash = f.name[:_NAME_HASH_LEN]
+            if name_hash not in known_hashes:
                 self._scrub_file(f, "orphan (image deleted)")
                 continue
 
-            # auto_clear: remove old-slug panel/preview for registered images.
-            if auto_clear and f.name not in current_slug_valid:
-                self._scrub_file(f, "stale slug")
+            # Thumbs have no embedded slug — exempt from Rule 1.
+            if f.name.endswith(_THUMB_SUFFIX):
+                continue
+
+            # Rule 1 (auto_clear only): embedded slug ≠ current slug.
+            if auto_clear:
+                rec = records_by_hash.get(name_hash)
+                if rec is not None and rec.screen_image_config_slug:
+                    expected_name_panel = f"{name_hash}_{rec.screen_image_config_slug}{_PANEL_SUFFIX}"
+                    expected_name_preview = f"{name_hash}_{rec.screen_image_config_slug}{_PREVIEW_SUFFIX}"
+                    if f.name not in (expected_name_panel, expected_name_preview):
+                        self._scrub_file(f, "stale slug")
 
     def _scrub_file(self, f: Path, reason: str) -> None:
         try:
@@ -530,16 +524,17 @@ class ImageManager:
             )
 
         src_path = self._upload_dir / name
-        slug = self._config.cache_slug()
 
         try:
+            screen_cfg = self._classifier.screen_config_for(src_path, self._records[name].original_sha1)
             with open_image_for_render(src_path) as img:
                 panel_bytes = render_panel_bytes(
-                    img, self._config.image, self._config.orientation,
+                    img, screen_cfg.image_config, screen_cfg.orientation,
                 )
             preview_bytes = preview_png_from_panel_bytes(
-                panel_bytes, self._config.orientation,
+                panel_bytes, screen_cfg.orientation,
             )
+            new_slug = screen_cfg.cache_slug()
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             print(f"  Conversion failed for {name!r}: {err}")
@@ -549,7 +544,7 @@ class ImageManager:
                 if cur is not None:
                     self._records[name] = replace(
                         cur, convert_status="failed", convert_error=err,
-                        convert_pipeline_slug=None,
+                        screen_image_config_slug=None,
                     )
                     self._save_db()
                 self._progress = replace(
@@ -568,7 +563,7 @@ class ImageManager:
                 cur,
                 convert_status="ok",
                 convert_error=None,
-                convert_pipeline_slug=slug,
+                screen_image_config_slug=new_slug,
             )
             self._records[name] = new_rec
             self._images_dir.mkdir(parents=True, exist_ok=True)

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from webserver.config import AppConfig
+from webserver.app_config import AppConfig
 from webserver.image_manager import ImageManager
 
 # Suffixes as defined in image_manager
@@ -31,8 +31,9 @@ def _images_dir(mgr: ImageManager) -> Path:
     return Path(mgr._config.cache_dir) / "images"
 
 
-def _slug(mgr: ImageManager) -> str:
-    return mgr._config.cache_slug()
+def _slug_for(mgr: ImageManager, name: str) -> str:
+    """Return the current screen_image_config_slug for a registered image."""
+    return mgr._records[name].screen_image_config_slug
 
 
 def _name_hash(mgr: ImageManager, name: str) -> str:
@@ -67,7 +68,7 @@ def test_scrub_always_removes_orphan_hash(app_config, make_test_image):
     _register_ok(mgr, "a.png", make_test_image)
 
     # File whose hash prefix doesn't match any registered image.
-    orphan = _images_dir(mgr) / f"deadbeef000000_{_slug(mgr)}{_PANEL}"
+    orphan = _images_dir(mgr) / f"deadbeef000000_{_slug_for(mgr, 'a.png')}{_PANEL}"
     _write(orphan)
 
     mgr.sync()
@@ -94,7 +95,7 @@ def test_scrub_always_keeps_current_slug_files(app_config, make_test_image):
     mgr.thumbnail_jpg("a.png")  # thumbnails are generated lazily
 
     h = _name_hash(mgr, "a.png")
-    slug = _slug(mgr)
+    slug = _slug_for(mgr, "a.png")
     panel   = _images_dir(mgr) / f"{h}_{slug}{_PANEL}"
     preview = _images_dir(mgr) / f"{h}_{slug}{_PREVIEW}"
     thumb   = _images_dir(mgr) / f"{h}{_THUMB}"
@@ -114,13 +115,15 @@ def test_scrub_off_keeps_old_slug_files(tmp_path, make_test_image):
     cache  = tmp_path / "ca"; cache.mkdir()
 
     from webserver.presets import PRESET_IMAGE_CONFIGS
-    from webserver.dither import DitherConfig
 
     base_cfg = AppConfig(
         upload_dir=str(upload), cache_dir=str(cache), port=18080,
         poll_interval_seconds=1, orientation="landscape",
         auto_clear_cache=False,
-        image=replace(
+        # Disable classifier so the slug tracks image_config_default cleanly.
+        classifier_bw_detect_enabled=False,
+        classifier_face_detect_enabled=False,
+        image_config_default=replace(
             PRESET_IMAGE_CONFIGS["atkinson"],
             dither=replace(PRESET_IMAGE_CONFIGS["atkinson"].dither, algorithm="noop"),
         ),
@@ -131,22 +134,23 @@ def test_scrub_off_keeps_old_slug_files(tmp_path, make_test_image):
     mgr.sync()
 
     h = _name_hash(mgr, "a.png")
-    old_slug = _slug(mgr)
+    old_slug = _slug_for(mgr, "a.png")
+    assert old_slug is not None, "slug must be set after successful conversion"
 
     # Pretend the pipeline changed: build a new config with a different slug.
     new_image = replace(
-        base_cfg.image,
+        base_cfg.image_config_default,
         prepare_brightness=0.9,  # changes the slug
-        dither=replace(base_cfg.image.dither, algorithm="noop"),
+        dither=replace(base_cfg.image_config_default.dither, algorithm="noop"),
     )
-    new_cfg = replace(base_cfg, image=new_image)
-    assert new_cfg.cache_slug() != old_slug, "slug must differ for this test"
+    new_cfg = replace(base_cfg, image_config_default=new_image)
 
     # Reload manager with new config — image becomes pending, gets re-converted.
     mgr2 = ImageManager(new_cfg)
     mgr2.sync()
 
-    new_slug = new_cfg.cache_slug()
+    new_slug = _slug_for(mgr2, "a.png")
+    assert new_slug != old_slug, "slug must differ after config change"
 
     old_panel = Path(cache) / "images" / f"{h}_{old_slug}{_PANEL}"
     new_panel = Path(cache) / "images" / f"{h}_{new_slug}{_PANEL}"
@@ -172,7 +176,10 @@ def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
         upload_dir=str(upload), cache_dir=str(cache), port=18080,
         poll_interval_seconds=1, orientation="landscape",
         auto_clear_cache=True,
-        image=base_image,
+        # Disable classifier so the slug tracks image_config_default cleanly.
+        classifier_bw_detect_enabled=False,
+        classifier_face_detect_enabled=False,
+        image_config_default=base_image,
     )
 
     mgr = ImageManager(base_cfg)
@@ -180,16 +187,18 @@ def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
     mgr.sync()
 
     h = _name_hash(mgr, "a.png")
-    old_slug = _slug(mgr)
+    old_slug = _slug_for(mgr, "a.png")
+    assert old_slug is not None
 
     new_image = replace(base_image, prepare_brightness=0.9)
-    new_cfg   = replace(base_cfg, image=new_image, auto_clear_cache=True)
-    assert new_cfg.cache_slug() != old_slug
+    new_cfg   = replace(base_cfg, image_config_default=new_image, auto_clear_cache=True)
 
     mgr2 = ImageManager(new_cfg)
     mgr2.sync()
 
-    new_slug = new_cfg.cache_slug()
+    new_slug = _slug_for(mgr2, "a.png")
+    assert new_slug != old_slug, "slug must differ after config change"
+
     old_panel = Path(cache) / "images" / f"{h}_{old_slug}{_PANEL}"
     new_panel = Path(cache) / "images" / f"{h}_{new_slug}{_PANEL}"
 
@@ -211,7 +220,10 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
     cfg = AppConfig(
         upload_dir=str(upload), cache_dir=str(cache), port=18080,
         poll_interval_seconds=1, orientation="landscape",
-        auto_clear_cache=True, image=base_image,
+        auto_clear_cache=True,
+        classifier_bw_detect_enabled=False,
+        classifier_face_detect_enabled=False,
+        image_config_default=base_image,
     )
 
     mgr = ImageManager(cfg)
@@ -226,7 +238,7 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
 
     # Re-sync with new slug to trigger scrubber with auto_clear=True.
     new_image = replace(base_image, prepare_brightness=0.9)
-    new_cfg   = replace(cfg, image=new_image, auto_clear_cache=True)
+    new_cfg   = replace(cfg, image_config_default=new_image, auto_clear_cache=True)
     mgr2 = ImageManager(new_cfg)
     mgr2.sync()
 
@@ -242,7 +254,7 @@ def test_clear_caches_removes_panel_preview_thumb(app_config, make_test_image):
     mgr.thumbnail_jpg("a.png")
 
     h    = _name_hash(mgr, "a.png")
-    slug = _slug(mgr)
+    slug = _slug_for(mgr, "a.png")
     idir = _images_dir(mgr)
 
     panel   = idir / f"{h}_{slug}{_PANEL}"

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from webserver.config import AppConfig
+from webserver.app_config import AppConfig
 
 
 DEBUG_FAST_REFRESH_SECONDS = 180

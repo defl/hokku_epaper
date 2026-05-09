@@ -13,6 +13,7 @@ dependencies = [
     "pillow>=9.0",
     "numpy>=1.20",
     "pillow-heif>=0.10",
+    "opencv-contrib-python>=4.8",
 ]
 
 [project.scripts]
@@ -26,6 +27,9 @@ test = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["webserver*"]
+
+[tool.setuptools.package-data]
+webserver = ["models/*.onnx", "models/ATTRIBUTION.md"]
 
 [tool.pytest.ini_options]
 addopts = ["-m", "not time_intensive"]

@@ -29,13 +29,13 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from webserver.dither import DitherConfig, PALETTE_LAB, adaptive_saturate, rgb_to_lab
+from webserver.dither import PALETTE_LAB, adaptive_saturate, rgb_to_lab
+from webserver.dither_config import DitherConfig
 
 # Panel ink L* limits — same derivation as image.py's private constants.
 _DISPLAY_BLACK_L = float(PALETTE_LAB[0, 0])
 _DISPLAY_WHITE_L = float(PALETTE_LAB[1, 0])
 from webserver.image import (
-    ImageConfig,
     _apply_prepare_enhancements,
     _bw_safe_image_config,
     _is_near_grayscale,
@@ -43,6 +43,7 @@ from webserver.image import (
     open_image_for_render,
     render_preview_png,
 )
+from webserver.image_config import ImageConfig
 from webserver.presets import PRESET_IMAGE_CONFIGS
 
 
@@ -504,14 +505,52 @@ def test_render_preview_png_portrait_aspect():
     assert h > w
 
 
-def test_bw_config_applied_automatically_for_grey_source():
-    """Hue-aware preset on a grey image should use the B&W-safe path and not crash."""
+def test_hue_aware_config_on_grey_source_renders_without_crash():
+    """Hue-aware preset on a grey image renders successfully.
+
+    The auto-bw-safe fallback was removed (dispatch is now opt-in via
+    ImageClassifier); render_panel_bytes/render_preview_png honour the cfg given.
+    """
     cfg = replace(
         PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
         dither=_NOOP_DITHER,
     )
     png = render_preview_png(_make_grey(60, 40), cfg, "landscape", max_side_px=100)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_render_panel_bytes_honours_cfg_without_hidden_override():
+    """render_panel_bytes must use the exact cfg it was given — no hidden B&W override.
+
+    Previously a hue-aware cfg on a grey source was silently rewritten to a B&W-safe
+    variant. That auto-fallback is gone; ImageClassifier owns the dispatch policy.
+
+    We verify this by rendering the SAME coloured image with hue-aware vs bw-safe
+    configs and asserting the outputs differ (proving each cfg was actually honoured).
+    """
+    from webserver.image import render_panel_bytes
+    from webserver.display import TOTAL_BYTES
+
+    # A hue-aware cfg that boosts saturation.
+    cfg_hue = replace(
+        PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
+        dither=_NOOP_DITHER,
+    )
+    # A bw-safe cfg (no saturation boost).
+    cfg_bw = _bw_safe_image_config(cfg_hue)
+
+    # Coloured gradient — adaptive saturation will differ between the two cfgs.
+    colour = _make_gradient(60, 40)
+    out_hue = render_panel_bytes(colour, cfg_hue, "landscape")
+    out_bw = render_panel_bytes(colour, cfg_bw, "landscape")
+
+    # Both should produce valid panel output.
+    assert len(out_hue) == TOTAL_BYTES
+    assert len(out_bw) == TOTAL_BYTES
+    # Outputs must differ — proves render_panel_bytes honoured the distinct cfgs.
+    assert out_hue != out_bw, (
+        "hue-aware and bw-safe configs must produce different outputs on a coloured image"
+    )
 
 
 # ── slow: visual inspection outputs ──────────────────────────────────────────

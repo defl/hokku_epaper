@@ -194,7 +194,7 @@
   </div>
 
   <div class="config-row" style="position: relative;">
-    <label>Dither preset:</label>
+    <label>Default dither preset:</label>
     <select id="dither-preset"></select>
     <button type="button" class="info-btn" id="dither-preset-info-btn"
             title="What does this preset do?" aria-label="Preset description"
@@ -229,18 +229,57 @@
     </div>
   </div>
 
-  <div class="config-row popover-anchor">
-    <label>Serpentine scan:</label>
+  <div class="config-row">
+    <label>Detect B&amp;W photos:</label>
     <label class="toggle">
-      <input type="checkbox" id="dither-serpentine">
-      <span id="dither-serpentine-label">Off</span>
+      <input type="checkbox" id="bw-detect-enabled" onchange="document.getElementById('bw-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('bw-config-panel').hidden=!this.checked;">
+      <span id="bw-detect-enabled-label">Off</span>
     </label>
-    <button type="button" class="help-icon" id="serpentine-help-btn" aria-label="Serpentine scan help" aria-expanded="false">?</button>
-    <div id="serpentine-help-popover" class="help-popover" role="dialog" aria-label="Serpentine scan explanation" hidden>
-      <h3>Serpentine error diffusion</h3>
-      <p><strong>What it does:</strong> Normally each row is scanned left-to-right, so quantization error is always pushed ahead in the same direction. With serpentine (boustrophedon) scanning, <strong>every other row is processed right-to-left</strong>, and the error-diffusion pattern is <strong>mirrored horizontally</strong> so error still flows only into pixels that have not been finalized yet.</p>
-      <p><strong>Why use it:</strong> A single scan direction can leave <strong>visible directional streaks or "combing"</strong> in smooth areas. Alternating direction breaks that bias and often looks more even, similar to the default recommendation in mature dithering libraries.</p>
-      <p class="help-popover-note">Applies to Floyd–Steinberg, Atkinson, and Stucki. Turning it on or off re-converts images (cached results for both settings are kept). Default is off for backward compatibility with earlier renders.</p>
+    <span class="info">use a separate pipeline for monochrome images</span>
+  </div>
+
+  <div id="bw-config-panel" class="dither-advanced" hidden>
+    <div class="dither-advanced-header">
+      <h3>B&amp;W photo pipeline</h3>
+    </div>
+    <p class="dither-advanced-intro">Applied when a photo is detected as near-monochrome (95th-percentile Lab chroma below 8). Saturation boosters are disabled by default to avoid tinting film grain.</p>
+    <div class="config-row">
+      <label>B&amp;W dither preset:</label>
+      <select id="bw-preset" onchange="onBwPresetChange(this.value)"></select>
+    </div>
+    <div class="config-row">
+      <label>Serpentine scan:</label>
+      <label class="toggle">
+        <input type="checkbox" id="bw-serpentine" onchange="onBwSerpentineChange(this.checked)">
+        <span id="bw-serpentine-label">Off</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="config-row">
+    <label>Detect faces:</label>
+    <label class="toggle">
+      <input type="checkbox" id="face-detect-enabled" onchange="document.getElementById('face-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('face-config-panel').hidden=!this.checked;">
+      <span id="face-detect-enabled-label">Off</span>
+    </label>
+    <span class="info">use a separate pipeline for portrait photos</span>
+  </div>
+
+  <div id="face-config-panel" class="dither-advanced" hidden>
+    <div class="dither-advanced-header">
+      <h3>Face photo pipeline</h3>
+    </div>
+    <p class="dither-advanced-intro">Applied when ≥1 face is detected (YuNet, score ≥ 0.5). Atkinson dithering tends to look better on skin tones than Floyd–Steinberg.</p>
+    <div class="config-row">
+      <label>Face dither preset:</label>
+      <select id="face-preset" onchange="onFacePresetChange(this.value)"></select>
+    </div>
+    <div class="config-row">
+      <label>Serpentine scan:</label>
+      <label class="toggle">
+        <input type="checkbox" id="face-serpentine" onchange="onFaceSerpentineChange(this.checked)">
+        <span id="face-serpentine-label">Off</span>
+      </label>
     </div>
   </div>
 
@@ -271,6 +310,7 @@
     <label></label>
     <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
     <button class="btn btn-danger" onclick="clearCache()">Clear Cache &amp; Re-convert</button>
+    <button class="btn btn-secondary" onclick="clearClassifierCache()" title="Wipe cached B&amp;W / face detection results. Panel .bin files are untouched.">Clear Classifier Cache</button>
   </div>
 </div>
 
@@ -356,6 +396,10 @@ let refreshTimes = [];
 let ditherState = null;
 let ditherPresets = {};
 
+// Classifier secondary config states — full ImageConfig dicts for B&W / face.
+let bwDitherState = null;
+let faceDitherState = null;
+
 // Per-knob help text shown in (?) popovers. Short, user-facing, explains
 // what changes in the output when the knob moves — not the implementation.
 const DITHER_HELP = {
@@ -376,6 +420,7 @@ const DITHER_HELP = {
   bw_fallback: `<p>Detects near-grayscale images and switches to a conservative pipeline (flat 1.05 saturation, no adaptive chroma tricks). Without this, tiny sensor tints in B&amp;W photos get amplified into a visible pink cast.</p><p>The rest of the pipeline (LUT, kernel, tonal stages) still runs as configured.</p>`,
   bw_fallback_params: `<p>An image counts as B&amp;W if the Nth-percentile Lab chroma (across a 200px thumbnail) stays below the threshold. Defaults: 95th percentile, chroma 8.</p>`,
   kernel: `<p>The error-diffusion rule.</p><p><strong>floyd_steinberg</strong> — full error distributed to 4 neighbours (7/16, 3/16, 5/16, 1/16). Highest contrast; finer diagonal noise.</p><p><strong>atkinson</strong> — only 6/8 of error distributed to 6 neighbours (1/8 each). Softer gradients, less hue-shift cascade, slightly lower max contrast.</p>`,
+  serpentine: `<p><strong>Serpentine scanning</strong> alternates scan direction row by row (left→right, right→left, …) so quantization error never accumulates in one direction. Without it a single left→right scan can leave faint directional streaks in smooth areas.</p><p>Applies to Floyd–Steinberg, Atkinson, and Stucki. No effect on the noop kernel.</p>`,
 };
 
 function deepCopy(o) { return JSON.parse(JSON.stringify(o)); }
@@ -410,10 +455,6 @@ function populatePresetDropdown() {
     if (v !== '__custom__' && ditherPresets[v]) {
       const {label, description, ...presetFields} = ditherPresets[v];
       ditherState = deepCopy(presetFields);
-      // Sync the main serpentine toggle from preset value
-      const serpOn = !!(ditherState.dither && ditherState.dither.serpentine);
-      document.getElementById('dither-serpentine').checked = serpOn;
-      document.getElementById('dither-serpentine-label').textContent = serpOn ? 'On' : 'Off';
       renderDitherPanel();
       updatePresetDescription();
       if (isAutoClearEnabled()) scrubStaleCache();
@@ -435,6 +476,79 @@ function selectPresetMatching(state) {
   }
   sel.value = matched;
   updatePresetDescription();
+}
+
+function populateClassifierPresetDropdowns() {
+  ['bw-preset', 'face-preset'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    sel.innerHTML = '';
+    Object.entries(ditherPresets).forEach(([key, p]) => {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = p.label;
+      sel.appendChild(opt);
+    });
+  });
+}
+
+function selectClassifierPresets(cfg) {
+  // Select matching preset in bw/face dropdowns. If exact match not found,
+  // leave at whatever the first option is (preset may have been saved as custom).
+  ['bw', 'face'].forEach(kind => {
+    const state = kind === 'bw' ? cfg.image_config_bw : cfg.image_config_face;
+    if (!state) return;
+    const sel = document.getElementById(kind + '-preset');
+    if (!sel) return;
+    const stateJson = JSON.stringify(state);
+    for (const [key, p] of Object.entries(ditherPresets)) {
+      const {label, description, ...fields} = p;
+      if (JSON.stringify(fields) === stateJson) { sel.value = key; return; }
+    }
+    // No match — leave at first option (server default).
+  });
+  if (cfg.image_config_bw) {
+    bwDitherState = JSON.parse(JSON.stringify(cfg.image_config_bw));
+    const serpOn = !!(bwDitherState.dither && bwDitherState.dither.serpentine);
+    document.getElementById('bw-serpentine').checked = serpOn;
+    document.getElementById('bw-serpentine-label').textContent = serpOn ? 'On' : 'Off';
+  }
+  if (cfg.image_config_face) {
+    faceDitherState = JSON.parse(JSON.stringify(cfg.image_config_face));
+    const serpOn = !!(faceDitherState.dither && faceDitherState.dither.serpentine);
+    document.getElementById('face-serpentine').checked = serpOn;
+    document.getElementById('face-serpentine-label').textContent = serpOn ? 'On' : 'Off';
+  }
+}
+
+function onBwPresetChange(key) {
+  if (ditherPresets[key]) {
+    const {label, description, ...fields} = ditherPresets[key];
+    bwDitherState = deepCopy(fields);
+    const serpOn = !!(bwDitherState.dither && bwDitherState.dither.serpentine);
+    document.getElementById('bw-serpentine').checked = serpOn;
+    document.getElementById('bw-serpentine-label').textContent = serpOn ? 'On' : 'Off';
+  }
+}
+
+function onBwSerpentineChange(checked) {
+  document.getElementById('bw-serpentine-label').textContent = checked ? 'On' : 'Off';
+  if (bwDitherState && bwDitherState.dither) bwDitherState.dither.serpentine = checked;
+}
+
+function onFacePresetChange(key) {
+  if (ditherPresets[key]) {
+    const {label, description, ...fields} = ditherPresets[key];
+    faceDitherState = deepCopy(fields);
+    const serpOn = !!(faceDitherState.dither && faceDitherState.dither.serpentine);
+    document.getElementById('face-serpentine').checked = serpOn;
+    document.getElementById('face-serpentine-label').textContent = serpOn ? 'On' : 'Off';
+  }
+}
+
+function onFaceSerpentineChange(checked) {
+  document.getElementById('face-serpentine-label').textContent = checked ? 'On' : 'Off';
+  if (faceDitherState && faceDitherState.dither) faceDitherState.dither.serpentine = checked;
 }
 
 function updatePresetDescription() {
@@ -477,10 +591,6 @@ function resetToPreset() {
   if (ditherPresets[key]) {
     const {label, description, ...presetFields} = ditherPresets[key];
     ditherState = deepCopy(presetFields);
-    // Sync the main serpentine toggle from preset value
-    const serpOn = !!(ditherState.dither && ditherState.dither.serpentine);
-    document.getElementById('dither-serpentine').checked = serpOn;
-    document.getElementById('dither-serpentine-label').textContent = serpOn ? 'On' : 'Off';
     renderDitherPanel();
     updatePresetDescription();
     showToast('Reset to preset: ' + ditherPresets[key].label);
@@ -614,11 +724,13 @@ function renderDitherPanel() {
   sections.push(group('Palette LUT', lutBody, null));
 
   // 5. Dither kernel
-  const kernelBody = fieldSelect('Algorithm', ['dither', 'algorithm'], [
-    ['floyd_steinberg', 'Floyd-Steinberg'],
-    ['atkinson', 'Atkinson'],
-    ['stucki', 'Stucki'],
-  ], 'kernel');
+  const kernelBody =
+    fieldSelect('Algorithm', ['dither', 'algorithm'], [
+      ['floyd_steinberg', 'Floyd-Steinberg'],
+      ['atkinson', 'Atkinson'],
+      ['stucki', 'Stucki'],
+    ], 'kernel') +
+    fieldCheck('Serpentine scan', ['dither', 'serpentine'], 'serpentine');
   sections.push(group('Dither kernel', kernelBody, null));
 
   document.getElementById('dither-advanced-panel').innerHTML = sections.join('');
@@ -800,18 +912,17 @@ function removeTime(idx) {
 }
 
 async function saveConfig() {
-  // Sync serpentine toggle into ditherState before saving.
-  const serpentineChecked = document.getElementById('dither-serpentine').checked;
-  if (ditherState && ditherState.dither) {
-    ditherState.dither.serpentine = serpentineChecked;
-  }
   const data = {
     refresh_image_at_time: refreshTimes,
     poll_interval_seconds: parseInt(document.getElementById('poll-interval').value) || 10,
     orientation: document.getElementById('orientation').value,
     debug_fast_refresh: document.getElementById('debug-fast-refresh').checked,
     auto_clear_cache: document.getElementById('auto-clear-cache').checked,
-    image: ditherState,
+    image_config_default: ditherState,
+    classifier_bw_detect_enabled: document.getElementById('bw-detect-enabled').checked,
+    image_config_bw: bwDitherState,
+    classifier_face_detect_enabled: document.getElementById('face-detect-enabled').checked,
+    image_config_face: faceDitherState,
   };
   try {
     const resp = await fetch('/hokku/api/config', {
@@ -852,6 +963,16 @@ async function clearCache(silent = false) {
     refreshStatus();
   } catch (e) {
     if (!silent) showToast('Error: ' + e.message);
+  }
+}
+
+async function clearClassifierCache() {
+  try {
+    await fetch('/hokku/api/classifier/clear', {method: 'POST'});
+    showToast('Classifier cache cleared — detections will re-run on next sync');
+    refreshStatus();
+  } catch (e) {
+    showToast('Error clearing classifier cache: ' + e.message);
   }
 }
 
@@ -1191,10 +1312,15 @@ async function loadConfig() {
     renderRefreshTimes();
     document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
     document.getElementById('orientation').value = cfg.orientation || 'landscape';
-    // cfg.image holds the full ImageConfig; cfg.image.dither holds the DitherConfig
-    const serpOn = !!(cfg.image && cfg.image.dither && cfg.image.dither.serpentine);
-    document.getElementById('dither-serpentine').checked = serpOn;
-    document.getElementById('dither-serpentine-label').textContent = serpOn ? 'On' : 'Off';
+    // Classifier toggles
+    const bwOn = !!cfg.classifier_bw_detect_enabled;
+    document.getElementById('bw-detect-enabled').checked = bwOn;
+    document.getElementById('bw-detect-enabled-label').textContent = bwOn ? 'On' : 'Off';
+    document.getElementById('bw-config-panel').hidden = !bwOn;
+    const faceOn = !!cfg.classifier_face_detect_enabled;
+    document.getElementById('face-detect-enabled').checked = faceOn;
+    document.getElementById('face-detect-enabled-label').textContent = faceOn ? 'On' : 'Off';
+    document.getElementById('face-config-panel').hidden = !faceOn;
 
     const autoClear = !!cfg.auto_clear_cache;
     document.getElementById('auto-clear-cache').checked = autoClear;
@@ -1213,10 +1339,12 @@ async function loadConfig() {
     // Dither presets + current state. ditherState is the full ImageConfig dict
     // (same shape as what each preset carries before label/description are added).
     ditherPresets = data.dither_presets || {};
-    ditherState = JSON.parse(JSON.stringify(cfg.image || {}));
+    ditherState = JSON.parse(JSON.stringify(cfg.image_config_default || {}));
     populatePresetDropdown();
     selectPresetMatching(ditherState);
     renderDitherPanel();
+    populateClassifierPresetDropdowns();
+    selectClassifierPresets(cfg);
 
     currentConfig = cfg;
   } catch (e) {
@@ -1460,15 +1588,6 @@ window.addEventListener('drop', e => {
 document.getElementById('auto-clear-cache').addEventListener('change', function() {
   document.getElementById('auto-clear-cache-label').textContent = this.checked ? 'On' : 'Off';
   if (this.checked) scrubStaleCache();
-});
-
-// Serpentine toggle — update label and sync into ditherState immediately.
-document.getElementById('dither-serpentine').addEventListener('change', function() {
-  document.getElementById('dither-serpentine-label').textContent = this.checked ? 'On' : 'Off';
-  if (ditherState && ditherState.dither) {
-    ditherState.dither.serpentine = this.checked;
-    markCustom();
-  }
 });
 
 // Initial load: fetch config once, then start polling volatile status only.

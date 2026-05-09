@@ -1,18 +1,16 @@
 """Spectra 6 dithering pipeline: Lab color, LUTs, error diffusion."""
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
 from functools import lru_cache
-from typing import Any, Literal, TypeAlias
+from typing import Any, TypeAlias
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from PIL import Image
 
 from webserver.display import PALETTE_MEASURED_RGB
+from webserver.dither_config import AlgorithmName, DitherConfig, LutName  # noqa: F401 (re-exported)
 
 FloatArray: TypeAlias = NDArray[Any]
 UInt8Array: TypeAlias = NDArray[np.uint8]
@@ -350,25 +348,6 @@ def noop_dither(
 
 
 # ── Config + dispatch ──────────────────────────────────────────────
-
-AlgorithmName = Literal["floyd_steinberg", "atkinson", "stucki", "noop"]
-LutName = Literal["euclidean", "hue_aware"]
-
-
-@dataclass(frozen=True)
-class DitherConfig:
-    """Error-diffusion algorithm, palette LUT, scan order."""
-
-    algorithm: AlgorithmName
-    lut_name: LutName
-    serpentine: bool
-    hue_cutoff_deg: float
-    neutral_chroma: float
-
-    def cache_slug(self) -> str:
-        raw = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(raw.encode()).hexdigest()[:14]
-
 
 def lut_and_scale_for_dither_config(cfg: DitherConfig) -> tuple[NDArray[np.uint8], float]:
     if cfg.lut_name == "euclidean":

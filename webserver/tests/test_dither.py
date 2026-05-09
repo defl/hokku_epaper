@@ -2,13 +2,13 @@
 import numpy as np
 
 from webserver.dither import (
-    DitherConfig,
     PALETTE_LAB,
     _cached_euclidean_lut,
     _cached_hue_aware_lut,
     dither,
     noop_dither,
 )
+from webserver.dither_config import DitherConfig
 
 
 def test_palette_lab_shape():

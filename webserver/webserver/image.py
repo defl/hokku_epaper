@@ -1,4 +1,4 @@
-"""ImageConfig + a single internal render path.
+"""Image rendering pipeline.
 
 Two public entrypoints:
 - render_panel_bytes()   — full-resolution panel, returns wire-format bytes
@@ -8,13 +8,11 @@ Both go through the same _render_indices() pipeline; only the canvas dims differ
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -30,7 +28,6 @@ from webserver.display import (
     panel_bytes_to_indices,
 )
 from webserver.dither import (
-    DitherConfig,
     PALETTE_LAB,
     adaptive_saturate,
     dither,
@@ -39,6 +36,7 @@ from webserver.dither import (
     srgb_to_linear,
     xyz_to_lab,
 )
+from webserver.image_config import ImageConfig, Orientation  # noqa: F401 (re-exported)
 
 
 IMAGE_EXTENSIONS = {
@@ -52,39 +50,6 @@ GRAYSCALE_CHROMA_THRESHOLD = 8.0
 # to map the source image's full Lab range into what the panel can actually show.
 _DISPLAY_BLACK_L = float(PALETTE_LAB[0, 0])
 _DISPLAY_WHITE_L = float(PALETTE_LAB[1, 0])
-
-Orientation = Literal["landscape", "portrait"]
-
-
-# ── ImageConfig ─────────────────────────────────────────────────────
-
-@dataclass(frozen=True)
-class ImageConfig:
-    """How to convert a source image to palette indices.
-
-    Orientation is *not* stored here — it lives on AppConfig and is passed
-    explicitly to the render functions.
-    """
-
-    dither: DitherConfig
-    prepare_autocontrast_cutoff: float
-    prepare_gamma: float
-    prepare_brightness: float
-    prepare_contrast: float
-    prepare_sharpness: float
-    color_enhance: float
-    use_adaptive_saturate: bool
-    saturate_max_enhance: float
-    saturate_low_chroma_thresh: float
-    saturate_high_chroma_thresh: float
-    scale_chroma: bool
-    adaptive_vivid: bool
-    vivid_chroma_low: float
-    vivid_chroma_high: float
-
-    def cache_slug(self) -> str:
-        raw = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(raw.encode()).hexdigest()[:14]
 
 
 # ── Lab → RGB (for compress_dynamic_range) ─────────────────────────
@@ -188,6 +153,21 @@ def _is_near_grayscale(img: Image.Image) -> bool:
     return float(np.percentile(chroma, 95)) < GRAYSCALE_CHROMA_THRESHOLD
 
 
+# Public alias for use by ImageClassifier.
+is_grayscale_image = _is_near_grayscale
+
+
+def is_grayscale(path: Path) -> bool:
+    """Return True iff the image at *path* is essentially monochrome.
+
+    Convenience wrapper that opens the file and delegates to
+    ``is_grayscale_image()``. Used by ``ImageClassifier`` to avoid opening
+    the same file twice.
+    """
+    with open_image_for_render(path) as img:
+        return is_grayscale_image(img)
+
+
 def _bw_safe_image_config(cfg: ImageConfig) -> ImageConfig:
     """Disable saturation boosters and chroma scaling for B&W sources."""
     return replace(
@@ -257,10 +237,10 @@ def _render_indices(
 def render_panel_bytes(img: Image.Image, cfg: ImageConfig, orientation: Orientation) -> bytes:
     """Full-resolution panel buffer → wire bytes.
 
-    Auto-applies a B&W-safe config when the source is essentially monochrome.
+    Renders with exactly the ``cfg`` provided — no hidden B&W fallback.
+    Callers that want B&W-safe rendering should use an appropriate ``ImageConfig``
+    (e.g. obtained from ``ImageClassifier.screen_config_for()``).
     """
-    if (cfg.use_adaptive_saturate or cfg.adaptive_vivid) and _is_near_grayscale(img):
-        cfg = _bw_safe_image_config(cfg)
     result_idx = _render_indices(img, cfg, orientation, FULL_W, PANEL_H)
     return indices_to_panel_bytes(result_idx)
 
@@ -283,9 +263,9 @@ def render_preview_png(
 
     PNG (not JPEG) because each pixel is already snapped to a palette colour
     and JPEG's chroma subsampling would smear them.
+
+    Renders with exactly the ``cfg`` provided — no hidden B&W fallback.
     """
-    if (cfg.use_adaptive_saturate or cfg.adaptive_vivid) and _is_near_grayscale(img):
-        cfg = _bw_safe_image_config(cfg)
     cw, ch = _preview_canvas_dims(orientation, max_side_px)
     result_idx = _render_indices(img, cfg, orientation, cw, ch)
     preview_rgb = indices_to_preview_rgb(result_idx)

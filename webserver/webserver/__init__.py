@@ -9,8 +9,9 @@ import threading
 from pathlib import Path
 
 from webserver.app_state import AppState
-from webserver.config import AppConfig
+from webserver.app_config import AppConfig
 from webserver.flask_app import create_app
+from webserver.image_classifier import ImageClassifier
 from webserver.image_manager import ImageManager
 from webserver.serve_scheduler import ServeScheduler
 from webserver.watcher import Watcher
@@ -24,6 +25,13 @@ def main() -> None:
     config_path = Path(args.config)
     config = AppConfig.load(config_path)
 
+    if not config.upload_dir:
+        print("Error: upload_dir is not set in config — edit your config.json and set upload_dir", file=sys.stderr)
+        sys.exit(1)
+    if not config.cache_dir:
+        print("Error: cache_dir is not set in config — edit your config.json and set cache_dir", file=sys.stderr)
+        sys.exit(1)
+
     upload_dir = Path(config.upload_dir)
     cache_dir = Path(config.cache_dir)
     if not upload_dir.is_dir():
@@ -36,9 +44,10 @@ def main() -> None:
         print(f"Error: cache_dir is not writable: {cache_dir}", file=sys.stderr)
         sys.exit(1)
 
-    manager = ImageManager(config)
+    classifier = ImageClassifier(config)
+    manager = ImageManager(config, classifier)
     scheduler = ServeScheduler(manager)
-    state = AppState(config, manager, scheduler)
+    state = AppState(config, classifier, manager, scheduler)
     app = create_app(state, config_path=config_path)
 
     print(f"Hokku image server")

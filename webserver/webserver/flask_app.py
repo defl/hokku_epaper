@@ -26,7 +26,7 @@ from pillow_heif import register_heif_opener
 from werkzeug.utils import secure_filename
 
 from webserver.app_state import AppState
-from webserver.config import AppConfig
+from webserver.app_config import AppConfig
 from webserver.display import TOTAL_BYTES, VISUAL_H, VISUAL_W
 from webserver.image import IMAGE_EXTENSIONS
 from webserver.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS, PRESET_META
@@ -228,6 +228,18 @@ def create_app(
         state.manager.scrub_stale_cache()
         return jsonify({"ok": True})
 
+    @app.route("/hokku/api/classifier/clear", methods=["POST"])
+    def api_classifier_clear():
+        """Wipe all cached classifier observations (is_bw / has_face).
+
+        Deletes image_classifier.json. The next sync will re-run detection
+        on every image. Already-rendered panel .bin files are NOT touched —
+        they are keyed by ScreenImageConfig slug and remain valid unless the
+        classification result changes.
+        """
+        state.classifier.clear_cache()
+        return jsonify({"ok": True})
+
     # ── API: status + config ───────────────────────────────────
 
     @app.route("/hokku/api/status")
@@ -363,7 +375,7 @@ def create_app(
         except FileNotFoundError:
             return jsonify({"error": f"image {name!r} not found"}), 404
         try:
-            from webserver.config import _image_config_from_dict
+            from webserver.image_config import _image_config_from_dict
             cfg = _image_config_from_dict(image_blob)
         except (TypeError, ValueError) as e:
             return jsonify({"error": f"invalid image config: {e}"}), 400
