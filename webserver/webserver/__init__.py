@@ -61,6 +61,16 @@ def main() -> None:
     print(f"    GET /hokku/screen/  — panel binary + X-Sleep-Seconds")
     print(f"    GET /hokku/ui       — web GUI")
 
+    # Run an initial sync on the main thread so the state is fully populated
+    # before Flask starts accepting connections.  The watcher thread then takes
+    # over for all subsequent scans.
+    print("  Initial scan…", end=" ", flush=True)
+    try:
+        manager.sync()
+        print("done.")
+    except Exception as e:
+        print(f"warning: {e}")
+
     watcher_thread = threading.Thread(
         target=Watcher(state).run_forever, daemon=True, name="watcher",
     )
