@@ -261,6 +261,9 @@ def create_app(
                 "status": r.convert_status,
                 "error": r.convert_error,
                 "size_bytes": r.original_size_bytes,
+                "image_width": r.image_width,
+                "image_height": r.image_height,
+                "last_conversion_seconds": r.last_conversion_seconds,
                 "is_bw": obs.is_bw if obs else None,
                 "has_face": obs.has_face if obs else None,
             }

@@ -35,9 +35,12 @@
   .failed-list .failed-row:last-child { border-bottom: none; }
   .failed-list .failed-row .fname { word-break: break-all; color: #7c2d12; }
   .failed-list .failed-row .failed-error { font-size: 0.9em; color: #b45309; }
+  .failed-list .failed-row .row-actions { display: flex; gap: 6px; flex-shrink: 0; }
   .failed-list .failed-row button { background: #2563eb; color: #fff; border: none; border-radius: 4px; padding: 6px 14px; font-size: 0.85em; cursor: pointer; }
   .failed-list .failed-row button:hover { background: #1d4ed8; }
   .failed-list .failed-row button:disabled { background: #9ca3af; cursor: not-allowed; }
+  .failed-list .failed-row .delete-failed-btn { background: #fff; color: #dc2626; border: 1px solid #dc2626; }
+  .failed-list .failed-row .delete-failed-btn:hover { background: #fee2e2; }
   .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9em; cursor: pointer; user-select: none; }
   .toggle input[type="checkbox"] { width: 16px; height: 16px; accent-color: #dc2626; cursor: pointer; }
   .info-btn { width: 22px; height: 22px; border-radius: 50%; border: 1px solid #ccc; background: #fff; color: #555; font-weight: 700; font-size: 0.85em; cursor: pointer; line-height: 1; padding: 0; }
@@ -222,6 +225,10 @@
     Use "Retry" to try again — if it fails repeatedly, delete the image and re-upload a different version.
   </p>
   <div id="failed-list"></div>
+  <div id="failed-bulk" style="display:none; margin-top:12px; gap:8px; flex-wrap:wrap;">
+    <button class="btn btn-secondary btn-small" id="failed-retry-all">Retry all</button>
+    <button class="btn btn-secondary btn-small" id="failed-delete-all" style="color:#dc2626; border-color:#dc2626;">Delete all</button>
+  </div>
 </div>
 
 <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()" style="margin-top:20px;">
@@ -1258,9 +1265,11 @@ function escapeHtml(s) {
 function renderFailedList(failed) {
   const section = document.getElementById('failed-section');
   const list = document.getElementById('failed-list');
+  const bulk = document.getElementById('failed-bulk');
   if (!failed || failed.length === 0) {
     section.style.display = 'none';
     list.innerHTML = '';
+    bulk.style.display = 'none';
     return;
   }
   section.style.display = 'block';
@@ -1276,12 +1285,30 @@ function renderFailedList(failed) {
         ${escapeHtml(entry.name)}
         ${entry.error ? `<span class="failed-error" title="${escapeHtml(entry.error)}"> — ${escapeHtml(entry.error)}</span>` : ''}
       </span>
-      <button class="retry-btn" data-name="${escapeHtml(entry.name)}">Retry</button>
+      <div class="row-actions">
+        <button class="retry-btn" data-name="${escapeHtml(entry.name)}">Retry</button>
+        <button class="delete-failed-btn" data-name="${escapeHtml(entry.name)}">Delete</button>
+      </div>
     </div>
   `).join('');
   list.querySelectorAll('.retry-btn').forEach(btn => {
     btn.addEventListener('click', () => retryFailed(btn.dataset.name, btn));
   });
+  list.querySelectorAll('.delete-failed-btn').forEach(btn => {
+    btn.addEventListener('click', () => deleteImage(btn.dataset.name));
+  });
+
+  // Bulk buttons
+  bulk.style.display = 'flex';
+  const retryAllBtn = document.getElementById('failed-retry-all');
+  const deleteAllBtn = document.getElementById('failed-delete-all');
+  // Re-wire (clone to drop previous listeners)
+  const newRetryAll = retryAllBtn.cloneNode(true);
+  const newDeleteAll = deleteAllBtn.cloneNode(true);
+  retryAllBtn.replaceWith(newRetryAll);
+  deleteAllBtn.replaceWith(newDeleteAll);
+  newRetryAll.addEventListener('click', () => retryAllFailed(failed));
+  newDeleteAll.addEventListener('click', () => deleteAllFailed(failed));
 }
 
 async function retryFailed(name, btn) {
@@ -1300,6 +1327,35 @@ async function retryFailed(name, btn) {
     btn.textContent = 'Retry';
     showToast('Retry failed: ' + e.message);
   }
+}
+
+async function retryAllFailed(failed) {
+  const btn = document.getElementById('failed-retry-all');
+  btn.disabled = true;
+  let ok = 0, errs = 0;
+  for (const entry of failed) {
+    try {
+      const resp = await fetch(`/hokku/api/image/${encodeURIComponent(entry.name)}/retry`, {method: 'POST'});
+      if (resp.ok) ok++; else errs++;
+    } catch { errs++; }
+  }
+  showToast(errs ? `Retried ${ok}, ${errs} error(s)` : `Retrying all ${ok} image(s)`);
+  refreshStatus();
+}
+
+async function deleteAllFailed(failed) {
+  if (!confirm(`Delete all ${failed.length} failed image(s)? This cannot be undone.`)) return;
+  const btn = document.getElementById('failed-delete-all');
+  btn.disabled = true;
+  let ok = 0, errs = 0;
+  for (const entry of failed) {
+    try {
+      const resp = await fetch(`/hokku/api/image/${encodeURIComponent(entry.name)}`, {method: 'DELETE'});
+      if (resp.ok) ok++; else errs++;
+    } catch { errs++; }
+  }
+  showToast(errs ? `Deleted ${ok}, ${errs} error(s)` : `Deleted ${ok} image(s)`);
+  refreshStatus();
 }
 
 // Keep the last upload+serve snapshot so Details can read it without a round-trip.
@@ -1366,7 +1422,15 @@ function showImageDetails(fname) {
   const fmt = (v, fallback) => (v != null ? v : fallback);
   const yesno = v => v === true ? '✓ Yes' : v === false ? '✗ No' : '–';
 
+  const dimsStr = (entry.image_width && entry.image_height)
+    ? `${entry.image_width} × ${entry.image_height}`
+    : '–';
+  const ditherStr = (entry.last_conversion_seconds != null)
+    ? `${entry.last_conversion_seconds.toFixed(1)} s`
+    : '–';
   const rows = [
+    ['Dimensions', dimsStr],
+    ['Dither time', ditherStr],
     ['Shown', (sd.total_show_count || 0) + '×'],
     ['Last displayed', formatLastDisplayed(sd.last_request)],
     ['Display time', sd.total_show_formatted || '0m'],
