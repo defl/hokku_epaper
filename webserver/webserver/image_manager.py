@@ -530,6 +530,7 @@ class ImageManager:
             with open_image_for_render(src_path) as img:
                 panel_bytes = render_panel_bytes(
                     img, screen_cfg.image_config, screen_cfg.orientation,
+                    screen_cfg.crop_to_fill_threshold,
                 )
             preview_bytes = preview_png_from_panel_bytes(
                 panel_bytes, screen_cfg.orientation,

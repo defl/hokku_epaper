@@ -8,6 +8,7 @@ Both go through the same _render_indices() pipeline; only the canvas dims differ
 """
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import replace
 from io import BytesIO
@@ -185,11 +186,16 @@ def _render_indices(
     orientation: Orientation,
     canvas_w: int,
     canvas_h: int,
+    crop_to_fill_threshold: float = 0.0,
 ) -> NDArray[np.uint8]:
-    """Letterbox → enhance → rotate → DRC → dither → mask padding.
+    """Fit (or crop-to-fill) → enhance → rotate → DRC → dither → mask padding.
 
     canvas_w/canvas_h are the *post-rotation* panel-memory buffer dims.
     For full panel use (FULL_W, PANEL_H). For preview, scaled-down versions.
+
+    crop_to_fill_threshold: if the zoom needed to eliminate letterbox bands is
+    ≤ this fraction (e.g. 0.02 = 2 %), scale to cover and center-crop instead
+    of scaling to fit and padding.  0.0 = always letterbox.
     """
     portrait = orientation == "portrait"
 
@@ -199,17 +205,35 @@ def _render_indices(
     visible_w, visible_h = (canvas_w, canvas_h) if portrait else (canvas_h, canvas_w)
 
     src_w, src_h = img.size
-    scale = min(visible_w / src_w, visible_h / src_h)
-    new_w, new_h = int(src_w * scale), int(src_h * scale)
-    img_resized = img.resize((new_w, new_h), Image.LANCZOS)
+    scale_fit   = min(visible_w / src_w, visible_h / src_h)
+    scale_cover = max(visible_w / src_w, visible_h / src_h)
+    zoom_ratio  = scale_cover / scale_fit - 1.0  # 0.0 = image exactly fits
 
-    composed = Image.new("RGB", (visible_w, visible_h), (255, 255, 255))
-    x_off = (visible_w - new_w) // 2
-    y_off = (visible_h - new_h) // 2
-    composed.paste(img_resized, (x_off, y_off))
+    use_cover = crop_to_fill_threshold > 0.0 and zoom_ratio <= crop_to_fill_threshold
 
-    padding_mask = np.ones((visible_h, visible_w), dtype=bool)
-    padding_mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
+    if use_cover:
+        # Scale to cover: the shorter panel axis is exactly filled.
+        # The longer axis is trimmed symmetrically — no white bands.
+        # Use ceil so integer rounding never produces a scaled image that is
+        # a pixel short of the canvas (which would leave a white row/column).
+        scaled_w = max(visible_w, math.ceil(src_w * scale_cover))
+        scaled_h = max(visible_h, math.ceil(src_h * scale_cover))
+        img_scaled = img.resize((scaled_w, scaled_h), Image.LANCZOS)
+        x_off = (scaled_w - visible_w) // 2
+        y_off = (scaled_h - visible_h) // 2
+        composed = img_scaled.crop((x_off, y_off, x_off + visible_w, y_off + visible_h))
+        padding_mask = np.zeros((visible_h, visible_w), dtype=bool)  # no padding at all
+    else:
+        # Scale to fit: image fits entirely, padded with white.
+        scale = scale_fit
+        new_w, new_h = int(src_w * scale), int(src_h * scale)
+        img_resized = img.resize((new_w, new_h), Image.LANCZOS)
+        composed = Image.new("RGB", (visible_w, visible_h), (255, 255, 255))
+        x_off = (visible_w - new_w) // 2
+        y_off = (visible_h - new_h) // 2
+        composed.paste(img_resized, (x_off, y_off))
+        padding_mask = np.ones((visible_h, visible_w), dtype=bool)
+        padding_mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
 
     composed = _apply_prepare_enhancements(composed, cfg)
 
@@ -234,14 +258,19 @@ def _render_indices(
 
 # ── Public render helpers ──────────────────────────────────────────
 
-def render_panel_bytes(img: Image.Image, cfg: ImageConfig, orientation: Orientation) -> bytes:
+def render_panel_bytes(
+    img: Image.Image,
+    cfg: ImageConfig,
+    orientation: Orientation,
+    crop_to_fill_threshold: float = 0.0,
+) -> bytes:
     """Full-resolution panel buffer → wire bytes.
 
     Renders with exactly the ``cfg`` provided — no hidden B&W fallback.
     Callers that want B&W-safe rendering should use an appropriate ``ImageConfig``
     (e.g. obtained from ``ImageClassifier.screen_config_for()``).
     """
-    result_idx = _render_indices(img, cfg, orientation, FULL_W, PANEL_H)
+    result_idx = _render_indices(img, cfg, orientation, FULL_W, PANEL_H, crop_to_fill_threshold)
     return indices_to_panel_bytes(result_idx)
 
 
@@ -258,6 +287,7 @@ def render_preview_png(
     cfg: ImageConfig,
     orientation: Orientation,
     max_side_px: int = 800,
+    crop_to_fill_threshold: float = 0.0,
 ) -> bytes:
     """Smaller panel buffer → PNG of the dithered preview.
 
@@ -267,7 +297,7 @@ def render_preview_png(
     Renders with exactly the ``cfg`` provided — no hidden B&W fallback.
     """
     cw, ch = _preview_canvas_dims(orientation, max_side_px)
-    result_idx = _render_indices(img, cfg, orientation, cw, ch)
+    result_idx = _render_indices(img, cfg, orientation, cw, ch, crop_to_fill_threshold)
     preview_rgb = indices_to_preview_rgb(result_idx)
     return _encode_panel_rgb_to_png(preview_rgb, orientation)
 

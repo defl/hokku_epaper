@@ -387,6 +387,12 @@
     </div>
 
     <div class="config-row">
+      <label>Fill threshold:</label>
+      <input type="number" id="crop-to-fill-threshold" min="0" max="1" step="0.01" style="width:80px;">
+      <span class="info">zoom up to this fraction (e.g. 0.02 = 2 %) to remove letterbox bands; 0 = always letterbox</span>
+    </div>
+
+    <div class="config-row">
       <label></label>
       <button class="btn btn-danger" onclick="clearCache()">Clear Cache &amp; Re-convert</button>
       <button class="btn btn-secondary" onclick="clearClassifierCache()" title="Wipe cached B&amp;W / face detection results. Panel .bin files are untouched.">Clear Classifier Cache</button>
@@ -954,6 +960,7 @@ async function saveConfig() {
     orientation: document.getElementById('orientation').value,
     debug_fast_refresh: document.getElementById('debug-fast-refresh').checked,
     auto_clear_cache: document.getElementById('auto-clear-cache').checked,
+    crop_to_fill_threshold: parseFloat(document.getElementById('crop-to-fill-threshold').value) || 0,
     image_config_default: ditherState,
     classifier_bw_detect_enabled: document.getElementById('bw-detect-enabled').checked,
     image_config_bw: bwDitherState,
@@ -1416,6 +1423,7 @@ async function loadConfig() {
     const autoClear = !!cfg.auto_clear_cache;
     document.getElementById('auto-clear-cache').checked = autoClear;
     document.getElementById('auto-clear-cache-label').textContent = autoClear ? 'On' : 'Off';
+    document.getElementById('crop-to-fill-threshold').value = cfg.crop_to_fill_threshold ?? 0;
 
     document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
 

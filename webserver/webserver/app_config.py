@@ -57,6 +57,9 @@ class AppConfig:
     debug_fast_refresh: bool = False
     orientation: Orientation = "landscape"
     auto_clear_cache: bool = False
+    #: Zoom up to this fraction (e.g. 0.02 = 2 %) to eliminate letterbox bands.
+    #: 0.0 = always letterbox (default, safe).
+    crop_to_fill_threshold: float = 0.0
 
     # Image pipeline: default, B&W, and face presets.
     image_config_default: ImageConfig = field(
@@ -78,6 +81,7 @@ class AppConfig:
             "classifier_bw_detect_enabled": self.classifier_bw_detect_enabled,
             "classifier_face_detect_enabled": self.classifier_face_detect_enabled,
             "orientation": self.orientation,
+            "crop_to_fill_threshold": self.crop_to_fill_threshold,
         }
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(raw.encode()).hexdigest()[:14]

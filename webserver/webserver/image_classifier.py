@@ -54,10 +54,14 @@ class ImageClassifier:
     # ── Public API ───────────────────────────────────────────────────────────
 
     def screen_config_for(self, path: Path, sha1: str) -> ScreenImageConfig:
-        """Return the ScreenImageConfig (image_config + orientation) to render with."""
+        """Return the ScreenImageConfig (image_config + orientation + crop threshold) to render with."""
         cfg = self._config
         chosen = self._image_config_for(path, sha1)
-        return ScreenImageConfig(image_config=chosen, orientation=cfg.orientation)
+        return ScreenImageConfig(
+            image_config=chosen,
+            orientation=cfg.orientation,
+            crop_to_fill_threshold=cfg.crop_to_fill_threshold,
+        )
 
     def observations_for(self, sha1: str) -> Observations:
         """Return the cached observations for *sha1*, or an all-None instance."""

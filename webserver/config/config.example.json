@@ -12,6 +12,7 @@
   "debug_fast_refresh": false,
   "orientation": "landscape",
   "auto_clear_cache": false,
+  "crop_to_fill_threshold": 0.0,
   "image_config_default": {
     "dither": {
       "algorithm": "atkinson",
