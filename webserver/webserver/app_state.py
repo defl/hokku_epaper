@@ -75,3 +75,5 @@ class AppState:
             self.scheduler = new_scheduler
 
         print(f"  Config reloaded in-process — pipeline slug: {new_config.cache_slug()}")
+        if self.watcher is not None:
+            self.watcher.wake()  # skip remaining sleep, pick up new config immediately

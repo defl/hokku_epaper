@@ -73,7 +73,6 @@ def main() -> None:
     logging.getLogger("werkzeug").addFilter(_SilentFilter())
 
     print(f"  Starting server on port {config.port}...")
-    watcher.start()  # everything is built — first sync begins immediately
     app.run(host="0.0.0.0", port=config.port)
 
 

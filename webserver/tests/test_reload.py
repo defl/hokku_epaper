@@ -173,105 +173,126 @@ def test_reload_manager_wired_with_new_classifier(app_config: AppConfig, tmp_pat
 
 # ── Watcher unit tests ────────────────────────────────────────────────────────
 
-def test_watcher_blocks_until_start(app_config: AppConfig):
-    """Thread must not call sync() before start() is called."""
+def test_watcher_syncs_immediately_on_construction(app_config: AppConfig):
+    """Thread starts in the constructor and syncs without any external call."""
     import threading as _threading
     state = _make_state(app_config)
-    sync_called = _threading.Event()
-
+    synced = _threading.Event()
     original_sync = state.manager.sync
 
     def tracking_sync():
-        sync_called.set()
         original_sync()
+        synced.set()
 
     state.manager.sync = tracking_sync  # type: ignore[method-assign]
+    Watcher(state)
+    assert synced.wait(timeout=5.0), "sync() should be called immediately on construction"
 
-    with unittest.mock.patch("webserver.watcher.time.sleep"):
-        w = Watcher(state)
 
-        # Give the thread a moment — sync must NOT have been called yet.
-        assert not sync_called.wait(timeout=0.2), "sync() should not run before start()"
+def test_watcher_wake_triggers_extra_sync(app_config: AppConfig):
+    """wake() interrupts the sleep and causes a sync before the interval expires."""
+    import threading as _threading
+    state = _make_state(app_config)
+    sync_count = 0
+    second_sync_done = _threading.Event()
+    first_sync_done = _threading.Event()
+    original_sync = state.manager.sync
 
-        w.start()
+    def tracking_sync():
+        nonlocal sync_count
+        original_sync()
+        sync_count += 1
+        if sync_count == 1:
+            first_sync_done.set()
+        elif sync_count >= 2:
+            second_sync_done.set()
 
-        # Now sync must fire promptly.
-        assert sync_called.wait(timeout=2.0), "sync() should run immediately after start()"
+    state.manager.sync = tracking_sync  # type: ignore[method-assign]
+    w = Watcher(state)
+    assert first_sync_done.wait(timeout=5.0), "First sync should happen immediately"
+    w.wake()
+    assert second_sync_done.wait(timeout=5.0), "Second sync should happen after wake()"
 
 
 def test_watcher_calls_sync_on_manager(app_config: AppConfig):
-    """Watcher daemon thread calls sync() repeatedly after start()."""
+    """Watcher daemon thread calls sync() on the current manager each iteration."""
     import threading as _threading
     state = _make_state(app_config)
-    sync_calls: list[str] = []
-    done = _threading.Event()
+    synced = _threading.Event()
     original_sync = state.manager.sync
 
     def tracking_sync():
-        sync_calls.append("sync")
         original_sync()
-        if len(sync_calls) >= 2:
-            done.set()
+        synced.set()
 
     state.manager.sync = tracking_sync  # type: ignore[method-assign]
-
-    with unittest.mock.patch("webserver.watcher.time.sleep"):
-        w = Watcher(state)
-        w.start()
-        assert done.wait(timeout=5.0), "Expected at least 2 sync() calls within 5 s"
-    assert len(sync_calls) >= 2
+    Watcher(state)
+    assert synced.wait(timeout=5.0), "Watcher should have synced the manager"
 
 
 def test_watcher_follows_new_manager_after_reload(app_config: AppConfig, tmp_path: Path):
-    """After AppState.reload(), the next Watcher tick syncs the NEW manager."""
+    """After AppState.reload(), the next sync uses the NEW manager."""
     import threading as _threading
     state = _make_state(app_config)
     new_cfg = _alt_config(app_config, tmp_path)
-
     state.reload(new_cfg)
     new_manager = state.manager
 
-    synced: list[object] = []
-    done = _threading.Event()
+    synced = _threading.Event()
     original_sync = new_manager.sync
 
     def tracking_sync():
-        synced.append(new_manager)
         original_sync()
-        done.set()
+        synced.set()
 
     new_manager.sync = tracking_sync  # type: ignore[method-assign]
-
-    with unittest.mock.patch("webserver.watcher.time.sleep"):
-        w = Watcher(state)
-        w.start()
-        assert done.wait(timeout=5.0), "Watcher should have synced the new manager"
-    assert len(synced) >= 1
+    Watcher(state)
+    assert synced.wait(timeout=5.0), "Watcher should sync the new manager"
 
 
 def test_watcher_uses_new_poll_interval_after_reload(app_config: AppConfig, tmp_path: Path):
-    """After reload, the watcher sleeps for the new config's poll_interval."""
+    """After reload, the watcher waits for the new config's poll_interval."""
     import threading as _threading
     state = _make_state(app_config)
     new_cfg = replace(app_config, poll_interval_seconds=42)
     state.reload(new_cfg)
 
+    # Block inside sync() until we've had a chance to patch _wake.wait,
+    # then release so the thread proceeds to the sleep.
+    sync_may_proceed = _threading.Event()
+    sync_done = _threading.Event()
+    original_sync = state.manager.sync
+
+    def gated_sync():
+        sync_may_proceed.wait()
+        original_sync()
+        sync_done.set()
+
+    state.manager.sync = gated_sync  # type: ignore[method-assign]
+
+    w = Watcher(state)
+
+    # Thread is now blocked in gated_sync() — safe to install our spy.
     sleep_durations: list[float] = []
-    done = _threading.Event()
+    sleep_called = _threading.Event()
+    original_wait = w._wake.wait
 
-    def capturing_sleep(seconds):
-        sleep_durations.append(seconds)
-        done.set()
+    def capturing_wait(timeout=None):
+        sleep_durations.append(timeout)
+        sleep_called.set()
+        return original_wait(timeout=0)  # return immediately
 
-    with unittest.mock.patch("webserver.watcher.time.sleep", side_effect=capturing_sleep):
-        w = Watcher(state)
-        w.start()
-        assert done.wait(timeout=5.0), "Expected time.sleep to be called"
-    assert sleep_durations[0] == 42
+    w._wake.wait = capturing_wait  # type: ignore[method-assign]
+
+    sync_may_proceed.set()        # let sync() finish
+    sync_done.wait(timeout=5.0)   # wait until sync returns
+    sleep_called.wait(timeout=5.0)
+
+    assert sleep_durations and sleep_durations[0] == 42
 
 
-def test_watcher_stop_exits_after_sleep(app_config: AppConfig):
-    """stop() causes the thread to exit cleanly after its current sleep."""
+def test_watcher_stop_exits_cleanly(app_config: AppConfig):
+    """stop() causes the thread to exit after its current sync completes."""
     import threading as _threading
     state = _make_state(app_config)
     exited = _threading.Event()
@@ -280,16 +301,13 @@ def test_watcher_stop_exits_after_sleep(app_config: AppConfig):
 
     def patched_run_forever(self):
         original_run_forever(self)
-        exited.set()  # signals that run_forever returned normally
+        exited.set()
 
     Watcher.run_forever = patched_run_forever  # type: ignore[method-assign]
-
     try:
-        with unittest.mock.patch("webserver.watcher.time.sleep"):
-            w = Watcher(state)
-            w.start()
-            w.stop()
-            assert exited.wait(timeout=5.0), "Thread should exit after stop()"
+        w = Watcher(state)
+        w.stop()
+        assert exited.wait(timeout=5.0), "Thread should exit cleanly after stop()"
     finally:
         Watcher.run_forever = original_run_forever  # type: ignore[method-assign]
 
