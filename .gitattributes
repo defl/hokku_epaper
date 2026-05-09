@@ -5,6 +5,8 @@
 *.bin       binary
 *.jpeg      binary
 *.png       binary
+*.heic      binary
+
 
 # Debian package control files must be LF — dpkg runs postinst et al.
 # through the kernel, which reads the shebang byte-for-byte. A CR in
