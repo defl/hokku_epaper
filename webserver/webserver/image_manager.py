@@ -264,6 +264,9 @@ class ImageManager:
         rec = self._records.get(name)
         if rec is None:
             return None
+        # Image was unreadable at registration — PIL will fail again; don't retry.
+        if rec.image_width is None:
+            return None
         thumb_path = self._thumb_path(rec)
         try:
             src_path = self._upload_dir / name

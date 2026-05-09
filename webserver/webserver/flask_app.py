@@ -259,6 +259,7 @@ def create_app(
                 "name": r.name,
                 "dithered": r.convert_status == "ok",
                 "status": r.convert_status,
+                "error": r.convert_error,
                 "size_bytes": r.original_size_bytes,
                 "is_bw": obs.is_bw if obs else None,
                 "has_face": obs.has_face if obs else None,

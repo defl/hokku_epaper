@@ -108,7 +108,9 @@
 
   /* Pending dither badge */
   .image-card.pending img { opacity: 0.6; }
+  .image-card.failed img  { opacity: 0.3; }
   .image-card .pending-badge { position: absolute; top: 8px; left: 8px; z-index: 1; max-width: calc(100% - 60px); background: #fef3c7; color: #92400e; padding: 4px 10px; border-radius: 4px; font-size: 0.75em; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.15); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .image-card .pending-badge.error-badge { background: #fee2e2; color: #991b1b; }
   .image-card .card-actions button:disabled { background: #e5e7eb; color: #aaa; cursor: not-allowed; }
 
   /* Confirmation modal */
@@ -1312,13 +1314,19 @@ function renderImageGrid(uploadFiles, serveData) {
     const fname    = entry.name;
     const dithered = entry.dithered;
     const card = document.createElement('div');
-    card.className = 'image-card' + (dithered ? '' : ' pending');
-    const pendingBadge = dithered ? '' : '<div class="pending-badge" title="Dithered version for the e-ink display is still being generated">Dithering…</div>';
+    const failed = entry.status === 'failed';
+    card.className = 'image-card' + (dithered ? '' : (failed ? ' failed' : ' pending'));
+    const pendingBadge = dithered ? '' : (failed
+      ? `<div class="pending-badge error-badge" title="${escapeHtml(entry.error || 'Could not open image')}">Error</div>`
+      : '<div class="pending-badge" title="Dithered version for the e-ink display is still being generated">Dithering…</div>');
+    const thumbHtml = failed
+      ? `<div class="failed-thumb-placeholder" title="Image could not be opened"></div>`
+      : `<img src="/hokku/api/thumbnail/${encodeURIComponent(fname)}" alt="${escapeHtml(fname)}"
+           style="cursor:pointer" title="Click to view original">`;
     card.innerHTML = `
       <button class="delete-btn" data-name="" title="Delete this image">&#x1F5D1;</button>
       ${pendingBadge}
-      <img src="/hokku/api/thumbnail/${encodeURIComponent(fname)}" alt="${escapeHtml(fname)}"
-           style="cursor:pointer" title="Click to view original">
+      ${thumbHtml}
       <div class="card-body">
         <div class="filename">${escapeHtml(fname)}</div>
         <div class="card-actions">
