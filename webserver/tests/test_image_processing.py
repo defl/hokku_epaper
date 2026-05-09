@@ -616,14 +616,13 @@ def _slow_ids():
 def test_image_pipeline_visual(src: Path, cfg_name: str):
     """Render src with cfg_name using noop dither; write PNG to build/test_image/.
 
-    Output layout:
-      build/test_image/<cfg_name>/<stem>.png           — processed preview
-      build/test_image/<cfg_name>/<stem>_original<ext> — source copy
+    Output layout (flat):
+      build/test_image/<stem>__<cfg_name>.png   — processed preview
+      build/test_image/<stem>_original<ext>     — source copy (written once)
     """
-    out_dir = _BUILD_IMAGE_DIR / cfg_name
-    out_dir.mkdir(parents=True, exist_ok=True)
+    _BUILD_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-    original_dest = out_dir / f"{src.stem}_original{src.suffix}"
+    original_dest = _BUILD_IMAGE_DIR / f"{src.stem}_original{src.suffix}"
     if not original_dest.exists():
         shutil.copy2(src, original_dest)
 
@@ -632,7 +631,7 @@ def test_image_pipeline_visual(src: Path, cfg_name: str):
         png_bytes = render_preview_png(img, cfg, "landscape", max_side_px=800)
 
     assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
-    (out_dir / f"{src.stem}.png").write_bytes(png_bytes)
+    (_BUILD_IMAGE_DIR / f"{src.stem}__{cfg_name}.png").write_bytes(png_bytes)
 
     w, h = _png_size(png_bytes)
     assert max(w, h) <= 800

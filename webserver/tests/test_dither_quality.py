@@ -288,14 +288,13 @@ def _slow_ids():
 def test_dither_full_scale(src: Path, preset_name: str):
     """Render at full panel resolution; write decoded PNG to build/test_dither_full/.
 
-    Output layout:
-      build/test_dither_full/<preset>/<stem>.png         — dithered, full scale
-      build/test_dither_full/<preset>/<stem>_original<ext> — source copy
+    Output layout (flat):
+      build/test_dither_full/<stem>__<preset>.png   — dithered, full scale
+      build/test_dither_full/<stem>_original<ext>   — source copy (written once)
     """
-    out_dir = _BUILD_FULL_DIR / preset_name
-    out_dir.mkdir(parents=True, exist_ok=True)
+    _BUILD_FULL_DIR.mkdir(parents=True, exist_ok=True)
 
-    original_dest = out_dir / f"{src.stem}_original{src.suffix}"
+    original_dest = _BUILD_FULL_DIR / f"{src.stem}_original{src.suffix}"
     if not original_dest.exists():
         shutil.copy2(src, original_dest)
 
@@ -311,7 +310,7 @@ def test_dither_full_scale(src: Path, preset_name: str):
     assert int(idx.max()) <= 5
 
     png_bytes = _indices_to_png(idx, "landscape")
-    (out_dir / f"{src.stem}.png").write_bytes(png_bytes)
+    (_BUILD_FULL_DIR / f"{src.stem}__{preset_name}.png").write_bytes(png_bytes)
 
     w, h = _png_size(png_bytes)
     assert (w, h) == (VISUAL_W, VISUAL_H), (
@@ -324,14 +323,13 @@ def test_dither_full_scale(src: Path, preset_name: str):
 def test_dither_preview(src: Path, preset_name: str):
     """Render preview PNG (≤ 800 px); write to build/test_dither_preview/.
 
-    Output layout:
-      build/test_dither_preview/<preset>/<stem>.png         — dithered preview
-      build/test_dither_preview/<preset>/<stem>_original<ext> — source copy
+    Output layout (flat):
+      build/test_dither_preview/<stem>__<preset>.png — dithered preview
+      build/test_dither_preview/<stem>_original<ext> — source copy (written once)
     """
-    out_dir = _BUILD_PREVIEW_DIR / preset_name
-    out_dir.mkdir(parents=True, exist_ok=True)
+    _BUILD_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 
-    original_dest = out_dir / f"{src.stem}_original{src.suffix}"
+    original_dest = _BUILD_PREVIEW_DIR / f"{src.stem}_original{src.suffix}"
     if not original_dest.exists():
         shutil.copy2(src, original_dest)
 
@@ -341,7 +339,7 @@ def test_dither_preview(src: Path, preset_name: str):
 
     assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
 
-    (out_dir / f"{src.stem}.png").write_bytes(png_bytes)
+    (_BUILD_PREVIEW_DIR / f"{src.stem}__{preset_name}.png").write_bytes(png_bytes)
 
     w, h = _png_size(png_bytes)
     assert max(w, h) <= 800
