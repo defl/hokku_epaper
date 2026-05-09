@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from webserver.app_config import AppConfig
 from webserver.image_classifier import ImageClassifier
 from webserver.image_manager import ImageManager
 from webserver.serve_scheduler import ServeScheduler
+
+if TYPE_CHECKING:
+    from webserver.watcher import Watcher
 
 
 class AppState:
@@ -33,12 +37,14 @@ class AppState:
         classifier: ImageClassifier,
         manager: ImageManager,
         scheduler: ServeScheduler,
+        watcher: Watcher | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self.config = config
         self.classifier = classifier
         self.manager = manager
         self.scheduler = scheduler
+        self.watcher = watcher
 
     def reload(self, new_config: AppConfig) -> None:
         """Rebuild classifier + manager + scheduler from *new_config* and swap atomically.
@@ -61,6 +67,10 @@ class AppState:
         new_classifier = ImageClassifier(new_config)
         new_manager = ImageManager(new_config, new_classifier)
         new_scheduler = ServeScheduler(new_manager)
+
+        # Stop the old watcher thread before swapping in the new objects.
+        if self.watcher is not None:
+            self.watcher.stop()
 
         with self._lock:
             self.config = new_config

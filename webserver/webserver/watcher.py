@@ -14,30 +14,37 @@ class Watcher:
     reload — after ``AppState.reload()`` swaps in a new manager, the next
     watcher iteration will sync the new one without any restart.
 
-    The daemon thread is started immediately on construction and waits for
-    :meth:`kick` before running its first sync.  Call ``kick()`` once
-    everything is built so the first sync starts without delay::
+    The thread is built in the constructor but not started.  Call
+    :meth:`start` once everything is ready so the first sync fires
+    immediately.  Call :meth:`stop` to signal the thread to exit cleanly
+    after its current sleep::
 
         watcher = Watcher(state)
         # … finish building app …
-        watcher.kick()   # first sync begins immediately, non-blocking
+        watcher.start()   # first sync begins immediately, non-blocking
+
+        # On teardown / hot-reload:
+        watcher.stop()    # signals thread to exit after its next sleep
     """
 
     def __init__(self, state: AppState, sleep=_time.sleep) -> None:
         self._state = state
         self._sleep = sleep
-        self._ready = threading.Event()
-        threading.Thread(
+        self._run = True
+        self._thread = threading.Thread(
             target=self.run_forever, daemon=True, name="watcher",
-        ).start()
+        )
 
-    def kick(self) -> None:
-        """Signal the thread to begin its first sync immediately."""
-        self._ready.set()
+    def start(self) -> None:
+        """Start the watcher thread; first sync begins immediately."""
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Signal the thread to exit cleanly after its current sleep."""
+        self._run = False
 
     def run_forever(self) -> None:
-        self._ready.wait()
-        while True:
+        while self._run:
             manager = self._state.manager
             try:
                 manager.sync()

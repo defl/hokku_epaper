@@ -194,7 +194,7 @@ def test_watcher_blocks_until_kick(app_config: AppConfig):
     # Give the thread a moment — sync must NOT have been called yet.
     assert not sync_called.wait(timeout=0.2), "sync() should not run before kick()"
 
-    w.kick()
+    w.start()
 
     # Now sync must fire promptly.
     assert sync_called.wait(timeout=2.0), "sync() should run immediately after kick()"
@@ -220,7 +220,7 @@ def test_watcher_calls_sync_on_manager(app_config: AppConfig):
         pass  # return immediately so the loop cycles fast in the test
 
     w = Watcher(state, sleep=fake_sleep)
-    w.kick()
+    w.start()
     assert done.wait(timeout=5.0), "Expected at least 2 sync() calls within 5 s"
     assert len(sync_calls) >= 2
 
@@ -249,7 +249,7 @@ def test_watcher_follows_new_manager_after_reload(app_config: AppConfig, tmp_pat
         pass
 
     w = Watcher(state, sleep=fake_sleep)
-    w.kick()
+    w.start()
     assert done.wait(timeout=5.0), "Watcher should have synced the new manager"
     assert len(synced) >= 1
 
@@ -269,9 +269,35 @@ def test_watcher_uses_new_poll_interval_after_reload(app_config: AppConfig, tmp_
         done.set()
 
     w = Watcher(state, sleep=fake_sleep)
-    w.kick()
+    w.start()
     assert done.wait(timeout=5.0), "Expected fake_sleep to be called"
     assert sleep_durations[0] == 42
+
+
+def test_watcher_stop_exits_after_sleep(app_config: AppConfig):
+    """stop() causes the thread to exit cleanly after its current sleep."""
+    import threading as _threading
+    state = _make_state(app_config)
+    exited = _threading.Event()
+
+    original_run_forever = Watcher.run_forever
+
+    def patched_run_forever(self):
+        original_run_forever(self)
+        exited.set()  # signals that run_forever returned normally
+
+    Watcher.run_forever = patched_run_forever  # type: ignore[method-assign]
+
+    try:
+        def fake_sleep(_seconds):
+            pass  # return immediately
+
+        w = Watcher(state, sleep=fake_sleep)
+        w.start()
+        w.stop()
+        assert exited.wait(timeout=5.0), "Thread should exit after stop()"
+    finally:
+        Watcher.run_forever = original_run_forever  # type: ignore[method-assign]
 
 
 # ── Flask integration tests ───────────────────────────────────────────────────

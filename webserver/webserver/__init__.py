@@ -47,6 +47,8 @@ def main() -> None:
     manager = ImageManager(config, classifier)
     scheduler = ServeScheduler(manager)
     state = AppState(config, classifier, manager, scheduler)
+    watcher = Watcher(state)
+    state.watcher = watcher
     app = create_app(state, config_path=config_path)
 
     print(f"Hokku image server")
@@ -60,8 +62,6 @@ def main() -> None:
     print(f"    GET /hokku/screen/  — panel binary + X-Sleep-Seconds")
     print(f"    GET /hokku/ui       — web GUI")
 
-    watcher = Watcher(state)
-
     # Suppress Werkzeug access-log noise for high-frequency polling endpoints.
     _SILENT_PATHS = {"/hokku/api/status"}
 
@@ -73,7 +73,7 @@ def main() -> None:
     logging.getLogger("werkzeug").addFilter(_SilentFilter())
 
     print(f"  Starting server on port {config.port}...")
-    watcher.kick()  # everything is built — let the first sync begin
+    watcher.start()  # everything is built — first sync begins immediately
     app.run(host="0.0.0.0", port=config.port)
 
 
