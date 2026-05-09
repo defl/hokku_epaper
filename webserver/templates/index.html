@@ -243,16 +243,23 @@
       <h3>B&amp;W photo pipeline</h3>
     </div>
     <p class="dither-advanced-intro">Applied when a photo is detected as near-monochrome (95th-percentile Lab chroma below 8). Saturation boosters are disabled by default to avoid tinting film grain.</p>
-    <div class="config-row">
-      <label>B&amp;W dither preset:</label>
-      <select id="bw-preset" onchange="onBwPresetChange(this.value)"></select>
+    <div class="config-row" style="position: relative;">
+      <label>Preset:</label>
+      <select id="bw-preset"></select>
+      <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset('bw')"
+              title="Reset all knobs to the preset's default values">Reset to preset</button>
+      <button type="button" class="btn btn-secondary btn-small" id="bw-custom-btn"
+              onclick="toggleAdvancedPanel('bw')"
+              title="Open the advanced pipeline editor">Custom…</button>
     </div>
-    <div class="config-row">
-      <label>Serpentine scan:</label>
-      <label class="toggle">
-        <input type="checkbox" id="bw-serpentine" onchange="onBwSerpentineChange(this.checked)">
-        <span id="bw-serpentine-label">Off</span>
-      </label>
+    <div class="dither-advanced" id="bw-advanced" hidden>
+      <div class="dither-advanced-header">
+        <h3>Advanced B&amp;W pipeline</h3>
+        <button type="button" class="close-btn" onclick="toggleAdvancedPanel('bw')"
+                aria-label="Close">×</button>
+      </div>
+      <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Each <span class="help-icon-inline">?</span> explains what the knob does.</p>
+      <div id="bw-advanced-panel"></div>
     </div>
   </div>
 
@@ -270,16 +277,23 @@
       <h3>Face photo pipeline</h3>
     </div>
     <p class="dither-advanced-intro">Applied when ≥1 face is detected (YuNet, score ≥ 0.5). Atkinson dithering tends to look better on skin tones than Floyd–Steinberg.</p>
-    <div class="config-row">
-      <label>Face dither preset:</label>
-      <select id="face-preset" onchange="onFacePresetChange(this.value)"></select>
+    <div class="config-row" style="position: relative;">
+      <label>Preset:</label>
+      <select id="face-preset"></select>
+      <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset('face')"
+              title="Reset all knobs to the preset's default values">Reset to preset</button>
+      <button type="button" class="btn btn-secondary btn-small" id="face-custom-btn"
+              onclick="toggleAdvancedPanel('face')"
+              title="Open the advanced pipeline editor">Custom…</button>
     </div>
-    <div class="config-row">
-      <label>Serpentine scan:</label>
-      <label class="toggle">
-        <input type="checkbox" id="face-serpentine" onchange="onFaceSerpentineChange(this.checked)">
-        <span id="face-serpentine-label">Off</span>
-      </label>
+    <div class="dither-advanced" id="face-advanced" hidden>
+      <div class="dither-advanced-header">
+        <h3>Advanced face pipeline</h3>
+        <button type="button" class="close-btn" onclick="toggleAdvancedPanel('face')"
+                aria-label="Close">×</button>
+      </div>
+      <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Each <span class="help-icon-inline">?</span> explains what the knob does.</p>
+      <div id="face-advanced-panel"></div>
     </div>
   </div>
 
@@ -338,12 +352,6 @@
 <!-- Image Grid -->
 <h2>Images</h2>
 
-<div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
-  <div class="upload-hint">Drag &amp; drop images here, or click to choose files</div>
-  <div class="upload-sub">JPG, PNG, HEIC, WebP, AVIF, TIFF, BMP, GIF</div>
-  <input type="file" id="file-input" multiple accept="image/*,.heic,.heif,.avif,.tiff">
-</div>
-
 <div class="upload-progress" id="upload-progress"></div>
 
 <div class="image-grid" id="image-grid"></div>
@@ -358,9 +366,13 @@
   <div id="failed-list"></div>
 </div>
 
-<div class="drag-overlay" id="drag-overlay"><div class="drag-msg">Drop images to upload</div></div>
+<div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()" style="margin-top:20px;">
+  <div class="upload-hint">Drag &amp; drop images here, or click to choose files</div>
+  <div class="upload-sub">JPG, PNG, HEIC, WebP, AVIF, TIFF, BMP, GIF</div>
+  <input type="file" id="file-input" multiple accept="image/*,.heic,.heif,.avif,.tiff">
+</div>
 
-<div id="processing-banner" style="display:none; background:#fef3c7; color:#92400e; border-radius:8px; padding:20px; margin-top:20px; text-align:center; font-size:1.1em; font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,0.1);"></div>
+<div class="drag-overlay" id="drag-overlay"><div class="drag-msg">Drop images to upload</div></div>
 
 <div class="toast" id="toast"></div>
 
@@ -437,50 +449,27 @@ function isAutoClearEnabled() {
   return document.getElementById('auto-clear-cache').checked;
 }
 
+// Map panelId ('default', 'bw', 'face') to the DOM id prefix and state vars.
+function _pfx(panelId) {
+  return (!panelId || panelId === 'default') ? 'dither' : panelId;
+}
+function _getState(panelId) {
+  if (panelId === 'bw') return bwDitherState;
+  if (panelId === 'face') return faceDitherState;
+  return ditherState;
+}
+function _setState(panelId, v) {
+  if (panelId === 'bw') bwDitherState = v;
+  else if (panelId === 'face') faceDitherState = v;
+  else ditherState = v;
+}
+
+// Populate the preset dropdown(s). Called once after ditherPresets is loaded.
+// Populates all three panels so a single call covers everything.
 function populatePresetDropdown() {
-  const sel = document.getElementById('dither-preset');
-  sel.innerHTML = '';
-  Object.entries(ditherPresets).forEach(([key, p]) => {
-    const opt = document.createElement('option');
-    opt.value = key;
-    opt.textContent = p.label;
-    sel.appendChild(opt);
-  });
-  const customOpt = document.createElement('option');
-  customOpt.value = '__custom__';
-  customOpt.textContent = 'Custom (your edits)';
-  sel.appendChild(customOpt);
-  sel.onchange = () => {
-    const v = sel.value;
-    if (v !== '__custom__' && ditherPresets[v]) {
-      const {label, description, ...presetFields} = ditherPresets[v];
-      ditherState = deepCopy(presetFields);
-      renderDitherPanel();
-      updatePresetDescription();
-      if (isAutoClearEnabled()) scrubStaleCache();
-    }
-  };
-}
-
-// Pick the preset whose dither config matches ditherState verbatim; fall back
-// to "Custom" if none match. Used on page load so a user-saved custom config
-// doesn't accidentally show a preset name that no longer fits.
-function selectPresetMatching(state) {
-  const sel = document.getElementById('dither-preset');
-  const stateJson = JSON.stringify(state);
-  let matched = '__custom__';
-  for (const [key, p] of Object.entries(ditherPresets)) {
-    // Compare the image config fields only — exclude UI-only label/description.
-    const {label, description, ...presetFields} = p;
-    if (JSON.stringify(presetFields) === stateJson) { matched = key; break; }
-  }
-  sel.value = matched;
-  updatePresetDescription();
-}
-
-function populateClassifierPresetDropdowns() {
-  ['bw-preset', 'face-preset'].forEach(id => {
-    const sel = document.getElementById(id);
+  ['default', 'bw', 'face'].forEach(panelId => {
+    const pfx = _pfx(panelId);
+    const sel = document.getElementById(pfx + '-preset');
     if (!sel) return;
     sel.innerHTML = '';
     Object.entries(ditherPresets).forEach(([key, p]) => {
@@ -489,66 +478,39 @@ function populateClassifierPresetDropdowns() {
       opt.textContent = p.label;
       sel.appendChild(opt);
     });
+    const customOpt = document.createElement('option');
+    customOpt.value = '__custom__';
+    customOpt.textContent = 'Custom (your edits)';
+    sel.appendChild(customOpt);
+    // Capture panelId for the closure — don't let it be the loop variable.
+    sel.onchange = ((pid) => () => {
+      const v = sel.value;
+      if (v !== '__custom__' && ditherPresets[v]) {
+        const {label, description, ...presetFields} = ditherPresets[v];
+        _setState(pid, deepCopy(presetFields));
+        renderDitherPanel(pid);
+        if (pid === 'default') updatePresetDescription();
+        if (isAutoClearEnabled()) scrubStaleCache();
+      }
+    })(panelId);
   });
 }
 
-function selectClassifierPresets(cfg) {
-  // Select matching preset in bw/face dropdowns. If exact match not found,
-  // leave at whatever the first option is (preset may have been saved as custom).
-  ['bw', 'face'].forEach(kind => {
-    const state = kind === 'bw' ? cfg.image_config_bw : cfg.image_config_face;
-    if (!state) return;
-    const sel = document.getElementById(kind + '-preset');
-    if (!sel) return;
-    const stateJson = JSON.stringify(state);
-    for (const [key, p] of Object.entries(ditherPresets)) {
-      const {label, description, ...fields} = p;
-      if (JSON.stringify(fields) === stateJson) { sel.value = key; return; }
-    }
-    // No match — leave at first option (server default).
-  });
-  if (cfg.image_config_bw) {
-    bwDitherState = JSON.parse(JSON.stringify(cfg.image_config_bw));
-    const serpOn = !!(bwDitherState.dither && bwDitherState.dither.serpentine);
-    document.getElementById('bw-serpentine').checked = serpOn;
-    document.getElementById('bw-serpentine-label').textContent = serpOn ? 'On' : 'Off';
+// Pick the preset whose dither config matches state verbatim; fall back to
+// "Custom" if none match. panelId selects which dropdown to update.
+function selectPresetMatching(state, panelId) {
+  panelId = panelId || 'default';
+  const pfx = _pfx(panelId);
+  const sel = document.getElementById(pfx + '-preset');
+  if (!sel) return;
+  const stateJson = JSON.stringify(state);
+  let matched = '__custom__';
+  for (const [key, p] of Object.entries(ditherPresets)) {
+    const {label, description, ...presetFields} = p;
+    if (JSON.stringify(presetFields) === stateJson) { matched = key; break; }
   }
-  if (cfg.image_config_face) {
-    faceDitherState = JSON.parse(JSON.stringify(cfg.image_config_face));
-    const serpOn = !!(faceDitherState.dither && faceDitherState.dither.serpentine);
-    document.getElementById('face-serpentine').checked = serpOn;
-    document.getElementById('face-serpentine-label').textContent = serpOn ? 'On' : 'Off';
-  }
-}
-
-function onBwPresetChange(key) {
-  if (ditherPresets[key]) {
-    const {label, description, ...fields} = ditherPresets[key];
-    bwDitherState = deepCopy(fields);
-    const serpOn = !!(bwDitherState.dither && bwDitherState.dither.serpentine);
-    document.getElementById('bw-serpentine').checked = serpOn;
-    document.getElementById('bw-serpentine-label').textContent = serpOn ? 'On' : 'Off';
-  }
-}
-
-function onBwSerpentineChange(checked) {
-  document.getElementById('bw-serpentine-label').textContent = checked ? 'On' : 'Off';
-  if (bwDitherState && bwDitherState.dither) bwDitherState.dither.serpentine = checked;
-}
-
-function onFacePresetChange(key) {
-  if (ditherPresets[key]) {
-    const {label, description, ...fields} = ditherPresets[key];
-    faceDitherState = deepCopy(fields);
-    const serpOn = !!(faceDitherState.dither && faceDitherState.dither.serpentine);
-    document.getElementById('face-serpentine').checked = serpOn;
-    document.getElementById('face-serpentine-label').textContent = serpOn ? 'On' : 'Off';
-  }
-}
-
-function onFaceSerpentineChange(checked) {
-  document.getElementById('face-serpentine-label').textContent = checked ? 'On' : 'Off';
-  if (faceDitherState && faceDitherState.dither) faceDitherState.dither.serpentine = checked;
+  sel.value = matched;
+  if (panelId === 'default') updatePresetDescription();
 }
 
 function updatePresetDescription() {
@@ -571,68 +533,82 @@ function updatePresetDescription() {
   pop.innerHTML = html;
 }
 
-function toggleAdvancedPanel() {
-  const panel = document.getElementById('dither-advanced');
+function toggleAdvancedPanel(panelId) {
+  panelId = panelId || 'default';
+  const pfx = _pfx(panelId);
+  const panel = document.getElementById(pfx + '-advanced');
   if (!panel) return;
   panel.hidden = !panel.hidden;
-  const btn = document.getElementById('dither-custom-btn');
+  const btn = document.getElementById(pfx + '-custom-btn');
   if (btn) btn.textContent = panel.hidden ? 'Custom…' : 'Hide advanced';
   if (!panel.hidden) panel.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
-function resetToPreset() {
-  const sel = document.getElementById('dither-preset');
+function resetToPreset(panelId) {
+  panelId = panelId || 'default';
+  const pfx = _pfx(panelId);
+  const sel = document.getElementById(pfx + '-preset');
+  if (!sel) return;
   let key = sel.value;
   if (key === '__custom__') {
-    // Reset Custom back to the default preset.
     key = Object.keys(ditherPresets)[0];
     sel.value = key;
   }
   if (ditherPresets[key]) {
     const {label, description, ...presetFields} = ditherPresets[key];
-    ditherState = deepCopy(presetFields);
-    renderDitherPanel();
-    updatePresetDescription();
+    _setState(panelId, deepCopy(presetFields));
+    renderDitherPanel(panelId);
+    if (panelId === 'default') updatePresetDescription();
     showToast('Reset to preset: ' + ditherPresets[key].label);
   }
 }
 
-function markCustom() {
-  document.getElementById('dither-preset').value = '__custom__';
-  updatePresetDescription();
+function markCustom(panelId) {
+  panelId = panelId || 'default';
+  const pfx = _pfx(panelId);
+  const sel = document.getElementById(pfx + '-preset');
+  if (sel) sel.value = '__custom__';
+  if (panelId === 'default') updatePresetDescription();
 }
 
-// Build a single knob/row. kind in:
+// Build a single knob/row. panelId ('default'|'bw'|'face') selects which
+// state dict to read from and which onchange target to write to.
 //   "check"  — single checkbox bound to state[path...]
 //   "num"    — number input bound to state[path...]
 //   "select" — <select> bound to state[path...] with options [[value,label],...]
-function fieldNum(labelText, path, {min, max, step, help}) {
-  const id = 'df_' + path.join('_');
-  const val = pathGet(ditherState, path);
+function fieldNum(labelText, path, {min, max, step, help}, panelId, state) {
+  const pfx = _pfx(panelId);
+  const id = `df_${pfx}_${path.join('_')}`;
+  const val = pathGet(state, path);
   const attrs = [`id="${id}"`, `type="number"`, `value="${val}"`];
   if (min !== undefined) attrs.push(`min="${min}"`);
   if (max !== undefined) attrs.push(`max="${max}"`);
   if (step !== undefined) attrs.push(`step="${step}"`);
+  const pathJson = JSON.stringify(path).replace(/"/g, '&quot;');
   return `<label class="field">${labelText}
-    <input ${attrs.join(' ')} onchange="onKnobChange(${JSON.stringify(path).replace(/"/g,'&quot;')}, 'num', this)">
+    <input ${attrs.join(' ')} onchange="onKnobChange(${pathJson}, 'num', this, '${panelId}')">
     ${help ? helpIcon(help) : ''}
   </label>`;
 }
-function fieldSelect(labelText, path, options, help) {
-  const id = 'df_' + path.join('_');
-  const val = pathGet(ditherState, path);
+function fieldSelect(labelText, path, options, help, panelId, state) {
+  const pfx = _pfx(panelId);
+  const id = `df_${pfx}_${path.join('_')}`;
+  const val = pathGet(state, path);
   const opts = options.map(([v, lab]) =>
     `<option value="${v}"${v === val ? ' selected' : ''}>${lab}</option>`).join('');
+  const pathJson = JSON.stringify(path).replace(/"/g, '&quot;');
   return `<label class="field">${labelText}
-    <select id="${id}" onchange="onKnobChange(${JSON.stringify(path).replace(/"/g,'&quot;')}, 'select', this)">${opts}</select>
+    <select id="${id}" onchange="onKnobChange(${pathJson}, 'select', this, '${panelId}')">${opts}</select>
     ${help ? helpIcon(help) : ''}
   </label>`;
 }
-function fieldCheck(labelText, path, help) {
-  const id = 'df_' + path.join('_');
-  const val = !!pathGet(ditherState, path);
+function fieldCheck(labelText, path, help, panelId, state) {
+  const pfx = _pfx(panelId);
+  const id = `df_${pfx}_${path.join('_')}`;
+  const val = !!pathGet(state, path);
+  const pathJson = JSON.stringify(path).replace(/"/g, '&quot;');
   return `<label class="field">
-    <input id="${id}" type="checkbox"${val ? ' checked' : ''} onchange="onKnobChange(${JSON.stringify(path).replace(/"/g,'&quot;')}, 'check', this)">
+    <input id="${id}" type="checkbox"${val ? ' checked' : ''} onchange="onKnobChange(${pathJson}, 'check', this, '${panelId}')">
     ${labelText}
     ${help ? helpIcon(help) : ''}
   </label>`;
@@ -655,24 +631,33 @@ function pathSet(obj, path, value) {
   o[path[path.length - 1]] = value;
 }
 
-function onKnobChange(path, kind, el) {
+function onKnobChange(path, kind, el, panelId) {
+  panelId = panelId || 'default';
   let val;
   if (kind === 'check') val = el.checked;
   else if (kind === 'num') val = parseFloat(el.value);
   else val = el.value;
-  pathSet(ditherState, path, val);
-  markCustom();
-  // Re-render so stages toggling `enabled` grey out the right body, and so
-  // conditional fields (e.g. saturation thresholds only if mode=adaptive)
-  // appear/disappear.
-  renderDitherPanel();
+  pathSet(_getState(panelId), path, val);
+  markCustom(panelId);
+  // Re-render so conditional fields (saturation thresholds, hue fields, etc.)
+  // appear/disappear immediately without needing a page reload.
+  renderDitherPanel(panelId);
 }
 
-// Render the advanced dither panel from the actual ImageConfig fields.
-// ditherState is the full ImageConfig dict as returned by /api/config.
-function renderDitherPanel() {
-  if (!ditherState) return;
-  const d = ditherState;
+// Render the advanced dither panel for the given panelId ('default'|'bw'|'face').
+// Reads state from _getState(panelId) and writes to the matching container.
+function renderDitherPanel(panelId) {
+  panelId = panelId || 'default';
+  const state = _getState(panelId);
+  if (!state) return;
+  const d = state;
+  const pfx = _pfx(panelId);
+
+  // Shorthand wrappers that bake in panelId + state for every field builder.
+  const fn = (lbl, path, opts) => fieldNum(lbl, path, opts, panelId, state);
+  const fc = (lbl, path, help) => fieldCheck(lbl, path, help, panelId, state);
+  const fs = (lbl, path, opts, help) => fieldSelect(lbl, path, opts, help, panelId, state);
+
   const sections = [];
 
   const group = (title, bodyHtml, headerHelpKey) => {
@@ -687,54 +672,54 @@ function renderDitherPanel() {
 
   // 1. Tonal preparation
   sections.push(group('Tonal preparation',
-    fieldNum('Autocontrast cutoff', ['prepare_autocontrast_cutoff'], {min: 0, max: 49, step: 0.5, help: 'autocontrast'}) +
-    fieldNum('Gamma', ['prepare_gamma'], {min: 0.1, max: 3, step: 0.05, help: 'gamma'}) +
-    fieldNum('Brightness', ['prepare_brightness'], {min: 0.1, max: 3, step: 0.05, help: 'brightness'}) +
-    fieldNum('Contrast', ['prepare_contrast'], {min: 0.1, max: 3, step: 0.05, help: 'contrast'}) +
-    fieldNum('Sharpness', ['prepare_sharpness'], {min: 0.1, max: 3, step: 0.05, help: 'sharpness'})
+    fn('Autocontrast cutoff', ['prepare_autocontrast_cutoff'], {min: 0, max: 49, step: 0.5, help: 'autocontrast'}) +
+    fn('Gamma', ['prepare_gamma'], {min: 0.1, max: 3, step: 0.05, help: 'gamma'}) +
+    fn('Brightness', ['prepare_brightness'], {min: 0.1, max: 3, step: 0.05, help: 'brightness'}) +
+    fn('Contrast', ['prepare_contrast'], {min: 0.1, max: 3, step: 0.05, help: 'contrast'}) +
+    fn('Sharpness', ['prepare_sharpness'], {min: 0.1, max: 3, step: 0.05, help: 'sharpness'})
   ));
 
   // 2. Colour enhancement (flat + adaptive saturation)
-  let colorBody = fieldNum('Global colour enhance', ['color_enhance'], {min: 0.5, max: 3, step: 0.05, help: 'saturation_value'});
-  colorBody += fieldCheck('Adaptive saturation', ['use_adaptive_saturate'], 'saturation_mode');
+  let colorBody = fn('Global colour enhance', ['color_enhance'], {min: 0.5, max: 3, step: 0.05, help: 'saturation_value'});
+  colorBody += fc('Adaptive saturation', ['use_adaptive_saturate'], 'saturation_mode');
   if (d.use_adaptive_saturate) {
-    colorBody += fieldNum('Max enhance', ['saturate_max_enhance'], {min: 0.5, max: 3, step: 0.05});
-    colorBody += fieldNum('Low chroma', ['saturate_low_chroma_thresh'], {min: 0, max: 100, step: 0.5, help: 'saturation_thresholds'});
-    colorBody += fieldNum('High chroma', ['saturate_high_chroma_thresh'], {min: 0, max: 100, step: 0.5});
+    colorBody += fn('Max enhance', ['saturate_max_enhance'], {min: 0.5, max: 3, step: 0.05});
+    colorBody += fn('Low chroma', ['saturate_low_chroma_thresh'], {min: 0, max: 100, step: 0.5, help: 'saturation_thresholds'});
+    colorBody += fn('High chroma', ['saturate_high_chroma_thresh'], {min: 0, max: 100, step: 0.5});
   }
   sections.push(group('Colour enhancement', colorBody, null));
 
   // 3. Adaptive vivid (chroma ramp — keeps neutrals clean, keeps vivid colours vivid)
-  let vividBody = fieldCheck('Scale chroma', ['scale_chroma'], 'drc_chroma');
-  vividBody += fieldCheck('Adaptive vivid', ['adaptive_vivid'], 'drc_chroma');
+  let vividBody = fc('Scale chroma', ['scale_chroma'], 'drc_chroma');
+  vividBody += fc('Adaptive vivid', ['adaptive_vivid'], 'drc_chroma');
   if (d.adaptive_vivid) {
-    vividBody += fieldNum('Vivid low', ['vivid_chroma_low'], {min: 0, max: 100, step: 0.5, help: 'drc_thresholds'});
-    vividBody += fieldNum('Vivid high', ['vivid_chroma_high'], {min: 0, max: 100, step: 0.5});
+    vividBody += fn('Vivid low', ['vivid_chroma_low'], {min: 0, max: 100, step: 0.5, help: 'drc_thresholds'});
+    vividBody += fn('Vivid high', ['vivid_chroma_high'], {min: 0, max: 100, step: 0.5});
   }
   sections.push(group('Adaptive vivid', vividBody, null));
 
   // 4. Palette LUT — hue-aware specific fields conditional on lut_name
-  let lutBody = fieldSelect('LUT', ['dither', 'lut_name'], [
+  let lutBody = fs('LUT', ['dither', 'lut_name'], [
     ['euclidean', 'Euclidean'], ['hue_aware', 'Hue-aware'],
   ], 'palette_mode');
   if (d.dither && d.dither.lut_name === 'hue_aware') {
-    lutBody += fieldNum('Hue cutoff °', ['dither', 'hue_cutoff_deg'], {min: 10, max: 180, step: 1, help: 'palette_hue_cutoff'});
-    lutBody += fieldNum('Neutral chroma', ['dither', 'neutral_chroma'], {min: 0, max: 50, step: 0.5, help: 'palette_neutral'});
+    lutBody += fn('Hue cutoff °', ['dither', 'hue_cutoff_deg'], {min: 10, max: 180, step: 1, help: 'palette_hue_cutoff'});
+    lutBody += fn('Neutral chroma', ['dither', 'neutral_chroma'], {min: 0, max: 50, step: 0.5, help: 'palette_neutral'});
   }
   sections.push(group('Palette LUT', lutBody, null));
 
   // 5. Dither kernel
   const kernelBody =
-    fieldSelect('Algorithm', ['dither', 'algorithm'], [
+    fs('Algorithm', ['dither', 'algorithm'], [
       ['floyd_steinberg', 'Floyd-Steinberg'],
       ['atkinson', 'Atkinson'],
       ['stucki', 'Stucki'],
     ], 'kernel') +
-    fieldCheck('Serpentine scan', ['dither', 'serpentine'], 'serpentine');
+    fc('Serpentine scan', ['dither', 'serpentine'], 'serpentine');
   sections.push(group('Dither kernel', kernelBody, null));
 
-  document.getElementById('dither-advanced-panel').innerHTML = sections.join('');
-  wireHelpIcons();
+  document.getElementById(pfx + '-advanced-panel').innerHTML = sections.join('');
+  wireHelpIcons(panelId);
 }
 
 // Single delegated handler for every dither-panel (?) button. Position the
@@ -743,8 +728,10 @@ let currentHelpPopover = null;
 function closeHelpPopover() {
   if (currentHelpPopover) { currentHelpPopover.remove(); currentHelpPopover = null; }
 }
-function wireHelpIcons() {
-  document.querySelectorAll('#dither-advanced-panel .help-icon[data-help]').forEach(btn => {
+function wireHelpIcons(panelId) {
+  panelId = panelId || 'default';
+  const pfx = _pfx(panelId);
+  document.querySelectorAll(`#${pfx}-advanced-panel .help-icon[data-help]`).forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const key = btn.getAttribute('data-help');
@@ -1336,15 +1323,18 @@ async function loadConfig() {
     document.getElementById('debug-active-banner').style.display = debugOn ? 'block' : 'none';
     document.getElementById('debug-secs').textContent = debugSecs;
 
-    // Dither presets + current state. ditherState is the full ImageConfig dict
-    // (same shape as what each preset carries before label/description are added).
+    // Dither presets + current state for all three panels.
     ditherPresets = data.dither_presets || {};
-    ditherState = JSON.parse(JSON.stringify(cfg.image_config_default || {}));
-    populatePresetDropdown();
-    selectPresetMatching(ditherState);
-    renderDitherPanel();
-    populateClassifierPresetDropdowns();
-    selectClassifierPresets(cfg);
+    ditherState     = JSON.parse(JSON.stringify(cfg.image_config_default || {}));
+    bwDitherState   = JSON.parse(JSON.stringify(cfg.image_config_bw   || {}));
+    faceDitherState = JSON.parse(JSON.stringify(cfg.image_config_face  || {}));
+    populatePresetDropdown();  // populates default + bw + face dropdowns
+    selectPresetMatching(ditherState,     'default');
+    selectPresetMatching(bwDitherState,   'bw');
+    selectPresetMatching(faceDitherState, 'face');
+    renderDitherPanel('default');
+    renderDitherPanel('bw');
+    renderDitherPanel('face');
 
     currentConfig = cfg;
   } catch (e) {
@@ -1368,23 +1358,14 @@ async function refreshStatus() {
     document.getElementById('stat-last-served').textContent = data.last_served || '-';
 
     const proc = document.getElementById('processing-indicator');
-    const banner = document.getElementById('processing-banner');
     if (data.converting > 0 || data.converting_total > 0) {
       const done = data.converting_done || 0;
       const total = data.converting_total || 0;
-      const remaining = total - done;
       proc.className = 'processing-indicator';
       proc.textContent = `Dithering ${data.converting_name || '...'} (${done + 1} of ${total})`;
-      if (remaining > 0) {
-        banner.style.display = 'block';
-        banner.textContent = `${remaining} more image${remaining > 1 ? 's' : ''} being converted...`;
-      } else {
-        banner.style.display = 'none';
-      }
     } else {
       proc.className = 'processing-indicator idle';
       proc.textContent = 'Idle';
-      banner.style.display = 'none';
     }
 
     // Screens
