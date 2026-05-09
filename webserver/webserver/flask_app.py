@@ -269,7 +269,7 @@ def create_app(
             }
             upload_files.append(entry)
             if r.convert_status == "failed":
-                failed_files.append({"name": r.name, "error": r.convert_error})
+                failed_files.append({"name": r.name, "error": r.convert_error, "size_bytes": r.original_size_bytes})
 
         ready_count = sum(1 for r in records if r.convert_status == "ok")
         serve_data: dict[str, dict] = {}
