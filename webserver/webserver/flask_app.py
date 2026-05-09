@@ -316,6 +316,7 @@ def create_app(
             "converting_name": progress.current_name,
             "converting_done": progress.done,
             "converting_total": progress.total,
+            "converting_eta_seconds": manager.estimate_remaining_seconds(),
             "cache_used_bytes": disk["cache_used_bytes"],
             "disk_free_bytes": disk["disk_free_bytes"],
         })

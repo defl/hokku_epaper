@@ -56,6 +56,7 @@ class ImageRecord:
     convert_status: ConvertStatus
     convert_error: str | None
     screen_image_config_slug: str | None    # ScreenImageConfig slug at last successful conversion
+    last_conversion_seconds: float | None = None  # wall-clock time of the last successful render
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,7 @@ def _record_to_dict(rec: ImageRecord) -> dict:
 def _record_from_dict(d: dict) -> ImageRecord:
     # Support old DB files that used 'convert_pipeline_slug'.
     slug = d.get("screen_image_config_slug") or d.get("convert_pipeline_slug")
+    raw_t = d.get("last_conversion_seconds")
     return ImageRecord(
         name=d["name"],
         name_hash=d["name_hash"],
@@ -101,6 +103,7 @@ def _record_from_dict(d: dict) -> ImageRecord:
         convert_status=d["convert_status"],
         convert_error=d.get("convert_error"),
         screen_image_config_slug=slug,
+        last_conversion_seconds=float(raw_t) if raw_t is not None else None,
     )
 
 
@@ -271,6 +274,28 @@ class ImageManager:
 
     def conversion_progress(self) -> ConversionProgress:
         return self._progress
+
+    def estimate_remaining_seconds(self) -> float | None:
+        """Estimate seconds until the current conversion batch finishes.
+
+        Uses the average of all known per-image conversion times as the
+        per-image cost, multiplied by the number of images not yet done
+        (including the one currently rendering).  Returns None when there
+        is nothing pending or no timing data is available yet.
+        """
+        progress = self._progress
+        remaining = progress.total - progress.done
+        if remaining <= 0:
+            return None
+        times = [
+            r.last_conversion_seconds
+            for r in self._records.values()
+            if r.last_conversion_seconds is not None
+        ]
+        if not times:
+            return None
+        avg = sum(times) / len(times)
+        return remaining * avg
 
     # ── Cache control ────────────────────────────────────────────
 
@@ -527,11 +552,13 @@ class ImageManager:
 
         try:
             screen_cfg = self._classifier.screen_config_for(src_path, self._records[name].original_sha1)
+            t0 = time.monotonic()
             with open_image_for_render(src_path) as img:
                 panel_bytes = render_panel_bytes(
                     img, screen_cfg.image_config, screen_cfg.orientation,
                     screen_cfg.crop_to_fill_threshold,
                 )
+            conversion_seconds = time.monotonic() - t0
             preview_bytes = preview_png_from_panel_bytes(
                 panel_bytes, screen_cfg.orientation,
             )
@@ -565,6 +592,7 @@ class ImageManager:
                 convert_status="ok",
                 convert_error=None,
                 screen_image_config_slug=new_slug,
+                last_conversion_seconds=conversion_seconds,
             )
             self._records[name] = new_rec
             self._images_dir.mkdir(parents=True, exist_ok=True)

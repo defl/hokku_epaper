@@ -1473,8 +1473,16 @@ async function refreshStatus() {
     if (data.converting > 0 || data.converting_total > 0) {
       const done = data.converting_done || 0;
       const total = data.converting_total || 0;
+      const eta = data.converting_eta_seconds;
+      let etaStr = '';
+      if (eta != null && eta > 0) {
+        const secs = Math.round(eta);
+        if (secs < 60)       etaStr = ` — ~${secs}s left`;
+        else if (secs < 3600) etaStr = ` — ~${Math.ceil(secs / 60)}m left`;
+        else                   etaStr = ` — ~${(secs / 3600).toFixed(1)}h left`;
+      }
       proc.className = 'processing-indicator';
-      proc.textContent = `Dithering ${data.converting_name || '...'} (${done + 1} of ${total})`;
+      proc.textContent = `Dithering ${data.converting_name || '...'} (${done + 1} of ${total})${etaStr}`;
     } else {
       proc.className = 'processing-indicator idle';
       proc.textContent = 'Idle';
