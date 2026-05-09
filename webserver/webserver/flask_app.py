@@ -1,13 +1,12 @@
 """Flask application factory and route handlers.
 
-Routes only — no module-level mutable globals. State lives in the
-ImageManager / ServeScheduler instances passed to ``create_app()``.
+Routes only — no module-level mutable globals. Live state lives in the
+AppState instance passed to ``create_app()``. All route handlers read
+``state.manager`` / ``state.scheduler`` / ``state.config`` at the start of
+each request so they automatically pick up a hot-reloaded config.
 """
 from __future__ import annotations
 
-import json
-import os
-import sys
 import time as _time
 from dataclasses import asdict
 from datetime import datetime
@@ -23,17 +22,15 @@ from flask import (
     request,
     send_file,
 )
-from PIL import Image
 from pillow_heif import register_heif_opener
 from werkzeug.utils import secure_filename
 
+from webserver.app_state import AppState
 from webserver.config import AppConfig
 from webserver.display import TOTAL_BYTES, VISUAL_H, VISUAL_W
 from webserver.image import IMAGE_EXTENSIONS
-from webserver.image_manager import ImageManager
 from webserver.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS, PRESET_META
 from webserver.screen_headers import parse_battery_header, parse_frame_state
-from webserver.serve_scheduler import ServeScheduler
 from webserver.time_utils import calculate_sleep_seconds, format_duration_human
 
 
@@ -59,17 +56,14 @@ def _busy_retry_seconds(config: AppConfig) -> int:
 
 
 def create_app(
-    manager: ImageManager,
-    scheduler: ServeScheduler,
-    config: AppConfig,
+    state: AppState,
     *,
     config_path: Path | None = None,
     template_folder: str | None = None,
 ) -> Flask:
-    """Build the Flask app over a manager + scheduler + config.
+    """Build the Flask app over an AppState.
 
-    config_path is optional but required for save-config to work (the UI's
-    save handler writes the new JSON and exits the process; systemd respawns).
+    config_path is optional but required for save-config to work.
     """
     app = Flask(__name__, template_folder=_resolve_template_folder(template_folder))
 
@@ -77,6 +71,10 @@ def create_app(
 
     @app.route("/hokku/screen/", strict_slashes=False)
     def serve_binary():
+        manager = state.manager
+        scheduler = state.scheduler
+        config = state.config
+
         screen_name = request.headers.get("X-Screen-Name", "unnamed")
         screen_ip = request.remote_addr or "unknown"
         battery_mv = parse_battery_header(request.headers.get("X-Battery-mV"))
@@ -140,6 +138,7 @@ def create_app(
 
     @app.route("/hokku/api/original/<path:name>")
     def api_original(name: str):
+        manager = state.manager
         try:
             path = manager.original_path(name)
         except FileNotFoundError:
@@ -150,14 +149,14 @@ def create_app(
 
     @app.route("/hokku/api/dithered/<path:name>")
     def api_dithered(name: str):
-        png = manager.preview_png(name)
+        png = state.manager.preview_png(name)
         if png is None:
             abort(404)
         return _png_response(png)
 
     @app.route("/hokku/api/thumbnail/<path:name>")
     def api_thumbnail(name: str):
-        jpg = manager.thumbnail_jpg(name)
+        jpg = state.manager.thumbnail_jpg(name)
         if jpg is None:
             abort(404)
         resp = make_response(jpg)
@@ -168,6 +167,7 @@ def create_app(
 
     @app.route("/hokku/api/upload", methods=["POST"])
     def api_upload():
+        manager = state.manager
         files = request.files.getlist("file") or request.files.getlist("files")
         if not files:
             return jsonify({"error": "No files in upload"}), 400
@@ -195,7 +195,7 @@ def create_app(
     @app.route("/hokku/api/image/<path:name>", methods=["DELETE"])
     def api_delete(name: str):
         try:
-            manager.remove(name)
+            state.manager.remove(name)
         except FileNotFoundError:
             return jsonify({"error": f"image {name!r} not found"}), 404
         except OSError as e:
@@ -205,53 +205,36 @@ def create_app(
     @app.route("/hokku/api/image/<path:name>/retry", methods=["POST"])
     def api_retry(name: str):
         try:
-            manager.retry(name)
+            state.manager.retry(name)
         except FileNotFoundError:
             return jsonify({"error": f"image {name!r} not found"}), 404
         return jsonify({"ok": True})
 
     @app.route("/hokku/api/show_next/<path:name>", methods=["POST"])
     def api_show_next(name: str):
-        # "Move this to front of rotation" — we approximate by zeroing its
-        # show_index so it wins the next pick_next() tiebreak.
-        rec = manager.status(name)
+        rec = state.manager.status(name)
         if rec is None:
             return jsonify({"error": f"image {name!r} not found"}), 404
-        # Reach into scheduler internals via stats: mark_served bumps; we
-        # achieve "next" by clearing this image's index and bumping others.
-        all_stats = scheduler.stats()
-        for n, s in all_stats.items():
-            if n == name:
-                continue
-            # Bump non-target so target (whatever it is) becomes the lowest.
-            if s.show_index == 0:
-                # Use mark_served on a placeholder is wrong; we just don't
-                # have a public API for "set_index". Do nothing here — the
-                # rotation will get to it on its own. The UI hint is enough.
-                pass
-        # Simplest: just mark every other image served once to bump them above.
-        # We avoid touching the scheduler internals; instead we reset for next.
         return jsonify({"ok": True, "note": "rotation will get to this image next cycle"})
 
     @app.route("/hokku/api/clear_cache", methods=["POST"])
     def api_clear_cache():
-        manager.clear_caches()
+        state.manager.clear_caches()
         return jsonify({"ok": True})
 
     @app.route("/hokku/api/scrub", methods=["POST"])
     def api_scrub():
-        """Remove stale-slug panel/preview files immediately (preserves thumbs).
-
-        Called by the UI when auto-clear is toggled ON or the preset changes
-        with auto-clear enabled — works without requiring a config save.
-        """
-        manager.scrub_stale_cache()
+        """Remove stale-slug panel/preview files immediately (preserves thumbs)."""
+        state.manager.scrub_stale_cache()
         return jsonify({"ok": True})
 
     # ── API: status + config ───────────────────────────────────
 
     @app.route("/hokku/api/status")
     def api_status():
+        manager = state.manager
+        scheduler = state.scheduler
+
         records = manager.list()
         progress = manager.conversion_progress()
         last = scheduler.last_served()
@@ -332,7 +315,7 @@ def create_app(
                 "description": meta.get("description", ""),
             }
         return jsonify({
-            "config": config.to_dict(),
+            "config": state.config.to_dict(),
             "dither_presets": presets,
             "default_preset": DEFAULT_PRESET,
             "server_time": datetime.now().isoformat(timespec="seconds"),
@@ -347,7 +330,7 @@ def create_app(
         if not isinstance(body, dict):
             return jsonify({"error": "expected JSON object"}), 400
         try:
-            merged = {**config.to_dict(), **body}
+            merged = {**state.config.to_dict(), **body}
             new_cfg = AppConfig.from_dict(merged)
         except (TypeError, ValueError) as e:
             return jsonify({"error": f"invalid config: {e}"}), 400
@@ -355,19 +338,12 @@ def create_app(
             new_cfg.save(config_path)
         except OSError as e:
             return jsonify({"error": f"failed to write config: {e}"}), 500
-
-        # Spawn a daemon thread that exits the process shortly after we
-        # return — gives Flask time to flush the response so the UI sees
-        # success before the connection drops. systemd respawns us.
-        import threading
-
-        def _exit_soon() -> None:
-            _time.sleep(0.5)
-            print("  Config saved — exiting for systemd restart")
-            os._exit(0)
-
-        threading.Thread(target=_exit_soon, daemon=True).start()
-        return jsonify({"ok": True, "restarting": True})
+        try:
+            state.reload(new_cfg)
+        except ValueError as e:
+            return jsonify({"error": f"reload failed: {e}"}), 400
+        print("  Config saved and reloaded in-process")
+        return jsonify({"ok": True, "restarting": False})
 
     @app.route("/hokku/api/dither/preview", methods=["POST"])
     def api_dither_preview():
@@ -383,7 +359,7 @@ def create_app(
         if not name or not isinstance(image_blob, dict):
             return jsonify({"error": "expected {name, image}"}), 400
         try:
-            path = manager.original_path(name)
+            path = state.manager.original_path(name)
         except FileNotFoundError:
             return jsonify({"error": f"image {name!r} not found"}), 404
         try:
@@ -394,7 +370,7 @@ def create_app(
         from webserver.image import open_image_for_render, render_preview_png
         print(f"  Preview: {name!r}")
         with open_image_for_render(path) as img:
-            png = render_preview_png(img, cfg, config.orientation)
+            png = render_preview_png(img, cfg, state.config.orientation)
         print(f"  Preview done: {name!r}")
         return _png_response(png)
 

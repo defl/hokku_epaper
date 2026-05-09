@@ -8,6 +8,7 @@ import sys
 import threading
 from pathlib import Path
 
+from webserver.app_state import AppState
 from webserver.config import AppConfig
 from webserver.flask_app import create_app
 from webserver.image_manager import ImageManager
@@ -37,7 +38,8 @@ def main() -> None:
 
     manager = ImageManager(config)
     scheduler = ServeScheduler(manager)
-    app = create_app(manager, scheduler, config, config_path=config_path)
+    state = AppState(config, manager, scheduler)
+    app = create_app(state, config_path=config_path)
 
     print(f"Hokku image server")
     print(f"  Upload dir: {upload_dir}")
@@ -51,7 +53,7 @@ def main() -> None:
     print(f"    GET /hokku/ui       — web GUI")
 
     watcher_thread = threading.Thread(
-        target=Watcher(manager).run_forever, daemon=True, name="watcher",
+        target=Watcher(state).run_forever, daemon=True, name="watcher",
     )
     watcher_thread.start()
 
