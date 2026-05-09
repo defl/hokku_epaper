@@ -5,7 +5,6 @@ import argparse
 import logging
 import os
 import sys
-import threading
 from pathlib import Path
 
 from webserver.app_state import AppState
@@ -61,20 +60,8 @@ def main() -> None:
     print(f"    GET /hokku/screen/  — panel binary + X-Sleep-Seconds")
     print(f"    GET /hokku/ui       — web GUI")
 
-    # Run an initial sync on the main thread so the state is fully populated
-    # before Flask starts accepting connections.  The watcher thread then takes
-    # over for all subsequent scans.
-    print("  Initial scan…", end=" ", flush=True)
-    try:
-        manager.sync()
-        print("done.")
-    except Exception as e:
-        print(f"warning: {e}")
-
-    watcher_thread = threading.Thread(
-        target=Watcher(state).run_forever, daemon=True, name="watcher",
-    )
-    watcher_thread.start()
+    watcher = Watcher(state)
+    watcher.start()
 
     # Suppress Werkzeug access-log noise for high-frequency polling endpoints.
     _SILENT_PATHS = {"/hokku/api/status"}
@@ -87,6 +74,7 @@ def main() -> None:
     logging.getLogger("werkzeug").addFilter(_SilentFilter())
 
     print(f"  Starting server on port {config.port}...")
+    watcher.kick()  # everything is built — let the first sync begin
     app.run(host="0.0.0.0", port=config.port)
 
 

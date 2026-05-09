@@ -194,6 +194,7 @@ def test_watcher_calls_sync_on_manager(app_config: AppConfig):
             raise StopIteration
 
     w = Watcher(state, sleep=fake_sleep)
+    w.kick()
     try:
         w.run_forever()
     except StopIteration:
@@ -227,6 +228,7 @@ def test_watcher_follows_new_manager_after_reload(app_config: AppConfig, tmp_pat
         raise StopIteration
 
     w = Watcher(state, sleep=fake_sleep)
+    w.kick()
     try:
         w.run_forever()
     except StopIteration:
@@ -250,6 +252,7 @@ def test_watcher_uses_new_poll_interval_after_reload(app_config: AppConfig, tmp_
         raise StopIteration
 
     w = Watcher(state, sleep=fake_sleep)
+    w.kick()
     try:
         w.run_forever()
     except StopIteration:
