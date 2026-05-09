@@ -223,12 +223,19 @@ class ImageManager:
             self._save_db()
 
     def retry(self, name: str) -> None:
-        """Mark a failed image as pending so the next sync() retries conversion."""
+        """Mark a failed image as pending so the next sync() retries conversion.
+
+        Images that PIL couldn't open (image_width is None) are never retried —
+        the file is corrupt/unsupported and won't open on a second attempt.
+        """
         with self._db_lock:
             rec = self._records.get(name)
             if rec is None:
                 raise FileNotFoundError(f"Image {name!r} is not registered.")
             if rec.convert_status != "failed":
+                return
+            if rec.image_width is None:
+                # PIL couldn't open this at upload time and won't now; leave as failed.
                 return
             self._records[name] = replace(
                 rec, convert_status="pending", convert_error=None,
@@ -594,6 +601,24 @@ class ImageManager:
             )
 
         src_path = self._upload_dir / name
+
+        # image_width is None means PIL couldn't open this file at registration.
+        # It won't open now either — re-fail immediately without a traceback.
+        if rec.image_width is None:
+            err = rec.convert_error or "Cannot open image (unreadable or unsupported format)"
+            print(f"  Skipping {name!r}: {err}")
+            with self._db_lock:
+                cur = self._records.get(name)
+                if cur is not None:
+                    self._records[name] = replace(
+                        cur, convert_status="failed", convert_error=err,
+                        screen_image_config_slug=None,
+                    )
+                    self._save_db()
+                self._progress = replace(
+                    self._progress, current_name=None, done=self._progress.done + 1,
+                )
+            return
 
         try:
             screen_cfg = self._classifier.screen_config_for(src_path, self._records[name].original_sha1)
