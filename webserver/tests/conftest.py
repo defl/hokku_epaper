@@ -1,0 +1,50 @@
+"""Shared test fixtures."""
+from __future__ import annotations
+
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+from PIL import Image
+
+from webserver.config import AppConfig
+from webserver.dither import DitherConfig
+from webserver.image import ImageConfig
+from webserver.presets import PRESET_IMAGE_CONFIGS
+
+
+@pytest.fixture
+def fast_image_config() -> ImageConfig:
+    """An ImageConfig that uses the noop kernel — instant dither."""
+    base = PRESET_IMAGE_CONFIGS["atkinson"]
+    return replace(
+        base,
+        dither=replace(base.dither, algorithm="noop"),
+    )
+
+
+@pytest.fixture
+def app_config(tmp_path: Path, fast_image_config: ImageConfig) -> AppConfig:
+    """An AppConfig wired to tmp_path with the noop image config."""
+    upload = tmp_path / "uploads"
+    cache = tmp_path / "cache"
+    upload.mkdir()
+    cache.mkdir()
+    return AppConfig(
+        upload_dir=str(upload),
+        cache_dir=str(cache),
+        port=18080,
+        poll_interval_seconds=1,
+        orientation="landscape",
+        image=fast_image_config,
+    )
+
+
+@pytest.fixture
+def make_test_image():
+    """Factory for writing a tiny solid-colour image into a path."""
+    def _make(path: Path, size=(40, 30), color=(180, 60, 60)) -> Path:
+        img = Image.new("RGB", size, color)
+        img.save(path)
+        return path
+    return _make
