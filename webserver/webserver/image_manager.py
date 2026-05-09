@@ -278,24 +278,36 @@ class ImageManager:
     def estimate_remaining_seconds(self) -> float | None:
         """Estimate seconds until the current conversion batch finishes.
 
-        Uses the average of all known per-image conversion times as the
-        per-image cost, multiplied by the number of images not yet done
-        (including the one currently rendering).  Returns None when there
-        is nothing pending or no timing data is available yet.
+        Fits a seconds-per-byte rate from all images that have already been
+        converted (total_time / total_bytes), then multiplies each pending
+        image's known file size by that rate and sums the results.  This is
+        more accurate than a flat average because conversion time scales
+        roughly linearly with source image size.
+
+        Returns None when there is nothing pending or no timing data yet.
         """
         progress = self._progress
-        remaining = progress.total - progress.done
-        if remaining <= 0:
+        if progress.total - progress.done <= 0:
             return None
-        times = [
-            r.last_conversion_seconds
+
+        # Fit rate from converted images: seconds per source byte.
+        total_bytes_fitted = 0
+        total_time_fitted = 0.0
+        for r in self._records.values():
+            if r.last_conversion_seconds is not None and r.original_size_bytes > 0:
+                total_bytes_fitted += r.original_size_bytes
+                total_time_fitted += r.last_conversion_seconds
+        if total_bytes_fitted == 0:
+            return None
+        seconds_per_byte = total_time_fitted / total_bytes_fitted
+
+        # Sum per-image estimates for every image still pending (including
+        # the one currently rendering, whose status is still "pending").
+        return sum(
+            r.original_size_bytes * seconds_per_byte
             for r in self._records.values()
-            if r.last_conversion_seconds is not None
-        ]
-        if not times:
-            return None
-        avg = sum(times) / len(times)
-        return remaining * avg
+            if r.convert_status == "pending"
+        )
 
     # ── Cache control ────────────────────────────────────────────
 
