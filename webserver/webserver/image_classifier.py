@@ -12,6 +12,8 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from webserver.app_config import AppConfig
+from webserver.face_detect import has_face
+from webserver.image import is_grayscale
 from webserver.image_config import ImageConfig
 from webserver.screen_image_config import ScreenImageConfig
 
@@ -80,25 +82,29 @@ class ImageClassifier:
 
         with self._lock:
             obs = self._cache.get(sha1, Observations())
+            dirty = False
 
-            if cfg.classifier_bw_detect_enabled:
-                if obs.is_bw is None:
-                    from webserver.image import is_grayscale
-                    obs = replace(obs, is_bw=is_grayscale(path))
-                    self._cache[sha1] = obs
-                    self._persist()
-                if obs.is_bw:
-                    return cfg.image_config_bw
+            # Always run both detectors when their flag is on, regardless of
+            # the other result.  This means both is_bw and has_face are always
+            # populated for images that go through the enabled detectors, so
+            # the UI can show both observations.
+            if cfg.classifier_bw_detect_enabled and obs.is_bw is None:
+                obs = replace(obs, is_bw=is_grayscale(path))
+                dirty = True
 
-            if cfg.classifier_face_detect_enabled:
-                if obs.has_face is None:
-                    from webserver.face_detect import has_face
-                    obs = replace(obs, has_face=has_face(path))
-                    self._cache[sha1] = obs
-                    self._persist()
-                if obs.has_face:
-                    return cfg.image_config_face
+            if cfg.classifier_face_detect_enabled and obs.has_face is None:
+                obs = replace(obs, has_face=has_face(path))
+                dirty = True
 
+            if dirty:
+                self._cache[sha1] = obs
+                self._persist()
+
+            # Dispatch order: B&W wins over face wins over default.
+            if cfg.classifier_bw_detect_enabled and obs.is_bw:
+                return cfg.image_config_bw
+            if cfg.classifier_face_detect_enabled and obs.has_face:
+                return cfg.image_config_face
             return cfg.image_config_default
 
     def _load(self) -> dict[str, Observations]:

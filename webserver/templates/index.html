@@ -250,11 +250,6 @@
     <span class="info">changing orientation re-converts all images</span>
   </div>
 
-  <div class="config-row" style="margin-bottom:4px;">
-    <label></label>
-    <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
-  </div>
-
   <!-- Advanced toggle -->
   <div class="config-advanced-toggle" id="cfg-advanced-toggle" onclick="toggleConfigAdvanced()">
     <span class="toggle-arrow">▶</span>
@@ -398,6 +393,11 @@
     </div>
 
   </div><!-- /cfg-advanced-body -->
+
+  <div class="config-row" style="margin-top:12px;">
+    <label></label>
+    <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+  </div>
 </div><!-- /config-section -->
 
 <div class="drag-overlay" id="drag-overlay"><div class="drag-msg">Drop images to upload</div></div>
@@ -1315,8 +1315,8 @@ function renderImageGrid(uploadFiles, serveData) {
       <div class="card-body">
         <div class="filename">${escapeHtml(fname)}</div>
         <div class="card-actions">
-          <button class="btn btn-secondary btn-small details-btn" data-name="">Details</button>
           ${dithered ? '<button class="btn btn-primary btn-small shownext-btn" data-name="">Show Next</button>' : ''}
+          <button class="btn btn-secondary btn-small details-btn" data-name="">Details</button>
         </div>
       </div>
     `;
