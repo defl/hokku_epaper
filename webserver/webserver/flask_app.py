@@ -238,6 +238,16 @@ def create_app(
         manager.clear_caches()
         return jsonify({"ok": True})
 
+    @app.route("/hokku/api/scrub", methods=["POST"])
+    def api_scrub():
+        """Remove stale-slug panel/preview files immediately (preserves thumbs).
+
+        Called by the UI when auto-clear is toggled ON or the preset changes
+        with auto-clear enabled — works without requiring a config save.
+        """
+        manager.scrub_stale_cache()
+        return jsonify({"ok": True})
+
     # ── API: status + config ───────────────────────────────────
 
     @app.route("/hokku/api/status")
@@ -292,6 +302,7 @@ def create_app(
                 "state": t.frame_state,
             }
 
+        disk = manager.cache_disk_info()
         return jsonify({
             "server_time": datetime.now().isoformat(timespec="seconds"),
             "upload_size": len(records),
@@ -306,6 +317,8 @@ def create_app(
             "converting_name": progress.current_name,
             "converting_done": progress.done,
             "converting_total": progress.total,
+            "cache_used_bytes": disk["cache_used_bytes"],
+            "disk_free_bytes": disk["disk_free_bytes"],
         })
 
     @app.route("/hokku/api/config", methods=["GET"])

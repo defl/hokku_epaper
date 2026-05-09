@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import threading
 import time
 import traceback
@@ -266,9 +267,8 @@ class ImageManager:
     # ── Cache control ────────────────────────────────────────────
 
     def clear_caches(self) -> None:
-        """Wipe all cached panel/preview/thumb files and mark every record pending.
-
-        The next sync() rebuilds them.
+        """Wipe ALL cached files (panel, preview, thumbnail) and mark every
+        record pending. The next sync() rebuilds everything from scratch.
         """
         with self._db_lock:
             if self._images_dir.exists():
@@ -287,6 +287,22 @@ class ImageManager:
                 )
             self._save_db()
             print("  Cache cleared")
+
+    def cache_disk_info(self) -> dict[str, int]:
+        """Return cache directory size and partition free space in bytes."""
+        used = 0
+        if self._cache_dir.exists():
+            for f in self._cache_dir.rglob("*"):
+                if f.is_file():
+                    try:
+                        used += f.stat().st_size
+                    except OSError:
+                        pass
+        try:
+            free = shutil.disk_usage(self._cache_dir).free
+        except OSError:
+            free = 0
+        return {"cache_used_bytes": used, "disk_free_bytes": free}
 
     # ── Internals ────────────────────────────────────────────────
 
@@ -422,32 +438,85 @@ class ImageManager:
                 except OSError as e:
                     print(f"  Cache: could not remove {f.name}: {e}")
 
-    def _scrub_orphan_cache_files(self) -> None:
-        """Remove cache files that aren't claimed by any current record."""
+    def scrub_stale_cache(self) -> None:
+        """Remove stale-slug panel/preview files for registered images now,
+        regardless of the auto_clear_cache config setting.
+
+        Called by the API endpoint when the user enables auto-clear or changes
+        the preset with auto-clear enabled — so the effect is immediate without
+        requiring a config save + restart.
+        """
+        with self._db_lock:
+            self._scrub_orphan_cache_files(force_auto_clear=True)
+
+    def _scrub_orphan_cache_files(self, *, force_auto_clear: bool = False) -> None:
+        """Remove cache files according to the current policy.
+
+        Always:
+          - Remove .tmp files.
+          - Remove files with an unrecognised suffix.
+          - Remove files whose name_hash doesn't match any registered image
+            (the source image was deleted).
+
+        If auto_clear_cache is True (in AppConfig) *or* force_auto_clear=True:
+          - Also remove panel/preview files for registered images whose
+            pipeline slug no longer matches the current slug (i.e. old-preset
+            cached results).  Thumbnails are never removed by this rule.
+
+        If auto_clear_cache is False and force_auto_clear is False:
+          - Keep every file that belongs to a registered image, regardless of
+            its pipeline slug.
+        """
         if not self._images_dir.exists():
             return
-        valid: set[str] = set()
+
+        known_hashes: set[str] = {rec.name_hash for rec in self._records.values()}
         current_slug = self._config.cache_slug()
-        for rec in self._records.values():
-            slug = rec.convert_pipeline_slug or current_slug
-            valid.add(f"{rec.name_hash}_{slug}{_PANEL_SUFFIX}")
-            valid.add(f"{rec.name_hash}_{slug}{_PREVIEW_SUFFIX}")
-            valid.add(f"{rec.name_hash}{_THUMB_SUFFIX}")
+        auto_clear = self._config.auto_clear_cache or force_auto_clear
+
+        # Build the set of filenames that are valid under the current slug
+        # (only used when auto_clear is True).
+        current_slug_valid: set[str] = set()
+        if auto_clear:
+            for rec in self._records.values():
+                current_slug_valid.add(f"{rec.name_hash}_{current_slug}{_PANEL_SUFFIX}")
+                current_slug_valid.add(f"{rec.name_hash}_{current_slug}{_PREVIEW_SUFFIX}")
+                current_slug_valid.add(f"{rec.name_hash}{_THUMB_SUFFIX}")
+
+        _KNOWN_SUFFIXES = (_PANEL_SUFFIX, _PREVIEW_SUFFIX, _THUMB_SUFFIX)
+
         for f in list(self._images_dir.iterdir()):
             if not f.is_file():
                 continue
+
+            # Always: remove .tmp leftovers.
             if f.name.endswith(".tmp"):
                 try:
                     f.unlink()
                 except OSError:
                     pass
                 continue
-            if f.name not in valid:
-                try:
-                    f.unlink()
-                    print(f"  Scrubbed orphan cache file: {f.name}")
-                except OSError as e:
-                    print(f"  Could not scrub {f.name}: {e}")
+
+            # Always: remove files with an unrecognised suffix.
+            if not any(f.name.endswith(s) for s in _KNOWN_SUFFIXES):
+                self._scrub_file(f, "unknown suffix")
+                continue
+
+            # Always: remove files whose name_hash is not registered.
+            if not any(f.name.startswith(h + "_") for h in known_hashes):
+                self._scrub_file(f, "orphan (image deleted)")
+                continue
+
+            # auto_clear: remove old-slug panel/preview for registered images.
+            if auto_clear and f.name not in current_slug_valid:
+                self._scrub_file(f, "stale slug")
+
+    def _scrub_file(self, f: Path, reason: str) -> None:
+        try:
+            f.unlink()
+            print(f"  Scrubbed {reason}: {f.name}")
+        except OSError as e:
+            print(f"  Could not scrub {f.name}: {e}")
 
     def _run_one_conversion(self, name: str) -> None:
         with self._db_lock:

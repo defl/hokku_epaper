@@ -259,6 +259,15 @@
   </div>
 
   <div class="config-row">
+    <label>Auto-clear cache:</label>
+    <label class="toggle">
+      <input type="checkbox" id="auto-clear-cache">
+      <span id="auto-clear-cache-label">Off</span>
+    </label>
+    <span class="info" id="cache-disk-info" style="font-variant-numeric: tabular-nums;"></span>
+  </div>
+
+  <div class="config-row">
     <label></label>
     <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
     <button class="btn btn-danger" onclick="clearCache()">Clear Cache &amp; Re-convert</button>
@@ -371,6 +380,18 @@ const DITHER_HELP = {
 
 function deepCopy(o) { return JSON.parse(JSON.stringify(o)); }
 
+function formatBytes(b) {
+  if (b == null) return '—';
+  if (b >= 1e9) return (b / 1e9).toFixed(1) + ' GB';
+  if (b >= 1e6) return (b / 1e6).toFixed(0) + ' MB';
+  if (b >= 1024) return (b / 1024).toFixed(0) + ' KB';
+  return b + ' B';
+}
+
+function isAutoClearEnabled() {
+  return document.getElementById('auto-clear-cache').checked;
+}
+
 function populatePresetDropdown() {
   const sel = document.getElementById('dither-preset');
   sel.innerHTML = '';
@@ -395,6 +416,7 @@ function populatePresetDropdown() {
       document.getElementById('dither-serpentine-label').textContent = serpOn ? 'On' : 'Off';
       renderDitherPanel();
       updatePresetDescription();
+      if (isAutoClearEnabled()) scrubStaleCache();
     }
   };
 }
@@ -788,6 +810,7 @@ async function saveConfig() {
     poll_interval_seconds: parseInt(document.getElementById('poll-interval').value) || 10,
     orientation: document.getElementById('orientation').value,
     debug_fast_refresh: document.getElementById('debug-fast-refresh').checked,
+    auto_clear_cache: document.getElementById('auto-clear-cache').checked,
     image: ditherState,
   };
   try {
@@ -810,14 +833,25 @@ async function saveConfig() {
   }
 }
 
-async function clearCache() {
-  if (!confirm('Clear all cached conversions and re-process all images?')) return;
+async function scrubStaleCache() {
+  // Remove stale-slug panel/preview files immediately (thumbs are kept).
+  // Called when auto-clear is toggled ON or a preset is selected with auto-clear ON.
   try {
-    await fetch('/hokku/api/clear_cache', {method: 'POST'});
-    showToast('Cache cleared, re-converting...');
+    await fetch('/hokku/api/scrub', {method: 'POST'});
     refreshStatus();
   } catch (e) {
-    showToast('Error: ' + e.message);
+    showToast('Error during scrub: ' + e.message);
+  }
+}
+
+async function clearCache(silent = false) {
+  if (!silent && !confirm('Clear all cached conversions and re-process all images?')) return;
+  try {
+    await fetch('/hokku/api/clear_cache', {method: 'POST'});
+    if (!silent) showToast('Cache cleared, re-converting...');
+    refreshStatus();
+  } catch (e) {
+    if (!silent) showToast('Error: ' + e.message);
   }
 }
 
@@ -1161,6 +1195,11 @@ async function loadConfig() {
     const serpOn = !!(cfg.image && cfg.image.dither && cfg.image.dither.serpentine);
     document.getElementById('dither-serpentine').checked = serpOn;
     document.getElementById('dither-serpentine-label').textContent = serpOn ? 'On' : 'Off';
+
+    const autoClear = !!cfg.auto_clear_cache;
+    document.getElementById('auto-clear-cache').checked = autoClear;
+    document.getElementById('auto-clear-cache-label').textContent = autoClear ? 'On' : 'Off';
+
     document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
 
     const debugOn = !!cfg.debug_fast_refresh;
@@ -1223,6 +1262,12 @@ async function refreshStatus() {
     // Screens
     lastScreens = data.screens || {};
     renderScreens(data.screens);
+
+    // Disk usage next to auto-clear toggle
+    const diskInfo = document.getElementById('cache-disk-info');
+    if (diskInfo) {
+      diskInfo.textContent = `${formatBytes(data.cache_used_bytes)} used · ${formatBytes(data.disk_free_bytes)} free`;
+    }
 
     // Image grid — render every uploaded file (dithered or pending)
     const uploadList = data.upload_files || data.pool_files.map(n => ({name: n, dithered: true}));
@@ -1409,6 +1454,12 @@ window.addEventListener('drop', e => {
   dragDepth = 0;
   overlay.classList.remove('show');
   uploadFiles(e.dataTransfer.files);
+});
+
+// Auto-clear cache toggle — value comes from config (loaded in loadConfig).
+document.getElementById('auto-clear-cache').addEventListener('change', function() {
+  document.getElementById('auto-clear-cache-label').textContent = this.checked ? 'On' : 'Off';
+  if (this.checked) scrubStaleCache();
 });
 
 // Serpentine toggle — update label and sync into ditherState immediately.

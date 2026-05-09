@@ -34,6 +34,7 @@ class AppConfig:
     poll_interval_seconds: int = 10
     debug_fast_refresh: bool = False
     orientation: Orientation = "landscape"
+    auto_clear_cache: bool = False
     image: ImageConfig = field(default_factory=lambda: PRESET_IMAGE_CONFIGS[DEFAULT_PRESET])
 
     def cache_slug(self) -> str:

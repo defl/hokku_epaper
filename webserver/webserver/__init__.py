@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 import threading
@@ -53,6 +54,16 @@ def main() -> None:
         target=Watcher(manager).run_forever, daemon=True, name="watcher",
     )
     watcher_thread.start()
+
+    # Suppress Werkzeug access-log noise for high-frequency polling endpoints.
+    _SILENT_PATHS = {"/hokku/api/status"}
+
+    class _SilentFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            msg = record.getMessage()
+            return not any(p in msg for p in _SILENT_PATHS)
+
+    logging.getLogger("werkzeug").addFilter(_SilentFilter())
 
     print(f"  Starting server on port {config.port}...")
     app.run(host="0.0.0.0", port=config.port)
