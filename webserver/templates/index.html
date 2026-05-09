@@ -34,6 +34,7 @@
   .failed-list .failed-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid #fde68a; font-size: 0.9em; }
   .failed-list .failed-row:last-child { border-bottom: none; }
   .failed-list .failed-row .fname { word-break: break-all; color: #7c2d12; }
+  .failed-list .failed-row .failed-error { font-size: 0.9em; color: #b45309; }
   .failed-list .failed-row button { background: #2563eb; color: #fff; border: none; border-radius: 4px; padding: 6px 14px; font-size: 0.85em; cursor: pointer; }
   .failed-list .failed-row button:hover { background: #1d4ed8; }
   .failed-list .failed-row button:disabled { background: #9ca3af; cursor: not-allowed; }
@@ -108,9 +109,7 @@
 
   /* Pending dither badge */
   .image-card.pending img { opacity: 0.6; }
-  .image-card.failed img  { opacity: 0.3; }
   .image-card .pending-badge { position: absolute; top: 8px; left: 8px; z-index: 1; max-width: calc(100% - 60px); background: #fef3c7; color: #92400e; padding: 4px 10px; border-radius: 4px; font-size: 0.75em; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.15); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .image-card .pending-badge.error-badge { background: #fee2e2; color: #991b1b; }
   .image-card .card-actions button:disabled { background: #e5e7eb; color: #aaa; cursor: not-allowed; }
 
   /* Confirmation modal */
@@ -219,9 +218,8 @@
 <div class="failed-section" id="failed-section" style="display:none;">
   <h2 style="margin:0 0 10px 0; font-size:1.1em; color:#b45309;">Failed conversions</h2>
   <p style="margin:0 0 12px 0; font-size:0.9em; color:#92400e;">
-    These images crashed the dither pipeline (usually out-of-memory on a low-RAM host).
-    Use "Retry" to unquarantine — if it crashes again, consider deleting the image and
-    re-uploading a smaller resolution.
+    These images could not be processed (unreadable file, unsupported format, or dither pipeline crash).
+    Use "Retry" to try again — if it fails repeatedly, delete the image and re-upload a different version.
   </p>
   <div id="failed-list"></div>
 </div>
@@ -1272,10 +1270,13 @@ function renderFailedList(failed) {
   // when filenames contain apostrophes (e.g. O'Brien.jpg). Inline onclick
   // would HTML-decode the attribute first and the apostrophe would break
   // out of the JS string literal.
-  list.innerHTML = failed.map(name => `
+  list.innerHTML = failed.map(entry => `
     <div class="failed-row">
-      <span class="fname">${escapeHtml(name)}</span>
-      <button class="retry-btn" data-name="${escapeHtml(name)}">Retry</button>
+      <span class="fname">
+        ${escapeHtml(entry.name)}
+        ${entry.error ? `<span class="failed-error" title="${escapeHtml(entry.error)}"> — ${escapeHtml(entry.error)}</span>` : ''}
+      </span>
+      <button class="retry-btn" data-name="${escapeHtml(entry.name)}">Retry</button>
     </div>
   `).join('');
   list.querySelectorAll('.retry-btn').forEach(btn => {
@@ -1311,18 +1312,16 @@ function renderImageGrid(uploadFiles, serveData) {
   const grid = document.getElementById('image-grid');
   grid.innerHTML = '';
   uploadFiles.forEach(entry => {
+    // Failed images are shown only in the "Failed conversions" list, not the grid.
+    if (entry.status === 'failed') return;
     const fname    = entry.name;
     const dithered = entry.dithered;
     const card = document.createElement('div');
-    const failed = entry.status === 'failed';
-    card.className = 'image-card' + (dithered ? '' : (failed ? ' failed' : ' pending'));
-    const pendingBadge = dithered ? '' : (failed
-      ? `<div class="pending-badge error-badge" title="${escapeHtml(entry.error || 'Could not open image')}">Error</div>`
-      : '<div class="pending-badge" title="Dithered version for the e-ink display is still being generated">Dithering…</div>');
-    const thumbHtml = failed
-      ? `<div class="failed-thumb-placeholder" title="Image could not be opened"></div>`
-      : `<img src="/hokku/api/thumbnail/${encodeURIComponent(fname)}" alt="${escapeHtml(fname)}"
-           style="cursor:pointer" title="Click to view original">`;
+    card.className = 'image-card' + (dithered ? '' : ' pending');
+    const pendingBadge = dithered ? '' :
+      '<div class="pending-badge" title="Dithered version for the e-ink display is still being generated">Dithering…</div>';
+    const thumbHtml = `<img src="/hokku/api/thumbnail/${encodeURIComponent(fname)}" alt="${escapeHtml(fname)}"
+         style="cursor:pointer" title="Click to view original">`;
     card.innerHTML = `
       <button class="delete-btn" data-name="" title="Delete this image">&#x1F5D1;</button>
       ${pendingBadge}
