@@ -5,6 +5,10 @@ __pycache__/
 build/
 .cache/
 
+# Runtime DB files that may be created in the source tree by accident
+image_manager.json
+serve_scheduler.json
+
 # Debian build artifacts
 *.deb
 *.buildinfo
