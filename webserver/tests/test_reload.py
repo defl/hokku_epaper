@@ -172,39 +172,62 @@ def test_reload_manager_wired_with_new_classifier(app_config: AppConfig, tmp_pat
 
 # ── Watcher unit tests ────────────────────────────────────────────────────────
 
+def test_watcher_blocks_until_kick(app_config: AppConfig):
+    """Thread must not call sync() before kick() is called."""
+    import threading as _threading
+    state = _make_state(app_config)
+    sync_called = _threading.Event()
+
+    original_sync = state.manager.sync
+
+    def tracking_sync():
+        sync_called.set()
+        original_sync()
+
+    state.manager.sync = tracking_sync  # type: ignore[method-assign]
+
+    def fake_sleep(_seconds):
+        pass  # return so the loop idles; daemon thread exits when test ends
+
+    w = Watcher(state, sleep=fake_sleep)
+
+    # Give the thread a moment — sync must NOT have been called yet.
+    assert not sync_called.wait(timeout=0.2), "sync() should not run before kick()"
+
+    w.kick()
+
+    # Now sync must fire promptly.
+    assert sync_called.wait(timeout=2.0), "sync() should run immediately after kick()"
+
+
 def test_watcher_calls_sync_on_manager(app_config: AppConfig):
-    """Watcher.run_forever() calls state.manager.sync() on every tick."""
+    """Watcher daemon thread calls sync() on every tick after kick()."""
+    import threading as _threading
     state = _make_state(app_config)
     sync_calls: list[str] = []
-
+    done = _threading.Event()
     original_sync = state.manager.sync
 
     def tracking_sync():
         sync_calls.append("sync")
         original_sync()
+        if len(sync_calls) >= 2:
+            done.set()
 
     state.manager.sync = tracking_sync  # type: ignore[method-assign]
 
-    ticks = 0
-
-    def fake_sleep(seconds):
-        nonlocal ticks
-        ticks += 1
-        if ticks >= 2:
-            raise StopIteration
+    def fake_sleep(_seconds):
+        pass  # return immediately so the loop cycles fast in the test
 
     w = Watcher(state, sleep=fake_sleep)
     w.kick()
-    try:
-        w.run_forever()
-    except StopIteration:
-        pass
-
-    assert len(sync_calls) == 2
+    assert done.wait(timeout=5.0), "Expected at least 2 sync() calls within 5 s"
+    assert len(sync_calls) >= 2
 
 
 def test_watcher_follows_new_manager_after_reload(app_config: AppConfig, tmp_path: Path):
     """After AppState.reload(), the next Watcher tick syncs the NEW manager."""
+    import threading as _threading
     state = _make_state(app_config)
     new_cfg = _alt_config(app_config, tmp_path)
 
@@ -212,53 +235,43 @@ def test_watcher_follows_new_manager_after_reload(app_config: AppConfig, tmp_pat
     new_manager = state.manager
 
     synced: list[object] = []
+    done = _threading.Event()
     original_sync = new_manager.sync
 
     def tracking_sync():
         synced.append(new_manager)
         original_sync()
+        done.set()
 
     new_manager.sync = tracking_sync  # type: ignore[method-assign]
 
-    ticks = 0
-
-    def fake_sleep(seconds):
-        nonlocal ticks
-        ticks += 1
-        raise StopIteration
+    def fake_sleep(_seconds):
+        pass
 
     w = Watcher(state, sleep=fake_sleep)
     w.kick()
-    try:
-        w.run_forever()
-    except StopIteration:
-        pass
-
-    assert len(synced) == 1, "Watcher should have synced the new manager"
+    assert done.wait(timeout=5.0), "Watcher should have synced the new manager"
+    assert len(synced) >= 1
 
 
 def test_watcher_uses_new_poll_interval_after_reload(app_config: AppConfig, tmp_path: Path):
     """After reload, the watcher sleeps for the new config's poll_interval."""
+    import threading as _threading
     state = _make_state(app_config)
     new_cfg = replace(app_config, poll_interval_seconds=42)
-
-    # Patch upload_dir / cache_dir to pass validation (they already exist).
     state.reload(new_cfg)
 
     sleep_durations: list[float] = []
+    done = _threading.Event()
 
     def fake_sleep(seconds):
         sleep_durations.append(seconds)
-        raise StopIteration
+        done.set()
 
     w = Watcher(state, sleep=fake_sleep)
     w.kick()
-    try:
-        w.run_forever()
-    except StopIteration:
-        pass
-
-    assert sleep_durations == [42]
+    assert done.wait(timeout=5.0), "Expected fake_sleep to be called"
+    assert sleep_durations[0] == 42
 
 
 # ── Flask integration tests ───────────────────────────────────────────────────

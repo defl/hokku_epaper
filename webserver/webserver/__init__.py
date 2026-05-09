@@ -61,7 +61,6 @@ def main() -> None:
     print(f"    GET /hokku/ui       — web GUI")
 
     watcher = Watcher(state)
-    watcher.start()
 
     # Suppress Werkzeug access-log noise for high-frequency polling endpoints.
     _SILENT_PATHS = {"/hokku/api/status"}
