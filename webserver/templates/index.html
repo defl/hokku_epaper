@@ -2282,7 +2282,7 @@ async function refreshStatus() {
     document.getElementById('stat-last-served').textContent = data.last_served || '-';
 
     const proc = document.getElementById('processing-indicator');
-    if (data.converting > 0 || data.converting_total > 0) {
+    if (data.converting > 0) {
       const done = data.converting_done || 0;
       const total = data.converting_total || 0;
       const eta = data.converting_eta_seconds;
