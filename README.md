@@ -117,7 +117,6 @@ JPEG, PNG, BMP, TIFF, WebP, GIF, HEIC/HEIF, AVIF. Drop any of these into the upl
 
 ## More Documentation
 
-- **[Technical details](docs/tech_details.md)** — state machine, REST API, hardware map, firmware internals.
 - **[Image server documentation](webserver/README.md)** — install, web GUI, API endpoints, systemd service.
 - **[Dithering pipeline](docs/dithering.md)** — why it looks the way it does; failure modes and countermeasures.
 - **[Firmware documentation](firmware/README.md)** — building from source, manual flashing, developer notes.

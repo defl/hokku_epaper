@@ -625,7 +625,7 @@ webserver/
 docs/
   dithering.md                      ← this file
   image_processing_memory_usage.md  ← full memory optimisation journey
-  memory_constrained_dither_plan.md ← original design plan
+  image_processing_memory_usage.md  ← memory optimisation journey and measurements
 ```
 
 ---

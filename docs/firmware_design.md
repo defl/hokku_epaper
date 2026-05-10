@@ -1,6 +1,6 @@
 # Firmware Design — Rationale
 
-This is the "why" doc. For *what* the firmware actually does — state diagram, protocol, RTC fields, API — see [`tech_details.md`](tech_details.md). For the hardware reference — pin map, init bytes, registers — see [`hardware_facts.md`](hardware_facts.md).
+This is the "why" doc. For the hardware reference — pin map, init bytes, registers — see [`hardware_facts.md`](hardware_facts.md).
 
 ## Goals
 

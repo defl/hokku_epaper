@@ -434,19 +434,22 @@ restructuring.
 ### `RLIMIT_AS` wired into the per-render path
 
 The `webserver/memory_guard.py` module exists as an opt-in context
-manager. It's **not yet wired into `image_manager._run_one_conversion`**
-because:
+manager. It's **not yet wired into the render worker** because:
 
-1. `RLIMIT_AS` is process-wide, not per-thread. A multi-thread worker
-   pool would need it sized to `N × budget + baseline` and set once
-   at process start, not per-render.
-2. In the current single-process Flask server, setting it inside a
-   render risks aborting unrelated allocations in concurrent request
-   handlers.
+1. `RLIMIT_AS` is process-wide, not per-render. Each worker process
+   spawned by `RenderPool` would need the limit set once at worker
+   startup (sized to `budget + interpreter baseline`), not inside
+   individual render calls.
+2. Worker startup happens inside `ProcessPoolExecutor`'s internal
+   machinery; injecting an initializer that calls `setrlimit` is
+   straightforward but has not been done yet.
 
-The right place to wire it is in the future multi-process worker pool
-(phase 2). For now, the streaming design holds the soft budget; the
-hard-guarantee path is documented and tested but not in production.
+The render pipeline now runs in a `ProcessPoolExecutor`
+(`webserver/render_pool.py`), so `RLIMIT_AS` set at worker-process
+startup would correctly isolate each render without touching the Flask
+request-handler process. For now the streaming design holds the soft
+budget; the hard-guarantee path is documented and tested but not in
+production.
 
 ---
 
@@ -529,19 +532,25 @@ for wiring memory_guard in phase 2.
 ```
 webserver/
   webserver/
-    image.py               ← _render_indices, render_panel_bytes,
-                              open_image_for_render (JPEG draft),
-                              compress_dynamic_range (per-stripe).
-    dither.py              ← _streaming_diffusion_dither (rolling buffer +
-                              stripe cache), prep_stripe API,
-                              DEFAULT_STRIPE_H = 100.
-    memory_guard.py        ← memory_limit() ctx mgr (RLIMIT_AS), opt-in.
+    image.py                  ← _render_indices, render_panel_bytes,
+                                 open_image_for_render (JPEG draft),
+                                 compress_dynamic_range (per-stripe).
+    dither_constrained.py     ← _streaming_diffusion_dither (rolling buffer +
+                                 stripe cache), prep_stripe API,
+                                 adaptive_saturate, build_rgb_lut*,
+                                 DEFAULT_STRIPE_H = 100.
+    dither_unconstrained.py   ← full-canvas reference dither (quality
+                                 comparison / regression baseline only).
+    dither.py                 ← backward-compat re-export shim →
+                                 dither_constrained.
+    render_pool.py            ← lazy ProcessPoolExecutor; renders run here.
+    render_worker.py          ← top-level render_one() submitted to the pool.
+    memory_guard.py           ← memory_limit() ctx mgr (RLIMIT_AS), opt-in.
   tests/
-    _memory_helpers.py     ← Layer A / B / C measurement helpers.
-    test_memory_budget.py  ← time_intensive marker; the headline
-                              50 MB / render assertions live here.
+    _memory_helpers.py        ← Layer A / B / C measurement helpers.
+    test_memory_budget.py     ← time_intensive marker; the headline
+                                 50 MB / render assertions live here.
 
 docs/
-  memory_constrained_dither_plan.md   ← original design plan
   image_processing_memory_usage.md    ← this document
 ```
