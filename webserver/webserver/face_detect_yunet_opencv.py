@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import cv2
-
 from webserver.face_detect_abstract import (
     AbstractFaceDetector,
     DEFAULT_SCORE_THRESHOLD,
@@ -26,6 +24,7 @@ class OpenCVYuNetFaceDetector(AbstractFaceDetector):
         self._score_threshold = score_threshold
 
     def has_face(self, path: Path) -> bool:
+        import cv2
         loaded = load_image_resized(path)
         if loaded is None:
             return False

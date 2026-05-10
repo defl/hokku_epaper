@@ -1,3 +1,16 @@
+hokku-server (3.0.0~alpha1-10) unstable; urgency=low
+
+  * Fix startup crash when cv2 is not installed: move cv2 import inside
+    method bodies in face_detect_abstract/yunet_opencv/haar_opencv so the
+    module can be imported without opencv present. load_image_resized
+    returns None on ImportError; detectors return False; server starts and
+    uses the default image config rather than crashing.
+  * postinst: remove 2>/dev/null from opencv pip install so failures are
+    visible in dpkg/journalctl output. Add post-install cv2 import check
+    to catch "installed but still not importable" cases.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-9) unstable; urgency=low
 
   * Shrink install footprint: swap opencv-contrib-python-headless for

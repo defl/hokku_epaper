@@ -51,9 +51,13 @@ fi
 # that we don't use and is significantly larger.
 if ! python3 -c "import cv2" 2>/dev/null; then
     echo "Installing opencv-python-headless via pip..."
-    pip3 install --break-system-packages opencv-python-headless 2>/dev/null || \
-    pip3 install opencv-python-headless 2>/dev/null || \
-    echo "Warning: Could not install opencv. Face detection will be unavailable."
+    pip3 install --break-system-packages opencv-python-headless || \
+    pip3 install opencv-python-headless || \
+    echo "Warning: pip install of opencv-python-headless failed (see above). Face detection will be unavailable."
+    # Verify the install actually worked.
+    if ! python3 -c "import cv2" 2>/dev/null; then
+        echo "Warning: opencv-python-headless installed but cv2 is still not importable. Check pip output above."
+    fi
 fi
 
 # Install onnxruntime only when face_detector="yunet_onnx" is configured.

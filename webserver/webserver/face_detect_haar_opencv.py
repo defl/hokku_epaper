@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import cv2
-
 from webserver.face_detect_abstract import AbstractFaceDetector, load_image_resized
 
 
@@ -21,12 +19,14 @@ class OpenCVHaarFaceDetector(AbstractFaceDetector):
     """Frontal-face Haar cascade via cv2.CascadeClassifier."""
 
     def __init__(self) -> None:
+        import cv2
         cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         self._cascade = cv2.CascadeClassifier(cascade_path)
         if self._cascade.empty():
             raise RuntimeError(f"failed to load Haar cascade from {cascade_path}")
 
     def has_face(self, path: Path) -> bool:
+        import cv2
         loaded = load_image_resized(path)
         if loaded is None:
             return False
