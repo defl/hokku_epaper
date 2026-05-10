@@ -236,6 +236,27 @@ class AbstractImageManager(ABC):
                     done=self._progress.done,
                     total=self._progress.total + len(pending),
                 )
+            # Collect images whose thumbnails are missing. Done inside the
+            # lock so the snapshot is consistent, but generation runs outside.
+            needs_thumb = [
+                r for r in self._records.values()
+                if r.image_width is not None and not self._thumb_path(r).exists()
+            ]
+
+        # Pre-generate missing thumbnails before starting any render jobs so
+        # the UI can show them immediately — even while dithering is in
+        # progress.  Each call is cheap thanks to Image.draft() in
+        # _materialize_thumbnail, and is idempotent (skipped if another
+        # thread already wrote the file).
+        for rec in needs_thumb:
+            src = self._upload_dir / rec.name
+            thumb = self._thumb_path(rec)
+            if thumb.exists():
+                continue
+            try:
+                self._materialize_thumbnail(src, thumb)
+            except Exception as e:
+                print(f"  Thumbnail pre-generation failed for {rec.name!r}: {e}")
 
         for rec in pending:
             self._submit_one(rec.name)
@@ -762,6 +783,13 @@ class AbstractImageManager(ABC):
     def _materialize_thumbnail(self, src_path: Path, thumb_path: Path) -> None:
         thumb_path.parent.mkdir(parents=True, exist_ok=True)
         with Image.open(src_path) as img:
+            # Ask the JPEG decoder to downsample at decode time so we never
+            # materialise the full pixel buffer just to produce a 300 px
+            # thumbnail.  draft() is a no-op for non-JPEG formats.
+            try:
+                img.draft("RGB", (_THUMB_MAX_PX, _THUMB_MAX_PX))
+            except (AttributeError, OSError):
+                pass
             img = ImageOps.exif_transpose(img)
             if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
                 img = img.convert("RGBA")
