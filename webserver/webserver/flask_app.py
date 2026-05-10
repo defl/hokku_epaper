@@ -21,9 +21,19 @@ from flask import (
     render_template,
     request,
     send_file,
+    send_from_directory,
 )
 from pillow_heif import register_heif_opener
 from werkzeug.utils import secure_filename
+
+import os
+import psutil
+import subprocess
+try:
+    from importlib.metadata import version as _pkg_version, PackageNotFoundError
+except ImportError:  # py<3.8 — not expected
+    _pkg_version = None
+    PackageNotFoundError = Exception
 
 from webserver.app_state import AppState
 from webserver.app_config import AppConfig
@@ -51,6 +61,57 @@ def _resolve_template_folder(override: str | None) -> str:
     return str(candidates[0])  # default; flask will error if missing
 
 
+def _resolve_static_folder() -> Path:
+    """Locate the directory that holds /hokku/static/* assets.
+
+    Dev: <webserver_root>/static/. Installed: /usr/share/hokku-server/static/.
+    """
+    pkg_root = Path(__file__).resolve().parent.parent
+    candidates = [
+        pkg_root / "static",
+        Path("/usr/share/hokku-server/static"),
+    ]
+    for c in candidates:
+        if c.is_dir():
+            return c
+    return candidates[0]
+
+
+def _read_version() -> str:
+    if _pkg_version is not None:
+        try:
+            return _pkg_version("hokku-server")
+        except PackageNotFoundError:
+            pass
+    # Fallback: read pyproject.toml
+    try:
+        pyproj = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        for line in pyproj.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("version"):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return "unknown"
+
+
+def _read_commit() -> str | None:
+    try:
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(repo_root),
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        return out.decode("ascii").strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+_REPO_URL = "https://github.com/defl/hokku_epaper"
+
+
 def _busy_retry_seconds(config: AppConfig) -> int:
     return min(300, calculate_sleep_seconds(config))
 
@@ -66,6 +127,10 @@ def create_app(
     config_path is optional but required for save-config to work.
     """
     app = Flask(__name__, template_folder=_resolve_template_folder(template_folder))
+
+    static_root = _resolve_static_folder()
+    app_version = _read_version()
+    app_commit = _read_commit()
 
     # ── Firmware-facing ────────────────────────────────────────
 
@@ -133,6 +198,11 @@ def create_app(
     @app.route("/hokku/ui")
     def web_gui():
         return render_template("index.html")
+
+    @app.route("/hokku/static/<path:filename>")
+    def static_asset(filename: str):
+        # send_from_directory rejects path-traversal automatically.
+        return send_from_directory(static_root, filename)
 
     # ── API: image data ────────────────────────────────────────
 
@@ -288,6 +358,11 @@ def create_app(
 
         screens_payload: dict[str, dict] = {}
         for sname, t in scheduler.screens().items():
+            next_update_at = None
+            if t.last_seen_at and t.last_sleep_seconds:
+                next_update_at = datetime.fromtimestamp(
+                    t.last_seen_at + t.last_sleep_seconds
+                ).isoformat(timespec="seconds")
             screens_payload[sname] = {
                 "ip": t.ip,
                 "request_count": t.request_count,
@@ -303,6 +378,7 @@ def create_app(
                     datetime.fromtimestamp(t.battery_seen_at).isoformat(timespec="seconds")
                     if t.battery_seen_at else None
                 ),
+                "next_update_at": next_update_at,
                 "state": t.frame_state,
             }
 
@@ -325,6 +401,8 @@ def create_app(
             "cache_used_bytes": disk["cache_used_bytes"],
             "disk_free_bytes": disk["disk_free_bytes"],
             "image_worker_count_resolved": state.render_pool.resolved_worker_count,
+            "cpu_cores": os.cpu_count(),
+            "memory_available_gb": round(psutil.virtual_memory().available / 1e9, 1),
         })
 
     @app.route("/hokku/api/config", methods=["GET"])
@@ -343,6 +421,9 @@ def create_app(
             "default_preset": DEFAULT_PRESET,
             "server_time": datetime.now().isoformat(timespec="seconds"),
             "panel": {"visual_w": VISUAL_W, "visual_h": VISUAL_H, "total_bytes": TOTAL_BYTES},
+            "version": app_version,
+            "commit": app_commit,
+            "repo_url": _REPO_URL,
         })
 
     @app.route("/hokku/api/config", methods=["POST"])
