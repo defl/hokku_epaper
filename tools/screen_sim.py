@@ -31,8 +31,10 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -87,6 +89,44 @@ def render_to_image(binary: bytes) -> Image.Image:
     return img.rotate(90, expand=True)          # → (1600, 1200) landscape
 
 
+# ── Simulated frame state ──────────────────────────────────────────────────
+
+@dataclass
+class SimState:
+    """Per-process counters that mimic the firmware's RTC-persistent fields."""
+    boot: int = 0
+    start_monotonic: float = field(default_factory=time.monotonic)
+    last_sleep_seconds: int = 0
+
+
+def build_frame_state(state: SimState, battery_mv: int | None) -> str:
+    """Render an X-Frame-State JSON payload matching firmware schema."""
+    state.boot += 1
+    first = state.boot == 1
+    now = int(time.time())
+    uptime_s = int(time.monotonic() - state.start_monotonic)
+    next_ep = (now + state.last_sleep_seconds) if state.last_sleep_seconds > 0 else 0
+    payload = {
+        "fw": "sim-1.0",
+        "boot": state.boot,
+        "wake": "first_boot" if first else "timer",
+        "regime": "battery_idle",
+        "uptime_s": uptime_s,
+        "bat_mv": int(battery_mv) if battery_mv is not None else 3900,
+        "usb": "none",
+        "last_sleep": "none" if first else "deep_sleep",
+        "rssi": -55,
+        "heap_kb": 200,
+        "spurious": 0,
+        "cfg_ver": 1,
+        "clk_now": now,
+        "next_ep": next_ep,
+        "sleep_err_s": None,
+        "wifi_cached": True,
+    }
+    return json.dumps(payload, separators=(",", ":"))
+
+
 # ── Network fetch ──────────────────────────────────────────────────────────
 
 def fetch_screen(
@@ -94,6 +134,7 @@ def fetch_screen(
     screen_name: str,
     *,
     battery_mv: int | None = None,
+    sim_state: SimState | None = None,
     timeout: int = 30,
 ) -> tuple[bytes, dict[str, str]]:
     """GET /hokku/screen/ and return (binary, response_headers).
@@ -121,12 +162,22 @@ def fetch_screen(
     }
     if battery_mv is not None:
         hdrs["X-Battery-mV"] = str(battery_mv)
+    if sim_state is not None:
+        hdrs["X-Frame-State"] = build_frame_state(sim_state, battery_mv)
 
     req = Request(url, headers=hdrs)
     with urlopen(req, timeout=timeout) as resp:
         status = resp.status
         resp_headers = {k.lower(): v for k, v in resp.headers.items()}
         data = resp.read()
+
+    if sim_state is not None:
+        try:
+            state_sleep = int(resp_headers.get("x-sleep-seconds", "0"))
+            if state_sleep > 0:
+                sim_state.last_sleep_seconds = state_sleep
+        except (TypeError, ValueError):
+            pass
 
     return data, resp_headers
 
@@ -313,11 +364,14 @@ def main():
             log(f"  Loading: {args.file}")
             return load_from_file(args.file)
     else:
+        sim_state = SimState()
         def _fetch():
             url = args.server.rstrip("/") + "/hokku/screen/"
             log(f"  → GET {url}  (X-Screen-Name: {args.name!r})")
             data, headers = fetch_screen(
-                args.server, args.name, battery_mv=args.battery,
+                args.server, args.name,
+                battery_mv=args.battery,
+                sim_state=sim_state,
             )
             sleep_s = headers.get("x-sleep-seconds", "?")
             epoch  = headers.get("x-server-time-epoch", "?")
