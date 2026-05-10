@@ -1,3 +1,13 @@
+hokku-server (3.0.0~alpha1-8) unstable; urgency=low
+
+  * Memory: free face detector between sync batches. sync() now runs in
+    three phases (thumbnails → classify all → release detector → render).
+    The ~57 MB YuNet DNN graph is returned to the OS before any dither
+    work begins. On the Pi the detector is only resident during the brief
+    classification window, not across the entire render cycle.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-7) unstable; urgency=low
 
   * Pluggable face detection: AbstractFaceDetector + three concretes
