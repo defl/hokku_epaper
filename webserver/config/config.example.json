@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "refresh_image_at_time": [
     "0600",
     "1200",
@@ -13,6 +13,7 @@
   "orientation": "landscape",
   "auto_clear_cache": false,
   "crop_to_fill_threshold": 0.0,
+  "image_worker_thread_count": 1,
   "image_config_default": {
     "dither": {
       "algorithm": "atkinson",

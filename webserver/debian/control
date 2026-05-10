@@ -11,6 +11,7 @@ Depends: ${python3:Depends}, ${misc:Depends},
  python3-flask,
  python3-pil,
  python3-numpy,
+ python3-psutil,
  python3-pip,
  libheif-dev
 Description: Spectra 6 e-ink image server for Hokku/Huessen frames

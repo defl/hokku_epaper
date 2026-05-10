@@ -1,34 +1,31 @@
-# Hokku / Huessen 13.3" E-Ink Frame — Open Source Firmware & Image Server
+![Logo](images/logo/logo_alt_white.png)
 
-Replacement firmware and self-hosted image server for the Hokku / Huessen 13.3" six-colour e-ink photo frame. Runs entirely on your local network — no cloud, no accounts, no third-party servers.
+This project offers open source firmware for the Hokku / Huessen 13.3" six-colour e-ink photo frame plus  a self-hosted image server. It's better in every imaginable way - from color correctness to full privacy. It installs with just a cable and you can run the server on basically any hardware.
 
-![Web GUI](images/server.png)
-
-## Features
-
-A self-hosted photo frame that actually works — no cloud, no accounts, no monthly sign-ups you forgot about.
+## Core features
 
 **Photos, your way**
-- **Local-only.** Your photos never leave your network. No cloud, no third-party servers, no telemetry.
+- **Local-only.** Your photos never leave your network. No cloud, no third-party servers, no telemetry. Your hardware and open source software means you're in full control. 
 - **Drag-and-drop upload** straight into the web app — single files or dozens at a time, with a live progress list. Works on phones too.
 - **Browse in a grid**, preview originals *and* the dithered version side-by-side (so you see exactly what the frame will show before it shows it), delete anything you don't want with a one-click trash button.
-- **All the formats you actually have:** JPEG, PNG, HEIC/HEIF, AVIF, WebP, GIF, TIFF, BMP. Phone photos auto-rotate thanks to EXIF.
+- **All the formats you actually have:** JPEG, PNG, HEIC/HEIF, AVIF, WebP, GIF, TIFF, BMP. It takes anything from 90's formats to modern day iPhone and Android images. Phone photos auto-rotate thanks to EXIF.
 - **Landscape or portrait** — flip a switch, the server re-dithers everything to match the mounting.
 - **"Show next" on any image** when you want to force a specific photo onto the frame at the next refresh.
 
 **Looks good on e-paper**
-- **Three dither algorithms to choose from**, including a hue-aware Atkinson recipe that handles skin tones and whites without the usual blue-speckle / pink-noise failure modes. ([the dithering rabbit hole →](docs/dithering.md))
+- **Correct out of the box**, comes pre-set for optimal results.
+- **Context aware**, the software knows if images are black and white or have faces in them (model runs locally) and it can adapt the dithering algorithm to deliver optimal results.
+- **Extremely configurable**, 6 preconfigured settings and dozens of knobs to turn. If you want to, you can tune this to the n-th degree. ([Details on dithering](docs/dithering.md))
 - **Calibrated to real Spectra 6 panel colours**, not theoretical sRGB, for accurate rendering.
 
 **Smart about frames**
 - **Multiple frames, one server.** Each frame gets a name and shows up in a dashboard table with battery level, last-seen time, WiFi signal, and when it'll next update.
 - **Fair image rotation** — least-shown image goes next, randomised tie-breaking, newly-uploaded photos jump to the front.
-- **Per-image stats** (shown count, total display time, last-seen) so you can see which shots are getting the most air time.
 - **Ultra-low power on battery** — ~8 µA in deep sleep, so a full charge lasts months. Live battery indicator per frame on the web app (red below 20 %) so you know when to plug in.
 - **Errors show up on the screen.** If something goes wrong — wrong WiFi password, server unreachable, configuration missing — the frame renders a readable explanation right on the e-paper instead of silently giving up. No serial-cable debugging required.
 - **Overdue-frame warning** banner if a frame is more than an hour late on its scheduled refresh — so you know to check WiFi or the battery before you notice a stale photo on the wall.
-- **Schedule-driven refreshes** (e.g. 06:00, 12:00, 18:00) with timezone support; the frame sleeps between refreshes and wakes on its own.
-- **Clock-synced** — every refresh carries the server's wall-clock, and the dashboard shows drift in seconds for every frame.
+- **Schedule-driven refreshes** (e.g. 06:00, 12:00, 18:00) with timezone support; the frame sleeps between refreshes and wakes on its own. This means the screen updates when you want,
+- **Clock-synced** — every refresh carries the server's wall-clock such that the screen updates exactly when you want it, while using no power at all in the mean time.
 - **Per-frame diagnostics modal** — one click opens the frame's self-reported state (firmware version, boot count, wake cause, WiFi cache hit, free heap, etc.) without a serial cable.
 - **Button on the side** forces an immediate refresh regardless of schedule.
 
@@ -44,18 +41,22 @@ A self-hosted photo frame that actually works — no cloud, no accounts, no mont
 
 **Server side** — where you host the image server:
 - Any Linux, macOS, Windows, or Raspberry Pi host with Python 3.9+.
-- ~256 MB of RAM is plenty. Dithering a fresh upload briefly peaks a little higher while Pillow decodes the source, but it's single-threaded, transient, and you can feed it a slow machine.
+- ~256 MB of RAM is plenty. Dithering a fresh upload briefly peaks a little higher while Pillow decodes the source, but it's single-threaded, transient, and you can feed it a slow machine. Dithering takes about 50Mb/image/core so a simple Pi Zero 2 with 512Mb can use all cores to process.
 - Disk: ~2 MB per image for the dithered cache + preview + thumbnail, plus however big your originals are. A thousand photos fits comfortably on any SD card.
-- Networking: anywhere on the same LAN as the frame. No open-internet access needed.
+- Networking: anywhere on the same LAN as the frame. No internet access needed.
 
 **Frame side** — the ESP32-S3 board already inside your Hokku / Huessen frame:
 - ESP32-S3 with 16 MB flash and 8 MB octal PSRAM. This is what ships in the frame — the pre-built firmware matches.
 - One USB-C cable (any USB-A-to-C or C-to-C works) for first-time flashing and re-configuration.
-- 2.4 GHz WiFi (open / WPA2 / WPA3). 5 GHz not supported by the chip.
+- 2.4 GHz WiFi (open / WPA2 / WPA3). 5 GHz not supported by the frame's chip.
 
 ## Installation
 
-You need two things running:
+![Logo](images/frame_x_pi.png)
+
+Hokku loves Pi! There is an installer that is designed to get your frame and a Raspberry Pi Zero 2 W to work together in no-time. Just connect both to this computer and run hokku_setup.bat and you'll be off in no time. 
+
+For everybody else who wants to do it the harder way, ou need two things running:
 
 1. **The image server**, on a computer on your network.
 2. **The firmware**, flashed onto the frame over USB.

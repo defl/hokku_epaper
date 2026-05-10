@@ -51,3 +51,14 @@ Open questions:
 - Pi Zero 2 W has known thermal throttling under sustained 4-core load.
   Worth checking that we don't end up worse-off than serial because the
   CPU clamps to 600 MHz.
+
+### Human detection
+
+Use a small human recognition model and if so use Atkinson to prevent blue
+lips, else use other dithering methods for clearer picture.
+
+### Removal of the white bands on an image if within a certain bound
+
+If say 10% of the sides are a white band zoom in and remove it.
+
+### Store the conversion time in the database, add estimator, use in web-UI for better guess

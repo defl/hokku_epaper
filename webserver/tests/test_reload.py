@@ -35,17 +35,25 @@ from webserver.app_config import AppConfig
 from webserver.flask_app import create_app
 from webserver.image_classifier import ImageClassifier
 from webserver.image_manager import ImageManager
+from webserver.render_pool import RenderPool
 from webserver.serve_scheduler import ServeScheduler
 from webserver.watcher import Watcher
+from tests.conftest import _InlineRenderPool
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _make_state(app_config: AppConfig) -> AppState:
+def _make_pool() -> _InlineRenderPool:
+    return _InlineRenderPool()
+
+
+def _make_state(app_config: AppConfig, pool=None) -> AppState:
+    if pool is None:
+        pool = _make_pool()
     clf = ImageClassifier(app_config)
-    mgr = ImageManager(app_config, clf)
+    mgr = ImageManager(app_config, clf, pool)
     sch = ServeScheduler(mgr)
-    return AppState(app_config, clf, mgr, sch)
+    return AppState(app_config, clf, mgr, sch, pool)
 
 
 def _alt_config(base: AppConfig, tmp_path: Path) -> AppConfig:
@@ -63,14 +71,16 @@ def _alt_config(base: AppConfig, tmp_path: Path) -> AppConfig:
 # ── AppState unit tests ───────────────────────────────────────────────────────
 
 def test_app_state_holds_initial_references(app_config: AppConfig):
+    pool = _make_pool()
     clf = ImageClassifier(app_config)
-    mgr = ImageManager(app_config, clf)
+    mgr = ImageManager(app_config, clf, pool)
     sch = ServeScheduler(mgr)
-    state = AppState(app_config, clf, mgr, sch)
+    state = AppState(app_config, clf, mgr, sch, pool)
     assert state.config is app_config
     assert state.classifier is clf
     assert state.manager is mgr
     assert state.scheduler is sch
+    assert state.render_pool is pool
 
 
 def test_reload_swaps_config(app_config: AppConfig, tmp_path: Path):
@@ -148,6 +158,37 @@ def test_reload_is_idempotent(app_config: AppConfig, tmp_path: Path):
     state = _make_state(app_config)
     state.reload(app_config)
     assert state.config is app_config
+
+
+def test_reload_reuses_pool_when_worker_count_unchanged(app_config: AppConfig, tmp_path: Path):
+    """reload() with the same worker count reuses the existing pool object."""
+    pool = _make_pool()
+    state = _make_state(app_config, pool)
+    new_cfg = _alt_config(app_config, tmp_path)
+    assert new_cfg.image_worker_thread_count == app_config.image_worker_thread_count
+
+    state.reload(new_cfg)
+
+    assert state.render_pool is pool, (
+        "Pool should be reused when worker count is unchanged"
+    )
+
+
+def test_reload_creates_new_pool_when_worker_count_changes(app_config: AppConfig, tmp_path: Path):
+    """reload() with a different worker count creates a new pool."""
+    from webserver.worker_count import resolve_worker_count
+    pool = _make_pool()
+    state = _make_state(app_config, pool)
+
+    # Use explicit count=2 which differs from default 1.
+    new_cfg = replace(_alt_config(app_config, tmp_path), image_worker_thread_count=2)
+
+    state.reload(new_cfg)
+
+    assert state.render_pool is not pool, (
+        "A new pool should be created when worker count changes"
+    )
+    assert state.render_pool.resolved_worker_count == 2
 
 
 def test_reload_builds_new_classifier(app_config: AppConfig, tmp_path: Path):

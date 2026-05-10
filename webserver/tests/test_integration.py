@@ -42,10 +42,12 @@ _TEST_IMAGE = (
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _make_state(config: AppConfig) -> AppState:
+    from tests.conftest import _InlineRenderPool
+    pool = _InlineRenderPool()
     clf = ImageClassifier(config)
-    mgr = ImageManager(config, clf)
+    mgr = ImageManager(config, clf, pool)
     sch = ServeScheduler(mgr)
-    return AppState(config, clf, mgr, sch)
+    return AppState(config, clf, mgr, sch, pool)
 
 
 def _upload_and_sync(state: AppState, src: Path) -> str:
@@ -53,6 +55,7 @@ def _upload_and_sync(state: AppState, src: Path) -> str:
     dest = Path(state.config.upload_dir) / src.name
     shutil.copy(src, dest)
     state.manager.sync()
+    state.manager.wait_for_idle()  # inline pool fires callbacks synchronously, but flush DB
     return src.name
 
 
@@ -170,6 +173,33 @@ def test_serve_binary_firmware_headers_forwarded(live_client):
     screens = state.scheduler.screens()
     assert "fw-screen" in screens
     assert screens["fw-screen"].battery_mv == 3800
+
+
+def test_clear_cache_triggers_immediate_reconversion(live_client):
+    """/api/clear_cache must start rendering without waiting for the next watcher tick.
+
+    With _InlineRenderPool, sync() is effectively synchronous, so by the time
+    the POST response arrives the images should already be converted again.
+    """
+    client, state, _ = live_client
+    # Verify images are already converted after initial upload+sync.
+    prog_before = state.manager.conversion_progress()
+    assert prog_before.done == prog_before.total
+
+    # Clear — this marks everything pending.
+    resp = client.post("/hokku/api/clear_cache")
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+
+    # Because _InlineRenderPool fires callbacks synchronously, the sync()
+    # called inside api_clear_cache() re-converts everything inline.
+    # wait_for_idle() flushes the _DbSaver timer so the DB is up-to-date.
+    state.manager.wait_for_idle()
+    prog_after = state.manager.conversion_progress()
+    assert prog_after.done == prog_after.total, (
+        "Images should be reconverted immediately after /api/clear_cache, "
+        "not waiting for the next watcher tick"
+    )
 
 
 def test_serve_binary_no_images_returns_404_or_503(app_config: AppConfig, tmp_path: Path):

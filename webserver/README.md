@@ -1,4 +1,6 @@
-# Image Server
+![Logo](images/logo/logo_alt_white.png)
+
+# Hokku - open source e-ink firmware
 
 Spectra 6 e-ink image server for Hokku/Huessen frames. Converts images using Floyd-Steinberg dithering to the 6-color palette and serves them to connected frames.
 

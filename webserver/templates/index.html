@@ -401,6 +401,12 @@
     </div>
 
     <div class="config-row">
+      <label>Image workers:</label>
+      <input type="number" id="image-worker-count" min="0" step="1" style="width:80px;" value="1">
+      <span class="info">0&nbsp;=&nbsp;auto-detect (cores&nbsp;&minus;&nbsp;1, capped by free memory; ~50&nbsp;MB per worker). 1&nbsp;=&nbsp;serial (default). <span id="image-worker-count-resolved" style="font-style:italic;"></span></span>
+    </div>
+
+    <div class="config-row">
       <label></label>
       <button class="btn btn-danger" onclick="clearCache()">Clear Cache &amp; Re-convert</button>
       <button class="btn btn-secondary" onclick="clearClassifierCache()" title="Wipe cached B&amp;W / face detection results. Panel .bin files are untouched.">Clear Classifier Cache</button>
@@ -969,6 +975,7 @@ async function saveConfig() {
     debug_fast_refresh: document.getElementById('debug-fast-refresh').checked,
     auto_clear_cache: document.getElementById('auto-clear-cache').checked,
     crop_to_fill_threshold: parseFloat(document.getElementById('crop-to-fill-threshold').value) || 0,
+    image_worker_thread_count: (v => Number.isNaN(v) ? 1 : v)(parseInt(document.getElementById('image-worker-count').value, 10)),
     image_config_default: ditherState,
     classifier_bw_detect_enabled: document.getElementById('bw-detect-enabled').checked,
     image_config_bw: bwDitherState,
@@ -1497,8 +1504,16 @@ async function loadConfig() {
     document.getElementById('auto-clear-cache').checked = autoClear;
     document.getElementById('auto-clear-cache-label').textContent = autoClear ? 'On' : 'Off';
     document.getElementById('crop-to-fill-threshold').value = cfg.crop_to_fill_threshold ?? 0;
+    document.getElementById('image-worker-count').value = cfg.image_worker_thread_count ?? 1;
 
     document.getElementById('server-time').textContent = data.server_time ? `(${data.server_time})` : '';
+    const resolvedWorkers = data.image_worker_count_resolved;
+    const workerResolvedEl = document.getElementById('image-worker-count-resolved');
+    if (resolvedWorkers !== undefined && workerResolvedEl) {
+      workerResolvedEl.textContent = resolvedWorkers === 1
+        ? 'currently: 1 (serial)'
+        : `currently: ${resolvedWorkers} workers`;
+    }
 
     const debugOn = !!cfg.debug_fast_refresh;
     const debugSecs = cfg.debug_fast_refresh_seconds || 180;

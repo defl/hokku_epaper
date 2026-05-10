@@ -274,23 +274,46 @@ def test_image_config_cache_slugs_are_distinct():
 
 # ── slow: full-scale visual output ────────────────────────────────────────────
 
-def _slow_params():
+_MODES = ["streaming", "unconstrained"]
+
+
+def _preview_params():
     imgs = _test_images()
     presets = list(PRESET_IMAGE_CONFIGS)
     return [(img, p) for img in imgs for p in presets]
 
 
+def _preview_ids():
+    return [f"{img.stem}__{p}" for img, p in _preview_params()]
+
+
+def _slow_params():
+    """All (image, preset, mode) combinations for the full-scale render test."""
+    imgs = _test_images()
+    presets = list(PRESET_IMAGE_CONFIGS)
+    return [
+        (img, p, m)
+        for img in imgs
+        for p in presets
+        for m in _MODES
+    ]
+
+
 def _slow_ids():
-    return [f"{img.stem}__{p}" for img, p in _slow_params()]
+    return [f"{img.stem}__{p}__{m}" for img, p, m in _slow_params()]
 
 
 @pytest.mark.time_intensive
-@pytest.mark.parametrize("src,preset_name", _slow_params(), ids=_slow_ids())
-def test_dither_full_scale(src: Path, preset_name: str):
+@pytest.mark.parametrize("src,preset_name,mode", _slow_params(), ids=_slow_ids())
+def test_dither_full_scale(src: Path, preset_name: str, mode: str):
     """Render at full panel resolution; write decoded PNG to build/test_dither_full/.
 
+    Both rendering paths (streaming and unconstrained) are exercised for every
+    image × preset combination so the output files can be compared visually.
+
     Output layout (flat):
-      build/test_dither_full/<stem>__<preset>.png   — dithered, full scale
+      build/test_dither_full/<stem>__<preset>__streaming.png
+      build/test_dither_full/<stem>__<preset>__unconstrained.png
       build/test_dither_full/<stem>_original<ext>   — source copy (written once)
     """
     _BUILD_FULL_DIR.mkdir(parents=True, exist_ok=True)
@@ -300,8 +323,9 @@ def test_dither_full_scale(src: Path, preset_name: str):
         shutil.copy2(src, original_dest)
 
     cfg = PRESET_IMAGE_CONFIGS[preset_name]
+    unconstrained = mode == "unconstrained"
     with open_image_for_render(src) as img:
-        raw = render_panel_bytes(img, cfg, "landscape")
+        raw = render_panel_bytes(img, cfg, "landscape", unconstrained=unconstrained)
 
     assert len(raw) == TOTAL_BYTES
 
@@ -311,16 +335,16 @@ def test_dither_full_scale(src: Path, preset_name: str):
     assert int(idx.max()) <= 5
 
     png_bytes = _indices_to_png(idx, "landscape")
-    (_BUILD_FULL_DIR / f"{src.stem}__{preset_name}.png").write_bytes(png_bytes)
+    (_BUILD_FULL_DIR / f"{src.stem}__{preset_name}__{mode}.png").write_bytes(png_bytes)
 
     w, h = _png_size(png_bytes)
     assert (w, h) == (VISUAL_W, VISUAL_H), (
-        f"{src.name}/{preset_name}: expected {VISUAL_W}x{VISUAL_H}, got {w}x{h}"
+        f"{src.name}/{preset_name}/{mode}: expected {VISUAL_W}x{VISUAL_H}, got {w}x{h}"
     )
 
 
 @pytest.mark.time_intensive
-@pytest.mark.parametrize("src,preset_name", _slow_params(), ids=_slow_ids())
+@pytest.mark.parametrize("src,preset_name", _preview_params(), ids=_preview_ids())
 def test_dither_preview(src: Path, preset_name: str):
     """Render preview PNG (≤ 800 px); write to build/test_dither_preview/.
 

@@ -28,10 +28,10 @@ from webserver.display import (
     indices_to_preview_rgb,
     panel_bytes_to_indices,
 )
-from webserver.dither import (
+from webserver.dither_constrained import (
     PALETTE_LAB,
     adaptive_saturate,
-    dither,
+    dither_with_prep,
     linear_to_xyz,
     rgb_to_lab,
     srgb_to_linear,
@@ -210,6 +210,7 @@ def _render_indices(
     crop_to_fill_threshold: float = 0.0,
     *,
     release_input: bool = False,
+    unconstrained: bool = False,
 ) -> NDArray[np.uint8]:
     """Fit (or crop-to-fill) → enhance → rotate → DRC → dither → mask padding.
 
@@ -219,6 +220,13 @@ def _render_indices(
     crop_to_fill_threshold: if the zoom needed to eliminate letterbox bands is
     ≤ this fraction (e.g. 0.02 = 2 %), scale to cover and center-crop instead
     of scaling to fit and padding.  0.0 = always letterbox.
+
+    unconstrained: when True, run adaptive_saturate + compress_dynamic_range
+    on the full canvas in one shot and then call the unconstrained
+    (full-canvas mutating) dither variants. Intended for the side-by-side
+    quality comparison test, NOT for production — the full-canvas float
+    path peaks at ~230 MB on a panel render. Default False keeps the
+    streaming, ≤ 50 MB-per-render path on by default.
     """
     portrait = orientation == "portrait"
 
@@ -290,21 +298,37 @@ def _render_indices(
     sat_lo = cfg.saturate_low_chroma_thresh
     sat_hi = cfg.saturate_high_chroma_thresh
 
-    def _prep_stripe(stripe_uint8):
-        # stripe_uint8 is shape (stripe_h, W, 3), uint8.  We return a fresh
-        # float32 array of the same shape with adaptive_saturate + DRC
-        # applied.  Transient buffers inside saturate / DRC are sized to
-        # the stripe (~3.8 MB at 100 rows × 3200 wide × 3 ch × 4 bytes),
-        # so each function's peak is well under 20 MB and the streaming
-        # dither holds at most one cached stripe at a time.
+    if unconstrained:
+        # Full-canvas pipeline (the "unconstrained" path): saturate + DRC
+        # are applied to the entire panel at once and the unconstrained
+        # dither mutates a full-canvas float32 buffer.  Peak memory ~60 MB.
+        # Strictly for offline / side-by-side quality comparison.
+        from webserver.dither_unconstrained import dither as _dither_unc
         if use_sat:
-            f32 = adaptive_saturate(stripe_uint8, sat_max, sat_lo, sat_hi)
+            f32 = adaptive_saturate(arr, sat_max, sat_lo, sat_hi)
         else:
-            f32 = stripe_uint8.astype(np.float32)
-        return compress_dynamic_range(f32, **drc_kwargs)
+            f32 = arr.astype(np.float32)
+        del arr
+        f32 = compress_dynamic_range(f32, **drc_kwargs)
+        result_idx = _dither_unc(f32, cfg.dither)
+        del f32
+    else:
+        def _prep_stripe(stripe_uint8):
+            # stripe_uint8 is shape (stripe_h, W, 3), uint8.  We return a
+            # fresh float32 array of the same shape with adaptive_saturate
+            # + DRC applied.  Transient buffers inside saturate / DRC are
+            # sized to the stripe (~3.8 MB at 100 rows × 3200 wide × 3 ch
+            # × 4 bytes), so each function's peak is well under 20 MB and
+            # the streaming dither holds at most one cached stripe at a
+            # time.
+            if use_sat:
+                f32 = adaptive_saturate(stripe_uint8, sat_max, sat_lo, sat_hi)
+            else:
+                f32 = stripe_uint8.astype(np.float32)
+            return compress_dynamic_range(f32, **drc_kwargs)
 
-    result_idx = dither(arr, cfg.dither, prep_stripe=_prep_stripe)
-    del arr
+        result_idx = dither_with_prep(arr, cfg.dither, _prep_stripe)
+        del arr
     # White out the padding so it can't get speckled by enhancement chains.
     result_idx[padding_mask] = 1
     return result_idx
@@ -317,6 +341,8 @@ def render_panel_bytes(
     cfg: ImageConfig,
     orientation: Orientation,
     crop_to_fill_threshold: float = 0.0,
+    *,
+    unconstrained: bool = False,
 ) -> bytes:
     """Full-resolution panel buffer → wire bytes.
 
@@ -327,10 +353,16 @@ def render_panel_bytes(
     The source image's PIL buffer is released as soon as we have the resized
     panel canvas (the long-running per-render memory budget depends on this).
     Callers must NOT use ``img`` after this function returns.
+
+    ``unconstrained=True`` switches to the full-canvas, memory-unconstrained
+    dither path. Peak ~230 MB. Useful only for the side-by-side quality
+    comparison test in ``test_dither_quality.py`` — production code should
+    leave this False to keep within the 50 MB / render budget.
     """
     result_idx = _render_indices(
         img, cfg, orientation, FULL_W, PANEL_H,
         crop_to_fill_threshold, release_input=True,
+        unconstrained=unconstrained,
     )
     return indices_to_panel_bytes(result_idx)
 

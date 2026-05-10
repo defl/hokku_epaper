@@ -7,19 +7,20 @@ from pathlib import Path
 from webserver.app_config import AppConfig
 from webserver.image_manager import ImageManager
 from webserver.serve_scheduler import ServeScheduler
+from tests.conftest import _InlineRenderPool
 
 
 def _setup(app_config: AppConfig, make_test_image, names: list[str]) -> tuple[ImageManager, ServeScheduler]:
     upload = Path(app_config.upload_dir)
     for n in names:
         make_test_image(upload / n)
-    mgr = ImageManager(app_config)
+    mgr = ImageManager(app_config, render_pool=_InlineRenderPool())
     mgr.sync()
     return mgr, ServeScheduler(mgr)
 
 
 def test_pick_next_empty(app_config: AppConfig):
-    mgr = ImageManager(app_config)
+    mgr = ImageManager(app_config, render_pool=_InlineRenderPool())
     sched = ServeScheduler(mgr)
     assert sched.pick_next() is None
 
@@ -63,7 +64,7 @@ def test_persistence(app_config: AppConfig, make_test_image):
 
 
 def test_telemetry_record(app_config: AppConfig):
-    mgr = ImageManager(app_config)
+    mgr = ImageManager(app_config, render_pool=_InlineRenderPool())
     sched = ServeScheduler(mgr)
     sched.record_screen_call("frame-01", "192.168.1.5", 300, None, 3800, None)
     screens = sched.screens()

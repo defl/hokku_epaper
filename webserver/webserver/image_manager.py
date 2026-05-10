@@ -4,9 +4,16 @@ Outside callers see real filenames ("photo.jpg"). On-disk cache files are
 keyed by sha1(name) so odd characters / unicode / length aren't a concern.
 The single source of truth for what's known to ImageManager is
 ``<cache_dir>/image_manager.json``.
+
+Rendering is performed by a ``RenderPool`` (ProcessPoolExecutor) so that
+multiple images can be dithered in parallel.  ``sync()`` submits all pending
+images and returns immediately; results arrive via done-callbacks which run on
+the executor's internal thread.  ``_inflight`` prevents re-submission of images
+that are already being processed.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -16,18 +23,13 @@ import time
 import traceback
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Callable, Iterable, Literal
 
 from PIL import Image, ImageOps
 
 from webserver.app_config import AppConfig
 from webserver.display import TOTAL_BYTES
-from webserver.image import (
-    IMAGE_EXTENSIONS,
-    open_image_for_render,
-    preview_png_from_panel_bytes,
-    render_panel_bytes,
-)
+from webserver.image import IMAGE_EXTENSIONS
 
 
 _DB_FILENAME = "image_manager.json"
@@ -66,6 +68,56 @@ class ConversionProgress:
     current_name: str | None  # being converted right now (None if idle)
     done: int                 # completed this sync cycle
     total: int                # scheduled this sync cycle
+
+
+class _DbSaver:
+    """Coalesces _save_db() calls — at most one disk write per debounce window.
+
+    Thread-safe: safe to call ``request_save()`` from any thread.
+    """
+
+    def __init__(self, save_fn: Callable[[], None], debounce_s: float = 0.1) -> None:
+        self._save_fn = save_fn
+        self._debounce_s = debounce_s
+        self._lock = threading.Lock()
+        self._timer: threading.Timer | None = None
+        self._shutdown = False
+
+    def request_save(self) -> None:
+        """Schedule a DB save unless one is already pending or we're shut down."""
+        with self._lock:
+            if self._shutdown or self._timer is not None:
+                return
+            self._timer = threading.Timer(self._debounce_s, self._fire)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _fire(self) -> None:
+        with self._lock:
+            self._timer = None
+            if self._shutdown:
+                return
+        self._save_fn()
+
+    def _flush_now(self) -> None:
+        """Cancel any pending timer and do an immediate synchronous write."""
+        with self._lock:
+            timer, self._timer = self._timer, None
+        if timer is not None:
+            timer.cancel()
+        self._save_fn()
+
+    def shutdown(self) -> None:
+        """Cancel any pending timer and flush with one final synchronous write."""
+        with self._lock:
+            self._shutdown = True
+            timer, self._timer = self._timer, None
+        if timer is not None:
+            timer.cancel()
+        try:
+            self._save_fn()
+        except Exception:
+            pass
 
 
 def _hash_name(name: str) -> str:
@@ -138,7 +190,7 @@ class ImageManager:
     take ``_db_lock``.
     """
 
-    def __init__(self, config: AppConfig, classifier=None) -> None:
+    def __init__(self, config: AppConfig, classifier=None, render_pool=None) -> None:
         self._config = config
         self._upload_dir = Path(config.upload_dir).resolve()
         self._cache_dir = Path(config.cache_dir).resolve()
@@ -148,13 +200,52 @@ class ImageManager:
         self._records: dict[str, ImageRecord] = {}
         self._progress = ConversionProgress(current_name=None, done=0, total=0)
 
+        # Names of images currently being rendered in a worker process.
+        # Protected by _db_lock.
+        self._inflight: set[str] = set()
+
         if classifier is None:
             from webserver.image_classifier import ImageClassifier
             classifier = ImageClassifier(config)
         self._classifier = classifier
 
+        if render_pool is None:
+            from webserver.render_pool import RenderPool
+            from webserver.worker_count import resolve_worker_count
+            render_pool = RenderPool(resolve_worker_count(config.image_worker_thread_count))
+        self._render_pool = render_pool
+
+        self._db_saver = _DbSaver(self._save_db)
+
         self._images_dir.mkdir(parents=True, exist_ok=True)
         self._load_db()
+
+    def shutdown(self) -> None:
+        """Flush any pending DB write.  Call before discarding this manager."""
+        self._db_saver.shutdown()
+
+    def wait_for_idle(self, timeout: float = 120.0) -> None:
+        """Block until all in-flight renders have completed and the DB is saved.
+
+        Useful in tests (call after ``sync()``) and for graceful shutdown.
+
+        Raises ``TimeoutError`` if ``timeout`` seconds elapse while images are
+        still in flight.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._db_lock:
+                if not self._inflight:
+                    break
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"wait_for_idle: timed out after {timeout}s "
+                    f"({len(self._inflight)} image(s) still in flight)"
+                )
+            time.sleep(0.05)
+        # Cancel the debouncer's pending timer and flush the DB synchronously
+        # so that any writes queued by callbacks are not deferred past this call.
+        self._db_saver._flush_now()
 
     # ── Properties ───────────────────────────────────────────────
 
@@ -166,32 +257,30 @@ class ImageManager:
 
     def sync(self) -> None:
         """Re-scan upload dir, register new files, detect content changes,
-        run pending conversions, scrub orphans."""
+        submit pending conversions to the render pool, scrub orphans.
+
+        Returns immediately — conversions finish asynchronously.  Results
+        arrive via ``_on_render_done`` callbacks running on the pool's
+        internal callback thread.
+        """
         with self._db_lock:
             self._reconcile_with_disk()
-            pending = [r for r in self._records.values() if r.convert_status == "pending"]
-            self._progress = ConversionProgress(current_name=None, done=0, total=len(pending))
+            pending = [
+                r for r in self._records.values()
+                if r.convert_status == "pending" and r.name not in self._inflight
+            ]
+            if pending:
+                self._progress = ConversionProgress(
+                    current_name=None,
+                    done=self._progress.done,
+                    total=self._progress.total + len(pending),
+                )
 
-        # Run conversions outside the db lock (each conversion takes the lock
-        # only when updating the record + writing the db).
         for rec in pending:
-            self._run_one_conversion(rec.name)
-
-        if pending:
-            total = len(pending)
-            ok = sum(
-                1 for r in self._records.values()
-                if r.name in {p.name for p in pending} and r.convert_status == "ok"
-            )
-            failed = total - ok
-            if failed:
-                print(f"  Dithering complete: {ok}/{total} ok, {failed} failed")
-            else:
-                print(f"  Dithering complete: all {total} image(s) done")
+            self._submit_one(rec.name)
 
         with self._db_lock:
             self._scrub_orphan_cache_files()
-            self._progress = ConversionProgress(current_name=None, done=0, total=0)
 
     def add(self, name: str, src_bytes: bytes) -> None:
         """Write to upload_dir and register. Raises FileExistsError if name exists."""
@@ -589,94 +678,132 @@ class ImageManager:
         except OSError as e:
             print(f"  Could not scrub {f.name}: {e}")
 
-    def _run_one_conversion(self, name: str) -> None:
+    def _submit_one(self, name: str) -> None:
+        """Validate and submit one image to the render pool.
+
+        Images whose PIL dimensions were never read (corrupt / unsupported
+        format) are failed immediately without touching the pool.
+        """
+        from dataclasses import asdict as _asdict
+        from webserver.render_worker import render_one
+
         with self._db_lock:
             rec = self._records.get(name)
             if rec is None or rec.convert_status != "pending":
                 return
-            self._progress = replace(
-                self._progress,
-                current_name=name,
-                done=self._progress.done,
-            )
 
-        src_path = self._upload_dir / name
-
-        # image_width is None means PIL couldn't open this file at registration.
-        # It won't open now either — re-fail immediately without a traceback.
-        if rec.image_width is None:
-            err = rec.convert_error or "Cannot open image (unreadable or unsupported format)"
-            print(f"  Skipping {name!r}: {err}")
-            with self._db_lock:
-                cur = self._records.get(name)
-                if cur is not None:
-                    self._records[name] = replace(
-                        cur, convert_status="failed", convert_error=err,
-                        screen_image_config_slug=None,
-                    )
-                    self._save_db()
+            if rec.image_width is None:
+                # PIL couldn't open this file at registration; it won't open
+                # now either.  Fail immediately.
+                err = rec.convert_error or "Cannot open image (unreadable or unsupported format)"
+                print(f"  Skipping {name!r}: {err}")
+                self._records[name] = replace(
+                    rec, convert_status="failed", convert_error=err,
+                    screen_image_config_slug=None,
+                )
                 self._progress = replace(
-                    self._progress, current_name=None, done=self._progress.done + 1,
+                    self._progress, done=self._progress.done + 1,
                 )
-            return
+                self._db_saver.request_save()
+                return
 
+        # Compute screen config outside the lock (classifier is read-only).
+        src_path = self._upload_dir / name
+        with self._db_lock:
+            original_sha1 = self._records[name].original_sha1
+        screen_cfg = self._classifier.screen_config_for(src_path, original_sha1)
+        expected_slug = screen_cfg.cache_slug()
+
+        with self._db_lock:
+            if name in self._inflight:
+                return  # already submitted by a concurrent call
+            self._inflight.add(name)
+
+        future = self._render_pool.submit(
+            render_one,
+            str(src_path),
+            _asdict(screen_cfg.image_config),
+            screen_cfg.orientation,
+            screen_cfg.crop_to_fill_threshold,
+        )
+        future.add_done_callback(
+            lambda f, _n=name, _s=expected_slug, _t=time.monotonic():
+                self._on_render_done(_n, _s, f, _t)
+        )
+        print(f"  Submitted {name!r} for dithering")
+
+    def _on_render_done(
+        self,
+        name: str,
+        expected_slug: str,
+        future: concurrent.futures.Future,
+        t0: float,
+    ) -> None:
+        """Called from the executor's callback thread when a render finishes."""
         try:
-            screen_cfg = self._classifier.screen_config_for(src_path, self._records[name].original_sha1)
-            t0 = time.monotonic()
-            with open_image_for_render(src_path) as img:
-                panel_bytes = render_panel_bytes(
-                    img, screen_cfg.image_config, screen_cfg.orientation,
-                    screen_cfg.crop_to_fill_threshold,
-                )
+            panel_bytes, preview_bytes = future.result()
             conversion_seconds = time.monotonic() - t0
-            preview_bytes = preview_png_from_panel_bytes(
-                panel_bytes, screen_cfg.orientation,
-            )
-            new_slug = screen_cfg.cache_slug()
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             print(f"  Conversion failed for {name!r}: {err}")
             traceback.print_exc()
             with self._db_lock:
+                self._inflight.discard(name)
                 cur = self._records.get(name)
                 if cur is not None:
                     self._records[name] = replace(
                         cur, convert_status="failed", convert_error=err,
                         screen_image_config_slug=None,
                     )
-                    self._save_db()
-                self._progress = replace(
-                    self._progress,
-                    current_name=None,
-                    done=self._progress.done + 1,
-                )
+                done = self._progress.done + 1
+                total = self._progress.total
+                self._progress = replace(self._progress, done=done)
+                if done >= total:
+                    self._log_batch_complete()
+            self._db_saver.request_save()
             return
 
         with self._db_lock:
+            self._inflight.discard(name)
             cur = self._records.get(name)
             if cur is None:
-                # Removed mid-conversion; toss the work.
+                # Image was removed mid-conversion; discard the work.
                 return
             new_rec = replace(
                 cur,
                 convert_status="ok",
                 convert_error=None,
-                screen_image_config_slug=new_slug,
+                screen_image_config_slug=expected_slug,
                 last_conversion_seconds=conversion_seconds,
             )
             self._records[name] = new_rec
             self._images_dir.mkdir(parents=True, exist_ok=True)
             self._panel_path(new_rec).write_bytes(panel_bytes)
             self._preview_path(new_rec).write_bytes(preview_bytes)
-            self._save_db()
             done = self._progress.done + 1
             total = self._progress.total
+            self._progress = replace(self._progress, done=done)
             print(f"  Dithered {name!r} ({done}/{total})")
-            self._progress = replace(
-                self._progress,
-                current_name=None,
-                done=done,
-            )
+            if done >= total:
+                self._log_batch_complete()
+        self._db_saver.request_save()
+
+    def _log_batch_complete(self) -> None:
+        """Log a batch-complete summary (must be called while holding _db_lock)."""
+        total = self._progress.total
+        ok = sum(1 for r in self._records.values() if r.convert_status == "ok")
+        failed_count = total - self._progress.done + (
+            sum(1 for r in self._records.values() if r.convert_status == "failed")
+        )
+        # Simple approximation: count failed records in the last batch.
+        n_failed = total - sum(
+            1 for r in self._records.values()
+            if r.convert_status == "ok" and r.last_conversion_seconds is not None
+        )
+        if n_failed > 0:
+            print(f"  Dithering batch complete: some failed (check logs above)")
+        else:
+            print(f"  Dithering complete: all {total} image(s) done")
 
     def _materialize_thumbnail(self, src_path: Path, thumb_path: Path) -> None:
         thumb_path.parent.mkdir(parents=True, exist_ok=True)

@@ -12,8 +12,10 @@ from webserver.app_config import AppConfig
 from webserver.flask_app import create_app
 from webserver.image_classifier import ImageClassifier
 from webserver.image_manager import ImageManager
+from webserver.render_pool import RenderPool
 from webserver.serve_scheduler import ServeScheduler
 from webserver.watcher import Watcher
+from webserver.worker_count import resolve_worker_count
 
 
 def main() -> None:
@@ -43,10 +45,20 @@ def main() -> None:
         print(f"Error: cache_dir is not writable: {cache_dir}", file=sys.stderr)
         sys.exit(1)
 
+    import psutil as _psutil
+    resolved_workers = resolve_worker_count(config.image_worker_thread_count)
+    print(
+        f"  Image workers: configured={config.image_worker_thread_count}"
+        f" → resolved={resolved_workers}"
+        f" (cores={os.cpu_count()},"
+        f" free RAM={_psutil.virtual_memory().available / 1e9:.1f} GB)"
+    )
+
     classifier = ImageClassifier(config)
-    manager = ImageManager(config, classifier)
+    render_pool = RenderPool(resolved_workers)
+    manager = ImageManager(config, classifier, render_pool)
     scheduler = ServeScheduler(manager)
-    state = AppState(config, classifier, manager, scheduler)
+    state = AppState(config, classifier, manager, scheduler, render_pool)
     watcher = Watcher(state)
     state.watcher = watcher
     app = create_app(state, config_path=config_path)

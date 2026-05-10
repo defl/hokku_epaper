@@ -1,5 +1,11 @@
 This is a project where you're writing firmware for an ESP32 that drives an e-ink display.
 
+Python environment
+==================
+- The project venv is in `.venv` at the repo root. Always use it: `.venv/Scripts/python` (Windows) or `.venv/bin/python` (Linux/macOS).
+- To recreate the venv from scratch: `pip install -r requirements.txt`
+- `requirements.txt` at the repo root is the frozen venv and is the source of truth for dependencies.
+
 Releases
 ========
 - **NEVER** upload, replace, or delete GitHub release assets without an explicit "yes, publish" (or equivalent) from the user for that specific change. Building a `.deb` or merged firmware locally is fine; `gh release upload`, `gh release delete-asset`, `gh release create`, `gh release edit`, and any force-pushed tag are not.

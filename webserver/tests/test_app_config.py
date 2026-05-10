@@ -129,28 +129,40 @@ def test_image_field_with_partial_blob_rejected(tmp_path: Path):
         AppConfig.load(p)
 
 
-def test_future_version_migration(tmp_path: Path, monkeypatch):
-    """Simulate a v1→v2 migration step."""
-    # Register a fake migration that sets a new field.
-    def _fake_migration(data: dict) -> dict:
-        data = dict(data)
-        data["_migrated"] = True
-        return data
-
-    monkeypatch.setitem(_MIGRATIONS, 1, _fake_migration)
-    # Temporarily bump _CURRENT_VERSION to 2.
-    import webserver.app_config as _mod
-    monkeypatch.setattr(_mod, "_CURRENT_VERSION", 2)
-    # Reload so AppConfig picks up the new version.
-    monkeypatch.setattr(AppConfig, "__dataclass_fields__", AppConfig.__dataclass_fields__)
-
-    p = tmp_path / "config.json"
-    # Write a v1 file.
-    p.write_text(json.dumps({"version": 1}))
-
-    # from_dict should walk the migration chain.
-    data = json.loads(p.read_text())
+def test_v1_migrates_to_v2():
+    """A v1 dict (no image_worker_thread_count) is migrated to v2 with default 1."""
+    v1_blob = {"version": 1}  # minimal valid v1
     from webserver.app_config import _migrate
-    migrated = _migrate(data)
-    assert migrated["version"] == 2
-    assert migrated["_migrated"] is True
+    v2 = _migrate(v1_blob)
+    assert v2["version"] == 2
+    assert v2["image_worker_thread_count"] == 1
+
+
+def test_image_worker_thread_count_roundtrips(tmp_path: Path):
+    """image_worker_thread_count is written to and read from JSON."""
+    cfg = AppConfig(image_worker_thread_count=3)
+    p = tmp_path / "config.json"
+    cfg.save(p)
+    loaded = AppConfig.load(p)
+    assert loaded.image_worker_thread_count == 3
+
+
+def test_image_worker_thread_count_default_is_1():
+    assert AppConfig().image_worker_thread_count == 1
+
+
+def test_cache_slug_invariant_to_worker_count():
+    """Worker count doesn't affect rendered output, so it must not influence the slug."""
+    base = AppConfig(image_worker_thread_count=1)
+    other = AppConfig(image_worker_thread_count=4)
+    assert base.cache_slug() == other.cache_slug()
+
+
+def test_v1_file_loads_with_default_worker_count(tmp_path: Path):
+    """Load a file written as v1 (no image_worker_thread_count); should default to 1."""
+    p = tmp_path / "config.json"
+    # Simulate a v1 save: only include v1 fields, no image_worker_thread_count.
+    v1_data = {"version": 1}
+    p.write_text(json.dumps(v1_data))
+    loaded = AppConfig.load(p)
+    assert loaded.image_worker_thread_count == 1

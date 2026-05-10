@@ -220,6 +220,7 @@ def create_app(
     @app.route("/hokku/api/clear_cache", methods=["POST"])
     def api_clear_cache():
         state.manager.clear_caches()
+        state.manager.sync()  # kick off reconversion immediately
         return jsonify({"ok": True})
 
     @app.route("/hokku/api/scrub", methods=["POST"])
@@ -316,13 +317,14 @@ def create_app(
             "serve_data": serve_data,
             "screens": screens_payload,
             "last_served": last[0] if last else None,
-            "converting": 1 if progress.current_name else 0,
+            "converting": 1 if progress.current_name or progress.done < progress.total else 0,
             "converting_name": progress.current_name,
             "converting_done": progress.done,
             "converting_total": progress.total,
             "converting_eta_seconds": manager.estimate_remaining_seconds(),
             "cache_used_bytes": disk["cache_used_bytes"],
             "disk_free_bytes": disk["disk_free_bytes"],
+            "image_worker_count_resolved": state.render_pool.resolved_worker_count,
         })
 
     @app.route("/hokku/api/config", methods=["GET"])
