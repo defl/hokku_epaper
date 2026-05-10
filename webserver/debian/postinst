@@ -44,4 +44,14 @@ if ! python3 -c "import pillow_heif" 2>/dev/null; then
     echo "Warning: Could not install pillow-heif. HEIC/HEIF support will be unavailable."
 fi
 
+# Install opencv (headless build — no Qt/GTK/GStreamer pulled in) via pip if
+# cv2 isn't available. python3-opencv from Debian pulls hundreds of MB of GUI
+# dependencies we don't need on a headless server.
+if ! python3 -c "import cv2" 2>/dev/null; then
+    echo "Installing opencv-python-headless via pip..."
+    pip3 install --break-system-packages opencv-contrib-python-headless 2>/dev/null || \
+    pip3 install opencv-contrib-python-headless 2>/dev/null || \
+    echo "Warning: Could not install opencv. Face detection will be unavailable."
+fi
+
 #DEBHELPER#

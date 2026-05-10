@@ -13,7 +13,6 @@ Depends: ${python3:Depends}, ${misc:Depends},
  python3-numpy,
  python3-psutil,
  python3-pip,
- python3-opencv,
  libheif-dev
 Description: Spectra 6 e-ink image server for Hokku/Huessen frames
  Converts and serves images for Hokku e-paper frames using

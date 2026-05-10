@@ -1,3 +1,12 @@
+hokku-server (3.0.0~alpha1-2) unstable; urgency=low
+
+  * Drop python3-opencv from Depends — the Debian package is the full GUI
+    build and pulls in Qt/GTK/GStreamer/ffmpeg (~500 MB on a headless Pi).
+    Install opencv-contrib-python-headless via pip in postinst instead,
+    matching the existing pillow-heif pattern. ~50 MB, no GUI deps.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-1) unstable; urgency=low
 
   * v3 alpha1: Japanese-paper web UI redesign, parallel image rendering
