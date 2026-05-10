@@ -149,6 +149,37 @@ def test_compress_dynamic_range_peak_under_1mb_per_row() -> None:
     )
 
 
+@pytest.mark.time_intensive
+def test_compress_dynamic_range_peak_under_30mb_per_stripe() -> None:
+    """A 100-row DRC stripe — the actual production batch size — must peak
+    well under 30 MB Python heap.  Float64 anywhere in DRC's intermediates
+    would push this above the 50 MB end-to-end budget.
+
+    Note: ``compress_dynamic_range`` itself currently allocates several
+    transient ~3.8 MB float32 buffers (lab, chroma, t, factor, xyz_out, etc.)
+    that bring the per-stripe peak to ~25-30 MB.  That's fine for the
+    end-to-end budget — the streaming dither holds at most one cached
+    stripe at a time.
+    """
+    from webserver.image import compress_dynamic_range
+    from webserver.dither import DEFAULT_STRIPE_H
+    stripe = np.random.default_rng(0).integers(
+        0, 256, size=(DEFAULT_STRIPE_H, 3200, 3), dtype=np.uint8
+    )
+    peak = peak_python_heap(
+        compress_dynamic_range,
+        stripe.astype(np.float32),
+        scale_chroma=False, adaptive_vivid=False,
+        vivid_chroma_low=10.0, vivid_chroma_high=40.0,
+    )
+    peak_mb = peak / (1024 * 1024)
+    print(f"\n  DRC 3200×{DEFAULT_STRIPE_H} stripe peak (Python heap) = {peak_mb:.2f} MB")
+    assert peak < 30 * 1024 * 1024, (
+        f"DRC peak Python heap = {peak_mb:.2f} MB on a {DEFAULT_STRIPE_H}-row stripe; "
+        f"target is < 30 MB. Likely a float64 regression in the colour math."
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────
 # RLIMIT_AS hard-guard sanity checks
 # ──────────────────────────────────────────────────────────────────────

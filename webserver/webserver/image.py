@@ -290,19 +290,20 @@ def _render_indices(
     sat_lo = cfg.saturate_low_chroma_thresh
     sat_hi = cfg.saturate_high_chroma_thresh
 
-    def _prep_row(row_f32):
-        # row_f32 is shape (W, 3), mutated in place. Both adaptive_saturate
-        # and compress_dynamic_range are functional (return new buffers);
-        # we copy results back. Each operation's transient buffers are O(W)
-        # — well under 1 MB even at full panel width.
+    def _prep_stripe(stripe_uint8):
+        # stripe_uint8 is shape (stripe_h, W, 3), uint8.  We return a fresh
+        # float32 array of the same shape with adaptive_saturate + DRC
+        # applied.  Transient buffers inside saturate / DRC are sized to
+        # the stripe (~3.8 MB at 100 rows × 3200 wide × 3 ch × 4 bytes),
+        # so each function's peak is well under 20 MB and the streaming
+        # dither holds at most one cached stripe at a time.
         if use_sat:
-            row_f32[...] = adaptive_saturate(
-                row_f32[np.newaxis, :, :], sat_max, sat_lo, sat_hi,
-            )[0]
-        out = compress_dynamic_range(row_f32[np.newaxis, :, :], **drc_kwargs)
-        np.copyto(row_f32, out[0])
+            f32 = adaptive_saturate(stripe_uint8, sat_max, sat_lo, sat_hi)
+        else:
+            f32 = stripe_uint8.astype(np.float32)
+        return compress_dynamic_range(f32, **drc_kwargs)
 
-    result_idx = dither(arr, cfg.dither, prep_row=_prep_row)
+    result_idx = dither(arr, cfg.dither, prep_stripe=_prep_stripe)
     del arr
     # White out the padding so it can't get speckled by enhancement chains.
     result_idx[padding_mask] = 1

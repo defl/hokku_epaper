@@ -12,8 +12,17 @@ from PIL import Image
 from webserver.display import PALETTE_MEASURED_RGB
 from webserver.dither_config import AlgorithmName, DitherConfig, LutName  # noqa: F401 (re-exported)
 
-PrepRow = Callable[[NDArray[np.float32]], None]
+PrepStripe = Callable[[NDArray[np.uint8]], NDArray[np.float32]]
 DiffusionKernel = tuple[tuple[int, int, float], ...]
+
+# Stripe height (rows) the streaming dither asks of prep_stripe at a time.
+# 100 is a sweet spot on the dither performance/memory curve: small enough that
+# adaptive_saturate + compress_dynamic_range transient buffers stay well under
+# 20 MB, large enough to amortise the Python call / numpy dispatch overhead
+# across hundreds of rows so the per-render time stays close to the
+# full-canvas baseline. Wider stripes blow the memory budget; narrower ones
+# slow renders by 30-50 %.
+DEFAULT_STRIPE_H = 100
 
 FloatArray: TypeAlias = NDArray[Any]
 UInt8Array: TypeAlias = NDArray[np.uint8]
@@ -244,20 +253,28 @@ def _streaming_diffusion_dither(
     lut: NDArray[np.uint8],
     lut_scale: float,
     serpentine: bool,
-    prep_row: PrepRow | None = None,
+    prep_stripe: PrepStripe | None = None,
+    stripe_h: int = DEFAULT_STRIPE_H,
 ) -> UInt8Array:
     """Streaming error-diffusion dither.
 
     Holds only ``max_dy + 1`` rows of float32 RGB working state (typically
-    2 rows for Floyd-Steinberg, 3 rows for Atkinson / Stucki). The full-panel
-    float32 buffer is never materialised — peak Python-heap allocation is
-    on the order of a few hundred KB even for full-panel renders.
+    2 rows for Floyd-Steinberg, 3 rows for Atkinson / Stucki) plus one
+    cached pre-processed stripe of ``stripe_h`` rows.  The full-panel
+    float32 buffer is never materialised.
 
     ``canvas`` may be:
-    - uint8 H×W×3 numpy: rows are pulled lazily and pre-processed by
-      ``prep_row`` (typically the dynamic-range-compression step).
+    - uint8 H×W×3 numpy: rows are pulled in stripes of ``stripe_h``,
+      pre-processed by ``prep_stripe`` (saturate + DRC).  ``prep_stripe``
+      takes a uint8 ``(stripe_h, W, 3)`` view and returns a float32 array
+      of the same shape.
     - PIL Image: converted once to a uint8 numpy view (no copy).
-    - float32 H×W×3 numpy: used as-is; ``prep_row`` is ignored.
+    - float32 H×W×3 numpy: used as-is; ``prep_stripe`` is ignored.
+
+    Stripe batching lets the heavy numpy work (Lab conversion, DRC math)
+    amortise its Python overhead across many rows while keeping transient
+    buffers small.  100 rows is the default sweet spot — see
+    ``DEFAULT_STRIPE_H``.
 
     Mathematically identical to the original full-canvas implementations.
     """
@@ -267,8 +284,6 @@ def _streaming_diffusion_dither(
     if lut.shape != (n, n, n):
         raise ValueError(f"lut must be a cube, got {lut.shape}")
 
-    # Normalise input into a row-source: either a uint8 view (lazy, prep'd
-    # per row) or a float32 view (already prepared, prep_row ignored).
     if isinstance(canvas, Image.Image):
         canvas = np.asarray(canvas)
     canvas_arr = np.asarray(canvas)
@@ -276,7 +291,7 @@ def _streaming_diffusion_dither(
         raise ValueError(f"canvas must be H×W×3 RGB, got {canvas_arr.shape}")
     H, W = int(canvas_arr.shape[0]), int(canvas_arr.shape[1])
 
-    use_prep = canvas_arr.dtype == np.uint8 and prep_row is not None
+    use_prep = canvas_arr.dtype == np.uint8 and prep_stripe is not None
 
     pal_rgb = PALETTE_MEASURED_RGB
     lut_max = n - 1
@@ -286,14 +301,33 @@ def _streaming_diffusion_dither(
     n_rows = max_dy + 1
     rolling = np.zeros((n_rows, W, 3), dtype=np.float32)
 
-    def _add_row_pixels(y: int) -> None:
-        """Add row y's float32 pixels (post-prep) to rolling[0]."""
-        row = canvas_arr[y].astype(np.float32, copy=True)
-        if use_prep:
-            prep_row(row)  # type: ignore[misc]
-        rolling[0] += row
+    # Rolling stripe cache: holds at most one pre-processed stripe at a time.
+    # When the next row falls outside it, drop the old stripe (so its memory
+    # is reclaimed before the new one allocates) and call prep_stripe again.
+    stripe_y0 = -1
+    stripe_data: NDArray[np.float32] | None = None
 
-    _add_row_pixels(0)
+    def _row_pixels(y: int) -> NDArray[np.float32]:
+        """Return the float32 pixel row for canvas row y."""
+        nonlocal stripe_y0, stripe_data
+        if not use_prep:
+            return canvas_arr[y].astype(np.float32, copy=True)
+        sh = stripe_h
+        new_y0 = (y // sh) * sh
+        if new_y0 != stripe_y0:
+            # Drop the previous stripe BEFORE prep_stripe runs so the GC
+            # can reclaim its memory while the new stripe's transients
+            # are being allocated.
+            stripe_data = None
+            y1 = min(new_y0 + sh, H)
+            stripe_data = prep_stripe(canvas_arr[new_y0:y1])  # type: ignore[misc]
+            stripe_y0 = new_y0
+        assert stripe_data is not None
+        # copy=True so error-diffusion writes don't poison the cache for
+        # rows we haven't reached yet.
+        return stripe_data[y - stripe_y0].astype(np.float32, copy=True)
+
+    rolling[0] += _row_pixels(0)
 
     for y in range(H):
         reverse = serpentine and (y % 2 == 0)
@@ -324,7 +358,7 @@ def _streaming_diffusion_dither(
             for i in range(n_rows - 1):
                 rolling[i] = rolling[i + 1]
             rolling[n_rows - 1].fill(0)
-            _add_row_pixels(y + 1)
+            rolling[0] += _row_pixels(y + 1)
 
         if y % 200 == 0:
             print(f"  Dithering: {y}/{H}")
@@ -337,10 +371,11 @@ def floyd_steinberg_dither(
     lut: NDArray[np.uint8],
     lut_scale: float,
     serpentine: bool,
-    prep_row: PrepRow | None = None,
+    prep_stripe: PrepStripe | None = None,
+    stripe_h: int = DEFAULT_STRIPE_H,
 ) -> UInt8Array:
     return _streaming_diffusion_dither(
-        canvas, _FS_KERNEL, lut, lut_scale, serpentine, prep_row,
+        canvas, _FS_KERNEL, lut, lut_scale, serpentine, prep_stripe, stripe_h,
     )
 
 
@@ -349,10 +384,11 @@ def atkinson_dither(
     lut: NDArray[np.uint8],
     lut_scale: float,
     serpentine: bool,
-    prep_row: PrepRow | None = None,
+    prep_stripe: PrepStripe | None = None,
+    stripe_h: int = DEFAULT_STRIPE_H,
 ) -> UInt8Array:
     return _streaming_diffusion_dither(
-        canvas, _ATKINSON_KERNEL, lut, lut_scale, serpentine, prep_row,
+        canvas, _ATKINSON_KERNEL, lut, lut_scale, serpentine, prep_stripe, stripe_h,
     )
 
 
@@ -361,10 +397,11 @@ def stucki_dither(
     lut: NDArray[np.uint8],
     lut_scale: float,
     serpentine: bool,
-    prep_row: PrepRow | None = None,
+    prep_stripe: PrepStripe | None = None,
+    stripe_h: int = DEFAULT_STRIPE_H,
 ) -> UInt8Array:
     return _streaming_diffusion_dither(
-        canvas, _STUCKI_KERNEL, lut, lut_scale, serpentine, prep_row,
+        canvas, _STUCKI_KERNEL, lut, lut_scale, serpentine, prep_stripe, stripe_h,
     )
 
 
@@ -403,14 +440,17 @@ def dither(
     canvas: CanvasLike,
     cfg: DitherConfig,
     *,
-    prep_row: PrepRow | None = None,
+    prep_stripe: PrepStripe | None = None,
+    stripe_h: int = DEFAULT_STRIPE_H,
 ) -> UInt8Array:
     """Run the configured dither algorithm.
 
-    ``prep_row`` is forwarded to the diffusion kernels and only consulted
-    when ``canvas`` is a uint8 numpy array — letting callers stream DRC
-    (or any per-row preprocessing) without ever materialising a
-    full-panel float32 buffer. Ignored by ``noop``.
+    ``prep_stripe`` is forwarded to the diffusion kernels and only consulted
+    when ``canvas`` is a uint8 numpy array.  It receives a uint8
+    ``(stripe_h, W, 3)`` view and must return a float32 array of the same
+    shape; this lets callers batch DRC + saturate work in chunks of
+    ``stripe_h`` rows without ever materialising a full-panel float32
+    buffer.  Ignored by ``noop``.
     """
     if cfg.algorithm not in _DITHER_FN:
         raise ValueError(f"Unknown algorithm: {cfg.algorithm!r}")
@@ -420,4 +460,4 @@ def dither(
     fn = _DITHER_FN[cfg.algorithm]
     if cfg.algorithm == "noop":
         return fn(canvas, lut, lut_scale, cfg.serpentine)
-    return fn(canvas, lut, lut_scale, cfg.serpentine, prep_row)
+    return fn(canvas, lut, lut_scale, cfg.serpentine, prep_stripe, stripe_h)
