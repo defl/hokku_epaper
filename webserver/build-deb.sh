@@ -1,19 +1,19 @@
 #!/bin/bash
 # Build the Hokku server Debian package.
 # Run from the webserver/ directory. The finished .deb (plus .buildinfo /
-# .changes) lands in <repo-root>/builds/.
+# .changes) lands in <repo-root>/build/.
 set -e
 
 cd "$(dirname "$0")"
 WEBSERVER_DIR="$(pwd)"
 REPO_ROOT="$(cd .. && pwd)"
-BUILDS_DIR="$REPO_ROOT/builds"
+BUILDS_DIR="$REPO_ROOT/build"
 
 echo "Building hokku-server Debian package..."
 dpkg-buildpackage -us -uc -b
 
 # dpkg-buildpackage drops the artifacts one level up from the source dir
-# (i.e. directly in the repo root). Sweep them into builds/.
+# (i.e. directly in the repo root). Sweep them into build/.
 mkdir -p "$BUILDS_DIR"
 shopt -s nullglob
 moved=0
