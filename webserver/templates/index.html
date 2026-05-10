@@ -257,6 +257,9 @@
     box-shadow: var(--shadow-md);
   }
   [data-tip]:hover::after { opacity: 1; }
+  /* Wrapper span for inputs/selects that can't carry ::after themselves */
+  .ctrl-tip { display: inline-flex; align-items: center; gap: 6px; }
+
   /* Small ⓘ icon rendered via CSS — attach to a <span data-tip="..."> */
   .tip-icon {
     display: inline-flex; align-items: center; justify-content: center;
@@ -268,26 +271,6 @@
     vertical-align: middle;
     flex-shrink: 0;
     user-select: none;
-  }
-  /* Legacy .info-btn / .help-icon — keep selectors so JS-built panels still work */
-  .info-btn, .help-icon {
-    width: 22px; height: 22px;
-    border-radius: 50%;
-    border: 1px solid var(--bamboo);
-    background: var(--paper-card-solid);
-    color: var(--stone);
-    font-weight: 600;
-    font-size: 0.8em;
-    cursor: pointer;
-    line-height: 1;
-    padding: 0;
-    transition: all 0.15s;
-  }
-  .info-btn:hover, .help-icon:hover {
-    background: var(--indigo); color: var(--paper-card-solid); border-color: var(--indigo);
-  }
-  .info-btn[aria-expanded="true"], .help-icon[aria-expanded="true"] {
-    background: var(--indigo); color: var(--paper-card-solid); border-color: var(--indigo);
   }
   .help-icon-inline {
     display: inline-flex; align-items: center; justify-content: center;
@@ -615,7 +598,7 @@
 
   /* ── Help popover ─────────────────────────────────────────── */
   .help-popover {
-    position: absolute; z-index: 100;
+    position: fixed; z-index: 100;
     background: var(--paper-card-solid);
     border: 1px solid var(--bamboo);
     border-radius: 8px;
@@ -688,6 +671,7 @@
   .dither-stage-body label.field {
     display: inline-flex; align-items: center; gap: 6px; color: var(--stone);
   }
+  .dither-stage-body label.field[data-help] { cursor: help; }
   .dither-stage-body input[type="number"] {
     width: 72px; padding: 4px 8px;
     border: 1px solid var(--bamboo); border-radius: 5px;
@@ -700,7 +684,7 @@
   }
   .dither-stage-body input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--indigo); }
   .dither-stage.disabled .dither-stage-body { opacity: 0.4; pointer-events: none; }
-  .dither-stage .dither-field-help { position: relative; display: inline-block; }
+  /* .dither-field-help removed — help now triggers on hover of the label itself */
   .dither-preview-block {
     margin-top: 16px; padding-top: 12px;
     border-top: 1px dashed var(--bamboo);
@@ -855,11 +839,12 @@
 
   <div class="config-row">
     <label>Orientation:</label>
-    <select id="orientation">
-      <option value="landscape">Landscape</option>
-      <option value="portrait">Portrait</option>
-    </select>
-    <span class="tip-icon" data-tip="Landscape = wide side horizontal, portrait = tall side vertical.&#10;Changing orientation triggers a full re-conversion of all images.">i</span>
+    <span class="ctrl-tip" data-tip="Landscape = wide side horizontal, portrait = tall side vertical.&#10;Changing orientation triggers a full re-conversion of all images.">
+      <select id="orientation">
+        <option value="landscape">Landscape</option>
+        <option value="portrait">Portrait</option>
+      </select>
+    </span>
   </div>
 
   <!-- Advanced toggle -->
@@ -873,10 +858,9 @@
     <p class="config-section-label">Image rendering pipeline</p>
     <div class="config-row" style="position: relative;">
       <label>Default dither preset:</label>
-      <select id="dither-preset"></select>
-      <button type="button" class="info-btn" id="dither-preset-info-btn"
-              title="What does this preset do?" aria-label="Preset description"
-              aria-expanded="false">?</button>
+      <span class="ctrl-tip" id="dither-preset-wrap">
+        <select id="dither-preset"></select>
+      </span>
       <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset()"
               title="Reset all dither knobs to the preset's default values">Reset to preset</button>
       <button type="button" class="btn btn-secondary btn-small" id="dither-custom-btn"
@@ -891,7 +875,7 @@
         <button type="button" class="close-btn" onclick="toggleAdvancedPanel()"
                 aria-label="Close advanced pipeline">×</button>
       </div>
-      <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Each <span class="help-icon-inline">?</span> button explains what the knob does and how output changes when you move it.</p>
+      <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Hover any knob label to see what it does and how the output changes.</p>
       <div id="dither-advanced-panel"></div>
       <div class="dither-preview-block">
         <div class="config-row">
@@ -909,11 +893,10 @@
 
     <div class="config-row">
       <label>Detect B&amp;W photos:</label>
-      <label class="toggle">
+      <label class="toggle" data-tip="When enabled, photos detected as near-monochrome (B&W film, black-and-white scans) use a dedicated dither pipeline.&#10;This prevents tiny colour tints from being amplified into a visible pink or yellow cast.&#10;Detection: 95th-percentile Lab chroma below 8.">
         <input type="checkbox" id="bw-detect-enabled" onchange="document.getElementById('bw-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('bw-config-panel').hidden=!this.checked;">
         <span id="bw-detect-enabled-label">Off</span>
       </label>
-      <span class="tip-icon" data-tip="When enabled, photos detected as near-monochrome (B&W film, black-and-white scans) use a dedicated dither pipeline.&#10;This prevents tiny colour tints from being amplified into a visible pink or yellow cast.&#10;Detection: 95th-percentile Lab chroma below 8.">i</span>
     </div>
 
     <div id="bw-config-panel" class="dither-advanced" hidden>
@@ -936,18 +919,17 @@
           <button type="button" class="close-btn" onclick="toggleAdvancedPanel('bw')"
                   aria-label="Close">×</button>
         </div>
-        <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Each <span class="help-icon-inline">?</span> explains what the knob does.</p>
+        <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Hover any knob label to see what it does.</p>
         <div id="bw-advanced-panel"></div>
       </div>
     </div>
 
     <div class="config-row">
       <label>Detect faces:</label>
-      <label class="toggle">
+      <label class="toggle" data-tip="When enabled, photos with at least one detected face use a dedicated dither pipeline.&#10;The pipeline is tuned to preserve natural skin tones, which can otherwise shift orange or grey.&#10;Uses YuNet face detection (score threshold 0.5).">
         <input type="checkbox" id="face-detect-enabled" onchange="document.getElementById('face-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('face-config-panel').hidden=!this.checked;">
         <span id="face-detect-enabled-label">Off</span>
       </label>
-      <span class="tip-icon" data-tip="When enabled, photos with at least one detected face use a dedicated dither pipeline.&#10;Atkinson dithering tends to preserve skin tones better than Floyd-Steinberg.&#10;Detection uses YuNet face detection (score threshold 0.5).">i</span>
     </div>
 
     <div id="face-config-panel" class="dither-advanced" hidden>
@@ -970,54 +952,55 @@
           <button type="button" class="close-btn" onclick="toggleAdvancedPanel('face')"
                   aria-label="Close">×</button>
         </div>
-        <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Each <span class="help-icon-inline">?</span> explains what the knob does.</p>
+        <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Hover any knob label to see what it does.</p>
         <div id="face-advanced-panel"></div>
       </div>
     </div>
 
     <div class="config-row">
       <label>Letterbox fill limit:</label>
-      <input type="range" id="crop-to-fill-threshold" min="0" max="100" step="1" value="20"
-             oninput="document.getElementById('fill-threshold-val').textContent=this.value+'%'">
-      <span class="slider-value" id="fill-threshold-val">20%</span>
-      <span class="tip-icon" data-tip="How much the image may be zoomed in to eliminate thin letterbox bars.&#10;0% = always letterbox (never crop). 20% = zoom up to 20% to fill the frame.&#10;Useful for images with thin black borders from scanning or aspect-ratio mismatch.&#10;Above ~30% you may lose meaningful content at the edges.">i</span>
+      <span class="ctrl-tip" data-tip="How much the image may be zoomed in to eliminate thin letterbox bars.&#10;0% = always letterbox (never crop). 20% = zoom up to 20% to fill the frame.&#10;Useful for images with thin black borders from scanning or aspect-ratio mismatch.&#10;Above ~30% you may lose meaningful content at the edges.">
+        <input type="range" id="crop-to-fill-threshold" min="0" max="100" step="1" value="20"
+               oninput="document.getElementById('fill-threshold-val').textContent=this.value+'%'">
+        <span class="slider-value" id="fill-threshold-val">20%</span>
+      </span>
     </div>
 
     <p class="config-section-label">Server behaviour</p>
     <div class="config-row">
       <label>Poll interval:</label>
-      <input type="number" id="poll-interval" min="1" max="3600">
-      <span class="tip-icon" data-tip="How often (in seconds) the server checks the upload directory for new or removed images.&#10;Lower = faster reaction to new uploads. Higher = less disk activity.&#10;10–60 s is typical for normal use.">i</span>
+      <span class="ctrl-tip" data-tip="How often (in seconds) the server checks the upload directory for new or removed images.&#10;Lower = faster reaction to new uploads. Higher = less disk activity.&#10;10–60 s is typical for normal use.">
+        <input type="number" id="poll-interval" min="1" max="3600">
+      </span>
     </div>
 
     <div class="config-row">
       <label>Debug screen:</label>
-      <label class="toggle">
+      <label class="toggle" data-tip="Forces every screen to refresh every 180 s regardless of schedule.&#10;Useful when iterating on images or dither settings without waiting hours.&#10;Downside: drains battery fast and wears the e-paper. Turn off for normal use.">
         <input type="checkbox" id="debug-fast-refresh">
         <span id="debug-fast-refresh-label">Off</span>
       </label>
-      <span class="tip-icon" data-tip="Forces every screen to refresh every 180 s regardless of schedule.&#10;Useful when iterating on images or dither settings without waiting hours.&#10;Downside: drains battery fast and wears the e-paper. Turn off for normal use.">i</span>
     </div>
 
     <div class="config-row">
       <label>Auto-clear cache:</label>
-      <label class="toggle">
+      <label class="toggle" data-tip="When enabled, automatically deletes old cached dither output when disk space runs low.&#10;The originals are never deleted — only the processed copies, which are re-generated on demand.">
         <input type="checkbox" id="auto-clear-cache">
         <span id="auto-clear-cache-label">Off</span>
       </label>
       <span class="info" id="cache-disk-info" style="font-variant-numeric: tabular-nums;"></span>
-      <span class="tip-icon" data-tip="When enabled, automatically deletes old cached dither output when disk space runs low.&#10;The originals are never deleted — only the processed copies, which are re-generated on demand.">i</span>
     </div>
 
     <div class="config-row">
       <label>Image workers:</label>
-      <select id="image-worker-mode" onchange="onWorkerModeChange()">
-        <option value="auto">Auto</option>
-        <option value="serial" selected>Single threaded</option>
-        <option value="custom">Custom</option>
-      </select>
+      <span class="ctrl-tip" data-tip="Auto: uses all CPU cores minus 1, capped by free memory (~50 MB per worker).&#10;Single threaded: serial processing — safest, lowest memory.&#10;Custom: enter an exact worker count (1–1000).&#10;More workers = faster batch conversion but more RAM and CPU.">
+        <select id="image-worker-mode" onchange="onWorkerModeChange()">
+          <option value="auto">Auto</option>
+          <option value="serial" selected>Single threaded</option>
+          <option value="custom">Custom</option>
+        </select>
+      </span>
       <input type="number" id="image-worker-count" min="1" max="1000" step="1" style="width:80px; display:none;" value="2">
-      <span class="tip-icon" data-tip="Auto: uses all CPU cores minus 1, capped by free memory (~50 MB per worker).&#10;Single threaded: serial processing — safest, lowest memory.&#10;Custom: enter an exact worker count (1–1000).&#10;More workers = faster batch conversion but more RAM and CPU.">i</span>
     </div>
     <div class="config-row" style="margin-top:-6px; margin-bottom:8px;">
       <label></label>
@@ -1120,27 +1103,51 @@ let ditherPresets = {};
 let bwDitherState = null;
 let faceDitherState = null;
 
-// Per-knob help text shown in (?) popovers. Short, user-facing, explains
-// what changes in the output when the knob moves — not the implementation.
+// Per-knob help text shown in hover popovers. Plain English, describes the
+// specific control the user is hovering — never another control's options.
 const DITHER_HELP = {
-  autocontrast: `<p><strong>Autocontrast</strong> stretches brightness so the darkest pixel becomes black and the brightest becomes white. Helps images that were already faded or low-contrast.</p><p><code>cutoff</code> discards that many percent of pixels at each extreme before stretching, so a few rogue bright/dark pixels can't prevent the stretch.</p>`,
-  gamma: `<p><strong>Gamma</strong> lifts or darkens midtones without touching black or white. Values &lt; 1 brighten midtones, &gt; 1 darken them.</p><p>E-ink panels lose midtone contrast; 0.85 recovers some of that.</p>`,
-  brightness: `<p>Flat multiplier on every pixel's brightness. 1.0 = no change. Usually leave at 1.0 — gamma is a better place to boost midtones.</p>`,
-  contrast: `<p>Flat contrast multiplier. 1.0 = no change. &gt;1 pushes dark pixels darker and bright pixels brighter. Helps compensate for the display's compressed dynamic range.</p>`,
-  sharpness: `<p>Edge sharpening. 1.0 = no change. Helps recover detail softened by downscaling the original to panel resolution (1200×1600).</p>`,
-  saturation_mode: `<p>How much to boost each pixel's colour.</p><p><strong>off</strong> — no saturation change.</p><p><strong>global</strong> — flat multiplier on every pixel's chroma. Simple, but amplifies tiny tints in near-white regions into visible pink/yellow speckle.</p><p><strong>adaptive</strong> — only boosts pixels that already have meaningful chroma; near-neutrals stay neutral. Cleaner whites, less vivid skin tones.</p>`,
-  saturation_value: `<p>Saturation boost multiplier. 1.0 = no change. 1.2 matches the pre-2.0 default; 1.25 is the current hue-aware default.</p>`,
-  saturation_thresholds: `<p>Chroma thresholds for adaptive mode only.</p><p>Pixels with chroma &lt; <code>low</code> get no boost; chroma &gt; <code>high</code> get the full boost; smooth ramp between.</p><p>In Lab space: skin chroma ≈ 8–12, vivid reds ≈ 40+.</p>`,
-  drc_enabled: `<p><strong>Dynamic range compression</strong> remaps input luminance [0, 100] into the display's actual L* range (~21 to ~87 for Spectra 6). Without this the dither wastes its palette trying to reproduce brightness levels the panel can't show.</p><p>Disabling this is rarely useful — it exists for debugging.</p>`,
-  drc_chroma: `<p>How the DRC treats chroma alongside its luminance remap.</p><p><strong>off</strong> — L* compressed, chroma untouched. Can look oversaturated.</p><p><strong>flat</strong> — multiplies all chroma by the same ratio (~0.66). Muted overall, keeps colours inside the gamut.</p><p><strong>adaptive_vivid</strong> — near-neutrals get full chroma compression (keeps whites clean); already-colourful pixels keep full chroma (keeps tongues and logos vivid).</p>`,
-  drc_thresholds: `<p>Chroma ramp for <code>adaptive_vivid</code> mode. Pixels with chroma &lt; <code>vivid_low</code> get full compression; chroma &gt; <code>vivid_high</code> keep full chroma.</p>`,
-  palette_mode: `<p>How each pixel is mapped to a palette entry after dithering.</p><p><strong>euclidean</strong> — nearest palette entry by plain Lab distance. Occasionally snaps a warm-white pixel to red, which error diffusion then cascades into neighbouring pixels.</p><p><strong>hue-aware</strong> — same, but refuses palette picks whose hue differs from the source by more than <code>hue_cutoff_deg</code>. Prevents the warm-white → red → cascading-blue failure mode.</p>`,
-  palette_hue_cutoff: `<p>Maximum hue difference (in degrees) between a source pixel and its palette pick. Lower = stricter. 180° allows anything; 95° is the default and keeps skin tones from drifting.</p>`,
-  palette_neutral: `<p>Pixels and palette entries with chroma below this are treated as neutral — black, white, and gray stay candidates for every pixel, so the hue rule can never paint over them.</p>`,
-  bw_fallback: `<p>Detects near-grayscale images and switches to a conservative pipeline (flat 1.05 saturation, no adaptive chroma tricks). Without this, tiny sensor tints in B&amp;W photos get amplified into a visible pink cast.</p><p>The rest of the pipeline (LUT, kernel, tonal stages) still runs as configured.</p>`,
-  bw_fallback_params: `<p>An image counts as B&amp;W if the Nth-percentile Lab chroma (across a 200px thumbnail) stays below the threshold. Defaults: 95th percentile, chroma 8.</p>`,
-  kernel: `<p>The error-diffusion rule.</p><p><strong>floyd_steinberg</strong> — full error distributed to 4 neighbours (7/16, 3/16, 5/16, 1/16). Highest contrast; finer diagonal noise.</p><p><strong>atkinson</strong> — only 6/8 of error distributed to 6 neighbours (1/8 each). Softer gradients, less hue-shift cascade, slightly lower max contrast.</p>`,
-  serpentine: `<p><strong>Serpentine scanning</strong> alternates scan direction row by row (left→right, right→left, …) so quantization error never accumulates in one direction. Without it a single left→right scan can leave faint directional streaks in smooth areas.</p><p>Applies to Floyd–Steinberg, Atkinson, and Stucki. No effect on the noop kernel.</p>`,
+  // ── Tonal preparation ────────────────────────────────────────────────
+  autocontrast: `<p><strong>Autocontrast cutoff</strong> — before stretching the image so its darkest pixel becomes pure black and its brightest pure white, ignore this many percent of pixels at each extreme.</p><p>0 means "use the actual darkest and brightest pixels"; a handful of stray hot or dead pixels can then prevent any meaningful stretch. The default 0.5 ignores half a percent at each end, which is enough to defeat sensor noise without losing real detail.</p><p>Higher values stretch more aggressively but start clipping highlights and crushing shadows.</p>`,
+
+  gamma: `<p><strong>Gamma</strong> brightens or darkens midtones without touching pure black or pure white.</p><p>Values below 1.0 lift midtones (the image looks brighter overall). Values above 1.0 darken them (more punchy, more contrast). 1.0 leaves the image alone.</p><p>E-ink panels naturally compress midtones, so 0.85 is a common default — it lifts midtones to compensate for what the display loses.</p>`,
+
+  brightness: `<p><strong>Brightness</strong> multiplies every pixel's brightness by this number. 1.0 means no change.</p><p>Usually leave this at 1.0. If the whole image is too dark or too bright, the Gamma control above is almost always the better choice — it preserves blacks and whites while brightness shifts everything uniformly and can clip highlights.</p>`,
+
+  contrast: `<p><strong>Contrast</strong> pushes dark pixels darker and bright pixels brighter. 1.0 means no change.</p><p>Values above 1.0 increase contrast; below 1.0 reduce it. A small bump (1.1–1.2) helps compensate for the e-ink panel's compressed dynamic range — without it, images can look flat or washed-out on the screen.</p>`,
+
+  sharpness: `<p><strong>Sharpness</strong> applies edge sharpening. 1.0 means no change.</p><p>Recovers detail softened when the original photo is downscaled to the panel's resolution. Around 1.3 is a good default; above 1.6 starts producing visible halos around hard edges.</p>`,
+
+  // ── Colour enhancement ──────────────────────────────────────────────
+  saturation_value: `<p><strong>Global colour enhance</strong> multiplies every pixel's colour intensity by this number. 1.0 means no change.</p><p>Above 1.0 makes colours more vivid; below 1.0 makes them more muted. Around 1.2 is a sensible default — it compensates for the e-ink panel's reduced colour gamut without introducing artifacts.</p><p>Pushing this much higher (1.5+) starts to give near-white areas a visible pink or yellow tint, because tiny sensor noise gets amplified along with the real colour. The "Adaptive saturation" option below avoids that.</p>`,
+
+  saturation_mode: `<p><strong>Adaptive saturation</strong> — when ticked, the colour boost only applies to pixels that already have meaningful colour. Near-neutral pixels (whites, greys, very pale tints) are left alone.</p><p><em>Off:</em> the global colour enhance value above is multiplied flat into every pixel. Simple, but it can amplify tiny sensor tints in near-white areas into a visible pink or yellow speckle.</p><p><em>On:</em> cleaner whites and skin tones, at the cost of slightly less punchy pure colours. Reveals the "Max enhance", "Low chroma" and "High chroma" controls below.</p>`,
+
+  saturate_max_enhance: `<p><strong>Max enhance</strong> — when adaptive saturation is on, this is the boost multiplier applied to fully-saturated pixels.</p><p>Adaptive saturation ramps from no boost (on near-neutrals) up to this multiplier (on vivid pixels). Setting this equal to "Global colour enhance" makes adaptive behave like a soft-floor version of the flat boost; setting it higher lets vivid colours pop more without affecting whites.</p>`,
+
+  saturate_low_chroma: `<p><strong>Low chroma</strong> — pixels whose colour intensity (Lab chroma) is below this value get no saturation boost at all.</p><p>For reference: pure neutrals are 0, skin tones land around 8–12, and vivid reds reach 40+. The default of 5 keeps whites and very pale tints clean while still boosting anything visibly coloured.</p>`,
+
+  saturate_high_chroma: `<p><strong>High chroma</strong> — pixels whose colour intensity is above this value get the full boost (the "Max enhance" multiplier). Between "Low chroma" and "High chroma" the boost ramps up smoothly.</p><p>Default 25 means anything moderately colourful already gets the full boost. Lower values widen the "fully boosted" zone; higher values narrow it.</p>`,
+
+  // ── Adaptive vivid (gamut compression) ──────────────────────────────
+  vivid_scale_chroma: `<p><strong>Scale chroma</strong> — when ticked, all colours are uniformly compressed (multiplied by ~0.66) to fit inside the e-ink panel's reduced colour gamut.</p><p>Without any compression, the dither algorithm wastes its limited palette trying to reproduce colours the panel physically cannot show, often producing speckled or noisy results in saturated areas.</p><p><em>Off:</em> vivid source colours can look noisy on screen.<br><em>On:</em> the whole image looks slightly muted but cleaner.</p><p>If "Adaptive vivid" below is also enabled, that takes over and this flat scaling is ignored.</p>`,
+
+  vivid_adaptive: `<p><strong>Adaptive vivid</strong> — instead of compressing every colour uniformly (the "Scale chroma" option), compress near-neutrals fully but leave already-vivid pixels at full strength.</p><p>This keeps whites and pale skin tones clean (no pink or yellow cast) while letting saturated reds, blues and greens come through punchy. Reveals the "Vivid low" and "Vivid high" controls below.</p><p>Generally the best choice for photos that mix neutral and vivid areas — portraits with bold backgrounds, food, product shots, etc.</p>`,
+
+  vivid_low: `<p><strong>Vivid low</strong> — pixels with colour intensity below this value get fully compressed (treated as near-neutral).</p><p>For reference: pure neutrals are 0, skin tones around 8–12. The default of 5 keeps whites genuinely white. Below this threshold, "Adaptive vivid" behaves the same as "Scale chroma".</p>`,
+
+  vivid_high: `<p><strong>Vivid high</strong> — pixels with colour intensity above this value keep their full chroma (no compression at all). Between "Vivid low" and "Vivid high" the compression smoothly ramps off.</p><p>Default 15 means anything moderately colourful is preserved at full strength. Lower values keep more original colour through; higher values compress more aggressively.</p>`,
+
+  // ── Palette LUT ─────────────────────────────────────────────────────
+  palette_mode: `<p><strong>LUT</strong> — how each pixel is mapped to one of the panel's six available ink colours after dithering.</p><p><em>Euclidean:</em> pick the nearest palette colour by plain Lab distance. Fast and simple, but occasionally makes wrong choices — a warm-white pixel might get mapped to red, and the dither algorithm then propagates that error to neighbouring pixels, creating a cascading red-then-blue speckle.</p><p><em>Hue-aware:</em> same nearest-match rule, but a palette pick is rejected if its hue differs too much from the source pixel. Prevents the warm-white-becomes-red failure mode at the cost of slightly fewer palette choices in marginal cases. Reveals the "Hue cutoff" and "Neutral chroma" controls.</p>`,
+
+  palette_hue_cutoff: `<p><strong>Hue cutoff</strong> — for the hue-aware LUT, the maximum hue difference (in degrees) allowed between a source pixel and the palette colour it gets mapped to.</p><p>Lower values are stricter (palette picks must match the source hue more closely). 180° allows anything (effectively disables hue-awareness). 95° is the default and reliably stops skin tones from drifting orange or pink.</p>`,
+
+  palette_neutral: `<p><strong>Neutral chroma</strong> — pixels and palette colours whose chroma is below this value are treated as neutral (black, white and the greys between).</p><p>Neutral palette colours stay candidates for every pixel, even under the strict hue cutoff. Without this, the hue rule could prevent black or white from being used to represent a slightly-tinted pixel, which would produce visible discolouration in shadows and highlights.</p>`,
+
+  // ── Dither kernel ───────────────────────────────────────────────────
+  kernel: `<p><strong>Algorithm</strong> — the error-diffusion rule. After each pixel is rounded to the nearest palette colour, the rounding error is spread to neighbouring pixels so the dither pattern looks visually neutral instead of clumping.</p><p><em>Floyd-Steinberg:</em> distributes the full error to four neighbours (7/16, 3/16, 5/16, 1/16). Highest contrast, finest grain, but occasional diagonal noise patterns.</p><p><em>Atkinson:</em> only distributes 6/8 of the error, spread evenly across six neighbours. Softer gradients and less hue-shift cascade than Floyd-Steinberg, but slightly lower maximum contrast. Often preferred for skin tones.</p><p><em>Stucki:</em> distributes the full error across twelve neighbours in a wider, smoother pattern. Smoothest gradients and the cleanest skies, at the cost of slightly more processing time and slightly softer fine detail.</p>`,
+
+  serpentine: `<p><strong>Serpentine scan</strong> — when ticked, the dither algorithm alternates direction every row (left to right, then right to left, then left to right again).</p><p>Without it, a single left-to-right scan lets quantization error accumulate in one direction and leaves faint diagonal streaks in smooth areas like skies.</p><p>Generally leave this on. Affects all three error-diffusion algorithms (Floyd-Steinberg, Atkinson, Stucki).</p>`,
 };
 
 function deepCopy(o) { return JSON.parse(JSON.stringify(o)); }
@@ -1293,9 +1300,9 @@ function fieldNum(labelText, path, {min, max, step, help}, panelId, state) {
   if (max !== undefined) attrs.push(`max="${max}"`);
   if (step !== undefined) attrs.push(`step="${step}"`);
   const pathJson = JSON.stringify(path).replace(/"/g, '&quot;');
-  return `<label class="field">${labelText}
+  const helpAttr = help ? ` data-help="${help}"` : '';
+  return `<label class="field"${helpAttr}>${labelText}
     <input ${attrs.join(' ')} onchange="onKnobChange(${pathJson}, 'num', this, '${panelId}')">
-    ${help ? helpIcon(help) : ''}
   </label>`;
 }
 function fieldSelect(labelText, path, options, help, panelId, state) {
@@ -1305,9 +1312,9 @@ function fieldSelect(labelText, path, options, help, panelId, state) {
   const opts = options.map(([v, lab]) =>
     `<option value="${v}"${v === val ? ' selected' : ''}>${lab}</option>`).join('');
   const pathJson = JSON.stringify(path).replace(/"/g, '&quot;');
-  return `<label class="field">${labelText}
+  const helpAttr = help ? ` data-help="${help}"` : '';
+  return `<label class="field"${helpAttr}>${labelText}
     <select id="${id}" onchange="onKnobChange(${pathJson}, 'select', this, '${panelId}')">${opts}</select>
-    ${help ? helpIcon(help) : ''}
   </label>`;
 }
 function fieldCheck(labelText, path, help, panelId, state) {
@@ -1315,14 +1322,11 @@ function fieldCheck(labelText, path, help, panelId, state) {
   const id = `df_${pfx}_${path.join('_')}`;
   const val = !!pathGet(state, path);
   const pathJson = JSON.stringify(path).replace(/"/g, '&quot;');
-  return `<label class="field">
+  const helpAttr = help ? ` data-help="${help}"` : '';
+  return `<label class="field"${helpAttr}>
     <input id="${id}" type="checkbox"${val ? ' checked' : ''} onchange="onKnobChange(${pathJson}, 'check', this, '${panelId}')">
     ${labelText}
-    ${help ? helpIcon(help) : ''}
   </label>`;
-}
-function helpIcon(helpKey) {
-  return `<span class="dither-field-help"><button type="button" class="help-icon" aria-label="Help" data-help="${helpKey}">?</button></span>`;
 }
 
 function pathGet(obj, path) {
@@ -1368,12 +1372,9 @@ function renderDitherPanel(panelId) {
 
   const sections = [];
 
-  const group = (title, bodyHtml, headerHelpKey) => {
+  const group = (title, bodyHtml) => {
     return `<div class="dither-stage">
-      <div class="dither-stage-header">
-        <span>${title}</span>
-        ${headerHelpKey ? helpIcon(headerHelpKey) : ''}
-      </div>
+      <div class="dither-stage-header"><span>${title}</span></div>
       <div class="dither-stage-body">${bodyHtml}</div>
     </div>`;
   };
@@ -1391,18 +1392,18 @@ function renderDitherPanel(panelId) {
   let colorBody = fn('Global colour enhance', ['color_enhance'], {min: 0.5, max: 3, step: 0.05, help: 'saturation_value'});
   colorBody += fc('Adaptive saturation', ['use_adaptive_saturate'], 'saturation_mode');
   if (d.use_adaptive_saturate) {
-    colorBody += fn('Max enhance', ['saturate_max_enhance'], {min: 0.5, max: 3, step: 0.05});
-    colorBody += fn('Low chroma', ['saturate_low_chroma_thresh'], {min: 0, max: 100, step: 0.5, help: 'saturation_thresholds'});
-    colorBody += fn('High chroma', ['saturate_high_chroma_thresh'], {min: 0, max: 100, step: 0.5});
+    colorBody += fn('Max enhance', ['saturate_max_enhance'], {min: 0.5, max: 3, step: 0.05, help: 'saturate_max_enhance'});
+    colorBody += fn('Low chroma', ['saturate_low_chroma_thresh'], {min: 0, max: 100, step: 0.5, help: 'saturate_low_chroma'});
+    colorBody += fn('High chroma', ['saturate_high_chroma_thresh'], {min: 0, max: 100, step: 0.5, help: 'saturate_high_chroma'});
   }
   sections.push(group('Colour enhancement', colorBody, null));
 
   // 3. Adaptive vivid (chroma ramp — keeps neutrals clean, keeps vivid colours vivid)
-  let vividBody = fc('Scale chroma', ['scale_chroma'], 'drc_chroma');
-  vividBody += fc('Adaptive vivid', ['adaptive_vivid'], 'drc_chroma');
+  let vividBody = fc('Scale chroma', ['scale_chroma'], 'vivid_scale_chroma');
+  vividBody += fc('Adaptive vivid', ['adaptive_vivid'], 'vivid_adaptive');
   if (d.adaptive_vivid) {
-    vividBody += fn('Vivid low', ['vivid_chroma_low'], {min: 0, max: 100, step: 0.5, help: 'drc_thresholds'});
-    vividBody += fn('Vivid high', ['vivid_chroma_high'], {min: 0, max: 100, step: 0.5});
+    vividBody += fn('Vivid low', ['vivid_chroma_low'], {min: 0, max: 100, step: 0.5, help: 'vivid_low'});
+    vividBody += fn('Vivid high', ['vivid_chroma_high'], {min: 0, max: 100, step: 0.5, help: 'vivid_high'});
   }
   sections.push(group('Adaptive vivid', vividBody, null));
 
@@ -1430,35 +1431,39 @@ function renderDitherPanel(panelId) {
   wireHelpIcons(panelId);
 }
 
-// Single delegated handler for every dither-panel (?) button. Position the
-// popover absolutely relative to the clicked button, close on Esc or click-out.
+// Per-knob (?) popover — shown on hover, hidden when mouse leaves both
+// the button and the popover itself.
 let currentHelpPopover = null;
+let _hidePopoverTimer = null;
 function closeHelpPopover() {
+  clearTimeout(_hidePopoverTimer);
   if (currentHelpPopover) { currentHelpPopover.remove(); currentHelpPopover = null; }
 }
 function wireHelpIcons(panelId) {
   panelId = panelId || 'default';
   const pfx = _pfx(panelId);
-  document.querySelectorAll(`#${pfx}-advanced-panel .help-icon[data-help]`).forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const key = btn.getAttribute('data-help');
+  document.querySelectorAll(`#${pfx}-advanced-panel label[data-help]`).forEach(lbl => {
+    lbl.addEventListener('mouseenter', () => {
+      clearTimeout(_hidePopoverTimer);
+      closeHelpPopover();
+      const key = lbl.getAttribute('data-help');
       const html = DITHER_HELP[key] || '<p>(no help written yet)</p>';
-      if (currentHelpPopover) { closeHelpPopover(); return; }
       const pop = document.createElement('div');
       pop.className = 'help-popover';
       pop.innerHTML = html;
       document.body.appendChild(pop);
-      const r = btn.getBoundingClientRect();
-      pop.style.top = (window.scrollY + r.bottom + 4) + 'px';
-      pop.style.left = Math.max(8, Math.min(window.innerWidth - 500, window.scrollX + r.left - 200)) + 'px';
+      const r = lbl.getBoundingClientRect();
+      pop.style.top  = (r.bottom + 4) + 'px';
+      pop.style.left = Math.max(8, Math.min(window.innerWidth - 500, r.left)) + 'px';
       currentHelpPopover = pop;
+      pop.addEventListener('mouseenter', () => clearTimeout(_hidePopoverTimer));
+      pop.addEventListener('mouseleave', () => { _hidePopoverTimer = setTimeout(closeHelpPopover, 120); });
+    });
+    lbl.addEventListener('mouseleave', () => {
+      _hidePopoverTimer = setTimeout(closeHelpPopover, 120);
     });
   });
 }
-document.addEventListener('click', (e) => {
-  if (currentHelpPopover && !currentHelpPopover.contains(e.target)) closeHelpPopover();
-});
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeHelpPopover();
@@ -1466,32 +1471,35 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Preset (?) popover — toggles a permanent <div> next to the preset selector
-// rather than creating a transient one like the per-knob popovers do.
+// Preset popover — shown on hover over the select, hidden on mouse-leave.
 function closePresetPopover() {
   const pop = document.getElementById('dither-preset-popover');
-  const btn = document.getElementById('dither-preset-info-btn');
   if (pop) pop.hidden = true;
-  if (btn) btn.setAttribute('aria-expanded', 'false');
 }
 document.addEventListener('DOMContentLoaded', () => {
-  const btn = document.getElementById('dither-preset-info-btn');
-  const pop = document.getElementById('dither-preset-popover');
-  if (!btn || !pop) return;
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (!pop.hidden) { closePresetPopover(); return; }
-    // Position under the button, clamped to the viewport.
-    const r = btn.getBoundingClientRect();
-    pop.style.top = (window.scrollY + r.bottom + 6) + 'px';
-    pop.style.left = Math.max(8, Math.min(window.innerWidth - 500,
-                                           window.scrollX + r.left - 100)) + 'px';
+  const wrap = document.getElementById('dither-preset-wrap');
+  const pop  = document.getElementById('dither-preset-popover');
+  if (!wrap || !pop) return;
+  let hideTimer;
+  function showPresetPopover() {
+    clearTimeout(hideTimer);
+    updatePresetDescription();
+    const r = wrap.getBoundingClientRect();
+    pop.style.top  = (r.bottom + 6) + 'px';
+    pop.style.left = Math.max(8, Math.min(window.innerWidth - 500, r.left)) + 'px';
     pop.hidden = false;
-    btn.setAttribute('aria-expanded', 'true');
+  }
+  function scheduleHide() { hideTimer = setTimeout(() => { pop.hidden = true; }, 120); }
+  wrap.addEventListener('mouseenter', showPresetPopover);
+  wrap.addEventListener('mouseleave', scheduleHide);
+  pop.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+  pop.addEventListener('mouseleave', () => { pop.hidden = true; });
+  // Also update content when the user changes the selected preset.
+  document.getElementById('dither-preset').addEventListener('change', () => {
+    if (!pop.hidden) updatePresetDescription();
   });
   document.addEventListener('click', (e) => {
-    if (pop.hidden) return;
-    if (!pop.contains(e.target) && e.target !== btn) closePresetPopover();
+    if (!pop.hidden && !pop.contains(e.target) && !wrap.contains(e.target)) closePresetPopover();
   });
 });
 
