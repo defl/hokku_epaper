@@ -48,6 +48,7 @@ from numpy.typing import ArrayLike, NDArray
 from PIL import Image
 
 from hokku_server.display import PALETTE_MEASURED_RGB
+from hokku_server.dither_abc import AbstractDither, CanvasLike, UInt8Array  # noqa: F401
 from hokku_server.dither_config import DitherConfig
 
 UInt8Array: TypeAlias = NDArray[np.uint8]
@@ -312,3 +313,22 @@ def dither(canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
         "stucki": _STUCKI_KERNEL,
     }[cfg.algorithm]
     return _full_canvas_diffusion(canvas, kernel, lut, lut_scale, cfg.serpentine)
+
+
+# ── Public class ─────────────────────────────────────────────────────────────
+
+
+class UnconstrainedDither(AbstractDither):
+    """Full-canvas error-diffusion dither — reference / quality-comparison strategy.
+
+    Operates on a full H×W×3 float32 buffer mutated in place as errors
+    propagate.  Memory peak ~60 MB for a 3200×1600 panel.  Interchangeable
+    with ``StreamingDither`` via the ``AbstractDither`` interface.
+
+    Intended uses:
+      * ``test_dither_quality.py`` — side-by-side vs streaming.
+      * Offline rendering where RAM is not the bottleneck.
+    """
+
+    def dither(self, canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
+        return dither(canvas, cfg)
