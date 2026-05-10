@@ -1,6 +1,6 @@
 # Face-detection memory budget
 
-> **Reference commit:** to be filled in after the introducing commit lands. Re-measure with
+> **Reference commit:** [`32c05bf`](https://github.com/anthropics/hokku_epaper/commit/32c05bf) — "Pluggable face detection: AbstractFaceDetector + 3 concretes". Re-measure with
 > `pytest webserver/tests/test_face_detect_memory.py -m time_intensive -s` if numbers below diverge from observed behaviour.
 > Numbers are from the dev box (Windows / x86, Python 3.13, opencv-contrib-python 4.x, onnxruntime 1.26).
 > Pi-class hosts will see different absolute numbers — opencv-python-headless is similar across architectures, but onnxruntime arm64 wheels differ.
