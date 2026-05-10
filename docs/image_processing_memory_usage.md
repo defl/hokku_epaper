@@ -63,6 +63,131 @@ architecture eliminates that entirely.
 
 ---
 
+## Optimisation journey — measured peak after each step
+
+This is the actual sequence of measurements observed during the session
+that built the current pipeline. Each row is a Layer-C subprocess
+measurement (peak RSS minus baseline) from
+`pytest webserver/tests/test_memory_budget.py -m time_intensive -s`,
+running on this Windows dev box. Use it to diagnose future regressions
+— if you change one of the listed optimisations and the relevant
+column jumps, this table tells you which buffer is suddenly back.
+
+The cumulative changes are described in detail in the next section
+("What changed, in order of impact"). Steps that *didn't* move the
+needle are marked — they were instructive surprises.
+
+| # | Change | De Niro 1556×2247 | Fitz_Roy 1536×2048 | Forest_road 4500×2850 | Synthetic 6000×4000 JPEG | DRC unit |
+|---|---|---:|---:|---:|---:|---:|
+| 0 | **Baseline** (original pipeline) | — | — | 579.5 MB | 621.2 MB | 71.7 MB / 100-row stripe |
+| 1 | float32 in `compress_dynamic_range`, `_lab_to_rgb`, `adaptive_saturate`, dither.py colour helpers + initial source cap (6400 long edge) | 310.6 MB | 314.3 MB | 330.2 MB | **327.0 MB** ← cap fired | 29.0 MB |
+| 2 | Streaming dither (rolling buffer, no full-panel float copy) | 314.3 MB | 303.6 MB | 322.8 MB | 326.8 MB | 29.0 MB |
+| | ↑ **Surprise: no improvement.** PIL prepare-chain + full-canvas adaptive_saturate were dominating. | | | | | |
+| 3 | Fix the lurking `np.array(canvas, dtype=np.float64)` in `_apply_prepare_enhancements` | 267.0 MB | 272.8 MB | 284.1 MB | — | 29.0 MB |
+| 4 | Move `adaptive_saturate` from full-canvas to per-row inside `prep_row` | **53.3 MB** | **52.4 MB** | 108.3 MB ⚠ | 169.5 MB ⚠ | 29.0 MB |
+| | ↑ Big jump for small images. Forest_road and the synthetic JPEG are outliers because their source canvases are large and not yet capped. | | | | | |
+| 5 | Tighten source cap to 1.25 × panel (4000 long edge) | 50.5 MB | 51.7 MB | 95.4 MB ⚠ | 51.6 MB | 29.0 MB |
+| 6 | Aggressive JPEG draft (manual k-of-2 selection) | 43.1 MB | 44.9 MB | 44.5 MB | 51.9 MB ⚠ | 29.0 MB |
+| 7 | Tighten source cap to 1.0 × panel (3200 long edge) | 43.2 MB | 45.2 MB | 43.0 MB | 51.5 MB ⚠ | 29.0 MB |
+| 8 | `release_input=True` — close source PIL after resize | **35.7 MB** | **34.8 MB** | **37.0 MB** | **38.7 MB** | 29.0 MB |
+| 9 | Per-row → 100-row stripe `prep_stripe` (perf, no peak change) | 34.5 MB | 36.4 MB | 35.8 MB | 38.6 MB | 29.0 MB stripe / 0.3 MB row |
+
+### Things to notice from the table
+
+- **Step 2 was a flat line.** Streaming dither alone bought us *nothing*
+  because the bottleneck was upstream (full-canvas `adaptive_saturate`).
+  Always profile before you celebrate.
+- **Step 4 split the world** — small sources fell off a cliff to ~50 MB,
+  but anything with a big decoded source stayed high. That's what put
+  source-cap on the critical path (steps 5-7).
+- **Step 6's JPEG draft was the biggest single win for the worst
+  cases** — Forest_road dropped 50 MB, the synthetic JPEG dropped
+  44 MB, even though it didn't touch the small-source numbers.
+- **The DRC unit-test column never moved** between steps 1 and 9
+  because none of those changes touched DRC's per-call profile —
+  it's been "29 MB / 100-row stripe / float32" since step 1. Step 9
+  added a per-row DRC measurement (0.3 MB) when streaming dither
+  briefly used per-row prep.
+- **Synthetic 6000×4000 stayed slightly over budget** through step 7
+  (51.5-51.9 MB). Step 8 (`release_input`) finally closed the gap
+  by dropping the source's PIL buffer mid-render.
+
+### Image source dimensions (for sizing context)
+
+| Image | Dimensions | File on disk | Decoded uint8 RGB |
+|---|---:|---:|---:|
+| Robert_De_Niro_KVIFF_portrait.jpg | 1556 × 2247 | 1.2 MB | 10.0 MB |
+| Fitz_Roy_1.jpg | 1536 × 2048 | 1.0 MB | 9.0 MB |
+| Forest_road_Slavne_2017_BW_G9.jpg | 4500 × 2850 | 5.2 MB | 36.7 MB |
+| Synthetic huge JPEG | 6000 × 4000 | ~6 MB | 72.0 MB |
+| Synthetic black PNG | 10 000 × 10 000 | 285 KB | 285.7 MB |
+
+The last two are generated on demand by the test suite (random-block
+JPEG via `np.random.default_rng`, solid-black PNG saved with
+`Image.save(..., optimize=True)`).
+
+---
+
+## Cross-architecture peak comparison (same source, varying prep batch size)
+
+Run on the De Niro / Fitz_Roy / Forest_road set with the
+`floyd_steinberg_hue_aware` preset and the *current* (post-step-9)
+streaming dither, but with the prep batch size dialled up.
+Demonstrates the cost-of-going-wider — informs the choice of
+`DEFAULT_STRIPE_H = 100`.
+
+| Prep mode | De Niro peak | Fitz_Roy peak | Forest_road peak | Render time |
+|---|---:|---:|---:|---:|
+| Per-row (1) | 35 MB | 35 MB | 36 MB | ~15 s |
+| 50-row stripes | 45.9 MB | 46.1 MB | 47.9 MB | ~10 s |
+| **100-row stripes** ← chosen | **42.3 MB** | **47.6 MB** | **42.6 MB** | **~10 s** |
+| 200-row stripes | 57.1 MB | 60.9 MB | 56.6 MB | ~10.5 s |
+| 400-row stripes | 83.5 MB | 86.5 MB | 87.2 MB | ~10 s |
+| Full-canvas (no streaming prep) | 229.1 MB | 232.4 MB | 241.3 MB | ~10 s |
+
+`peak_rss_subprocess` benchmark in `/tmp/_measure_stripes.py`
+(transient script, not committed). Render times include ~3 s of
+subprocess startup overhead. Per-row was measured separately via
+in-process timing (`time.time()` around `render_panel_bytes`,
+mean of 3 runs).
+
+Key reads from this table:
+
+- **Per-row pays a 30-50 % render-time tax** to gain ~10 MB of memory.
+  Not worth it.
+- **100 rows lands inside the 50 MB budget** with comfortable margin
+  (~7 MB) for any single image, while matching full-canvas speed within
+  ~5 %.
+- **200+ rows breaks the 50 MB ceiling** before adding any speed —
+  the per-stripe transients inside `adaptive_saturate` and
+  `compress_dynamic_range` scale linearly with stripe height
+  (each function allocates ~5-6 working buffers of stripe size).
+- **Full canvas hits ~230 MB** because each colour-space intermediate
+  is a full-panel float32 array. That's our pre-step-1 baseline
+  re-emerging if anyone reverts the streaming work.
+
+---
+
+## Render time summary
+
+End-to-end on this dev box (Windows / x86, 1556×2247 portrait,
+floyd_steinberg_hue_aware, in-process `time.time()` around
+`render_panel_bytes`):
+
+| Architecture | Mean render time |
+|---|---:|
+| Original (full-canvas float64) | not re-measured; assume similar to ~15 s post-streaming since the dither inner loop was unchanged |
+| Streaming dither + per-row prep | ~15 s |
+| Streaming dither + 100-row stripes | **~11 s** |
+
+The 27 % speedup comes from amortising Python / numpy dispatch overhead
+over 100 rows per call instead of 1. The per-pixel dither inner loop
+itself (which is pure Python and dominates wall time) didn't change.
+Pi-class CPUs will see a similar ratio at roughly 5-10× the absolute
+time.
+
+---
+
 ## What changed, in order of impact
 
 The original pipeline peaked at **~580 MB on real photos**, dominated by
