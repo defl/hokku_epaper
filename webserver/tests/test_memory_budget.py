@@ -38,7 +38,7 @@ _TEST_IMAGES = Path(__file__).resolve().parent.parent.parent / "images" / "test"
 REAL_IMAGES = [
     "Robert_De_Niro_KVIFF_portrait.jpg",      # portrait
     "Fitz_Roy_1.jpg",                          # landscape
-    "Forest_road_Slavne_2017_BW_G9.jpg",       # B&W
+    "Forest_road_Slavne_2017_BW_G9.jpg",       # B&W, 4500×2850
 ]
 
 
@@ -89,6 +89,32 @@ def test_full_render_huge_jpeg_under_50mb(huge_jpeg: Path) -> None:
           f"(baseline {baseline / 1024 / 1024:.1f} MB)")
     assert delta < 50 * 1024 * 1024, (
         f"huge-JPEG render consumed {delta_mb:.1f} MB peak — budget is 50 MB"
+    )
+
+
+@pytest.mark.time_intensive
+def test_full_render_huge_png_documents_decode_limit() -> None:
+    """A 10 000 × 10 000 PNG cannot fit the 50 MB budget.
+
+    PNG decoding cannot be downscaled in flight (no equivalent of JPEG
+    ``draft``), so the full ~300 MB uint8 buffer must be materialised
+    before ``thumbnail`` can shrink it. This test documents that limit:
+    it asserts the render *does* exceed 50 MB, so a future regression
+    that secretly fixes the case (e.g. by adopting libvips) flips the
+    test red and forces us to update the budget guarantees.
+    """
+    image_path = _TEST_IMAGES / "synth_black_10000x10000.png"
+    if not image_path.is_file():
+        pytest.skip(f"synthetic image not present: {image_path}")
+    delta, baseline = peak_rss_subprocess(image_path, cfg=_real_cfg())
+    delta_mb = delta / (1024 * 1024)
+    print(f"\n  10000x10000 PNG: render peak = {delta_mb:.1f} MB "
+          f"(baseline {baseline / 1024 / 1024:.1f} MB)")
+    assert delta > 200 * 1024 * 1024, (
+        f"a 10 000×10 000 PNG should still exceed 200 MB without a streaming "
+        f"PNG decoder — got {delta_mb:.1f} MB. If this test is now passing, "
+        f"the PNG-decode path has improved and this test (and the budget "
+        f"docstring) need updating."
     )
 
 
