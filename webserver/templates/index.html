@@ -157,6 +157,14 @@
   .btn-danger { background: var(--vermilion); color: var(--paper-card-solid); border-color: var(--vermilion); }
   .btn-danger:hover { background: #9c2d23; border-color: #9c2d23; }
   .btn-small { padding: 4px 10px; font-size: 0.8em; }
+  .btn-icon-danger {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; padding: 0;
+    background: transparent; border: 1px solid var(--bamboo);
+    border-radius: 6px; color: var(--stone); cursor: pointer;
+    transition: all 0.15s; flex-shrink: 0;
+  }
+  .btn-icon-danger:hover { background: var(--vermilion); border-color: var(--vermilion); color: var(--paper-card-solid); }
 
   /* ── Icon-only buttons ────────────────────────────────────── */
   .icon-btn {
@@ -1809,9 +1817,13 @@ function renderScreens(screens) {
     const s = screens[name];
     const late = overdueMinutes(s);
     const rowClass = late > 0 ? ' class="overdue"' : '';
+    const safeName = name.replace(/'/g, "\\'");
     const detailsBtn = s.state
-      ? `<button class="btn btn-secondary btn-small" onclick="showScreenDetails('${name.replace(/'/g, "\\'")}')">Details</button>`
+      ? `<button class="btn btn-secondary btn-small" onclick="showScreenDetails('${safeName}')">Details</button>`
       : '<span style="color:#ccc;font-size:0.8em">no state yet</span>';
+    const removeBtn = `<button class="btn-icon-danger" onclick="removeScreen('${safeName}')" title="Remove screen record" aria-label="Remove ${name}">
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+    </button>`;
     html += `<tr${rowClass}>
       <td>${name}</td>
       <td>${s.ip || '-'}</td>
@@ -1819,7 +1831,7 @@ function renderScreens(screens) {
       <td>${s.request_count || 0}</td>
       <td>${s.last_seen || '-'}</td>
       <td>${formatNextUpdate(s.next_update_at)}</td>
-      <td>${detailsBtn}</td>
+      <td style="display:flex;gap:6px;align-items:center;">${detailsBtn}${removeBtn}</td>
     </tr>`;
   });
   html += '</table>';
@@ -1829,6 +1841,24 @@ function renderScreens(screens) {
 // Keep the most recent /hokku/api/status screens object around so the
 // Details modal can read from it without another round-trip.
 let lastScreens = {};
+
+async function removeScreen(name) {
+  const ok = await showConfirm({
+    title: 'Remove screen?',
+    message: `Remove "${name}" from the server's screen list? It will reappear automatically the next time it connects.`,
+    okLabel: 'Remove',
+  });
+  if (!ok) return;
+  try {
+    const r = await fetch(`/hokku/api/screens/${encodeURIComponent(name)}`, {method: 'DELETE'});
+    if (!r.ok) throw new Error(await r.text());
+    // Remove the row immediately without waiting for the next poll.
+    delete lastScreens[name];
+    renderScreens(lastScreens);
+  } catch (e) {
+    alert('Failed to remove screen: ' + e.message);
+  }
+}
 
 // Pretty-print a single state value.
 // `state` is the containing state object, used so next_ep can reference

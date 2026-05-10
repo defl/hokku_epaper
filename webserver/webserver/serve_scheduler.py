@@ -208,6 +208,19 @@ class ServeScheduler:
         with self._lock:
             return dict(self._screens)
 
+    def remove_screen(self, name: str) -> None:
+        """Remove a screen's telemetry and serve-stats records.
+
+        Idempotent — silently does nothing if the name is not known.
+        The screen can re-register itself the next time it connects.
+        """
+        with self._lock:
+            self._screens.pop(name, None)
+            self._stats.pop(name, None)
+            if self._last_served and self._last_served[0] == name:
+                self._last_served = None
+            self._save()
+
     # ── Internals ────────────────────────────────────────────────
 
     def _reconcile(self, ready_names: set[str]) -> None:

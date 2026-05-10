@@ -293,6 +293,15 @@ def create_app(
         state.manager.sync()  # kick off reconversion immediately
         return jsonify({"ok": True})
 
+    @app.route("/hokku/api/screens/<string:name>", methods=["DELETE"])
+    def api_screen_delete(name: str):
+        """Remove a screen's telemetry and serve-stats records.
+
+        The screen will re-appear automatically the next time it connects.
+        """
+        state.scheduler.remove_screen(name)
+        return jsonify({"ok": True})
+
     @app.route("/hokku/api/scrub", methods=["POST"])
     def api_scrub():
         """Remove stale-slug panel/preview files immediately (preserves thumbs)."""
