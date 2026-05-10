@@ -72,6 +72,8 @@ cp /*.deb /src/
 
 The finished `.deb` lands at the worktree root (e.g. `hokku-server_2.1.21-3_all.deb`). Upload with `gh release upload <tag> <file> --clobber` and delete the stale `.deb` with `gh release delete-asset <tag> <old_file> --yes`.
 
+**Never build a `.deb` from a dirty working tree.** Commit (or stash) all changes before invoking `build-deb.sh` / `dpkg-buildpackage`. Reason: the produced filename only encodes the changelog version, not the working-tree state — a `.deb` built from uncommitted edits cannot be reproduced from the git history, and "which bytes are in this build" becomes unanswerable. If a build reveals a bug (missing dep, broken postinst, etc.), commit the fix first, then rebuild. The commit-then-build cycle is cheap; the build-then-commit cycle silently produces orphan artifacts.
+
 **Bumping the Debian revision on every rebuild.** Whenever you rebuild the `.deb` without changing the upstream version (`2.2.2`, etc.), bump the trailing `-N` revision in `webserver/debian/changelog` and `webserver/pyproject.toml` (if it tracks the revision) by one — never overwrite an existing revision number with new contents. Example: a rebuild after `2.2.2-1` becomes `hokku-server_2.2.2-2_all.deb`, the next rebuild after that becomes `-3`, etc. Reason: each revision must have a unique build artifact so users can tell from the filename / `dpkg -l` output exactly which build they're running. Reusing `-1` for two different sets of bytes makes "I have hokku-server 2.2.2-1 installed" ambiguous and breaks the only easy way to verify the user has the version we think they do.
 
 Things that look harmless but break the build — lessons learned:
