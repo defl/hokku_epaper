@@ -11,8 +11,8 @@ import threading
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from webserver.app_config import AppConfig
-from webserver.face_detect import has_face
+from webserver.app_config import AppConfig, FaceDetectorName
+from webserver.face_detect_factory import build_face_detector
 from webserver.image import is_grayscale
 from webserver.image_config import ImageConfig
 from webserver.screen_image_config import ScreenImageConfig
@@ -22,9 +22,15 @@ _DB_NAME = "image_classifier.json"
 
 @dataclass(frozen=True)
 class Observations:
-    """Raw per-image detection results.  None = not yet observed."""
+    """Raw per-image detection results.  None = not yet observed.
+
+    ``face_detector`` records which backend produced ``has_face``. When the
+    configured detector changes, cached ``has_face`` is treated as stale and
+    re-run; ``is_bw`` is detector-independent and stays valid.
+    """
     is_bw: bool | None = None
     has_face: bool | None = None
+    face_detector: FaceDetectorName | None = None
 
 
 class ImageClassifier:
@@ -50,6 +56,10 @@ class ImageClassifier:
         self._lock = threading.RLock()
         self._db_path = Path(config.cache_dir) / _DB_NAME
         self._cache: dict[str, Observations] = self._load()
+        # Built lazily on first face-detection request so a config that
+        # disables face detection doesn't pay the import cost of the
+        # selected backend.
+        self._face_detector = None
 
     # ── Public API ───────────────────────────────────────────────────────────
 
@@ -96,8 +106,20 @@ class ImageClassifier:
                 obs = replace(obs, is_bw=is_grayscale(path))
                 dirty = True
 
-            if cfg.classifier_face_detect_enabled and obs.has_face is None:
-                obs = replace(obs, has_face=has_face(path))
+            # Treat cached has_face as stale if it was produced by a
+            # different detector — re-run with the currently-configured one.
+            face_stale = (
+                obs.has_face is None
+                or obs.face_detector != cfg.face_detector
+            )
+            if cfg.classifier_face_detect_enabled and face_stale:
+                if self._face_detector is None:
+                    self._face_detector = build_face_detector(cfg)
+                obs = replace(
+                    obs,
+                    has_face=self._face_detector.has_face(path),
+                    face_detector=cfg.face_detector,
+                )
                 dirty = True
 
             if dirty:
@@ -121,6 +143,7 @@ class ImageClassifier:
             out[sha1] = Observations(
                 is_bw=d.get("is_bw"),
                 has_face=d.get("has_face"),
+                face_detector=d.get("face_detector"),
             )
         return out
 

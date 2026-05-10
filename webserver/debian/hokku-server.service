@@ -1,6 +1,8 @@
 [Unit]
 Description=Hokku Spectra 6 image server
 After=network.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,7 +12,7 @@ DynamicUser=yes
 StateDirectory=hokku
 CacheDirectory=hokku
 Restart=on-failure
-RestartSec=5
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target

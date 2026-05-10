@@ -54,4 +54,15 @@ if ! python3 -c "import cv2" 2>/dev/null; then
     echo "Warning: Could not install opencv. Face detection will be unavailable."
 fi
 
+# Install onnxruntime via pip if not already available. Only required when
+# face_detector="yunet_onnx" is selected — yunet_opencv (default) and
+# haar_opencv work without it. Failure here is non-fatal; the service
+# raises a clear error at startup if the user picks yunet_onnx without it.
+if ! python3 -c "import onnxruntime" 2>/dev/null; then
+    echo "Installing onnxruntime via pip..."
+    pip3 install --break-system-packages onnxruntime 2>/dev/null || \
+    pip3 install onnxruntime 2>/dev/null || \
+    echo "Warning: Could not install onnxruntime. The yunet_onnx face_detector option will be unavailable."
+fi
+
 #DEBHELPER#

@@ -52,6 +52,7 @@ def main() -> None:
         f" cores={os.cpu_count()},"
         f" free RAM={_psutil.virtual_memory().available / 1e9:.1f} GB)"
     )
+    print(f"  Face detector: {config.face_detector}")
 
     scheduler = ServeScheduler(manager)
     state = AppState(config, classifier, manager, scheduler)

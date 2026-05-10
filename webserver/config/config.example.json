@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "refresh_image_at_time": [
     "0600",
     "1200",
@@ -62,6 +62,7 @@
     "vivid_chroma_high": 15.0
   },
   "classifier_face_detect_enabled": true,
+  "face_detector": "yunet_opencv",
   "image_config_face": {
     "dither": {
       "algorithm": "atkinson",

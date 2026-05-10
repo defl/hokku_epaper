@@ -1,3 +1,23 @@
+hokku-server (3.0.0~alpha1-7) unstable; urgency=low
+
+  * Pluggable face detection: AbstractFaceDetector + three concretes
+    (yunet_opencv default, haar_opencv, yunet_onnx). New AppConfig field
+    `face_detector` selects between them; config schema bumped v2→v3 with
+    automatic migration. ImageClassifier observations carry which detector
+    produced a cached has_face so swapping detectors triggers re-detection
+    without invalidating the panel cache when results agree.
+  * postinst pip-installs onnxruntime alongside opencv-headless so the
+    yunet_onnx detector works out of the box.
+  * Memory measurements for all three detectors recorded in
+    docs/face_detection_memory_usage.md. Headline finding: yunet_opencv
+    is actually the lightest both at startup AND during inference on the
+    dev box; haar_opencv's detectMultiScale allocates ~110 MB transient
+    pyramids and is the heaviest. The pluggable architecture stays
+    valuable for future detectors but doesn't itself solve the Pi OOM —
+    look elsewhere in the per-render budget.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-6) unstable; urgency=low
 
   * Build artifacts now land in <repo-root>/builds/ instead of the repo

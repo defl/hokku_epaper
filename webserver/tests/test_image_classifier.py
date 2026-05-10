@@ -133,19 +133,19 @@ def test_face_detect_persists_observation(tmp_path):
 # ── dispatch priority: B&W beats face ────────────────────────────────────────
 
 def test_bw_beats_face_for_bw_portrait(tmp_path):
-    """If an image is B&W, it gets image_config_bw even when face detection is on."""
+    """If an image is B&W, it gets image_config_bw even when a face is also detected."""
     cfg = _config(tmp_path, bw=True, face=True)
     clf = ImageClassifier(cfg)
 
-    # Pre-seed the cache so is_grayscale is also skipped.
+    # Pre-seed both observations so neither detector runs — the test is
+    # purely about dispatch priority: B&W must win over face.
     sha = _sha1(_BW_IMAGE)
     with clf._lock:
-        clf._cache[sha] = Observations(is_bw=True, has_face=None)
+        clf._cache[sha] = Observations(
+            is_bw=True, has_face=True, face_detector=cfg.face_detector,
+        )
 
-    # Patch has_face at its source so we can assert it's never called for B&W images.
-    with patch("webserver.face_detect.has_face", side_effect=AssertionError("has_face should not be called")):
-        sc = clf.screen_config_for(_BW_IMAGE, sha)
-
+    sc = clf.screen_config_for(_BW_IMAGE, sha)
     assert sc.image_config == cfg.image_config_bw
 
 
@@ -176,8 +176,9 @@ def test_cache_hit_no_redetection(tmp_path):
     clf.screen_config_for(_COLOUR_LANDSCAPE, sha)
 
     # Patch detectors at their source — they must NOT be called on the second call.
+    spy_detector = MagicMock(has_face=MagicMock(side_effect=AssertionError("should not re-detect")))
     with patch("webserver.image.is_grayscale", side_effect=AssertionError("should not re-detect")):
-        with patch("webserver.face_detect.has_face", side_effect=AssertionError("should not re-detect")):
+        with patch.object(clf, "_face_detector", spy_detector):
             sc = clf.screen_config_for(_COLOUR_LANDSCAPE, sha)
 
     assert sc.image_config == cfg.image_config_default

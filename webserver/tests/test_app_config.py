@@ -130,12 +130,21 @@ def test_image_field_with_partial_blob_rejected(tmp_path: Path):
 
 
 def test_v1_migrates_to_v2():
-    """A v1 dict (no image_worker_thread_count) is migrated to v2 with default 1."""
+    """A v1 dict (no image_worker_thread_count) is migrated forward and gains the v2 field with default 1."""
     v1_blob = {"version": 1}  # minimal valid v1
     from webserver.app_config import _migrate
-    v2 = _migrate(v1_blob)
-    assert v2["version"] == 2
-    assert v2["image_worker_thread_count"] == 1
+    migrated = _migrate(v1_blob)
+    assert migrated["version"] == _CURRENT_VERSION
+    assert migrated["image_worker_thread_count"] == 1
+
+
+def test_v2_migrates_to_v3():
+    """A v2 dict gains face_detector='yunet_opencv' on migration to v3."""
+    v2_blob = {"version": 2, "image_worker_thread_count": 1}
+    from webserver.app_config import _migrate
+    migrated = _migrate(v2_blob)
+    assert migrated["version"] == _CURRENT_VERSION
+    assert migrated["face_detector"] == "yunet_opencv"
 
 
 def test_image_worker_thread_count_roundtrips(tmp_path: Path):
