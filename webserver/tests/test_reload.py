@@ -30,16 +30,16 @@ from pathlib import Path
 
 import pytest
 
-from webserver.app_state import AppState, build_manager
-from webserver.app_config import AppConfig
-from webserver.flask_app import create_app
-from webserver.image_classifier import ImageClassifier
-from webserver.image_manager import (
+from hokku_server.app_state import AppState, build_manager
+from hokku_server.app_config import AppConfig
+from hokku_server.flask_app import create_app
+from hokku_server.image_classifier import ImageClassifier
+from hokku_server.image_manager import (
     MultiThreadedImageManager,
     SingleThreadedImageManager,
 )
-from webserver.serve_scheduler import ServeScheduler
-from webserver.watcher import Watcher
+from hokku_server.serve_scheduler import ServeScheduler
+from hokku_server.watcher import Watcher
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

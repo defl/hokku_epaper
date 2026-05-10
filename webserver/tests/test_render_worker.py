@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from webserver.display import TOTAL_BYTES, VISUAL_H, VISUAL_W
-from webserver.presets import PRESET_IMAGE_CONFIGS
-from webserver.render_worker import render_one
+from hokku_server.display import TOTAL_BYTES, VISUAL_H, VISUAL_W
+from hokku_server.presets import PRESET_IMAGE_CONFIGS
+from hokku_server.render_worker import render_one
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_IMAGES = _REPO_ROOT / "images" / "test"

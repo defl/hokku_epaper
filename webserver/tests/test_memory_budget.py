@@ -18,9 +18,9 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from webserver.image_config import ImageConfig
-from webserver.memory_guard import memory_limit, supported as memguard_supported
-from webserver.presets import PRESET_IMAGE_CONFIGS
+from hokku_server.image_config import ImageConfig
+from hokku_server.memory_guard import memory_limit, supported as memguard_supported
+from hokku_server.presets import PRESET_IMAGE_CONFIGS
 from tests._memory_helpers import (
     peak_python_heap,
     peak_rss_subprocess,
@@ -131,7 +131,7 @@ def test_compress_dynamic_range_peak_under_1mb_per_row() -> None:
     row. Float64 intermediates would blow this; float32 should keep us well
     under 1 MB even with the function's transient buffers.
     """
-    from webserver.image import compress_dynamic_range
+    from hokku_server.image import compress_dynamic_range
     row = np.random.default_rng(0).integers(
         0, 256, size=(1, 3200, 3), dtype=np.uint8
     ).astype(np.float32)
@@ -161,8 +161,8 @@ def test_compress_dynamic_range_peak_under_30mb_per_stripe() -> None:
     end-to-end budget — the streaming dither holds at most one cached
     stripe at a time.
     """
-    from webserver.image import compress_dynamic_range
-    from webserver.dither import DEFAULT_STRIPE_H
+    from hokku_server.image import compress_dynamic_range
+    from hokku_server.dither import DEFAULT_STRIPE_H
     stripe = np.random.default_rng(0).integers(
         0, 256, size=(DEFAULT_STRIPE_H, 3200, 3), dtype=np.uint8
     )

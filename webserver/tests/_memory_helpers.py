@@ -94,9 +94,9 @@ image_path = payload['image_path']
 render_kwargs = payload.get('render_kwargs', {})
 from pillow_heif import register_heif_opener
 register_heif_opener()
-from webserver.image import open_image_for_render, render_panel_bytes
-from webserver.image_config import ImageConfig
-from webserver.dither_config import DitherConfig
+from hokku_server.image import open_image_for_render, render_panel_bytes
+from hokku_server.image_config import ImageConfig
+from hokku_server.dither_config import DitherConfig
 cfg = render_kwargs['cfg']
 orientation = render_kwargs.get('orientation', 'landscape')
 crop_to_fill = float(render_kwargs.get('crop_to_fill_threshold', 0.0))
@@ -125,7 +125,7 @@ def peak_rss_subprocess(
     ``baseline`` is the child's RSS just after import + before the render.
     ``peak`` is the maximum RSS observed during the render.
 
-    The child uses ``webserver.image.render_panel_bytes`` with the supplied
+    The child uses ``hokku_server.image.render_panel_bytes`` with the supplied
     ImageConfig.  The RHS of the difference (peak − baseline) is what the
     pipeline alone consumed; that's the number that needs to fit in 50 MB.
     """

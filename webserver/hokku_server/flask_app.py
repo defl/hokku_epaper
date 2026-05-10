@@ -35,13 +35,13 @@ except ImportError:  # py<3.8 — not expected
     _pkg_version = None
     PackageNotFoundError = Exception
 
-from webserver.app_state import AppState
-from webserver.app_config import AppConfig
-from webserver.display import TOTAL_BYTES, VISUAL_H, VISUAL_W
-from webserver.image import IMAGE_EXTENSIONS
-from webserver.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS, PRESET_META
-from webserver.screen_headers import parse_battery_header, parse_frame_state
-from webserver.time_utils import calculate_sleep_seconds, format_duration_human
+from hokku_server.app_state import AppState
+from hokku_server.app_config import AppConfig
+from hokku_server.display import TOTAL_BYTES, VISUAL_H, VISUAL_W
+from hokku_server.image import IMAGE_EXTENSIONS
+from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS, PRESET_META
+from hokku_server.screen_headers import parse_battery_header, parse_frame_state
+from hokku_server.time_utils import calculate_sleep_seconds, format_duration_human
 
 
 register_heif_opener()
@@ -476,11 +476,11 @@ def create_app(
         except FileNotFoundError:
             return jsonify({"error": f"image {name!r} not found"}), 404
         try:
-            from webserver.image_config import _image_config_from_dict
+            from hokku_server.image_config import _image_config_from_dict
             cfg = _image_config_from_dict(image_blob)
         except (TypeError, ValueError) as e:
             return jsonify({"error": f"invalid image config: {e}"}), 400
-        from webserver.image import open_image_for_render, render_preview_png
+        from hokku_server.image import open_image_for_render, render_preview_png
         print(f"  Preview: {name!r}")
         with open_image_for_render(path) as img:
             png = render_preview_png(img, cfg, state.config.orientation)

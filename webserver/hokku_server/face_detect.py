@@ -10,16 +10,16 @@ Implementations live in:
 * ``face_detect_yunet_onnx``    — ONNXYuNetFaceDetector.
 * ``face_detect_factory``       — build_face_detector(config).
 """
-from webserver.face_detect_abstract import (
+from hokku_server.face_detect_abstract import (
     AbstractFaceDetector,
     DEFAULT_MAX_SIDE,
     DEFAULT_SCORE_THRESHOLD,
     load_image_resized,
 )
-from webserver.face_detect_factory import build_face_detector
-from webserver.face_detect_haar_opencv import OpenCVHaarFaceDetector
-from webserver.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
-from webserver.face_detect_yunet_onnx import ONNXYuNetFaceDetector
+from hokku_server.face_detect_factory import build_face_detector
+from hokku_server.face_detect_haar_opencv import OpenCVHaarFaceDetector
+from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
+from hokku_server.face_detect_yunet_onnx import ONNXYuNetFaceDetector
 
 __all__ = [
     "AbstractFaceDetector",

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from webserver.face_detect_abstract import AbstractFaceDetector, load_image_resized
+from hokku_server.face_detect_abstract import AbstractFaceDetector, load_image_resized
 
 
 class OpenCVHaarFaceDetector(AbstractFaceDetector):

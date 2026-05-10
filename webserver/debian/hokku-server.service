@@ -1,5 +1,5 @@
 [Unit]
-Description=Hokku Spectra 6 image server
+Description=Hokku Server
 After=network.target
 StartLimitIntervalSec=600
 StartLimitBurst=5

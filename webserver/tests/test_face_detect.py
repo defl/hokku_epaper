@@ -49,14 +49,14 @@ _NON_PORTRAITS = [
 def _build_detector(name: str):
     """Build a detector by name, skipping if its dep isn't installed."""
     if name == "yunet_opencv":
-        from webserver.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
+        from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
         return OpenCVYuNetFaceDetector()
     if name == "haar_opencv":
-        from webserver.face_detect_haar_opencv import OpenCVHaarFaceDetector
+        from hokku_server.face_detect_haar_opencv import OpenCVHaarFaceDetector
         return OpenCVHaarFaceDetector()
     if name == "yunet_onnx":
         pytest.importorskip("onnxruntime")
-        from webserver.face_detect_yunet_onnx import ONNXYuNetFaceDetector
+        from hokku_server.face_detect_yunet_onnx import ONNXYuNetFaceDetector
         return ONNXYuNetFaceDetector()
     raise ValueError(f"unknown detector: {name}")
 

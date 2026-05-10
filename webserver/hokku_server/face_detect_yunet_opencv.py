@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from webserver.face_detect_abstract import (
+from hokku_server.face_detect_abstract import (
     AbstractFaceDetector,
     DEFAULT_SCORE_THRESHOLD,
     load_image_resized,

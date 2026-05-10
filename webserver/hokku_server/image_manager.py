@@ -10,7 +10,7 @@ in:
 
 Selection between concretes happens in ``app_state.build_manager``.
 """
-from webserver.image_manager_abstract import (
+from hokku_server.image_manager_abstract import (
     AbstractImageManager,
     ConversionProgress,
     ConvertStatus,
@@ -18,8 +18,8 @@ from webserver.image_manager_abstract import (
     _hash_name,
     _try_read_image_dims,
 )
-from webserver.image_manager_multi import MultiThreadedImageManager
-from webserver.image_manager_single import SingleThreadedImageManager
+from hokku_server.image_manager_multi import MultiThreadedImageManager
+from hokku_server.image_manager_single import SingleThreadedImageManager
 
 __all__ = [
     "AbstractImageManager",

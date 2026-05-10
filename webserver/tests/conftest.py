@@ -12,15 +12,15 @@ from pillow_heif import register_heif_opener
 # PIL.Image.open() works on .heic files in the slow visual tests.
 register_heif_opener()
 
-from webserver.app_config import AppConfig
-from webserver.dither_config import DitherConfig
-from webserver.image_config import ImageConfig
-from webserver.image_manager import (
+from hokku_server.app_config import AppConfig
+from hokku_server.dither_config import DitherConfig
+from hokku_server.image_config import ImageConfig
+from hokku_server.image_manager import (
     AbstractImageManager,
     MultiThreadedImageManager,
     SingleThreadedImageManager,
 )
-from webserver.presets import PRESET_IMAGE_CONFIGS
+from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 
 @pytest.fixture

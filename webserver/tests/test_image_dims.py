@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from webserver.image_manager import _try_read_image_dims
+from hokku_server.image_manager import _try_read_image_dims
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_DIR = _REPO_ROOT / "images" / "test"

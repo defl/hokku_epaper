@@ -34,8 +34,8 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from PIL import Image
 
-from webserver.display import PALETTE_MEASURED_RGB
-from webserver.dither_config import AlgorithmName, DitherConfig, LutName  # noqa: F401 (re-exported)
+from hokku_server.display import PALETTE_MEASURED_RGB
+from hokku_server.dither_config import AlgorithmName, DitherConfig, LutName  # noqa: F401 (re-exported)
 
 PrepStripe = Callable[[NDArray[np.uint8]], NDArray[np.float32]]
 DiffusionKernel = tuple[tuple[int, int, float], ...]

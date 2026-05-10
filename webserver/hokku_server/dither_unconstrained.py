@@ -47,8 +47,8 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from PIL import Image
 
-from webserver.display import PALETTE_MEASURED_RGB
-from webserver.dither_config import DitherConfig
+from hokku_server.display import PALETTE_MEASURED_RGB
+from hokku_server.dither_config import DitherConfig
 
 UInt8Array: TypeAlias = NDArray[np.uint8]
 FloatArray: TypeAlias = NDArray[Any]

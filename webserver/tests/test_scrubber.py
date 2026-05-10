@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from webserver.app_config import AppConfig
-from webserver.image_manager import AbstractImageManager, SingleThreadedImageManager
+from hokku_server.app_config import AppConfig
+from hokku_server.image_manager import AbstractImageManager, SingleThreadedImageManager
 
 # Suffixes as defined in image_manager
 _PANEL = "_panel.bin"
@@ -114,7 +114,7 @@ def test_scrub_off_keeps_old_slug_files(tmp_path, make_test_image):
     upload = tmp_path / "up"; upload.mkdir()
     cache  = tmp_path / "ca"; cache.mkdir()
 
-    from webserver.presets import PRESET_IMAGE_CONFIGS
+    from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
     base_cfg = AppConfig(
         upload_dir=str(upload), cache_dir=str(cache), port=18080,
@@ -166,7 +166,7 @@ def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
     upload = tmp_path / "up"; upload.mkdir()
     cache  = tmp_path / "ca"; cache.mkdir()
 
-    from webserver.presets import PRESET_IMAGE_CONFIGS
+    from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
     base_image = replace(
         PRESET_IMAGE_CONFIGS["atkinson"],
@@ -211,7 +211,7 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
     upload = tmp_path / "up"; upload.mkdir()
     cache  = tmp_path / "ca"; cache.mkdir()
 
-    from webserver.presets import PRESET_IMAGE_CONFIGS
+    from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
     base_image = replace(
         PRESET_IMAGE_CONFIGS["atkinson"],

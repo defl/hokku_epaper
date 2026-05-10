@@ -9,11 +9,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from webserver.app_config import AppConfig
-from webserver.image_classifier import ImageClassifier, Observations
-from webserver.image_config import ImageConfig
-from webserver.presets import PRESET_IMAGE_CONFIGS
-from webserver.screen_image_config import ScreenImageConfig
+from hokku_server.app_config import AppConfig
+from hokku_server.image_classifier import ImageClassifier, Observations
+from hokku_server.image_config import ImageConfig
+from hokku_server.presets import PRESET_IMAGE_CONFIGS
+from hokku_server.screen_image_config import ScreenImageConfig
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_IMAGES = _REPO_ROOT / "images" / "test"
@@ -177,7 +177,7 @@ def test_cache_hit_no_redetection(tmp_path):
 
     # Patch detectors at their source — they must NOT be called on the second call.
     spy_detector = MagicMock(has_face=MagicMock(side_effect=AssertionError("should not re-detect")))
-    with patch("webserver.image.is_grayscale", side_effect=AssertionError("should not re-detect")):
+    with patch("hokku_server.image.is_grayscale", side_effect=AssertionError("should not re-detect")):
         with patch.object(clf, "_face_detector", spy_detector):
             sc = clf.screen_config_for(_COLOUR_LANDSCAPE, sha)
 

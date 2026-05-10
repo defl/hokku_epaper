@@ -24,12 +24,12 @@ from pathlib import Path
 
 import pytest
 
-from webserver.app_state import AppState, build_manager
-from webserver.app_config import AppConfig
-from webserver.display import TOTAL_BYTES, panel_bytes_to_indices
-from webserver.flask_app import create_app
-from webserver.image_classifier import ImageClassifier
-from webserver.serve_scheduler import ServeScheduler
+from hokku_server.app_state import AppState, build_manager
+from hokku_server.app_config import AppConfig
+from hokku_server.display import TOTAL_BYTES, panel_bytes_to_indices
+from hokku_server.flask_app import create_app
+from hokku_server.image_classifier import ImageClassifier
+from hokku_server.serve_scheduler import ServeScheduler
 
 # Path to a real source image (small enough to be fast with noop dither).
 _TEST_IMAGE = (

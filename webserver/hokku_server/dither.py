@@ -5,7 +5,7 @@ All dither logic has moved to ``dither_constrained`` (streaming) and
 imports working without change.  New code should import directly from the
 appropriate module.
 """
-from webserver.dither_constrained import (  # noqa: F401
+from hokku_server.dither_constrained import (  # noqa: F401
     PALETTE_LAB,
     PrepStripe,
     DiffusionKernel,
@@ -26,8 +26,8 @@ from webserver.dither_constrained import (  # noqa: F401
     _cached_euclidean_lut,
     _cached_hue_aware_lut,
 )
-from webserver.dither_config import AlgorithmName, DitherConfig, LutName  # noqa: F401
+from hokku_server.dither_config import AlgorithmName, DitherConfig, LutName  # noqa: F401
 
 # DEFAULT_STRIPE_H is an internal constant of dither_constrained; it's exposed
 # here only for the memory-budget test that documents the stripe size.
-from webserver.dither_constrained import _DEFAULT_STRIPE_H as DEFAULT_STRIPE_H  # noqa: F401
+from hokku_server.dither_constrained import _DEFAULT_STRIPE_H as DEFAULT_STRIPE_H  # noqa: F401

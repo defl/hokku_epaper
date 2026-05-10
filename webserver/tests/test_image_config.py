@@ -4,9 +4,9 @@ from __future__ import annotations
 import pytest
 from dataclasses import asdict, replace
 
-from webserver.dither_config import DitherConfig
-from webserver.image_config import ImageConfig, _image_config_from_dict
-from webserver.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
+from hokku_server.dither_config import DitherConfig
+from hokku_server.image_config import ImageConfig, _image_config_from_dict
+from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
 
 
 def _default_dither() -> DitherConfig:

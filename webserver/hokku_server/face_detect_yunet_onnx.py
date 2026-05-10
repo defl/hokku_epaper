@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from webserver.face_detect_abstract import (
+from hokku_server.face_detect_abstract import (
     AbstractFaceDetector,
     DEFAULT_SCORE_THRESHOLD,
     load_image_resized,

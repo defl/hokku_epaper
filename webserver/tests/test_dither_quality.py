@@ -35,7 +35,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from webserver.display import (
+from hokku_server.display import (
     FULL_W,
     PANEL_H,
     TOTAL_BYTES,
@@ -44,7 +44,7 @@ from webserver.display import (
     indices_to_preview_rgb,
     panel_bytes_to_indices,
 )
-from webserver.image import (
+from hokku_server.image import (
     ImageConfig,
     Orientation,
     _is_near_grayscale,
@@ -53,7 +53,7 @@ from webserver.image import (
     render_panel_bytes,
     render_preview_png,
 )
-from webserver.presets import PRESET_IMAGE_CONFIGS
+from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 
 # ── module-level helpers ──────────────────────────────────────────────────────

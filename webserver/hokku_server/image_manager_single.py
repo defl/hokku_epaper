@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import concurrent.futures
 
-from webserver.image_manager_abstract import AbstractImageManager
+from hokku_server.image_manager_abstract import AbstractImageManager
 
 
 class SingleThreadedImageManager(AbstractImageManager):
@@ -26,7 +26,7 @@ class SingleThreadedImageManager(AbstractImageManager):
         render_args: tuple,
         t0: float,
     ) -> None:
-        from webserver.render_worker import render_one
+        from hokku_server.render_worker import render_one
         future: concurrent.futures.Future = concurrent.futures.Future()
         try:
             future.set_result(render_one(*render_args))

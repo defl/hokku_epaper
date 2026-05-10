@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 import time
 
-from webserver.app_state import AppState
+from hokku_server.app_state import AppState
 
 
 class Watcher:

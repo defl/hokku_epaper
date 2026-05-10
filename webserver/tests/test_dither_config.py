@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from webserver.dither_config import DitherConfig
+from hokku_server.dither_config import DitherConfig
 
 
 def _default() -> DitherConfig:

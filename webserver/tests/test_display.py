@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from webserver.display import (
+from hokku_server.display import (
     FULL_W,
     PALETTE_MEASURED_RGB,
     PALETTE_NIBBLE,

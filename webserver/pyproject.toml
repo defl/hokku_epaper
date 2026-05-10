@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-hokku-server = "webserver:main"
+hokku-server = "hokku_server:main"
 
 [project.optional-dependencies]
 test = [
@@ -30,10 +30,10 @@ yunet-onnx = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["webserver*"]
+include = ["hokku_server*"]
 
 [tool.setuptools.package-data]
-webserver = ["models/*.onnx", "models/ATTRIBUTION.md"]
+hokku_server = ["models/*.onnx", "models/ATTRIBUTION.md"]
 
 [tool.pytest.ini_options]
 addopts = ["-m", "not time_intensive"]

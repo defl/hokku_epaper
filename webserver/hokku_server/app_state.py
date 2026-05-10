@@ -10,18 +10,18 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from webserver.app_config import AppConfig
-from webserver.image_classifier import ImageClassifier
-from webserver.image_manager import (
+from hokku_server.app_config import AppConfig
+from hokku_server.image_classifier import ImageClassifier
+from hokku_server.image_manager import (
     AbstractImageManager,
     MultiThreadedImageManager,
     SingleThreadedImageManager,
 )
-from webserver.serve_scheduler import ServeScheduler
-from webserver.worker_count import resolve_worker_count
+from hokku_server.serve_scheduler import ServeScheduler
+from hokku_server.worker_count import resolve_worker_count
 
 if TYPE_CHECKING:
-    from webserver.watcher import Watcher
+    from hokku_server.watcher import Watcher
 
 
 def build_manager(

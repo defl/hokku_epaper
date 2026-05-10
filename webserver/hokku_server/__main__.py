@@ -1,5 +1,5 @@
 """Allow `python -m webserver`."""
-from webserver import main
+from hokku_server import main
 
 if __name__ == "__main__":
     main()

@@ -26,13 +26,13 @@ image_path = payload['image_path']
 me = psutil.Process()
 rss_python_only = int(me.memory_info().rss)
 if detector_name == 'yunet_opencv':
-    from webserver.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
+    from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
     detector = OpenCVYuNetFaceDetector()
 elif detector_name == 'haar_opencv':
-    from webserver.face_detect_haar_opencv import OpenCVHaarFaceDetector
+    from hokku_server.face_detect_haar_opencv import OpenCVHaarFaceDetector
     detector = OpenCVHaarFaceDetector()
 elif detector_name == 'yunet_onnx':
-    from webserver.face_detect_yunet_onnx import ONNXYuNetFaceDetector
+    from hokku_server.face_detect_yunet_onnx import ONNXYuNetFaceDetector
     detector = ONNXYuNetFaceDetector()
 else:
     raise SystemExit(f'unknown detector: {detector_name}')

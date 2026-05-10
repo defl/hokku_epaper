@@ -24,12 +24,12 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from webserver.app_config import AppConfig
-from webserver.dither_config import DitherConfig
-from webserver.image import _render_indices
-from webserver.image_config import ImageConfig
-from webserver.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
-from webserver.screen_image_config import ScreenImageConfig
+from hokku_server.app_config import AppConfig
+from hokku_server.dither_config import DitherConfig
+from hokku_server.image import _render_indices
+from hokku_server.image_config import ImageConfig
+from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
+from hokku_server.screen_image_config import ScreenImageConfig
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -241,8 +241,8 @@ def test_visual_letterbox_all_images(_wipe_letterbox_build):
       build/test_letterbox/<stem>__landscape_0pct.png
       …
     """
-    from webserver.image import open_image_for_render, render_panel_bytes, preview_png_from_panel_bytes
-    from webserver.display import TOTAL_BYTES
+    from hokku_server.image import open_image_for_render, render_panel_bytes, preview_png_from_panel_bytes
+    from hokku_server.display import TOTAL_BYTES
 
     test_images = sorted(
         p for p in _TEST_IMAGES_DIR.iterdir()

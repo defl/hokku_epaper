@@ -29,13 +29,13 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from webserver.dither import PALETTE_LAB, adaptive_saturate, rgb_to_lab
-from webserver.dither_config import DitherConfig
+from hokku_server.dither import PALETTE_LAB, adaptive_saturate, rgb_to_lab
+from hokku_server.dither_config import DitherConfig
 
 # Panel ink L* limits — same derivation as image.py's private constants.
 _DISPLAY_BLACK_L = float(PALETTE_LAB[0, 0])
 _DISPLAY_WHITE_L = float(PALETTE_LAB[1, 0])
-from webserver.image import (
+from hokku_server.image import (
     _apply_prepare_enhancements,
     _bw_safe_image_config,
     _is_near_grayscale,
@@ -43,8 +43,8 @@ from webserver.image import (
     open_image_for_render,
     render_preview_png,
 )
-from webserver.image_config import ImageConfig
-from webserver.presets import PRESET_IMAGE_CONFIGS
+from hokku_server.image_config import ImageConfig
+from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 
 # ── shared helpers ────────────────────────────────────────────────────────────
@@ -528,8 +528,8 @@ def test_render_panel_bytes_honours_cfg_without_hidden_override():
     We verify this by rendering the SAME coloured image with hue-aware vs bw-safe
     configs and asserting the outputs differ (proving each cfg was actually honoured).
     """
-    from webserver.image import render_panel_bytes
-    from webserver.display import TOTAL_BYTES
+    from hokku_server.image import render_panel_bytes
+    from hokku_server.display import TOTAL_BYTES
 
     # A hue-aware cfg that boosts saturation.
     cfg_hue = replace(

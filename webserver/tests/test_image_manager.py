@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from webserver.app_config import AppConfig
-from webserver.display import TOTAL_BYTES
-from webserver.image_manager import _hash_name
+from hokku_server.app_config import AppConfig
+from hokku_server.display import TOTAL_BYTES
+from hokku_server.image_manager import _hash_name
 
 
 def test_hash_name_stable():
@@ -32,7 +32,7 @@ def test_register_and_convert(app_config: AppConfig, image_manager_factory, make
     mgr.sync()
     mgr.wait_for_idle()
 
-    from webserver.screen_image_config import ScreenImageConfig
+    from hokku_server.screen_image_config import ScreenImageConfig
     records = mgr.list()
     assert [r.name for r in records] == ["a.png", "b.png"]
     assert all(r.convert_status == "ok" for r in records)

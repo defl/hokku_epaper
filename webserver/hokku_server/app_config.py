@@ -14,8 +14,8 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from webserver.image_config import ImageConfig, _image_config_from_dict  # noqa: F401 (re-exported)
-from webserver.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
+from hokku_server.image_config import ImageConfig, _image_config_from_dict  # noqa: F401 (re-exported)
+from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
 
 
 Orientation = Literal["landscape", "portrait"]
@@ -57,7 +57,7 @@ def _migrate(data: dict) -> dict:
 
 def _default_bw_image_config() -> ImageConfig:
     """B&W-safe ImageConfig: saturation boosters disabled to avoid colour confetti."""
-    from webserver.image import _bw_safe_image_config  # avoid circular at module level
+    from hokku_server.image import _bw_safe_image_config  # avoid circular at module level
     return _bw_safe_image_config(PRESET_IMAGE_CONFIGS["floyd_steinberg"])
 
 

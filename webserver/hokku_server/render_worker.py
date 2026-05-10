@@ -55,12 +55,12 @@ def render_one(
 
     from pathlib import Path
 
-    from webserver.image import (
+    from hokku_server.image import (
         open_image_for_render,
         preview_png_from_panel_bytes,
         render_panel_bytes,
     )
-    from webserver.image_config import _image_config_from_dict
+    from hokku_server.image_config import _image_config_from_dict
 
     cfg = _image_config_from_dict(image_config_dict)
     with open_image_for_render(Path(image_path)) as img:

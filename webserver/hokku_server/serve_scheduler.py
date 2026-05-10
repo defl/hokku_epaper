@@ -15,8 +15,8 @@ import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from webserver.image_manager import AbstractImageManager
-from webserver.screen_headers import battery_percent, parse_battery_header
+from hokku_server.image_manager import AbstractImageManager
+from hokku_server.screen_headers import battery_percent, parse_battery_header
 
 
 _DB_FILENAME = "serve_scheduler.json"

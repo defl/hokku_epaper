@@ -6,7 +6,7 @@ import json
 from dataclasses import asdict, dataclass, fields
 from typing import Any, Literal
 
-from webserver.dither_config import DitherConfig
+from hokku_server.dither_config import DitherConfig
 
 
 Orientation = Literal["landscape", "portrait"]
@@ -48,7 +48,7 @@ def _image_config_from_dict(blob: Any, *, field_path: str = "image_config") -> I
         blob:       The dict (or None) to parse.
         field_path: Used in error messages to identify which config field is bad.
     """
-    from webserver.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS  # avoid circular at import time
+    from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS  # avoid circular at import time
 
     if blob is None:
         return PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]

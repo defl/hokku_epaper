@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from webserver.app_config import AppConfig, _CURRENT_VERSION, _MIGRATIONS
-from webserver.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
+from hokku_server.app_config import AppConfig, _CURRENT_VERSION, _MIGRATIONS
+from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
 
 
 def test_defaults():
@@ -132,7 +132,7 @@ def test_image_field_with_partial_blob_rejected(tmp_path: Path):
 def test_v1_migrates_to_v2():
     """A v1 dict (no image_worker_thread_count) is migrated forward and gains the v2 field with default 1."""
     v1_blob = {"version": 1}  # minimal valid v1
-    from webserver.app_config import _migrate
+    from hokku_server.app_config import _migrate
     migrated = _migrate(v1_blob)
     assert migrated["version"] == _CURRENT_VERSION
     assert migrated["image_worker_thread_count"] == 1
@@ -141,7 +141,7 @@ def test_v1_migrates_to_v2():
 def test_v2_migrates_to_v3():
     """A v2 dict gains face_detector='yunet_opencv' on migration to v3."""
     v2_blob = {"version": 2, "image_worker_thread_count": 1}
-    from webserver.app_config import _migrate
+    from hokku_server.app_config import _migrate
     migrated = _migrate(v2_blob)
     assert migrated["version"] == _CURRENT_VERSION
     assert migrated["face_detector"] == "yunet_opencv"

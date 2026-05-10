@@ -7,8 +7,8 @@ hue-constrained palette mapping.
 """
 from __future__ import annotations
 
-from webserver.dither_config import DitherConfig
-from webserver.image_config import ImageConfig
+from hokku_server.dither_config import DitherConfig
+from hokku_server.image_config import ImageConfig
 
 
 def _plain(algorithm: str) -> ImageConfig:

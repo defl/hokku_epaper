@@ -4,9 +4,9 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from webserver.app_config import AppConfig
-from webserver.image_manager import SingleThreadedImageManager
-from webserver.serve_scheduler import ServeScheduler
+from hokku_server.app_config import AppConfig
+from hokku_server.image_manager import SingleThreadedImageManager
+from hokku_server.serve_scheduler import ServeScheduler
 
 
 def _setup(app_config: AppConfig, make_test_image, names: list[str]) -> tuple[SingleThreadedImageManager, ServeScheduler]:

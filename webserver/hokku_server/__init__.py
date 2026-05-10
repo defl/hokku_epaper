@@ -7,12 +7,12 @@ import os
 import sys
 from pathlib import Path
 
-from webserver.app_config import AppConfig
-from webserver.app_state import AppState, build_manager
-from webserver.flask_app import create_app
-from webserver.image_classifier import ImageClassifier
-from webserver.serve_scheduler import ServeScheduler
-from webserver.watcher import Watcher
+from hokku_server.app_config import AppConfig
+from hokku_server.app_state import AppState, build_manager
+from hokku_server.flask_app import create_app
+from hokku_server.image_classifier import ImageClassifier
+from hokku_server.serve_scheduler import ServeScheduler
+from hokku_server.watcher import Watcher
 
 
 def main() -> None:

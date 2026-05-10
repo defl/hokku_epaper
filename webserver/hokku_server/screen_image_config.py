@@ -5,7 +5,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 
-from webserver.image_config import ImageConfig, Orientation
+from hokku_server.image_config import ImageConfig, Orientation
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class ScreenImageConfig:
 
 def _screen_image_config_from_dict(d: dict) -> ScreenImageConfig:
     """Round-trip helper: dict → ScreenImageConfig."""
-    from webserver.image_config import _image_config_from_dict
+    from hokku_server.image_config import _image_config_from_dict
     image_config = _image_config_from_dict(d.get("image_config"), field_path="image_config")
     orientation = d["orientation"]
     crop_to_fill_threshold = float(d.get("crop_to_fill_threshold", 0.0))

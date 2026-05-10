@@ -19,7 +19,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from PIL import Image, ImageEnhance, ImageOps
 
-from webserver.display import (
+from hokku_server.display import (
     FULL_W,
     PANEL_H,
     VISUAL_H,
@@ -28,7 +28,7 @@ from webserver.display import (
     indices_to_preview_rgb,
     panel_bytes_to_indices,
 )
-from webserver.dither_constrained import (
+from hokku_server.dither_constrained import (
     PALETTE_LAB,
     adaptive_saturate,
     dither_with_prep,
@@ -37,7 +37,7 @@ from webserver.dither_constrained import (
     srgb_to_linear,
     xyz_to_lab,
 )
-from webserver.image_config import ImageConfig, Orientation  # noqa: F401 (re-exported)
+from hokku_server.image_config import ImageConfig, Orientation  # noqa: F401 (re-exported)
 
 
 IMAGE_EXTENSIONS = {
@@ -303,7 +303,7 @@ def _render_indices(
         # are applied to the entire panel at once and the unconstrained
         # dither mutates a full-canvas float32 buffer.  Peak memory ~60 MB.
         # Strictly for offline / side-by-side quality comparison.
-        from webserver.dither_unconstrained import dither as _dither_unc
+        from hokku_server.dither_unconstrained import dither as _dither_unc
         if use_sat:
             f32 = adaptive_saturate(arr, sat_max, sat_lo, sat_hi)
         else:

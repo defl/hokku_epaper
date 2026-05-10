@@ -11,11 +11,11 @@ import threading
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from webserver.app_config import AppConfig, FaceDetectorName
-from webserver.face_detect_factory import build_face_detector
-from webserver.image import is_grayscale
-from webserver.image_config import ImageConfig
-from webserver.screen_image_config import ScreenImageConfig
+from hokku_server.app_config import AppConfig, FaceDetectorName
+from hokku_server.face_detect_factory import build_face_detector
+from hokku_server.image import is_grayscale
+from hokku_server.image_config import ImageConfig
+from hokku_server.screen_image_config import ScreenImageConfig
 
 _DB_NAME = "image_classifier.json"
 

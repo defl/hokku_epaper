@@ -1,3 +1,14 @@
+hokku-server (3.0.0~alpha1-13) unstable; urgency=low
+
+  * Rename Python package webserver → hokku_server; update all internal
+    imports, pyproject.toml entry point, package-data, and test patch
+    targets. Old webserver/ directory removed.
+  * Service description: "Hokku Spectra 6 image server" → "Hokku Server".
+  * Add test_memory_guard.py: verifies RLIMIT_AS ceiling raises MemoryError
+    on Linux; verifies no-op + correct limit restore; Windows tests skip.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-12) unstable; urgency=low
 
   * Auto worker count: retune for thread-pool model. Old constants

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import concurrent.futures
 
-from webserver.app_config import AppConfig
-from webserver.image_manager_abstract import AbstractImageManager
+from hokku_server.app_config import AppConfig
+from hokku_server.image_manager_abstract import AbstractImageManager
 
 
 class MultiThreadedImageManager(AbstractImageManager):
@@ -41,7 +41,7 @@ class MultiThreadedImageManager(AbstractImageManager):
         render_args: tuple,
         t0: float,
     ) -> None:
-        from webserver.render_worker import render_one
+        from hokku_server.render_worker import render_one
         future = self._executor.submit(render_one, *render_args)
         future.add_done_callback(
             lambda f, _n=name, _s=expected_slug, _t=t0:

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from webserver.worker_count import resolve_worker_count
+from hokku_server.worker_count import resolve_worker_count
 
 
 # ── configured >= 1 returns literally ─────────────────────────────────────────
@@ -28,7 +28,7 @@ def _mock_psutil(available_bytes: int):
     """Return a context-manager patch that sets psutil available RAM."""
     vm = MagicMock()
     vm.available = available_bytes
-    return patch("webserver.worker_count.psutil.virtual_memory", return_value=vm)
+    return patch("hokku_server.worker_count.psutil.virtual_memory", return_value=vm)
 
 
 def test_auto_normal_host():

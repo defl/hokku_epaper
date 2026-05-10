@@ -1,14 +1,14 @@
 """Dither LUTs, noop kernel, cache_slug stability."""
 import numpy as np
 
-from webserver.dither import (
+from hokku_server.dither import (
     PALETTE_LAB,
     _cached_euclidean_lut,
     _cached_hue_aware_lut,
     dither,
     noop_dither,
 )
-from webserver.dither_config import DitherConfig
+from hokku_server.dither_config import DitherConfig
 
 
 def test_palette_lab_shape():

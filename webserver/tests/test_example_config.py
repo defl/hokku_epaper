@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from webserver.app_config import AppConfig, _CURRENT_VERSION
+from hokku_server.app_config import AppConfig, _CURRENT_VERSION
 
 _EXAMPLE = Path(__file__).resolve().parents[2] / "webserver" / "config" / "config.example.json"
 

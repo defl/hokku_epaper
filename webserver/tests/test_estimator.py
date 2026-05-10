@@ -18,8 +18,8 @@ from dataclasses import replace
 
 import pytest
 
-from webserver.app_config import AppConfig
-from webserver.image_manager import ConversionProgress, ImageRecord, SingleThreadedImageManager
+from hokku_server.app_config import AppConfig
+from hokku_server.image_manager import ConversionProgress, ImageRecord, SingleThreadedImageManager
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
