@@ -1812,7 +1812,7 @@ function renderScreens(screens) {
     html += '</ul></div>';
   }
 
-  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Requests</th><th>Last Seen</th><th>Next Update</th><th></th></tr>';
+  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Requests</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th></th></tr>';
   names.forEach(name => {
     const s = screens[name];
     const late = overdueMinutes(s);
@@ -1824,6 +1824,9 @@ function renderScreens(screens) {
     const removeBtn = `<button class="btn-icon-danger" onclick="removeScreen('${safeName}')" title="Remove screen record" aria-label="Remove ${name}">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
     </button>`;
+    const lastImgThumb = s.last_served
+      ? `<a href="/hokku/api/original/${encodeURIComponent(s.last_served)}" target="_blank" title="${escapeHtml(s.last_served)}" style="display:block;line-height:0;"><img src="/hokku/api/thumbnail/${encodeURIComponent(s.last_served)}" alt="${escapeHtml(s.last_served)}" style="height:32px;width:auto;border-radius:2px;border:1px solid var(--bamboo);" loading="lazy" onerror="this.style.display='none'"></a>`
+      : '<span style="color:var(--bamboo)">—</span>';
     html += `<tr${rowClass}>
       <td>${name}</td>
       <td>${s.ip || '-'}</td>
@@ -1831,7 +1834,8 @@ function renderScreens(screens) {
       <td>${s.request_count || 0}</td>
       <td>${s.last_seen || '-'}</td>
       <td>${formatNextUpdate(s.next_update_at)}</td>
-      <td style="display:flex;gap:6px;align-items:center;">${detailsBtn}${removeBtn}</td>
+      <td>${lastImgThumb}</td>
+      <td><div style="display:flex;gap:6px;align-items:center;">${detailsBtn}${removeBtn}</div></td>
     </tr>`;
   });
   html += '</table>';
@@ -1906,11 +1910,13 @@ function formatStateValue(key, v, state) {
     return v ? 'fast-reconnect' : 'full-scan';
   }
   if (key === 'seen_at') {
-    const dt = new Date(v);
+    // v is a Unix timestamp in seconds (float). JS Date() expects milliseconds.
+    const ms = (typeof v === 'number' && v < 1e12) ? v * 1000 : v;
+    const dt = new Date(ms);
     if (!isNaN(dt.getTime())) {
-      const ageMin = Math.round((new Date() - dt) / 60000);
+      const ageMin = Math.round((Date.now() - dt.getTime()) / 60000);
       const ageStr = ageMin < 60 ? `${ageMin}m` : `${Math.floor(ageMin/60)}h ${ageMin%60}m`;
-      return `${v} <span class="stale">(${ageStr} ago)</span>`;
+      return `${dt.toLocaleString(undefined, {hour12: false})} <span class="stale">(${ageStr} ago)</span>`;
     }
   }
   return String(v);
@@ -1934,6 +1940,17 @@ async function showScreenDetails(name) {
   const modal = document.getElementById('state-modal');
   document.getElementById('state-title').textContent = `State for "${name}"`;
   let rows = '<table>';
+  // Prepend server-side fields that don't come from the firmware state dict.
+  if (s.last_served) {
+    const thumbUrl  = `/hokku/api/thumbnail/${encodeURIComponent(s.last_served)}`;
+    const originUrl = `/hokku/api/original/${encodeURIComponent(s.last_served)}`;
+    rows += `<tr><td>last_served</td><td>
+      <a href="${originUrl}" target="_blank" title="Open full image">
+        <img src="${thumbUrl}" alt="${escapeHtml(s.last_served)}" style="height:80px;width:auto;border-radius:3px;border:1px solid var(--bamboo);display:block;" onerror="this.style.display='none'">
+      </a>
+    </td></tr>`;
+    rows += `<tr><td></td><td style="word-break:break-all;font-size:0.85em;color:var(--stone);padding-top:2px;">${escapeHtml(s.last_served)}</td></tr>`;
+  }
   keys.forEach(k => {
     rows += `<tr><td>${k}</td><td>${formatStateValue(k, s.state[k], s.state)}</td></tr>`;
   });
