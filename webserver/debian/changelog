@@ -1,3 +1,15 @@
+hokku-server (3.0.0~alpha1-12) unstable; urgency=low
+
+  * Auto worker count: retune for thread-pool model. Old constants
+    (250 MB reserve, 50 MB/worker) were calibrated for the process-pool
+    where each worker forked the full interpreter. Threads share memory;
+    measured incremental cost on Pi Zero 2 W is ~14 MB/worker under load.
+    New constants: 100 MB OS reserve, 30 MB/worker. On a Pi with 200 MB
+    free this resolves to 3 workers (matching the confirmed-safe manual
+    setting) instead of the over-conservative 1.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-11) unstable; urgency=low
 
   * Fix missing static assets (logo.png, paper.png, line_seg_*.png): add

@@ -38,14 +38,14 @@ def test_auto_normal_host():
 
 
 def test_auto_ram_capped():
-    """4 cores, only 350 MB free → (350-250)//50 = 2 → min(3, 2) = 2."""
-    with patch("os.cpu_count", return_value=4), _mock_psutil(350 * 1024 * 1024):
-        assert resolve_worker_count(0) == 2
+    """4 cores, only 190 MB free → (190-100)//30 = 3 → min(3, 3) = 3."""
+    with patch("os.cpu_count", return_value=4), _mock_psutil(190 * 1024 * 1024):
+        assert resolve_worker_count(0) == 3
 
 
 def test_auto_ram_very_low_clamps_to_1():
-    """250 MB free (0 MB headroom) → ram_workers clamped to 1 → 1."""
-    with patch("os.cpu_count", return_value=4), _mock_psutil(250 * 1024 * 1024):
+    """100 MB free (0 MB headroom) → ram_workers clamped to 1 → 1."""
+    with patch("os.cpu_count", return_value=4), _mock_psutil(100 * 1024 * 1024):
         assert resolve_worker_count(0) == 1
 
 
