@@ -43,7 +43,7 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 
 <img src="images/ui.png" width="640">
 
-Three tabs: **Images** (your photo library with grid view and per-photo preview), **Screens** (live status of each frame — battery, WiFi, last seen, next update), and **Config** (orientation, schedule, look and feel). A status bar shows conversion progress; a separate panel lists any photos that couldn't be processed so nothing disappears without explanation.
+Three tabs: **Images** (your photo library — upload, preview, manage), **Screens** (live status of each frame — battery, WiFi, last seen, next update), and **Config** (refresh schedule, orientation, conversion settings). Everything updates live without a page reload. For a full walkthrough of every feature see the **[user manual](docs/manual.md)**.
 
 ## System Requirements
 
@@ -76,8 +76,8 @@ Prefer terminal tabs, mysterious pip errors, and the thrill of doing things the 
 
 ## More Documentation
 
-- **[Manual installation](docs/install.md)** — step-by-step server + firmware setup for those who prefer the scenic route.
-- **[API reference](docs/api.md)** — HTTP endpoints exposed by the image server.
+- **[User manual](docs/manual.md)** — full guide to the web app, frame behaviour, and day-to-day use.
+- **[Installation](docs/install.md)** — step-by-step server + firmware setup for those who prefer the scenic route.
 - **[Dithering pipeline](docs/dithering.md)** — why it looks the way it does; failure modes and countermeasures.
 - **[Firmware documentation](firmware/README.md)** — building from source, manual flashing, developer notes.
 - **[Firmware design spec](docs/firmware_design.md)** — the state-machine spec the current firmware implements.
