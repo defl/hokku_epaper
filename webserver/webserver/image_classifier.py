@@ -87,6 +87,15 @@ class ImageClassifier:
             except FileNotFoundError:
                 pass
 
+    def release_detector(self) -> None:
+        """Free the face detector so the ~57 MB DNN graph is returned to the OS.
+
+        Called by the manager after the classification phase of each sync batch.
+        The detector is rebuilt lazily on the next batch that needs it.
+        """
+        with self._lock:
+            self._face_detector = None
+
     # ── Internals ────────────────────────────────────────────────────────────
 
     def _image_config_for(self, path: Path, sha1: str) -> ImageConfig:

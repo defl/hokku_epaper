@@ -29,6 +29,7 @@ from PIL import Image, ImageOps
 from webserver.app_config import AppConfig
 from webserver.display import TOTAL_BYTES
 from webserver.image import IMAGE_EXTENSIONS
+from webserver.screen_image_config import ScreenImageConfig
 
 
 _DB_FILENAME = "image_manager.json"
@@ -223,6 +224,15 @@ class AbstractImageManager(ABC):
         For multi-threaded managers, returns immediately — conversions finish
         asynchronously via ``_on_render_done`` callbacks. For single-threaded
         managers, returns once every pending image has been rendered inline.
+
+        The sync is structured in three phases so the face detector (a ~57 MB
+        DNN graph) is alive only for as long as classification takes, never
+        during rendering:
+
+          Phase 1 — thumbnails (cheap; lets the UI show images right away)
+          Phase 2 — classify all pending images with one detector instance,
+                    then free the detector
+          Phase 3 — dispatch render workers with the pre-computed configs
         """
         with self._db_lock:
             self._reconcile_with_disk()
@@ -236,18 +246,12 @@ class AbstractImageManager(ABC):
                     done=self._progress.done,
                     total=self._progress.total + len(pending),
                 )
-            # Collect images whose thumbnails are missing. Done inside the
-            # lock so the snapshot is consistent, but generation runs outside.
             needs_thumb = [
                 r for r in self._records.values()
                 if r.image_width is not None and not self._thumb_path(r).exists()
             ]
 
-        # Pre-generate missing thumbnails before starting any render jobs so
-        # the UI can show them immediately — even while dithering is in
-        # progress.  Each call is cheap thanks to Image.draft() in
-        # _materialize_thumbnail, and is idempotent (skipped if another
-        # thread already wrote the file).
+        # Phase 1: thumbnails — fast, lets the UI show images before dithering.
         for rec in needs_thumb:
             src = self._upload_dir / rec.name
             thumb = self._thumb_path(rec)
@@ -258,8 +262,30 @@ class AbstractImageManager(ABC):
             except Exception as e:
                 print(f"  Thumbnail pre-generation failed for {rec.name!r}: {e}")
 
+        # Phase 2: classify every pending image while the detector is loaded.
+        # Images with unreadable dimensions are skipped here and failed in phase 3.
+        screen_configs: dict[str, ScreenImageConfig] = {}
         for rec in pending:
-            self._submit_one(rec.name)
+            if rec.image_width is None:
+                continue
+            src_path = self._upload_dir / rec.name
+            with self._db_lock:
+                rec_now = self._records.get(rec.name)
+            if rec_now is None:
+                continue
+            try:
+                screen_configs[rec.name] = self._classifier.screen_config_for(
+                    src_path, rec_now.original_sha1
+                )
+            except Exception as e:
+                print(f"  Classification failed for {rec.name!r}: {e}")
+        # Free the detector — the ~57 MB DNN graph is released back to the OS
+        # before any (potentially long) render work begins.
+        self._classifier.release_detector()
+
+        # Phase 3: dispatch renders with the pre-computed ScreenImageConfigs.
+        for rec in pending:
+            self._submit_one(rec.name, screen_configs.get(rec.name))
 
         with self._db_lock:
             self._scrub_orphan_cache_files()
@@ -660,8 +686,13 @@ class AbstractImageManager(ABC):
         except OSError as e:
             print(f"  Could not scrub {f.name}: {e}")
 
-    def _submit_one(self, name: str) -> None:
+    def _submit_one(self, name: str, screen_cfg: ScreenImageConfig | None = None) -> None:
         """Validate one image and hand it off to the concrete dispatcher.
+
+        ``screen_cfg`` is the pre-computed ScreenImageConfig from the classify
+        phase.  When None (e.g. classification raised), the image is treated as
+        unclassifiable and falls back to computing the config here — which also
+        handles the corrupt/unreadable case.
 
         Images whose PIL dimensions were never read (corrupt / unsupported
         format) are failed immediately without going through the dispatcher.
@@ -686,11 +717,14 @@ class AbstractImageManager(ABC):
                 self._save_db()
                 return
 
-        # Compute screen config outside the lock (classifier is read-only).
         src_path = self._upload_dir / name
-        with self._db_lock:
-            original_sha1 = self._records[name].original_sha1
-        screen_cfg = self._classifier.screen_config_for(src_path, original_sha1)
+
+        if screen_cfg is None:
+            # Fallback: classification failed or was skipped; compute now.
+            with self._db_lock:
+                original_sha1 = self._records[name].original_sha1
+            screen_cfg = self._classifier.screen_config_for(src_path, original_sha1)
+
         expected_slug = screen_cfg.cache_slug()
 
         with self._db_lock:
