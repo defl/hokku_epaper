@@ -1,3 +1,14 @@
+hokku-server (3.0.0~alpha1-5) unstable; urgency=low
+
+  * Split the three principal ImageManager classes into separate modules:
+    image_manager_abstract.py (AbstractImageManager + dataclasses + helpers),
+    image_manager_single.py (SingleThreadedImageManager), and
+    image_manager_multi.py (MultiThreadedImageManager). image_manager.py is
+    now a thin re-export module so existing imports keep working. No
+    behaviour change; pure file reorganisation.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-4) unstable; urgency=low
 
   * Split ImageManager into AbstractImageManager + SingleThreadedImageManager
