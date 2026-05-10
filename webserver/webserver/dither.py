@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import lru_cache
-from typing import Any, TypeAlias
+from typing import Any, Optional, TypeAlias
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -12,6 +12,9 @@ from PIL import Image
 from webserver.display import PALETTE_MEASURED_RGB
 from webserver.dither_config import AlgorithmName, DitherConfig, LutName  # noqa: F401 (re-exported)
 
+PrepRow = Callable[[NDArray[np.float32]], None]
+DiffusionKernel = tuple[tuple[int, int, float], ...]
+
 FloatArray: TypeAlias = NDArray[Any]
 UInt8Array: TypeAlias = NDArray[np.uint8]
 CanvasLike: TypeAlias = "Image.Image | ArrayLike"
@@ -19,34 +22,39 @@ CanvasLike: TypeAlias = "Image.Image | ArrayLike"
 
 # ── Color space ────────────────────────────────────────────────────
 
-def srgb_to_linear(c: ArrayLike) -> FloatArray:
-    c = np.asarray(c, dtype=np.float64) / 255.0
-    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+def srgb_to_linear(c: ArrayLike, *, dtype=np.float64) -> FloatArray:
+    arr = np.asarray(c, dtype=dtype) / dtype(255.0)
+    return np.where(arr <= dtype(0.04045), arr / dtype(12.92),
+                    ((arr + dtype(0.055)) / dtype(1.055)) ** dtype(2.4))
 
 
-def linear_to_xyz(rgb: ArrayLike) -> FloatArray:
-    rgb = np.asarray(rgb, dtype=np.float64)
+def linear_to_xyz(rgb: ArrayLike, *, dtype=np.float64) -> FloatArray:
+    rgb = np.asarray(rgb, dtype=dtype)
     M = np.array([
         [0.4124564, 0.3575761, 0.1804375],
         [0.2126729, 0.7151522, 0.0721750],
         [0.0193339, 0.1191920, 0.9503041],
-    ])
+    ], dtype=dtype)
     return rgb @ M.T
 
 
-def xyz_to_lab(xyz: ArrayLike) -> FloatArray:
-    ref = np.array([0.95047, 1.00000, 1.08883])
-    xyz = xyz / ref
-    f = np.where(xyz > 0.008856, xyz ** (1 / 3), 7.787 * xyz + 16 / 116)
-    L = 116 * f[..., 1] - 16
-    a = 500 * (f[..., 0] - f[..., 1])
-    b = 200 * (f[..., 1] - f[..., 2])
+def xyz_to_lab(xyz: ArrayLike, *, dtype=np.float64) -> FloatArray:
+    xyz = np.asarray(xyz, dtype=dtype)
+    ref = np.array([0.95047, 1.00000, 1.08883], dtype=dtype)
+    scaled = xyz / ref
+    f = np.where(scaled > dtype(0.008856),
+                 scaled ** dtype(1 / 3),
+                 dtype(7.787) * scaled + dtype(16 / 116))
+    L = dtype(116) * f[..., 1] - dtype(16)
+    a = dtype(500) * (f[..., 0] - f[..., 1])
+    b = dtype(200) * (f[..., 1] - f[..., 2])
     return np.stack([L, a, b], axis=-1)
 
 
-def rgb_to_lab(rgb: ArrayLike) -> FloatArray:
-    linear = srgb_to_linear(np.clip(np.asarray(rgb, dtype=np.float64), 0, 255))
-    return xyz_to_lab(linear_to_xyz(linear))
+def rgb_to_lab(rgb: ArrayLike, *, dtype=np.float64) -> FloatArray:
+    arr = np.clip(np.asarray(rgb, dtype=dtype), 0, 255)
+    return xyz_to_lab(linear_to_xyz(srgb_to_linear(arr, dtype=dtype),
+                                    dtype=dtype), dtype=dtype)
 
 
 PALETTE_LAB = rgb_to_lab(PALETTE_MEASURED_RGB)
@@ -62,36 +70,50 @@ def adaptive_saturate(
 
     Below low_thresh the factor is 1.0 (no change); above high_thresh it's
     ``max_enhance``; linearly ramped between.
+
+    Operates in float32 throughout — the visible difference vs float64 is
+    well below the dither quantisation noise.
     """
-    rgb = np.asarray(img_array, dtype=np.float64)
-    lab = rgb_to_lab(rgb)
+    f32 = np.float32
+    rgb = np.asarray(img_array, dtype=f32)
+    lab = rgb_to_lab(rgb, dtype=f32)
     chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
-    t = np.clip((chroma - low_thresh) / (high_thresh - low_thresh), 0.0, 1.0)
-    factor = 1.0 + (max_enhance - 1.0) * t
+    t = np.clip((chroma - f32(low_thresh)) / f32(high_thresh - low_thresh),
+                f32(0.0), f32(1.0))
+    factor = f32(1.0) + f32(max_enhance - 1.0) * t
     lab[..., 1] *= factor
     lab[..., 2] *= factor
 
-    # Lab → linear sRGB → sRGB
-    ref = np.array([0.95047, 1.00000, 1.08883])
-    L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
-    fy = (L + 16) / 116.0
-    fx = a / 500.0 + fy
-    fz = fy - b / 200.0
-    eps = 0.008856
-    kappa = 903.3
-    xyz_out = np.zeros_like(lab)
-    xyz_out[..., 0] = np.where(fx ** 3 > eps, fx ** 3, (116 * fx - 16) / kappa) * ref[0]
-    xyz_out[..., 1] = np.where(L > kappa * eps, ((L + 16) / 116.0) ** 3, L / kappa) * ref[1]
-    xyz_out[..., 2] = np.where(fz ** 3 > eps, fz ** 3, (116 * fz - 16) / kappa) * ref[2]
+    # Lab → linear sRGB → sRGB (all float32, in-place where safe).
+    ref = np.array([0.95047, 1.00000, 1.08883], dtype=f32)
+    L = lab[..., 0]
+    a = lab[..., 1]
+    b = lab[..., 2]
+    fy = (L + f32(16)) / f32(116)
+    fx = a / f32(500) + fy
+    fz = fy - b / f32(200)
+    eps = f32(0.008856)
+    kappa = f32(903.3)
+    xyz_out = np.empty_like(lab)
+    fx3 = fx ** 3
+    fz3 = fz ** 3
+    xyz_out[..., 0] = np.where(fx3 > eps, fx3,
+                               (f32(116) * fx - f32(16)) / kappa) * ref[0]
+    xyz_out[..., 1] = np.where(L > kappa * eps,
+                               ((L + f32(16)) / f32(116)) ** 3,
+                               L / kappa) * ref[1]
+    xyz_out[..., 2] = np.where(fz3 > eps, fz3,
+                               (f32(116) * fz - f32(16)) / kappa) * ref[2]
     M_inv = np.array([
         [3.2404542, -1.5371385, -0.4985314],
         [-0.9692660, 1.8760108, 0.0415560],
         [0.0556434, -0.2040259, 1.0572252],
-    ])
-    linear = np.clip(xyz_out @ M_inv.T, 0, 1)
-    srgb = np.where(linear <= 0.0031308, linear * 12.92,
-                    1.055 * (linear ** (1.0 / 2.4)) - 0.055)
-    return np.clip(srgb * 255, 0, 255).astype(np.float32)
+    ], dtype=f32)
+    linear = np.clip(xyz_out @ M_inv.T, f32(0), f32(1))
+    srgb = np.where(linear <= f32(0.0031308),
+                    linear * f32(12.92),
+                    f32(1.055) * (linear ** f32(1.0 / 2.4)) - f32(0.055))
+    return np.clip(srgb * f32(255), f32(0), f32(255))
 
 
 # ── LUTs ────────────────────────────────────────────────────────────
@@ -163,6 +185,42 @@ def _cached_hue_aware_lut(hue_cutoff_deg: float, neutral_chroma: float) -> tuple
 
 # ── Algorithms ──────────────────────────────────────────────────────
 
+# Diffusion kernels expressed as (dx, dy, weight). dy is always non-negative
+# (errors only flow forward). Forward direction is left-to-right; serpentine
+# mode mirrors dx every other row.
+
+_FS_KERNEL: DiffusionKernel = (
+    (1, 0, 7.0 / 16.0),
+    (-1, 1, 3.0 / 16.0),
+    (0, 1, 5.0 / 16.0),
+    (1, 1, 1.0 / 16.0),
+)
+
+_ATKINSON_KERNEL: DiffusionKernel = (
+    (1, 0, 1.0 / 8.0),
+    (2, 0, 1.0 / 8.0),
+    (-1, 1, 1.0 / 8.0),
+    (0, 1, 1.0 / 8.0),
+    (1, 1, 1.0 / 8.0),
+    (0, 2, 1.0 / 8.0),
+)
+
+_STUCKI_KERNEL: DiffusionKernel = (
+    (1, 0, 8 / 42.0),
+    (2, 0, 4 / 42.0),
+    (-2, 1, 2 / 42.0),
+    (-1, 1, 4 / 42.0),
+    (0, 1, 8 / 42.0),
+    (1, 1, 4 / 42.0),
+    (2, 1, 2 / 42.0),
+    (-2, 2, 1 / 42.0),
+    (-1, 2, 2 / 42.0),
+    (0, 2, 4 / 42.0),
+    (1, 2, 2 / 42.0),
+    (2, 2, 1 / 42.0),
+)
+
+
 def _diffusion_workspace(
     canvas: CanvasLike,
     lut: NDArray[np.uint8],
@@ -180,21 +238,71 @@ def _diffusion_workspace(
     return pixels, h, w, np.zeros((h, w), dtype=np.uint8), PALETTE_MEASURED_RGB, n - 1
 
 
-def floyd_steinberg_dither(
+def _streaming_diffusion_dither(
     canvas: CanvasLike,
+    kernel: DiffusionKernel,
     lut: NDArray[np.uint8],
     lut_scale: float,
     serpentine: bool,
+    prep_row: PrepRow | None = None,
 ) -> UInt8Array:
-    pixels, h, w, result_idx, pal_rgb, lut_max = _diffusion_workspace(canvas, lut, lut_scale)
+    """Streaming error-diffusion dither.
 
-    for y in range(h):
+    Holds only ``max_dy + 1`` rows of float32 RGB working state (typically
+    2 rows for Floyd-Steinberg, 3 rows for Atkinson / Stucki). The full-panel
+    float32 buffer is never materialised — peak Python-heap allocation is
+    on the order of a few hundred KB even for full-panel renders.
+
+    ``canvas`` may be:
+    - uint8 H×W×3 numpy: rows are pulled lazily and pre-processed by
+      ``prep_row`` (typically the dynamic-range-compression step).
+    - PIL Image: converted once to a uint8 numpy view (no copy).
+    - float32 H×W×3 numpy: used as-is; ``prep_row`` is ignored.
+
+    Mathematically identical to the original full-canvas implementations.
+    """
+    if not (np.isfinite(lut_scale) and lut_scale > 0):
+        raise ValueError(f"lut_scale must be positive and finite, got {lut_scale}")
+    n = lut.shape[0]
+    if lut.shape != (n, n, n):
+        raise ValueError(f"lut must be a cube, got {lut.shape}")
+
+    # Normalise input into a row-source: either a uint8 view (lazy, prep'd
+    # per row) or a float32 view (already prepared, prep_row ignored).
+    if isinstance(canvas, Image.Image):
+        canvas = np.asarray(canvas)
+    canvas_arr = np.asarray(canvas)
+    if canvas_arr.ndim != 3 or canvas_arr.shape[2] != 3:
+        raise ValueError(f"canvas must be H×W×3 RGB, got {canvas_arr.shape}")
+    H, W = int(canvas_arr.shape[0]), int(canvas_arr.shape[1])
+
+    use_prep = canvas_arr.dtype == np.uint8 and prep_row is not None
+
+    pal_rgb = PALETTE_MEASURED_RGB
+    lut_max = n - 1
+    result_idx = np.empty((H, W), dtype=np.uint8)
+
+    max_dy = max(dy for _, dy, _ in kernel)
+    n_rows = max_dy + 1
+    rolling = np.zeros((n_rows, W, 3), dtype=np.float32)
+
+    def _add_row_pixels(y: int) -> None:
+        """Add row y's float32 pixels (post-prep) to rolling[0]."""
+        row = canvas_arr[y].astype(np.float32, copy=True)
+        if use_prep:
+            prep_row(row)  # type: ignore[misc]
+        rolling[0] += row
+
+    _add_row_pixels(0)
+
+    for y in range(H):
         reverse = serpentine and (y % 2 == 0)
-        x_iter = range(w - 1, -1, -1) if reverse else range(w)
+        x_iter = range(W - 1, -1, -1) if reverse else range(W)
+
         for x in x_iter:
-            r = min(max(pixels[y, x, 0], 0.0), 255.0)
-            g = min(max(pixels[y, x, 1], 0.0), 255.0)
-            b = min(max(pixels[y, x, 2], 0.0), 255.0)
+            r = min(max(rolling[0, x, 0], 0.0), 255.0)
+            g = min(max(rolling[0, x, 1], 0.0), 255.0)
+            b = min(max(rolling[0, x, 2], 0.0), 255.0)
             ri = min(int(r / lut_scale), lut_max)
             gi = min(int(g / lut_scale), lut_max)
             bi = min(int(b / lut_scale), lut_max)
@@ -203,46 +311,37 @@ def floyd_steinberg_dither(
             er = r - pal_rgb[idx, 0]
             eg = g - pal_rgb[idx, 1]
             eb = b - pal_rgb[idx, 2]
-            if reverse:
-                if x - 1 >= 0:
-                    pixels[y, x - 1, 0] += er * 0.4375
-                    pixels[y, x - 1, 1] += eg * 0.4375
-                    pixels[y, x - 1, 2] += eb * 0.4375
-                if y + 1 < h:
-                    if x + 1 < w:
-                        pixels[y + 1, x + 1, 0] += er * 0.1875
-                        pixels[y + 1, x + 1, 1] += eg * 0.1875
-                        pixels[y + 1, x + 1, 2] += eb * 0.1875
-                    pixels[y + 1, x, 0] += er * 0.3125
-                    pixels[y + 1, x, 1] += eg * 0.3125
-                    pixels[y + 1, x, 2] += eb * 0.3125
-                    if x - 1 >= 0:
-                        pixels[y + 1, x - 1, 0] += er * 0.0625
-                        pixels[y + 1, x - 1, 1] += eg * 0.0625
-                        pixels[y + 1, x - 1, 2] += eb * 0.0625
-            else:
-                if x + 1 < w:
-                    pixels[y, x + 1, 0] += er * 0.4375
-                    pixels[y, x + 1, 1] += eg * 0.4375
-                    pixels[y, x + 1, 2] += eb * 0.4375
-                if y + 1 < h:
-                    if x - 1 >= 0:
-                        pixels[y + 1, x - 1, 0] += er * 0.1875
-                        pixels[y + 1, x - 1, 1] += eg * 0.1875
-                        pixels[y + 1, x - 1, 2] += eb * 0.1875
-                    pixels[y + 1, x, 0] += er * 0.3125
-                    pixels[y + 1, x, 1] += eg * 0.3125
-                    pixels[y + 1, x, 2] += eb * 0.3125
-                    if x + 1 < w:
-                        pixels[y + 1, x + 1, 0] += er * 0.0625
-                        pixels[y + 1, x + 1, 1] += eg * 0.0625
-                        pixels[y + 1, x + 1, 2] += eb * 0.0625
+            for dx, dy, wgt in kernel:
+                eff_dx = -dx if reverse else dx
+                nx = x + eff_dx
+                if 0 <= nx < W and y + dy < H:
+                    rolling[dy, nx, 0] += er * wgt
+                    rolling[dy, nx, 1] += eg * wgt
+                    rolling[dy, nx, 2] += eb * wgt
+
+        # Slide the rolling window up by one row, then pull in row y+1.
+        if y + 1 < H:
+            for i in range(n_rows - 1):
+                rolling[i] = rolling[i + 1]
+            rolling[n_rows - 1].fill(0)
+            _add_row_pixels(y + 1)
+
         if y % 200 == 0:
-            print(f"  Dithering: {y}/{h}")
+            print(f"  Dithering: {y}/{H}")
+
     return result_idx
 
 
-_ATKINSON_OFFSETS = ((1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2))
+def floyd_steinberg_dither(
+    canvas: CanvasLike,
+    lut: NDArray[np.uint8],
+    lut_scale: float,
+    serpentine: bool,
+    prep_row: PrepRow | None = None,
+) -> UInt8Array:
+    return _streaming_diffusion_dither(
+        canvas, _FS_KERNEL, lut, lut_scale, serpentine, prep_row,
+    )
 
 
 def atkinson_dither(
@@ -250,51 +349,11 @@ def atkinson_dither(
     lut: NDArray[np.uint8],
     lut_scale: float,
     serpentine: bool,
+    prep_row: PrepRow | None = None,
 ) -> UInt8Array:
-    pixels, h, w, result_idx, pal_rgb, lut_max = _diffusion_workspace(canvas, lut, lut_scale)
-    w_coef = 1.0 / 8.0
-
-    for y in range(h):
-        reverse = serpentine and (y % 2 == 0)
-        x_iter = range(w - 1, -1, -1) if reverse else range(w)
-        for x in x_iter:
-            r = min(max(pixels[y, x, 0], 0.0), 255.0)
-            g = min(max(pixels[y, x, 1], 0.0), 255.0)
-            b = min(max(pixels[y, x, 2], 0.0), 255.0)
-            ri = min(int(r / lut_scale), lut_max)
-            gi = min(int(g / lut_scale), lut_max)
-            bi = min(int(b / lut_scale), lut_max)
-            idx = int(lut[ri, gi, bi])
-            result_idx[y, x] = idx
-            er = (r - pal_rgb[idx, 0]) * w_coef
-            eg = (g - pal_rgb[idx, 1]) * w_coef
-            eb = (b - pal_rgb[idx, 2]) * w_coef
-            for dx, dy in _ATKINSON_OFFSETS:
-                eff_dx = -dx if reverse else dx
-                nx, ny = x + eff_dx, y + dy
-                if 0 <= nx < w and 0 <= ny < h:
-                    pixels[ny, nx, 0] += er
-                    pixels[ny, nx, 1] += eg
-                    pixels[ny, nx, 2] += eb
-        if y % 200 == 0:
-            print(f"  Dithering: {y}/{h}")
-    return result_idx
-
-
-_STUCKI_OFFSETS: tuple[tuple[int, int, float], ...] = (
-    (1, 0, 8 / 42.0),
-    (2, 0, 4 / 42.0),
-    (-2, 1, 2 / 42.0),
-    (-1, 1, 4 / 42.0),
-    (0, 1, 8 / 42.0),
-    (1, 1, 4 / 42.0),
-    (2, 1, 2 / 42.0),
-    (-2, 2, 1 / 42.0),
-    (-1, 2, 2 / 42.0),
-    (0, 2, 4 / 42.0),
-    (1, 2, 2 / 42.0),
-    (2, 2, 1 / 42.0),
-)
+    return _streaming_diffusion_dither(
+        canvas, _ATKINSON_KERNEL, lut, lut_scale, serpentine, prep_row,
+    )
 
 
 def stucki_dither(
@@ -302,34 +361,11 @@ def stucki_dither(
     lut: NDArray[np.uint8],
     lut_scale: float,
     serpentine: bool,
+    prep_row: PrepRow | None = None,
 ) -> UInt8Array:
-    pixels, h, w, result_idx, pal_rgb, lut_max = _diffusion_workspace(canvas, lut, lut_scale)
-
-    for y in range(h):
-        reverse = serpentine and (y % 2 == 0)
-        x_iter = range(w - 1, -1, -1) if reverse else range(w)
-        for x in x_iter:
-            r = min(max(pixels[y, x, 0], 0.0), 255.0)
-            g = min(max(pixels[y, x, 1], 0.0), 255.0)
-            b = min(max(pixels[y, x, 2], 0.0), 255.0)
-            ri = min(int(r / lut_scale), lut_max)
-            gi = min(int(g / lut_scale), lut_max)
-            bi = min(int(b / lut_scale), lut_max)
-            idx = int(lut[ri, gi, bi])
-            result_idx[y, x] = idx
-            er = r - pal_rgb[idx, 0]
-            eg = g - pal_rgb[idx, 1]
-            eb = b - pal_rgb[idx, 2]
-            for dx, dy, wgt in _STUCKI_OFFSETS:
-                eff_dx = -dx if reverse else dx
-                nx, ny = x + eff_dx, y + dy
-                if 0 <= nx < w and 0 <= ny < h:
-                    pixels[ny, nx, 0] += er * wgt
-                    pixels[ny, nx, 1] += eg * wgt
-                    pixels[ny, nx, 2] += eb * wgt
-        if y % 200 == 0:
-            print(f"  Dithering: {y}/{h}")
-    return result_idx
+    return _streaming_diffusion_dither(
+        canvas, _STUCKI_KERNEL, lut, lut_scale, serpentine, prep_row,
+    )
 
 
 def noop_dither(
@@ -363,10 +399,25 @@ _DITHER_FN: dict[str, Callable[..., UInt8Array]] = {
 }
 
 
-def dither(canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
+def dither(
+    canvas: CanvasLike,
+    cfg: DitherConfig,
+    *,
+    prep_row: PrepRow | None = None,
+) -> UInt8Array:
+    """Run the configured dither algorithm.
+
+    ``prep_row`` is forwarded to the diffusion kernels and only consulted
+    when ``canvas`` is a uint8 numpy array — letting callers stream DRC
+    (or any per-row preprocessing) without ever materialising a
+    full-panel float32 buffer. Ignored by ``noop``.
+    """
     if cfg.algorithm not in _DITHER_FN:
         raise ValueError(f"Unknown algorithm: {cfg.algorithm!r}")
     if cfg.lut_name not in ("euclidean", "hue_aware"):
         raise ValueError(f"Unknown lut_name: {cfg.lut_name!r}")
     lut, lut_scale = lut_and_scale_for_dither_config(cfg)
-    return _DITHER_FN[cfg.algorithm](canvas, lut, lut_scale, cfg.serpentine)
+    fn = _DITHER_FN[cfg.algorithm]
+    if cfg.algorithm == "noop":
+        return fn(canvas, lut, lut_scale, cfg.serpentine)
+    return fn(canvas, lut, lut_scale, cfg.serpentine, prep_row)

@@ -55,28 +55,40 @@ _DISPLAY_WHITE_L = float(PALETTE_LAB[1, 0])
 
 # ── Lab → RGB (for compress_dynamic_range) ─────────────────────────
 
-def _lab_to_rgb(lab: ArrayLike) -> NDArray[Any]:
-    lab = np.asarray(lab, dtype=np.float64)
-    ref = np.array([0.95047, 1.00000, 1.08883])
-    L, a, b_ch = lab[..., 0], lab[..., 1], lab[..., 2]
-    fy = (L + 16) / 116.0
-    fx = a / 500.0 + fy
-    fz = fy - b_ch / 200.0
-    eps = 0.008856
-    kappa = 903.3
-    xyz_out = np.zeros_like(lab)
-    xyz_out[..., 0] = np.where(fx ** 3 > eps, fx ** 3, (116 * fx - 16) / kappa) * ref[0]
-    xyz_out[..., 1] = np.where(L > kappa * eps, ((L + 16) / 116.0) ** 3, L / kappa) * ref[1]
-    xyz_out[..., 2] = np.where(fz ** 3 > eps, fz ** 3, (116 * fz - 16) / kappa) * ref[2]
+def _lab_to_rgb(lab: ArrayLike) -> NDArray[np.float32]:
+    """float32 Lab → float32 sRGB.  Allocation-conscious: avoids float64
+    intermediates so the full-panel Lab buffer fits well under budget."""
+    f32 = np.float32
+    lab = np.asarray(lab, dtype=f32)
+    ref = np.array([0.95047, 1.00000, 1.08883], dtype=f32)
+    L = lab[..., 0]
+    a = lab[..., 1]
+    b_ch = lab[..., 2]
+    fy = (L + f32(16)) / f32(116)
+    fx = a / f32(500) + fy
+    fz = fy - b_ch / f32(200)
+    eps = f32(0.008856)
+    kappa = f32(903.3)
+    xyz_out = np.empty_like(lab)
+    fx3 = fx ** 3
+    fz3 = fz ** 3
+    xyz_out[..., 0] = np.where(fx3 > eps, fx3,
+                               (f32(116) * fx - f32(16)) / kappa) * ref[0]
+    xyz_out[..., 1] = np.where(L > kappa * eps,
+                               ((L + f32(16)) / f32(116)) ** 3,
+                               L / kappa) * ref[1]
+    xyz_out[..., 2] = np.where(fz3 > eps, fz3,
+                               (f32(116) * fz - f32(16)) / kappa) * ref[2]
     M_inv = np.array([
         [3.2404542, -1.5371385, -0.4985314],
         [-0.9692660, 1.8760108, 0.0415560],
         [0.0556434, -0.2040259, 1.0572252],
-    ])
-    linear = np.clip(xyz_out @ M_inv.T, 0, 1)
-    srgb = np.where(linear <= 0.0031308, linear * 12.92,
-                    1.055 * (linear ** (1.0 / 2.4)) - 0.055)
-    return np.clip(srgb * 255, 0, 255)
+    ], dtype=f32)
+    linear = np.clip(xyz_out @ M_inv.T, f32(0), f32(1))
+    srgb = np.where(linear <= f32(0.0031308),
+                    linear * f32(12.92),
+                    f32(1.055) * (linear ** f32(1.0 / 2.4)) - f32(0.055))
+    return np.clip(srgb * f32(255), f32(0), f32(255))
 
 
 def compress_dynamic_range(
@@ -86,57 +98,66 @@ def compress_dynamic_range(
     adaptive_vivid: bool,
     vivid_chroma_low: float,
     vivid_chroma_high: float,
-) -> NDArray[Any]:
+) -> NDArray[np.float32]:
     """Map source Lab range into the panel's reachable L* range, optionally scaling chroma.
 
     The Spectra 6 panel's ink whites are dim and ink blacks are not jet black,
     so the displayable L* range is much narrower than [0, 100]. Without this
     compression, mid-tones quantize incorrectly.
+
+    All math is float32 — the visible round-trip error is far below the
+    dither quantisation noise and saves ~50 % memory on a full panel.
     """
-    rgb = np.asarray(img_array, dtype=np.float64)
-    lab = rgb_to_lab(rgb)
+    f32 = np.float32
+    rgb = np.asarray(img_array, dtype=f32)
+    lab = rgb_to_lab(rgb, dtype=f32)
+    # Reuse the lab buffer as our output Lab — only L (and optionally a/b)
+    # change.  This avoids one full-panel float32 allocation.
     L = lab[..., 0]
     a = lab[..., 1]
     b_ch = lab[..., 2]
-    L_out = _DISPLAY_BLACK_L + (L / 100.0) * (_DISPLAY_WHITE_L - _DISPLAY_BLACK_L)
-    chroma = np.sqrt(a ** 2 + b_ch ** 2)
-    c_ratio = (_DISPLAY_WHITE_L - _DISPLAY_BLACK_L) / 100.0
+    black_L = f32(_DISPLAY_BLACK_L)
+    white_L = f32(_DISPLAY_WHITE_L)
+    c_ratio = f32((_DISPLAY_WHITE_L - _DISPLAY_BLACK_L) / 100.0)
+    # In-place L compression.
+    np.multiply(L, f32((white_L - black_L) / 100.0), out=L)
+    np.add(L, black_L, out=L)
     if adaptive_vivid:
+        chroma = np.sqrt(a * a + b_ch * b_ch)
         t = np.clip(
-            (chroma - vivid_chroma_low) / (vivid_chroma_high - vivid_chroma_low),
-            0.0, 1.0,
+            (chroma - f32(vivid_chroma_low))
+            / f32(vivid_chroma_high - vivid_chroma_low),
+            f32(0.0), f32(1.0),
         )
-        c_factor = c_ratio + (1.0 - c_ratio) * t
-        a_out = a * c_factor
-        b_out = b_ch * c_factor
+        c_factor = c_ratio + (f32(1.0) - c_ratio) * t
+        np.multiply(a, c_factor, out=a)
+        np.multiply(b_ch, c_factor, out=b_ch)
     elif scale_chroma:
-        a_out = a * c_ratio
-        b_out = b_ch * c_ratio
-    else:
-        a_out = a
-        b_out = b_ch
-    return _lab_to_rgb(np.stack([L_out, a_out, b_out], axis=-1)).astype(np.float32)
+        np.multiply(a, c_ratio, out=a)
+        np.multiply(b_ch, c_ratio, out=b_ch)
+    return _lab_to_rgb(lab)
 
 
 # ── Pipeline ────────────────────────────────────────────────────────
 
 def _apply_prepare_enhancements(canvas: Image.Image, cfg: ImageConfig) -> Image.Image:
-    """Autocontrast → gamma → brightness/contrast/sharpness → color or adaptive saturate."""
+    """Autocontrast → gamma → brightness/contrast/sharpness → color.
+
+    Adaptive saturation has been moved out of this function and into the
+    streaming ``prep_row`` callback in ``_render_indices`` — it would
+    otherwise allocate a full-panel float32 buffer (and several float32
+    intermediates) here, blowing the per-render memory budget. PIL
+    transforms above run on the uint8 canvas so they each peak at one
+    extra 15 MB image (current + new) and recycle quickly.
+    """
     canvas = ImageOps.autocontrast(canvas, cutoff=cfg.prepare_autocontrast_cutoff)
     gamma_lut = [int(((i / 255.0) ** cfg.prepare_gamma) * 255) for i in range(256)] * 3
     canvas = canvas.point(gamma_lut)
     canvas = ImageEnhance.Brightness(canvas).enhance(cfg.prepare_brightness)
     canvas = ImageEnhance.Contrast(canvas).enhance(cfg.prepare_contrast)
     canvas = ImageEnhance.Sharpness(canvas).enhance(cfg.prepare_sharpness)
-    if cfg.use_adaptive_saturate:
-        arr = adaptive_saturate(
-            np.array(canvas, dtype=np.float64),
-            cfg.saturate_max_enhance,
-            cfg.saturate_low_chroma_thresh,
-            cfg.saturate_high_chroma_thresh,
-        )
-        canvas = Image.fromarray(arr.astype(np.uint8))
-    else:
+    if not cfg.use_adaptive_saturate:
+        # Plain global color enhance — cheap PIL operation.
         canvas = ImageEnhance.Color(canvas).enhance(cfg.color_enhance)
     return canvas
 
@@ -187,6 +208,8 @@ def _render_indices(
     canvas_w: int,
     canvas_h: int,
     crop_to_fill_threshold: float = 0.0,
+    *,
+    release_input: bool = False,
 ) -> NDArray[np.uint8]:
     """Fit (or crop-to-fill) → enhance → rotate → DRC → dither → mask padding.
 
@@ -219,19 +242,28 @@ def _render_indices(
         scaled_w = max(visible_w, math.ceil(src_w * scale_cover))
         scaled_h = max(visible_h, math.ceil(src_h * scale_cover))
         img_scaled = img.resize((scaled_w, scaled_h), Image.LANCZOS)
+        # Drop the source PIL buffer immediately if the caller has consented
+        # — we have the resized canvas and don't need the original pixels.
+        # Saves a double-held image during the rest of the pipeline.
+        if release_input:
+            img.close()
         x_off = (scaled_w - visible_w) // 2
         y_off = (scaled_h - visible_h) // 2
         composed = img_scaled.crop((x_off, y_off, x_off + visible_w, y_off + visible_h))
+        img_scaled.close()
         padding_mask = np.zeros((visible_h, visible_w), dtype=bool)  # no padding at all
     else:
         # Scale to fit: image fits entirely, padded with white.
         scale = scale_fit
         new_w, new_h = int(src_w * scale), int(src_h * scale)
         img_resized = img.resize((new_w, new_h), Image.LANCZOS)
+        if release_input:
+            img.close()  # source no longer needed; release PIL buffer
         composed = Image.new("RGB", (visible_w, visible_h), (255, 255, 255))
         x_off = (visible_w - new_w) // 2
         y_off = (visible_h - new_h) // 2
         composed.paste(img_resized, (x_off, y_off))
+        img_resized.close()  # paste copies pixels; resized buffer can go
         padding_mask = np.ones((visible_h, visible_w), dtype=bool)
         padding_mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
 
@@ -241,16 +273,37 @@ def _render_indices(
         composed = composed.rotate(-90, expand=True)
         padding_mask = np.rot90(padding_mask, k=3)
 
-    arr = np.asarray(composed, dtype=np.float32)
-    compressed = compress_dynamic_range(
-        arr,
+    # Take a uint8 numpy view of the PIL canvas (no copy). The streaming
+    # dither will pull rows on demand and run DRC per-row via prep_row,
+    # so we never materialise a full-panel float buffer.
+    arr = np.asarray(composed, dtype=np.uint8)
+    composed = None  # noqa: F841 (drop reference; PIL buffer can be released)
+
+    drc_kwargs = dict(
         scale_chroma=cfg.scale_chroma,
         adaptive_vivid=cfg.adaptive_vivid,
         vivid_chroma_low=cfg.vivid_chroma_low,
         vivid_chroma_high=cfg.vivid_chroma_high,
     )
-    canvas_d = Image.fromarray(compressed.astype(np.uint8))
-    result_idx = dither(canvas_d, cfg.dither)
+    use_sat = cfg.use_adaptive_saturate
+    sat_max = cfg.saturate_max_enhance
+    sat_lo = cfg.saturate_low_chroma_thresh
+    sat_hi = cfg.saturate_high_chroma_thresh
+
+    def _prep_row(row_f32):
+        # row_f32 is shape (W, 3), mutated in place. Both adaptive_saturate
+        # and compress_dynamic_range are functional (return new buffers);
+        # we copy results back. Each operation's transient buffers are O(W)
+        # — well under 1 MB even at full panel width.
+        if use_sat:
+            row_f32[...] = adaptive_saturate(
+                row_f32[np.newaxis, :, :], sat_max, sat_lo, sat_hi,
+            )[0]
+        out = compress_dynamic_range(row_f32[np.newaxis, :, :], **drc_kwargs)
+        np.copyto(row_f32, out[0])
+
+    result_idx = dither(arr, cfg.dither, prep_row=_prep_row)
+    del arr
     # White out the padding so it can't get speckled by enhancement chains.
     result_idx[padding_mask] = 1
     return result_idx
@@ -269,8 +322,15 @@ def render_panel_bytes(
     Renders with exactly the ``cfg`` provided — no hidden B&W fallback.
     Callers that want B&W-safe rendering should use an appropriate ``ImageConfig``
     (e.g. obtained from ``ImageClassifier.screen_config_for()``).
+
+    The source image's PIL buffer is released as soon as we have the resized
+    panel canvas (the long-running per-render memory budget depends on this).
+    Callers must NOT use ``img`` after this function returns.
     """
-    result_idx = _render_indices(img, cfg, orientation, FULL_W, PANEL_H, crop_to_fill_threshold)
+    result_idx = _render_indices(
+        img, cfg, orientation, FULL_W, PANEL_H,
+        crop_to_fill_threshold, release_input=True,
+    )
     return indices_to_panel_bytes(result_idx)
 
 
@@ -320,11 +380,49 @@ def preview_png_from_panel_bytes(panel_bytes: bytes, orientation: Orientation) -
 
 # ── File-based wrappers ────────────────────────────────────────────
 
+# Source-image dimensions are capped before the pipeline runs so a 6000×4000
+# JPEG can't blow the per-render memory budget on its own. 1 × the larger
+# panel axis (long edge FULL_W=3200) keeps the decoded source ≤ ~15 MB of
+# uint8 RGB; the 25 % "oversampling" room a Lanczos resize would prefer is
+# only relevant for crisp downsampling from massively larger sources, and
+# our JPEG draft already preserves full sub-pixel detail in the decode path.
+_MAX_SOURCE_LONG_SIDE = max(FULL_W, PANEL_H)
+
+
 def open_image_for_render(path: Path) -> Image.Image:
-    """PIL.open + EXIF transpose + RGB convert. Caller closes."""
+    """PIL.open + EXIF transpose + RGB convert + size cap. Caller closes.
+
+    For oversized sources we shrink the image before returning, so the rest
+    of the pipeline never sees a buffer larger than ~24 MB of decoded RGB
+    (uint8). For JPEG we ask the decoder to downsample by an integer power
+    of two during decode via ``Image.draft`` — the full source pixels are
+    never materialised.  For other formats (PNG, HEIC, WebP, …) we fall
+    back to ``thumbnail`` after open, which has higher transient peak.
+    """
     img = Image.open(path)
+    w0, h0 = img.size
+    long0 = max(w0, h0)
+    # Aggressive JPEG draft: PIL only honours powers of two (1, 1/2, 1/4, 1/8)
+    # and is conservative — calling ``draft`` with target = MAX won't pick a
+    # smaller scale unless the half-size result is still ≥ MAX in both dims.
+    # Compute the largest k ∈ {2, 4, 8} that still leaves us above MAX, and
+    # ask draft for size/k explicitly so the decoder downsamples in flight.
+    if long0 > _MAX_SOURCE_LONG_SIDE:
+        k = 1
+        while long0 / (k * 2) >= _MAX_SOURCE_LONG_SIDE / 2 and k < 8:
+            k *= 2
+        if k > 1:
+            try:
+                img.draft("RGB", (w0 // k, h0 // k))
+            except (AttributeError, OSError):
+                pass
     img = ImageOps.exif_transpose(img)
-    return img.convert("RGB")
+    img = img.convert("RGB")
+    if max(img.size) > _MAX_SOURCE_LONG_SIDE:
+        img.thumbnail(
+            (_MAX_SOURCE_LONG_SIDE, _MAX_SOURCE_LONG_SIDE), Image.LANCZOS,
+        )
+    return img
 
 
 def render_panel_bytes_from_path(

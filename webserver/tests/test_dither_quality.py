@@ -231,9 +231,10 @@ def test_presets_produce_distinct_output():
 
 
 def test_orientation_changes_panel_output():
-    img = _make_rgb(40, 30)
-    raw_l = render_panel_bytes(img, _FAST_CFG, "landscape")
-    raw_p = render_panel_bytes(img, _FAST_CFG, "portrait")
+    # render_panel_bytes consumes the input image (closes the PIL buffer to
+    # save memory), so we make a fresh image per orientation.
+    raw_l = render_panel_bytes(_make_rgb(40, 30), _FAST_CFG, "landscape")
+    raw_p = render_panel_bytes(_make_rgb(40, 30), _FAST_CFG, "portrait")
     assert raw_l != raw_p
 
 

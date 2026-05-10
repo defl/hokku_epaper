@@ -256,11 +256,13 @@ def test_visual_letterbox_all_images(_wipe_letterbox_build):
         # Copy original for side-by-side comparison.
         shutil.copy(src, _BUILD_DIR / f"{src.stem}_original{src.suffix}")
 
-        with open_image_for_render(src) as img:
-            for orientation in _ORIENTATIONS:
-                for label, threshold in _THRESHOLDS:
+        # render_panel_bytes consumes the input image (closes the PIL buffer
+        # to keep the per-render memory budget honest), so re-open per call.
+        for orientation in _ORIENTATIONS:
+            for label, threshold in _THRESHOLDS:
+                with open_image_for_render(src) as img:
                     panel_bytes = render_panel_bytes(img, noop, orientation, threshold)
-                    assert len(panel_bytes) == TOTAL_BYTES
-                    preview = preview_png_from_panel_bytes(panel_bytes, orientation)
-                    out = _BUILD_DIR / f"{src.stem}__{orientation}_{label}.png"
-                    out.write_bytes(preview)
+                assert len(panel_bytes) == TOTAL_BYTES
+                preview = preview_png_from_panel_bytes(panel_bytes, orientation)
+                out = _BUILD_DIR / f"{src.stem}__{orientation}_{label}.png"
+                out.write_bytes(preview)

@@ -539,10 +539,11 @@ def test_render_panel_bytes_honours_cfg_without_hidden_override():
     # A bw-safe cfg (no saturation boost).
     cfg_bw = _bw_safe_image_config(cfg_hue)
 
-    # Coloured gradient — adaptive saturation will differ between the two cfgs.
-    colour = _make_gradient(60, 40)
-    out_hue = render_panel_bytes(colour, cfg_hue, "landscape")
-    out_bw = render_panel_bytes(colour, cfg_bw, "landscape")
+    # render_panel_bytes consumes the input image (closes the PIL buffer to
+    # keep the per-render memory budget honest), so we make a fresh gradient
+    # per call.
+    out_hue = render_panel_bytes(_make_gradient(60, 40), cfg_hue, "landscape")
+    out_bw = render_panel_bytes(_make_gradient(60, 40), cfg_bw, "landscape")
 
     # Both should produce valid panel output.
     assert len(out_hue) == TOTAL_BYTES
