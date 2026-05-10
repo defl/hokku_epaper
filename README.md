@@ -5,7 +5,7 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 ## Core features
 
 **Photos, your way**
-- **Local-only** — your photos never leave your network. No cloud, no third-party servers, no telemetry. Your hardware and open source software means you're in full control.
+- **Local-only** — your photos never leave your network. No cloud, no third-party servers, no telemetry. The web app itself makes no external requests — fonts and assets are self-hosted, so nothing is phoned home just by opening a browser tab. Your hardware and open source software means you're in full control.
 - **Drag-and-drop upload** — single files or dozens at a time, straight into the web app, with a live progress list. Works on phones too.
 - **Browse in a grid** — preview exactly what the frame will show before it shows it, original and converted version side by side. Delete anything you don't want with one click.
 - **Click any photo** — see how it was processed and compare the original against what's going to the frame at full size.
