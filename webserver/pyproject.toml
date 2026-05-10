@@ -13,8 +13,7 @@ dependencies = [
     "pillow>=9.0",
     "numpy>=1.20",
     "pillow-heif>=0.10",
-    "opencv-contrib-python>=4.8",
-    "onnxruntime>=1.15",
+    "opencv-python-headless>=4.5.1",
     "psutil>=5.9",
 ]
 
@@ -24,6 +23,9 @@ hokku-server = "webserver:main"
 [project.optional-dependencies]
 test = [
     "pytest>=7.0",
+]
+yunet-onnx = [
+    "onnxruntime>=1.15",
 ]
 
 [tool.setuptools.packages.find]

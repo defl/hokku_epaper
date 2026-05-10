@@ -44,25 +44,38 @@ if ! python3 -c "import pillow_heif" 2>/dev/null; then
     echo "Warning: Could not install pillow-heif. HEIC/HEIF support will be unavailable."
 fi
 
-# Install opencv (headless build — no Qt/GTK/GStreamer pulled in) via pip if
-# cv2 isn't available. python3-opencv from Debian pulls hundreds of MB of GUI
-# dependencies we don't need on a headless server.
+# Install opencv (headless, no Qt/GTK/GStreamer) via pip if cv2 isn't
+# available. opencv-python-headless is the minimal build — it includes
+# FaceDetectorYN (objdetect, added 4.5.1), CascadeClassifier, and all the
+# image I/O we need. The contrib package adds patented extras (SIFT, etc.)
+# that we don't use and is significantly larger.
 if ! python3 -c "import cv2" 2>/dev/null; then
     echo "Installing opencv-python-headless via pip..."
-    pip3 install --break-system-packages opencv-contrib-python-headless 2>/dev/null || \
-    pip3 install opencv-contrib-python-headless 2>/dev/null || \
+    pip3 install --break-system-packages opencv-python-headless 2>/dev/null || \
+    pip3 install opencv-python-headless 2>/dev/null || \
     echo "Warning: Could not install opencv. Face detection will be unavailable."
 fi
 
-# Install onnxruntime via pip if not already available. Only required when
-# face_detector="yunet_onnx" is selected — yunet_opencv (default) and
-# haar_opencv work without it. Failure here is non-fatal; the service
-# raises a clear error at startup if the user picks yunet_onnx without it.
-if ! python3 -c "import onnxruntime" 2>/dev/null; then
-    echo "Installing onnxruntime via pip..."
-    pip3 install --break-system-packages onnxruntime 2>/dev/null || \
-    pip3 install onnxruntime 2>/dev/null || \
-    echo "Warning: Could not install onnxruntime. The yunet_onnx face_detector option will be unavailable."
+# Install onnxruntime only when face_detector="yunet_onnx" is configured.
+# The default (yunet_opencv) and haar_opencv both run on plain opencv with
+# no onnxruntime dependency. Skipping this on first install saves ~100 MB of
+# download and install time on Pi-class hardware.
+_FACE_DETECTOR="yunet_opencv"
+if [ -f /var/lib/hokku/config.json ]; then
+    _FACE_DETECTOR=$(python3 -c \
+        "import json,sys; d=json.load(open('/var/lib/hokku/config.json')); \
+         print(d.get('face_detector','yunet_opencv'))" 2>/dev/null \
+        || echo "yunet_opencv")
+fi
+if [ "$_FACE_DETECTOR" = "yunet_onnx" ]; then
+    if ! python3 -c "import onnxruntime" 2>/dev/null; then
+        echo "Installing onnxruntime via pip (face_detector=yunet_onnx)..."
+        pip3 install --break-system-packages onnxruntime 2>/dev/null || \
+        pip3 install onnxruntime 2>/dev/null || \
+        echo "Warning: Could not install onnxruntime. The yunet_onnx detector will fail at startup."
+    fi
+else
+    echo "Skipping onnxruntime (face_detector=${_FACE_DETECTOR}; install manually if you switch to yunet_onnx)."
 fi
 
 #DEBHELPER#

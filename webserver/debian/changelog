@@ -1,3 +1,15 @@
+hokku-server (3.0.0~alpha1-9) unstable; urgency=low
+
+  * Shrink install footprint: swap opencv-contrib-python-headless for
+    opencv-python-headless (contrib extras unused; FaceDetectorYN is in
+    the main objdetect module since 4.5.1). Remove libheif-dev from
+    Depends (runtime library is bundled by pillow-heif's pip wheel).
+    Skip onnxruntime pip-install unless face_detector=yunet_onnx is
+    set in config.json — saves ~100 MB on fresh installs with the
+    default yunet_opencv detector.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-8) unstable; urgency=low
 
   * Memory: free face detector between sync batches. sync() now runs in
