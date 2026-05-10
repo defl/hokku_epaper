@@ -1,3 +1,11 @@
+hokku-server (3.0.0~alpha1-11) unstable; urgency=low
+
+  * Fix missing static assets (logo.png, paper.png, line_seg_*.png): add
+    all files from static/ to debian/install so they land in
+    /usr/share/hokku-server/static/ alongside the templates.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-10) unstable; urgency=low
 
   * Fix startup crash when cv2 is not installed: move cv2 import inside
