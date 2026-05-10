@@ -4,7 +4,7 @@ Python environment
 ==================
 - The project venv is in `.venv` at the repo root. Always use it: `.venv/Scripts/python` (Windows) or `.venv/bin/python` (Linux/macOS).
 - To recreate the venv from scratch: `pip install -r requirements.txt`
-- `requirements.txt` at the repo root is the frozen venv and is the source of truth for dependencies.
+- `requirements.txt` at the repo root is the source of truth for dependencies. Versions are not pinned — it lists direct dependencies and pip resolves the rest.
 
 Releases
 ========
