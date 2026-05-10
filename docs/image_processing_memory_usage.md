@@ -343,17 +343,56 @@ raising `_MAX_SOURCE_LONG_SIDE` to 4800:
 | Forest_road 4500×2850 | 35.8 MB | **93.7 MB** | **+59 MB** |
 
 The cost is brutal in the 3200-4800 source-size window — roughly
-*the size of the entire 50 MB budget*. It's not the source uint8
-buffer alone (~37 MB for Forest_road); it's that the source must
-coexist with both the resized canvas (15 MB) and the Lanczos working
-memory during the resize step.
+*the size of the entire 50 MB budget*.
 
-The "fix" would need a streaming or tiled decode/resize (libvips or
-custom code) to ever fit in budget. Not justified for a marginal
-e-ink quality bump that's well below the dither pattern's own visual
-texture. Users with very high-resolution sources who care about
-sharpness can re-save to ≤ 3200 px before upload — bypasses the
-draft path with no on-panel quality penalty.
+**Why the cost is so high.** It's not the source uint8 buffer alone
+(~37 MB for Forest_road); it's that during the Lanczos resize step
+the source PIL buffer must coexist with both the resized target (15 MB)
+and PIL's own internal Lanczos working memory. The peak surge during
+resize is roughly `source + target + working ≈ 60 MB on top of the
+post-resize steady state` — much larger than the source size by itself.
+An earlier casual estimate of "~5 MB peak cost" in this document was
+wrong by ~12×; this section corrects it.
+
+**Why a smarter intermediate cap doesn't help either.** For sources in
+the 3200-4800 window, every reachable strategy blows the budget at
+some step:
+
+- **JPEG draft** (current behaviour): decode at 2250, then Lanczos
+  *upsample* to 3200. Some softness but fits in 50 MB.
+- **Skip draft, use `thumbnail`**: decode at 4500, then Lanczos
+  downsample to 3200. Crisper, but peak source + thumbnail = ~56 MB
+  during the thumbnail step.
+- **Skip draft, no thumbnail, let `_render_indices` resize**:
+  essentially the cap=4800 case above. ~94 MB peak.
+- **Tile the resize**: would need libvips or custom code that processes
+  the source in horizontal stripes and writes into the target stripe
+  by stripe. Major engineering effort.
+
+All non-tiled paths blow the 50 MB budget. The only way to win is to
+drop one of (a) the source, (b) the resized target, or (c) the
+per-thread budget. None are free.
+
+**Why we shouldn't fix it.**
+
+1. **Memory cost (~59 MB) >> quality benefit.** A 1.4× Lanczos
+   upsample of a JPEG-draft-decoded source vs. a full-Lanczos
+   downsample is detectable on a desktop monitor at 100 % zoom but
+   very subtle on a Spectra 6 e-ink panel where the dominant visual
+   texture is the dither pattern itself.
+2. **The window is narrow.** Sources < 3200 are unaffected (most
+   phone photos). Sources > ~6000 fit again because draft picks k=2
+   to land near the panel size. Only the 3200-6400 source-long-edge
+   range pays the upsample cost, and inside that the practical hit
+   lands at ~3500-4500 px — a slice of the typical-upload distribution
+   but not the bulk.
+3. **The "fix" we'd want needs streaming decode/resize**, which means
+   libvips. Adding libvips to a Pi-targeted package for a marginal
+   e-ink quality bump is a bad ROI.
+4. **Users can dodge it.** Re-saving a 4500-px source as a 3200-px
+   JPEG before upload bypasses the issue with no on-panel quality
+   penalty. Worth mentioning in user-facing docs if e-ink output ever
+   looks soft.
 
 ### Aggressive PIL `draft` fallback for non-JPEG formats
 
