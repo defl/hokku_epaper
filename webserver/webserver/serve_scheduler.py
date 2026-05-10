@@ -15,7 +15,7 @@ import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from webserver.image_manager import ImageManager
+from webserver.image_manager import AbstractImageManager
 from webserver.screen_headers import battery_percent, parse_battery_header
 
 
@@ -84,7 +84,7 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
 class ServeScheduler:
     """Fair-rotation scheduler + screen telemetry collector."""
 
-    def __init__(self, manager: ImageManager) -> None:
+    def __init__(self, manager: AbstractImageManager) -> None:
         self._manager = manager
         self._db_path = Path(manager.config.cache_dir) / _DB_FILENAME
         self._lock = threading.RLock()

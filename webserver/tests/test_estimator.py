@@ -19,7 +19,7 @@ from dataclasses import replace
 import pytest
 
 from webserver.app_config import AppConfig
-from webserver.image_manager import ConversionProgress, ImageManager, ImageRecord
+from webserver.image_manager import ConversionProgress, ImageRecord, SingleThreadedImageManager
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -49,9 +49,9 @@ def _rec(
     )
 
 
-def _manager_with(app_config: AppConfig, records: list[ImageRecord], progress: ConversionProgress) -> ImageManager:
+def _manager_with(app_config: AppConfig, records: list[ImageRecord], progress: ConversionProgress) -> SingleThreadedImageManager:
     """Build an ImageManager and inject synthetic records + progress."""
-    mgr = ImageManager(app_config)
+    mgr = SingleThreadedImageManager(app_config)
     mgr._records = {r.name: r for r in records}
     mgr._progress = progress
     return mgr

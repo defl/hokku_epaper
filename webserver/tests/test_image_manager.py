@@ -1,10 +1,11 @@
 """ImageManager: hashed filenames, sync, retry, scrub, db survival.
 
-All tests that call ``mgr.sync()`` and check conversion results use the
-``sync_pool`` fixture from conftest, which runs renders synchronously in the
-calling thread.  This avoids subprocess overhead in unit tests and makes
-``sync()`` effectively blocking (callbacks fire inline before ``sync()``
-returns).
+Every test runs twice (once against SingleThreadedImageManager, once against
+MultiThreadedImageManager) via the parametrised ``image_manager_factory``
+fixture in conftest.py. After ``mgr.sync()`` we always call
+``mgr.wait_for_idle()`` so the multi-threaded variant's callbacks have
+landed before assertions; on the single-threaded variant ``wait_for_idle``
+is a no-op.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import pytest
 
 from webserver.app_config import AppConfig
 from webserver.display import TOTAL_BYTES
-from webserver.image_manager import ImageManager, _hash_name
+from webserver.image_manager import _hash_name
 
 
 def test_hash_name_stable():
@@ -22,13 +23,14 @@ def test_hash_name_stable():
     assert _hash_name("photo.jpg") != _hash_name("photo.png")
 
 
-def test_register_and_convert(app_config: AppConfig, sync_pool, make_test_image):
+def test_register_and_convert(app_config: AppConfig, image_manager_factory, make_test_image):
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
     make_test_image(upload / "b.png")
 
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+    mgr = image_manager_factory(app_config)
     mgr.sync()
+    mgr.wait_for_idle()
 
     from webserver.screen_image_config import ScreenImageConfig
     records = mgr.list()
@@ -42,51 +44,55 @@ def test_register_and_convert(app_config: AppConfig, sync_pool, make_test_image)
     assert all(r.screen_image_config_slug == expected_slug for r in records)
 
 
-def test_panel_bytes_after_sync(app_config: AppConfig, sync_pool, make_test_image):
+def test_panel_bytes_after_sync(app_config: AppConfig, image_manager_factory, make_test_image):
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+    mgr = image_manager_factory(app_config)
     mgr.sync()
+    mgr.wait_for_idle()
     raw = mgr.panel_bytes("a.png")
     assert raw is not None and len(raw) == TOTAL_BYTES
 
 
-def test_preview_after_sync(app_config: AppConfig, sync_pool, make_test_image):
+def test_preview_after_sync(app_config: AppConfig, image_manager_factory, make_test_image):
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+    mgr = image_manager_factory(app_config)
     mgr.sync()
+    mgr.wait_for_idle()
     png = mgr.preview_png("a.png")
     assert png is not None and png.startswith(b"\x89PNG")
 
 
-def test_thumbnail_jpg(app_config: AppConfig, sync_pool, make_test_image):
+def test_thumbnail_jpg(app_config: AppConfig, image_manager_factory, make_test_image):
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+    mgr = image_manager_factory(app_config)
     mgr.sync()
+    mgr.wait_for_idle()
     jpg = mgr.thumbnail_jpg("a.png")
     assert jpg is not None and jpg[:3] == b"\xff\xd8\xff"  # JPEG SOI
 
 
-def test_add_existing_raises(app_config: AppConfig, sync_pool):
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+def test_add_existing_raises(app_config: AppConfig, image_manager_factory):
+    mgr = image_manager_factory(app_config)
     mgr.add("hello.png", _tiny_png_bytes())
     with pytest.raises(FileExistsError):
         mgr.add("hello.png", _tiny_png_bytes())
 
 
-def test_remove_missing_raises(app_config: AppConfig, sync_pool):
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+def test_remove_missing_raises(app_config: AppConfig, image_manager_factory):
+    mgr = image_manager_factory(app_config)
     with pytest.raises(FileNotFoundError):
         mgr.remove("nope.png")
 
 
-def test_remove_clears_cache(app_config: AppConfig, sync_pool, make_test_image):
+def test_remove_clears_cache(app_config: AppConfig, image_manager_factory, make_test_image):
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+    mgr = image_manager_factory(app_config)
     mgr.sync()
+    mgr.wait_for_idle()
     rec = mgr.status("a.png")
     assert rec is not None
     panel_path = Path(app_config.cache_dir) / "images" / f"{rec.name_hash}_{rec.screen_image_config_slug}_panel.bin"
@@ -98,68 +104,76 @@ def test_remove_clears_cache(app_config: AppConfig, sync_pool, make_test_image):
     assert not (upload / "a.png").exists()
 
 
-def test_db_survives_restart(app_config: AppConfig, sync_pool, make_test_image):
+def test_db_survives_restart(app_config: AppConfig, image_manager_factory, make_test_image):
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+    mgr = image_manager_factory(app_config)
     mgr.sync()
-    mgr.wait_for_idle()  # flush DB to disk before reading it in mgr2
+    mgr.wait_for_idle()
+    mgr.shutdown()  # final DB flush
     rec = mgr.status("a.png")
 
-    mgr2 = ImageManager(app_config, render_pool=sync_pool)
+    mgr2 = image_manager_factory(app_config)
     rec2 = mgr2.status("a.png")
     assert rec2 == rec
 
 
-def test_disk_change_detected(app_config: AppConfig, sync_pool, make_test_image):
+def test_disk_change_detected(app_config: AppConfig, image_manager_factory, make_test_image):
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png", color=(255, 0, 0))
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+    mgr = image_manager_factory(app_config)
     mgr.sync()
+    mgr.wait_for_idle()
     sha_before = mgr.status("a.png").original_sha1
 
     # Replace contents
     make_test_image(upload / "a.png", color=(0, 0, 255))
     mgr.sync()
+    mgr.wait_for_idle()
     sha_after = mgr.status("a.png").original_sha1
     assert sha_before != sha_after
 
 
-def test_orphan_scrubbed(app_config: AppConfig, sync_pool, make_test_image):
+def test_orphan_scrubbed(app_config: AppConfig, image_manager_factory, make_test_image):
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+    mgr = image_manager_factory(app_config)
     mgr.sync()
+    mgr.wait_for_idle()
 
     # Plant an orphan file in cache
     orphan = Path(app_config.cache_dir) / "images" / "deadbeefdeadbe_xx_panel.bin"
     orphan.write_bytes(b"x" * TOTAL_BYTES)
 
     mgr.sync()
+    mgr.wait_for_idle()
     assert not orphan.exists()
 
 
-def test_retry_on_failed(app_config: AppConfig, sync_pool):
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+def test_retry_on_failed(app_config: AppConfig, image_manager_factory):
+    mgr = image_manager_factory(app_config)
     # Create a corrupt "image" (non-image bytes with an image extension)
     src = Path(app_config.upload_dir) / "broken.png"
     src.write_bytes(b"not actually a png")
 
     mgr.sync()
+    mgr.wait_for_idle()
     rec = mgr.status("broken.png")
     assert rec is not None and rec.convert_status == "failed"
 
     # Retry while still broken — stays failed
     mgr.retry("broken.png")
     mgr.sync()
+    mgr.wait_for_idle()
     assert mgr.status("broken.png").convert_status == "failed"
 
 
-def test_clear_caches_marks_pending(app_config: AppConfig, sync_pool, make_test_image):
+def test_clear_caches_marks_pending(app_config: AppConfig, image_manager_factory, make_test_image):
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+    mgr = image_manager_factory(app_config)
     mgr.sync()
+    mgr.wait_for_idle()
     assert mgr.status("a.png").convert_status == "ok"
 
     mgr.clear_caches()
@@ -167,53 +181,58 @@ def test_clear_caches_marks_pending(app_config: AppConfig, sync_pool, make_test_
     assert mgr.panel_bytes("a.png") is None
 
     mgr.sync()
+    mgr.wait_for_idle()
     assert mgr.status("a.png").convert_status == "ok"
 
 
-# ── new tests for parallel behaviour ──────────────────────────────────────────
-
-def test_inflight_prevents_double_submission(app_config: AppConfig, sync_pool, make_test_image):
-    """sync() must not submit an image that is already in _inflight."""
+def test_inflight_prevents_double_submission(
+    app_config: AppConfig, image_manager_factory, make_test_image, monkeypatch
+):
+    """sync() must not submit an image that is already converted."""
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
 
-    submit_calls = []
-    original_submit = sync_pool.submit
+    mgr = image_manager_factory(app_config)
+    submitted: list[str] = []
+    original = mgr._dispatch_render
 
-    def counting_submit(fn, *args, **kwargs):
-        submit_calls.append(args[0])  # first arg is the image path string
-        return original_submit(fn, *args, **kwargs)
+    def counting(name, expected_slug, render_args, t0):
+        submitted.append(name)
+        return original(name, expected_slug, render_args, t0)
 
-    sync_pool.submit = counting_submit
+    monkeypatch.setattr(mgr, "_dispatch_render", counting)
 
-    mgr = ImageManager(app_config, render_pool=sync_pool)
     mgr.sync()   # submits and completes a.png
+    mgr.wait_for_idle()
     mgr.sync()   # a.png is now 'ok'; should NOT resubmit
+    mgr.wait_for_idle()
 
-    assert sum(1 for p in submit_calls if "a.png" in p) == 1, (
-        "a.png was submitted more than once"
-    )
+    assert submitted == ["a.png"], f"a.png should be submitted exactly once, got {submitted}"
 
 
-def test_two_images_both_succeed(app_config: AppConfig, sync_pool, make_test_image):
-    """Two pending images both finish successfully with the sync pool."""
+def test_two_images_both_succeed(app_config: AppConfig, image_manager_factory, make_test_image):
+    """Two pending images both finish successfully."""
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "x.png")
     make_test_image(upload / "y.png")
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+    mgr = image_manager_factory(app_config)
     mgr.sync()
+    mgr.wait_for_idle()
     assert mgr.status("x.png").convert_status == "ok"
     assert mgr.status("y.png").convert_status == "ok"
 
 
-def test_worker_error_marks_failed_sibling_unaffected(app_config: AppConfig, sync_pool, make_test_image):
+def test_worker_error_marks_failed_sibling_unaffected(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
     """A failing render marks that image 'failed'; sibling images succeed."""
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "good.png")
     (upload / "bad.png").write_bytes(b"not-an-image")  # will fail PIL open
 
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+    mgr = image_manager_factory(app_config)
     mgr.sync()
+    mgr.wait_for_idle()
     assert mgr.status("good.png").convert_status == "ok"
     assert mgr.status("bad.png").convert_status == "failed"
 

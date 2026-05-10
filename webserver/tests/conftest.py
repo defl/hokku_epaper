@@ -1,7 +1,6 @@
 """Shared test fixtures."""
 from __future__ import annotations
 
-import concurrent.futures
 from dataclasses import replace
 from pathlib import Path
 
@@ -16,6 +15,11 @@ register_heif_opener()
 from webserver.app_config import AppConfig
 from webserver.dither_config import DitherConfig
 from webserver.image_config import ImageConfig
+from webserver.image_manager import (
+    AbstractImageManager,
+    MultiThreadedImageManager,
+    SingleThreadedImageManager,
+)
 from webserver.presets import PRESET_IMAGE_CONFIGS
 
 
@@ -46,33 +50,35 @@ def app_config(tmp_path: Path, fast_image_config: ImageConfig) -> AppConfig:
     )
 
 
-class _InlineRenderPool:
-    """Synchronous render pool for unit tests.
+@pytest.fixture(params=["single", "multi"])
+def image_manager_factory(request):
+    """Yields a callable ``(config, classifier=None) -> AbstractImageManager``.
 
-    Runs submitted callables in the calling thread (no subprocess/thread
-    overhead).  Because ``concurrent.futures.Future.add_done_callback()``
-    fires immediately for already-resolved futures, callbacks run inline
-    inside ``submit()`` — by the time ``submit()`` returns the task is done.
+    Parametrised so every test that uses it runs twice — once against
+    SingleThreadedImageManager, once against MultiThreadedImageManager
+    (worker_count=2). This is the primary correctness gate that both
+    implementations honour the abstract API identically.
+
+    Tests block on ``mgr.wait_for_idle()`` after ``mgr.sync()`` to ensure
+    multi-threaded callbacks have completed before assertions.
     """
+    created: list[AbstractImageManager] = []
 
-    resolved_worker_count: int = 1
+    def _make(config: AppConfig, classifier=None) -> AbstractImageManager:
+        if request.param == "single":
+            mgr: AbstractImageManager = SingleThreadedImageManager(config, classifier)
+        else:
+            mgr = MultiThreadedImageManager(config, classifier, worker_count=2)
+        created.append(mgr)
+        return mgr
 
-    def submit(self, fn, *args, **kwargs):
-        f: concurrent.futures.Future = concurrent.futures.Future()
+    yield _make
+
+    for mgr in created:
         try:
-            f.set_result(fn(*args, **kwargs))
-        except Exception as exc:
-            f.set_exception(exc)
-        return f
-
-    def shutdown(self, wait: bool = True) -> None:
-        pass
-
-
-@pytest.fixture
-def sync_pool() -> _InlineRenderPool:
-    """A render pool that executes tasks synchronously in the calling thread."""
-    return _InlineRenderPool()
+            mgr.shutdown()
+        except Exception:
+            pass
 
 
 @pytest.fixture

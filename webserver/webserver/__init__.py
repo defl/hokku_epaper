@@ -7,15 +7,12 @@ import os
 import sys
 from pathlib import Path
 
-from webserver.app_state import AppState
 from webserver.app_config import AppConfig
+from webserver.app_state import AppState, build_manager
 from webserver.flask_app import create_app
 from webserver.image_classifier import ImageClassifier
-from webserver.image_manager import ImageManager
-from webserver.render_pool import RenderPool
 from webserver.serve_scheduler import ServeScheduler
 from webserver.watcher import Watcher
-from webserver.worker_count import resolve_worker_count
 
 
 def main() -> None:
@@ -46,19 +43,18 @@ def main() -> None:
         sys.exit(1)
 
     import psutil as _psutil
-    resolved_workers = resolve_worker_count(config.image_worker_thread_count)
+    classifier = ImageClassifier(config)
+    manager = build_manager(config, classifier)
     print(
         f"  Image workers: configured={config.image_worker_thread_count}"
-        f" → resolved={resolved_workers}"
-        f" (cores={os.cpu_count()},"
+        f" → resolved={manager.resolved_worker_count}"
+        f" ({type(manager).__name__},"
+        f" cores={os.cpu_count()},"
         f" free RAM={_psutil.virtual_memory().available / 1e9:.1f} GB)"
     )
 
-    classifier = ImageClassifier(config)
-    render_pool = RenderPool(resolved_workers)
-    manager = ImageManager(config, classifier, render_pool)
     scheduler = ServeScheduler(manager)
-    state = AppState(config, classifier, manager, scheduler, render_pool)
+    state = AppState(config, classifier, manager, scheduler)
     watcher = Watcher(state)
     state.watcher = watcher
     app = create_app(state, config_path=config_path)

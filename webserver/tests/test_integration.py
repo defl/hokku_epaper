@@ -24,12 +24,11 @@ from pathlib import Path
 
 import pytest
 
-from webserver.app_state import AppState
+from webserver.app_state import AppState, build_manager
 from webserver.app_config import AppConfig
 from webserver.display import TOTAL_BYTES, panel_bytes_to_indices
 from webserver.flask_app import create_app
 from webserver.image_classifier import ImageClassifier
-from webserver.image_manager import ImageManager
 from webserver.serve_scheduler import ServeScheduler
 
 # Path to a real source image (small enough to be fast with noop dither).
@@ -42,12 +41,10 @@ _TEST_IMAGE = (
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _make_state(config: AppConfig) -> AppState:
-    from tests.conftest import _InlineRenderPool
-    pool = _InlineRenderPool()
     clf = ImageClassifier(config)
-    mgr = ImageManager(config, clf, pool)
+    mgr = build_manager(config, clf)
     sch = ServeScheduler(mgr)
-    return AppState(config, clf, mgr, sch, pool)
+    return AppState(config, clf, mgr, sch)
 
 
 def _upload_and_sync(state: AppState, src: Path) -> str:

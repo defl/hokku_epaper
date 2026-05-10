@@ -400,7 +400,7 @@ def create_app(
             "converting_eta_seconds": manager.estimate_remaining_seconds(),
             "cache_used_bytes": disk["cache_used_bytes"],
             "disk_free_bytes": disk["disk_free_bytes"],
-            "image_worker_count_resolved": state.render_pool.resolved_worker_count,
+            "image_worker_count_resolved": state.manager.resolved_worker_count,
             "cpu_cores": os.cpu_count(),
             "memory_available_gb": round(psutil.virtual_memory().available / 1e9, 1),
         })

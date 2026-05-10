@@ -11,8 +11,7 @@ from pathlib import Path
 import pytest
 
 from webserver.app_config import AppConfig
-from webserver.image_manager import ImageManager
-from tests.conftest import _InlineRenderPool
+from webserver.image_manager import AbstractImageManager, SingleThreadedImageManager
 
 # Suffixes as defined in image_manager
 _PANEL = "_panel.bin"
@@ -28,20 +27,20 @@ def _write(path: Path, content: bytes = b"x") -> Path:
     return path
 
 
-def _images_dir(mgr: ImageManager) -> Path:
+def _images_dir(mgr: AbstractImageManager) -> Path:
     return Path(mgr._config.cache_dir) / "images"
 
 
-def _slug_for(mgr: ImageManager, name: str) -> str:
+def _slug_for(mgr: AbstractImageManager, name: str) -> str:
     """Return the current screen_image_config_slug for a registered image."""
     return mgr._records[name].screen_image_config_slug
 
 
-def _name_hash(mgr: ImageManager, name: str) -> str:
+def _name_hash(mgr: AbstractImageManager, name: str) -> str:
     return mgr._records[name].name_hash
 
 
-def _register_ok(mgr: ImageManager, name: str, make_test_image) -> None:
+def _register_ok(mgr: AbstractImageManager, name: str, make_test_image) -> None:
     """Add an image to the manager via the upload path then fake-convert it."""
     upload = Path(mgr._config.upload_dir)
     make_test_image(upload / name)
@@ -50,8 +49,8 @@ def _register_ok(mgr: ImageManager, name: str, make_test_image) -> None:
 
 # ── always: unknown suffix ────────────────────────────────────────────────────
 
-def test_scrub_always_removes_unknown_suffix(app_config, sync_pool, make_test_image):
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+def test_scrub_always_removes_unknown_suffix(app_config, make_test_image):
+    mgr = SingleThreadedImageManager(app_config)
     _register_ok(mgr, "a.png", make_test_image)
 
     # Drop a file with a foreign suffix in the images dir.
@@ -64,8 +63,8 @@ def test_scrub_always_removes_unknown_suffix(app_config, sync_pool, make_test_im
 
 # ── always: orphan (hash unknown) ────────────────────────────────────────────
 
-def test_scrub_always_removes_orphan_hash(app_config, sync_pool, make_test_image):
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+def test_scrub_always_removes_orphan_hash(app_config, make_test_image):
+    mgr = SingleThreadedImageManager(app_config)
     _register_ok(mgr, "a.png", make_test_image)
 
     # File whose hash prefix doesn't match any registered image.
@@ -76,8 +75,8 @@ def test_scrub_always_removes_orphan_hash(app_config, sync_pool, make_test_image
     assert not orphan.exists(), "File with unknown hash should be scrubbed"
 
 
-def test_scrub_always_removes_orphan_thumb(app_config, sync_pool, make_test_image):
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+def test_scrub_always_removes_orphan_thumb(app_config, make_test_image):
+    mgr = SingleThreadedImageManager(app_config)
     _register_ok(mgr, "a.png", make_test_image)
 
     # Thumb with an unknown hash.
@@ -90,8 +89,8 @@ def test_scrub_always_removes_orphan_thumb(app_config, sync_pool, make_test_imag
 
 # ── always: known hash → never remove ────────────────────────────────────────
 
-def test_scrub_always_keeps_current_slug_files(app_config, sync_pool, make_test_image):
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+def test_scrub_always_keeps_current_slug_files(app_config, make_test_image):
+    mgr = SingleThreadedImageManager(app_config)
     _register_ok(mgr, "a.png", make_test_image)
     mgr.thumbnail_jpg("a.png")  # thumbnails are generated lazily
 
@@ -130,8 +129,7 @@ def test_scrub_off_keeps_old_slug_files(tmp_path, make_test_image):
         ),
     )
 
-    pool = _InlineRenderPool()
-    mgr = ImageManager(base_cfg, render_pool=pool)
+    mgr = SingleThreadedImageManager(base_cfg)
     make_test_image(upload / "a.png")
     mgr.sync()
 
@@ -148,7 +146,7 @@ def test_scrub_off_keeps_old_slug_files(tmp_path, make_test_image):
     new_cfg = replace(base_cfg, image_config_default=new_image)
 
     # Reload manager with new config — image becomes pending, gets re-converted.
-    mgr2 = ImageManager(new_cfg, render_pool=_InlineRenderPool())
+    mgr2 = SingleThreadedImageManager(new_cfg)
     mgr2.sync()
 
     new_slug = _slug_for(mgr2, "a.png")
@@ -184,7 +182,7 @@ def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
         image_config_default=base_image,
     )
 
-    mgr = ImageManager(base_cfg, render_pool=_InlineRenderPool())
+    mgr = SingleThreadedImageManager(base_cfg)
     make_test_image(upload / "a.png")
     mgr.sync()
 
@@ -195,7 +193,7 @@ def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
     new_image = replace(base_image, prepare_brightness=0.9)
     new_cfg   = replace(base_cfg, image_config_default=new_image, auto_clear_cache=True)
 
-    mgr2 = ImageManager(new_cfg, render_pool=_InlineRenderPool())
+    mgr2 = SingleThreadedImageManager(new_cfg)
     mgr2.sync()
 
     new_slug = _slug_for(mgr2, "a.png")
@@ -228,7 +226,7 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
         image_config_default=base_image,
     )
 
-    mgr = ImageManager(cfg, render_pool=_InlineRenderPool())
+    mgr = SingleThreadedImageManager(cfg)
     make_test_image(upload / "a.png")
     mgr.sync()
     # Touch the thumb so it exists.
@@ -241,7 +239,7 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
     # Re-sync with new slug to trigger scrubber with auto_clear=True.
     new_image = replace(base_image, prepare_brightness=0.9)
     new_cfg   = replace(cfg, image_config_default=new_image, auto_clear_cache=True)
-    mgr2 = ImageManager(new_cfg, render_pool=_InlineRenderPool())
+    mgr2 = SingleThreadedImageManager(new_cfg)
     mgr2.sync()
 
     assert thumb.exists(), "Thumbnail must survive auto_clear scrub"
@@ -249,8 +247,8 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
 
 # ── clear_caches: removes everything ─────────────────────────────────────────
 
-def test_clear_caches_removes_panel_preview_thumb(app_config, sync_pool, make_test_image):
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+def test_clear_caches_removes_panel_preview_thumb(app_config, make_test_image):
+    mgr = SingleThreadedImageManager(app_config)
     make_test_image(Path(mgr._config.upload_dir) / "a.png")
     mgr.sync()
     mgr.thumbnail_jpg("a.png")
@@ -272,8 +270,8 @@ def test_clear_caches_removes_panel_preview_thumb(app_config, sync_pool, make_te
     assert not thumb.exists(),   "clear_caches should remove thumbnail"
 
 
-def test_clear_caches_marks_all_pending(app_config, sync_pool, make_test_image):
-    mgr = ImageManager(app_config, render_pool=sync_pool)
+def test_clear_caches_marks_all_pending(app_config, make_test_image):
+    mgr = SingleThreadedImageManager(app_config)
     make_test_image(Path(mgr._config.upload_dir) / "a.png")
     mgr.sync()
     assert mgr.status("a.png").convert_status == "ok"

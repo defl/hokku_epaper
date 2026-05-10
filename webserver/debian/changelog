@@ -1,3 +1,19 @@
+hokku-server (3.0.0~alpha1-4) unstable; urgency=low
+
+  * Split ImageManager into AbstractImageManager + SingleThreadedImageManager
+    + MultiThreadedImageManager. ProcessPoolExecutor and the standalone
+    RenderPool class are gone. Default image_worker_thread_count=1 now uses
+    the inline single-threaded manager — no fork, no worker thread —
+    restoring v2.x-class memory behaviour on the Pi Zero 2 W (the alpha1
+    fork into a worker process duplicated opencv/PIL/numpy and OOM-killed
+    the service on 512 MB hosts). Worker count >= 2 (or 0 = auto) uses a
+    private ThreadPoolExecutor; single process, GIL-bound for now,
+    parallelism for free once the dither hot path releases the GIL.
+    _DbSaver removed (debounced async DB writes were a workaround for
+    cross-process callback latency, not needed with threads).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-3) unstable; urgency=low
 
   * AppConfig: restore default upload_dir=/var/lib/hokku/upload and

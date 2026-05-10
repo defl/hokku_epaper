@@ -5,11 +5,21 @@ keyed by sha1(name) so odd characters / unicode / length aren't a concern.
 The single source of truth for what's known to ImageManager is
 ``<cache_dir>/image_manager.json``.
 
-Rendering is performed by a ``RenderPool`` (ProcessPoolExecutor) so that
-multiple images can be dithered in parallel.  ``sync()`` submits all pending
-images and returns immediately; results arrive via done-callbacks which run on
-the executor's internal thread.  ``_inflight`` prevents re-submission of images
-that are already being processed.
+Two concrete implementations of ``AbstractImageManager`` are provided:
+
+* ``SingleThreadedImageManager`` runs renders inline on the calling thread.
+  No executor, no extra processes, no extra threads. Right answer for tiny
+  hosts (e.g. a 512 MB Pi Zero 2 W) where forking a worker process or even
+  spawning a thread pool would push the system into swap.
+
+* ``MultiThreadedImageManager`` owns a private
+  ``concurrent.futures.ThreadPoolExecutor``. Single process, GIL-bound for
+  now; once the dither hot path releases the GIL the threading already
+  delivers parallelism with no further code changes.
+
+Selection happens in ``build_manager`` (app_state.py) based on
+``config.image_worker_thread_count``: ``1`` → single-threaded, anything else
+→ multi-threaded with the resolved worker count.
 """
 from __future__ import annotations
 
@@ -21,9 +31,10 @@ import shutil
 import threading
 import time
 import traceback
-from dataclasses import asdict, dataclass, field, replace
+from abc import ABC, abstractmethod
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Callable, Iterable, Literal
+from typing import Literal
 
 from PIL import Image, ImageOps
 
@@ -68,56 +79,6 @@ class ConversionProgress:
     current_name: str | None  # being converted right now (None if idle)
     done: int                 # completed this sync cycle
     total: int                # scheduled this sync cycle
-
-
-class _DbSaver:
-    """Coalesces _save_db() calls — at most one disk write per debounce window.
-
-    Thread-safe: safe to call ``request_save()`` from any thread.
-    """
-
-    def __init__(self, save_fn: Callable[[], None], debounce_s: float = 0.1) -> None:
-        self._save_fn = save_fn
-        self._debounce_s = debounce_s
-        self._lock = threading.Lock()
-        self._timer: threading.Timer | None = None
-        self._shutdown = False
-
-    def request_save(self) -> None:
-        """Schedule a DB save unless one is already pending or we're shut down."""
-        with self._lock:
-            if self._shutdown or self._timer is not None:
-                return
-            self._timer = threading.Timer(self._debounce_s, self._fire)
-            self._timer.daemon = True
-            self._timer.start()
-
-    def _fire(self) -> None:
-        with self._lock:
-            self._timer = None
-            if self._shutdown:
-                return
-        self._save_fn()
-
-    def _flush_now(self) -> None:
-        """Cancel any pending timer and do an immediate synchronous write."""
-        with self._lock:
-            timer, self._timer = self._timer, None
-        if timer is not None:
-            timer.cancel()
-        self._save_fn()
-
-    def shutdown(self) -> None:
-        """Cancel any pending timer and flush with one final synchronous write."""
-        with self._lock:
-            self._shutdown = True
-            timer, self._timer = self._timer, None
-        if timer is not None:
-            timer.cancel()
-        try:
-            self._save_fn()
-        except Exception:
-            pass
 
 
 def _hash_name(name: str) -> str:
@@ -181,16 +142,19 @@ def _record_from_dict(d: dict) -> ImageRecord:
     )
 
 
-class ImageManager:
+class AbstractImageManager(ABC):
     """Owns upload_dir, cache_dir/images/, and image_manager.json.
 
     Conversion happens *only* inside ``sync()``. ``panel_bytes()`` and
     ``preview_png()`` are pure cache reads (return None on miss). Outside
     threads can read ``list()``, ``status()`` etc. without locking; writes
     take ``_db_lock``.
+
+    Concretes implement how a render job is dispatched (inline vs threadpool)
+    and report their effective worker count.
     """
 
-    def __init__(self, config: AppConfig, classifier=None, render_pool=None) -> None:
+    def __init__(self, config: AppConfig, classifier=None) -> None:
         self._config = config
         self._upload_dir = Path(config.upload_dir).resolve()
         self._cache_dir = Path(config.cache_dir).resolve()
@@ -200,8 +164,7 @@ class ImageManager:
         self._records: dict[str, ImageRecord] = {}
         self._progress = ConversionProgress(current_name=None, done=0, total=0)
 
-        # Names of images currently being rendered in a worker process.
-        # Protected by _db_lock.
+        # Names of images currently being rendered. Protected by _db_lock.
         self._inflight: set[str] = set()
 
         if classifier is None:
@@ -209,28 +172,41 @@ class ImageManager:
             classifier = ImageClassifier(config)
         self._classifier = classifier
 
-        if render_pool is None:
-            from webserver.render_pool import RenderPool
-            from webserver.worker_count import resolve_worker_count
-            render_pool = RenderPool(resolve_worker_count(config.image_worker_thread_count))
-        self._render_pool = render_pool
-
-        self._db_saver = _DbSaver(self._save_db)
-
         self._images_dir.mkdir(parents=True, exist_ok=True)
         self._load_db()
 
+    # ── concrete-class hooks ─────────────────────────────────────
+
+    @property
+    @abstractmethod
+    def resolved_worker_count(self) -> int:
+        """How many parallel renders this manager can run. 1 = serial."""
+
+    @abstractmethod
+    def _dispatch_render(
+        self,
+        name: str,
+        expected_slug: str,
+        render_args: tuple,
+        t0: float,
+    ) -> None:
+        """Run ``render_one(*render_args)`` and arrange for ``_on_render_done``
+        to be called with the future when it completes.
+        """
+
+    # ── lifecycle ────────────────────────────────────────────────
+
     def shutdown(self) -> None:
-        """Flush any pending DB write.  Call before discarding this manager."""
-        self._db_saver.shutdown()
+        """Flush DB to disk. Override in subclasses to also tear down workers."""
+        with self._db_lock:
+            self._save_db()
 
     def wait_for_idle(self, timeout: float = 120.0) -> None:
-        """Block until all in-flight renders have completed and the DB is saved.
-
-        Useful in tests (call after ``sync()``) and for graceful shutdown.
+        """Block until all in-flight renders have completed.
 
         Raises ``TimeoutError`` if ``timeout`` seconds elapse while images are
-        still in flight.
+        still in flight. For SingleThreadedImageManager, ``_inflight`` is empty
+        as soon as ``sync()`` returns, so this is a no-op.
         """
         deadline = time.monotonic() + timeout
         while True:
@@ -243,9 +219,6 @@ class ImageManager:
                     f"({len(self._inflight)} image(s) still in flight)"
                 )
             time.sleep(0.05)
-        # Cancel the debouncer's pending timer and flush the DB synchronously
-        # so that any writes queued by callbacks are not deferred past this call.
-        self._db_saver._flush_now()
 
     # ── Properties ───────────────────────────────────────────────
 
@@ -257,11 +230,11 @@ class ImageManager:
 
     def sync(self) -> None:
         """Re-scan upload dir, register new files, detect content changes,
-        submit pending conversions to the render pool, scrub orphans.
+        submit pending conversions to the render dispatch, scrub orphans.
 
-        Returns immediately — conversions finish asynchronously.  Results
-        arrive via ``_on_render_done`` callbacks running on the pool's
-        internal callback thread.
+        For multi-threaded managers, returns immediately — conversions finish
+        asynchronously via ``_on_render_done`` callbacks. For single-threaded
+        managers, returns once every pending image has been rendered inline.
         """
         with self._db_lock:
             self._reconcile_with_disk()
@@ -472,6 +445,13 @@ class ImageManager:
             free = 0
         return {"cache_used_bytes": used, "disk_free_bytes": free}
 
+    def scrub_stale_cache(self) -> None:
+        """Remove stale-slug panel/preview files for registered images now,
+        regardless of the auto_clear_cache config setting.
+        """
+        with self._db_lock:
+            self._scrub_orphan_cache_files(force_auto_clear=True)
+
     # ── Internals ────────────────────────────────────────────────
 
     def _panel_path(self, rec: ImageRecord) -> Path:
@@ -608,13 +588,6 @@ class ImageManager:
                 except OSError as e:
                     print(f"  Cache: could not remove {f.name}: {e}")
 
-    def scrub_stale_cache(self) -> None:
-        """Remove stale-slug panel/preview files for registered images now,
-        regardless of the auto_clear_cache config setting.
-        """
-        with self._db_lock:
-            self._scrub_orphan_cache_files(force_auto_clear=True)
-
     def _scrub_orphan_cache_files(self, *, force_auto_clear: bool = False) -> None:
         """Remove cache files according to the three-rule policy.
 
@@ -679,14 +652,11 @@ class ImageManager:
             print(f"  Could not scrub {f.name}: {e}")
 
     def _submit_one(self, name: str) -> None:
-        """Validate and submit one image to the render pool.
+        """Validate one image and hand it off to the concrete dispatcher.
 
         Images whose PIL dimensions were never read (corrupt / unsupported
-        format) are failed immediately without touching the pool.
+        format) are failed immediately without going through the dispatcher.
         """
-        from dataclasses import asdict as _asdict
-        from webserver.render_worker import render_one
-
         with self._db_lock:
             rec = self._records.get(name)
             if rec is None or rec.convert_status != "pending":
@@ -704,7 +674,7 @@ class ImageManager:
                 self._progress = replace(
                     self._progress, done=self._progress.done + 1,
                 )
-                self._db_saver.request_save()
+                self._save_db()
                 return
 
         # Compute screen config outside the lock (classifier is read-only).
@@ -719,18 +689,14 @@ class ImageManager:
                 return  # already submitted by a concurrent call
             self._inflight.add(name)
 
-        future = self._render_pool.submit(
-            render_one,
+        render_args = (
             str(src_path),
-            _asdict(screen_cfg.image_config),
+            asdict(screen_cfg.image_config),
             screen_cfg.orientation,
             screen_cfg.crop_to_fill_threshold,
         )
-        future.add_done_callback(
-            lambda f, _n=name, _s=expected_slug, _t=time.monotonic():
-                self._on_render_done(_n, _s, f, _t)
-        )
         print(f"  Submitted {name!r} for dithering")
+        self._dispatch_render(name, expected_slug, render_args, time.monotonic())
 
     def _on_render_done(
         self,
@@ -739,7 +705,12 @@ class ImageManager:
         future: concurrent.futures.Future,
         t0: float,
     ) -> None:
-        """Called from the executor's callback thread when a render finishes."""
+        """Called when a render finishes.
+
+        For multi-threaded managers this runs on a worker thread (via
+        ``Future.add_done_callback``). For single-threaded managers this is
+        invoked synchronously from ``_dispatch_render`` on the calling thread.
+        """
         try:
             panel_bytes, preview_bytes = future.result()
             conversion_seconds = time.monotonic() - t0
@@ -760,7 +731,7 @@ class ImageManager:
                 self._progress = replace(self._progress, done=done)
                 if done >= total:
                     self._log_batch_complete()
-            self._db_saver.request_save()
+                self._save_db()
             return
 
         with self._db_lock:
@@ -786,16 +757,11 @@ class ImageManager:
             print(f"  Dithered {name!r} ({done}/{total})")
             if done >= total:
                 self._log_batch_complete()
-        self._db_saver.request_save()
+            self._save_db()
 
     def _log_batch_complete(self) -> None:
         """Log a batch-complete summary (must be called while holding _db_lock)."""
         total = self._progress.total
-        ok = sum(1 for r in self._records.values() if r.convert_status == "ok")
-        failed_count = total - self._progress.done + (
-            sum(1 for r in self._records.values() if r.convert_status == "failed")
-        )
-        # Simple approximation: count failed records in the last batch.
         n_failed = total - sum(
             1 for r in self._records.values()
             if r.convert_status == "ok" and r.last_conversion_seconds is not None
@@ -818,3 +784,76 @@ class ImageManager:
                 img = img.convert("RGB")
             img.thumbnail((_THUMB_MAX_PX, _THUMB_MAX_PX), Image.LANCZOS)
             img.save(thumb_path, format="JPEG", quality=_THUMB_QUALITY)
+
+
+class SingleThreadedImageManager(AbstractImageManager):
+    """Renders inline on the calling thread. No executor, no extra processes.
+
+    Cheapest possible memory profile — right answer for tiny hosts where a
+    fork or even an idle thread pool would push the system into swap.
+    """
+
+    @property
+    def resolved_worker_count(self) -> int:
+        return 1
+
+    def _dispatch_render(
+        self,
+        name: str,
+        expected_slug: str,
+        render_args: tuple,
+        t0: float,
+    ) -> None:
+        from webserver.render_worker import render_one
+        future: concurrent.futures.Future = concurrent.futures.Future()
+        try:
+            future.set_result(render_one(*render_args))
+        except BaseException as e:
+            future.set_exception(e)
+        self._on_render_done(name, expected_slug, future, t0)
+
+
+class MultiThreadedImageManager(AbstractImageManager):
+    """Renders on a private ``ThreadPoolExecutor``.
+
+    Single process; GIL-bound while the dither hot path is pure Python.
+    Switching to a GIL-releasing implementation later requires no callsite
+    changes — threading already gives parallelism for free at that point.
+    """
+
+    def __init__(
+        self,
+        config: AppConfig,
+        classifier=None,
+        worker_count: int = 2,
+    ) -> None:
+        if worker_count < 1:
+            raise ValueError(f"worker_count must be >= 1, got {worker_count}")
+        super().__init__(config, classifier)
+        self._worker_count = worker_count
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="hokku-render",
+        )
+
+    @property
+    def resolved_worker_count(self) -> int:
+        return self._worker_count
+
+    def _dispatch_render(
+        self,
+        name: str,
+        expected_slug: str,
+        render_args: tuple,
+        t0: float,
+    ) -> None:
+        from webserver.render_worker import render_one
+        future = self._executor.submit(render_one, *render_args)
+        future.add_done_callback(
+            lambda f, _n=name, _s=expected_slug, _t=t0:
+                self._on_render_done(_n, _s, f, _t)
+        )
+
+    def shutdown(self) -> None:
+        self._executor.shutdown(wait=False)
+        super().shutdown()
