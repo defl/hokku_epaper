@@ -1,3 +1,12 @@
+hokku-server (3.0.0~alpha1-6) unstable; urgency=low
+
+  * Build artifacts now land in <repo-root>/builds/ instead of the repo
+    root. webserver/build-deb.sh sweeps the .deb/.buildinfo/.changes files
+    dpkg-buildpackage drops; AGENTS.md and the Docker recipe updated to
+    match. No code change.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-5) unstable; urgency=low
 
   * Split the three principal ImageManager classes into separate modules:

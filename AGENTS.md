@@ -54,23 +54,26 @@ Building the hokku-server .deb on Windows (via Docker)
 
 ```
 MSYS_NO_PATHCONV=1 docker run --rm \
-    -v "/c/Users/defl/workspace/hokku_epaper/.claude/worktrees/<worktree>":/src \
+    -v "/c/Users/defl/workspace/hokku_epaper":/src \
     debian:trixie bash -c '
 set -e
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     debhelper dh-python python3-all python3-setuptools \
     pybuild-plugin-pyproject >/dev/null 2>&1
-cp -r /src/webserver /build
-cd /build
+cp -r /src /build
+cd /build/webserver
 chmod -x debian/* 2>/dev/null || true
 chmod +x debian/rules debian/postinst
 ./build-deb.sh
-cp /*.deb /src/
+mkdir -p /src/builds
+cp /build/builds/hokku-server_*.deb /src/builds/
 '
 ```
 
-The finished `.deb` lands at the worktree root (e.g. `hokku-server_2.1.21-3_all.deb`). Upload with `gh release upload <tag> <file> --clobber` and delete the stale `.deb` with `gh release delete-asset <tag> <old_file> --yes`.
+**Build output goes into `<repo-root>/builds/`, never the repo root.** `webserver/build-deb.sh` sweeps the `.deb` / `.buildinfo` / `.changes` files that `dpkg-buildpackage` drops next to the source dir into `builds/`. Don't bypass that — orphan `.deb` files in the repo root are easy to forget about and `*.deb` is gitignored, so they vanish silently. Find a built artifact at `builds/hokku-server_<version>_all.deb`.
+
+Upload with `gh release upload <tag> builds/hokku-server_<version>_all.deb --clobber` and delete the stale `.deb` with `gh release delete-asset <tag> <old_file> --yes`.
 
 **Never build a `.deb` from a dirty working tree.** Commit (or stash) all changes before invoking `build-deb.sh` / `dpkg-buildpackage`. Reason: the produced filename only encodes the changelog version, not the working-tree state — a `.deb` built from uncommitted edits cannot be reproduced from the git history, and "which bytes are in this build" becomes unanswerable. If a build reveals a bug (missing dep, broken postinst, etc.), commit the fix first, then rebuild. The commit-then-build cycle is cheap; the build-then-commit cycle silently produces orphan artifacts.
 

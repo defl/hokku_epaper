@@ -9,7 +9,8 @@ build/
 image_manager.json
 serve_scheduler.json
 
-# Debian build artifacts
+# Debian build artifacts (land in builds/, never the repo root)
+/builds/
 *.deb
 *.buildinfo
 *.changes
