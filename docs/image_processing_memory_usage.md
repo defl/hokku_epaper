@@ -325,6 +325,36 @@ RSS delta from baseline):
 
 ## What didn't work / wasn't worth pursuing
 
+### Raising `_MAX_SOURCE_LONG_SIDE` to recover Lanczos-quality downsampling
+
+Sources between the panel long edge (3200) and 2× panel (6400) get
+JPEG-decoded at 1/2 resolution by `Image.draft` — a 4500×2850 source
+becomes 2250×1425 in flight, which the panel-fit Lanczos then upsamples
+back to 3200 long edge. That 1.4× upsample is subtly softer than what a
+full Lanczos *downsample* from 4500 → 3200 would produce.
+
+We measured the cost of skipping draft for these mid-size sources by
+raising `_MAX_SOURCE_LONG_SIDE` to 4800:
+
+| Image | Cap = 3200 (current) | Cap = 4800 | Δ |
+|---|---:|---:|---:|
+| Robert_De_Niro 1556×2247 | 34.5 MB | 34.7 MB | 0 |
+| Fitz_Roy 1536×2048 | 36.4 MB | 35.4 MB | 0 |
+| Forest_road 4500×2850 | 35.8 MB | **93.7 MB** | **+59 MB** |
+
+The cost is brutal in the 3200-4800 source-size window — roughly
+*the size of the entire 50 MB budget*. It's not the source uint8
+buffer alone (~37 MB for Forest_road); it's that the source must
+coexist with both the resized canvas (15 MB) and the Lanczos working
+memory during the resize step.
+
+The "fix" would need a streaming or tiled decode/resize (libvips or
+custom code) to ever fit in budget. Not justified for a marginal
+e-ink quality bump that's well below the dither pattern's own visual
+texture. Users with very high-resolution sources who care about
+sharpness can re-save to ≤ 3200 px before upload — bypasses the
+draft path with no on-panel quality penalty.
+
 ### Aggressive PIL `draft` fallback for non-JPEG formats
 
 PIL's `draft` is a no-op on PNG, HEIC, WebP — those decoders have no
