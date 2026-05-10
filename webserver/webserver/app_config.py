@@ -57,8 +57,8 @@ class AppConfig:
 
     version: int = _CURRENT_VERSION
     refresh_image_at_time: tuple[str, ...] = ("0600", "1200", "1800")
-    upload_dir: str = ""
-    cache_dir: str = ""
+    upload_dir: str = "/var/lib/hokku/upload"
+    cache_dir: str = "/var/lib/hokku/cache"
     port: int = 8080
     poll_interval_seconds: int = 10
     debug_fast_refresh: bool = False

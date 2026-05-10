@@ -1,3 +1,14 @@
+hokku-server (3.0.0~alpha1-3) unstable; urgency=low
+
+  * AppConfig: restore default upload_dir=/var/lib/hokku/upload and
+    cache_dir=/var/lib/hokku/cache (were "" in alpha1, causing service
+    to refuse start with "upload_dir is not set" when an existing
+    config.json from an older install lacked the keys). The systemd
+    StateDirectory creates and owns these paths, matching the example
+    config and the v2.x defaults.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-2) unstable; urgency=low
 
   * Drop python3-opencv from Depends — the Debian package is the full GUI
