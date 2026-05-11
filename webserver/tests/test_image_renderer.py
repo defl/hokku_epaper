@@ -1,36 +1,25 @@
 """Smoke tests for ImageRenderer and the AbstractImageRenderer interface."""
 from __future__ import annotations
 
-import importlib
-
+import numba  # hard dep — must be installed
 import numpy as np
 import pytest
 from PIL import Image
 
 from hokku_server.dither_streaming import StreamingDither
+from hokku_server.dither_streaming_numba import NumbaDither
 from hokku_server.dither_unconstrained import UnconstrainedDither
 from hokku_server.image_config import ImageConfig
 from hokku_server.image_renderer import ImageRenderer
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
-_NUMBA_AVAILABLE = importlib.util.find_spec("numba") is not None
-
 
 def _dither_params():
-    params = [
+    return [
         pytest.param(StreamingDither(), id="streaming"),
         pytest.param(UnconstrainedDither(), id="unconstrained"),
+        pytest.param(NumbaDither(), id="numba"),
     ]
-    if _NUMBA_AVAILABLE:
-        from hokku_server.dither_streaming_numba import NumbaDither
-        params.append(pytest.param(NumbaDither(), id="numba"))
-    else:
-        from hokku_server.dither_abc import AbstractDither
-        params.append(pytest.param(
-            pytest.mark.skip(reason="numba not installed")(StreamingDither()),
-            id="numba",
-        ))
-    return params
 
 
 def _synth_img(w: int = 64, h: int = 64) -> Image.Image:
@@ -155,10 +144,6 @@ def test_streaming_and_unconstrained_agree_on_preprocessed_canvas() -> None:
     )
 
 
-@pytest.mark.skipif(
-    not _NUMBA_AVAILABLE,
-    reason="numba not installed",
-)
 def test_numba_and_streaming_agree_on_preprocessed_canvas() -> None:
     """NumbaDither must match StreamingDither on the same float32 canvas."""
     from hokku_server.dither_config import DitherConfig

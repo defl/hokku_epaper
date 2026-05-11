@@ -52,8 +52,7 @@ def face_detector():
 @pytest.mark.parametrize("filename", _PORTRAITS)
 def test_portrait_detected(face_detector, filename: str):
     path = _IMAGES / filename
-    if not path.exists():
-        pytest.skip(f"Test image missing: {path}")
+    assert path.exists(), f"Test image missing from repo: {path}"
     assert face_detector.has_face(path) is True, (
         f"yunet_opencv should detect a face in {filename}"
     )
@@ -62,8 +61,7 @@ def test_portrait_detected(face_detector, filename: str):
 @pytest.mark.parametrize("filename", _NON_PORTRAITS)
 def test_non_portrait_not_detected(face_detector, filename: str):
     path = _IMAGES / filename
-    if not path.exists():
-        pytest.skip(f"Test image missing: {path}")
+    assert path.exists(), f"Test image missing from repo: {path}"
     assert face_detector.has_face(path) is False, (
         f"yunet_opencv false-positively detected a face in {filename}"
     )

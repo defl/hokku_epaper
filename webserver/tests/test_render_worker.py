@@ -30,7 +30,6 @@ def _cfg_dict(preset: str = "atkinson") -> dict:
 
 # ── panel bytes size ───────────────────────────────────────────────────────────
 
-@pytest.mark.skipif(not _FIXTURE_PNG.exists(), reason="test image not found")
 def test_render_one_panel_bytes_size():
     panel_bytes, preview_bytes = render_one(
         str(_FIXTURE_PNG), _cfg_dict(), "landscape"
@@ -40,7 +39,6 @@ def test_render_one_panel_bytes_size():
 
 # ── preview bytes is valid PNG ─────────────────────────────────────────────────
 
-@pytest.mark.skipif(not _FIXTURE_PNG.exists(), reason="test image not found")
 def test_render_one_preview_is_png():
     _, preview_bytes = render_one(
         str(_FIXTURE_PNG), _cfg_dict(), "landscape"
@@ -50,7 +48,6 @@ def test_render_one_preview_is_png():
 
 # ── portrait orientation ────────────────────────────────────────────────────────
 
-@pytest.mark.skipif(not _FIXTURE_PNG.exists(), reason="test image not found")
 def test_render_one_portrait_size():
     panel_bytes, _ = render_one(
         str(_FIXTURE_PNG), _cfg_dict(), "portrait"
@@ -60,7 +57,6 @@ def test_render_one_portrait_size():
 
 # ── different orientations produce different bytes ─────────────────────────────
 
-@pytest.mark.skipif(not _FIXTURE_PNG.exists(), reason="test image not found")
 def test_render_one_orientation_matters():
     pb_l, _ = render_one(str(_FIXTURE_PNG), _cfg_dict(), "landscape")
     pb_p, _ = render_one(str(_FIXTURE_PNG), _cfg_dict(), "portrait")
@@ -69,7 +65,6 @@ def test_render_one_orientation_matters():
 
 # ── crop_to_fill_threshold forwarded correctly ─────────────────────────────────
 
-@pytest.mark.skipif(not _FIXTURE_PNG.exists(), reason="test image not found")
 def test_render_one_crop_threshold_accepted():
     panel_bytes, _ = render_one(
         str(_FIXTURE_PNG), _cfg_dict(), "landscape", crop_to_fill_threshold=1.0
@@ -79,7 +74,6 @@ def test_render_one_crop_threshold_accepted():
 
 # ── gradient image (colour content) ───────────────────────────────────────────
 
-@pytest.mark.skipif(not _FIXTURE_JPG.exists(), reason="test image not found")
 def test_render_one_colour_image():
     panel_bytes, preview_bytes = render_one(
         str(_FIXTURE_JPG), _cfg_dict("atkinson_hue_aware"), "landscape"

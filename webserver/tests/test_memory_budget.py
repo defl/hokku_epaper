@@ -68,8 +68,7 @@ def huge_jpeg(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_full_render_peak_under_50mb(image_name: str) -> None:
     """A single panel render's RSS delta must be ≤ 50 MB."""
     image_path = _TEST_IMAGES / image_name
-    if not image_path.is_file():
-        pytest.skip(f"test image not present: {image_path}")
+    assert image_path.is_file(), f"Test image missing from repo: {image_path}"
     delta, baseline = peak_rss_subprocess(image_path, cfg=_real_cfg())
     delta_mb = delta / (1024 * 1024)
     print(f"\n  {image_name}: render peak = {delta_mb:.1f} MB "
@@ -104,8 +103,7 @@ def test_full_render_huge_png_rejected_by_cap() -> None:
     from hokku_server.image_renderer import open_image_for_render
 
     image_path = _TEST_IMAGES / "synth_black_10000x10000.png"
-    if not image_path.is_file():
-        pytest.skip(f"synthetic image not present: {image_path}")
+    assert image_path.is_file(), f"Test image missing from repo: {image_path}"
     with pytest.raises((ValueError, Image.DecompressionBombError)):
         open_image_for_render(image_path)
 

@@ -375,8 +375,7 @@ def test_near_grayscale_mixed_mostly_grey():
 def test_near_grayscale_forest_bw():
     """The BW forest test image should be detected as near-grayscale."""
     bw_path = _TEST_IMAGES_DIR / "Forest_road_Slavne_2017_BW_G9.jpg"
-    if not bw_path.exists():
-        pytest.skip("BW test image not present")
+    assert bw_path.exists(), f"Test image missing from repo: {bw_path}"
     with open_image_for_render(bw_path) as img:
         assert _is_near_grayscale(img), "BW forest image should be detected as grayscale"
 
@@ -384,8 +383,7 @@ def test_near_grayscale_forest_bw():
 def test_near_grayscale_colour_photo():
     """A colour photo should not be detected as near-grayscale."""
     colour_path = _TEST_IMAGES_DIR / "Actress_Anna_Unterberger-2.jpg"
-    if not colour_path.exists():
-        pytest.skip("Colour test image not present")
+    assert colour_path.exists(), f"Test image missing from repo: {colour_path}"
     with open_image_for_render(colour_path) as img:
         assert not _is_near_grayscale(img), "Colour photo should not read as grayscale"
 

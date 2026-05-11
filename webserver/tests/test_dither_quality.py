@@ -332,7 +332,6 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
 
     cfg = PRESET_IMAGE_CONFIGS[preset_name]
     if mode == "streaming_numba":
-        pytest.importorskip("numba", reason="numba not installed")
         from hokku_server.dither_streaming_numba import NumbaDither
         with open_image_for_render(src) as img:
             raw = ImageRenderer(NumbaDither()).render_panel_bytes(img, cfg, "landscape")

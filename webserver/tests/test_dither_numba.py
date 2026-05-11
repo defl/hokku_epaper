@@ -1,13 +1,12 @@
 """Smoke tests for NumbaDither.
 
-Skipped entirely when numba is not installed (pytest.importorskip).
+numba is a hard dependency (see pyproject.toml). Import failure is a real error.
 """
 from __future__ import annotations
 
+import numba  # hard dep — must be installed
 import numpy as np
 import pytest
-
-numba = pytest.importorskip("numba", reason="numba not installed")
 
 from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming_numba import NumbaDither
