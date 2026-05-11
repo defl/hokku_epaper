@@ -54,13 +54,13 @@ def render_one(
         pass  # HEIF not installed; non-HEIF images still work
 
     from pathlib import Path
-    from hokku_server.dither_streaming import StreamingDither
+    from hokku_server.dither_streaming_numba import NumbaDither
     from hokku_server.image_abc import preview_png_from_panel_bytes
     from hokku_server.image_renderer import ImageRenderer, open_image_for_render
     from hokku_server.image_config import _image_config_from_dict
 
     cfg = _image_config_from_dict(image_config_dict)
-    renderer = ImageRenderer(StreamingDither())
+    renderer = ImageRenderer(NumbaDither())
     with open_image_for_render(Path(image_path)) as img:
         panel_bytes = renderer.render_panel_bytes(
             img, cfg, orientation,  # type: ignore[arg-type]
