@@ -280,7 +280,7 @@ def test_image_config_cache_slugs_are_distinct():
 
 # ── slow: full-scale visual output ────────────────────────────────────────────
 
-_MODES = ["streaming", "unconstrained", "numba"]
+_MODES = ["streaming", "unconstrained", "streaming_numba"]
 
 
 def _preview_params():
@@ -314,12 +314,14 @@ def _slow_ids():
 def test_dither_full_scale(src: Path, preset_name: str, mode: str):
     """Render at full panel resolution; write decoded PNG to build/test_dither_full/.
 
-    Both rendering paths (streaming and unconstrained) are exercised for every
-    image × preset combination so the output files can be compared visually.
+    All three rendering paths (streaming, unconstrained, streaming_numba) are
+    exercised for every image × preset combination so the output files can be
+    compared visually.
 
     Output layout (flat):
       build/test_dither_full/<stem>__<preset>__streaming.png
       build/test_dither_full/<stem>__<preset>__unconstrained.png
+      build/test_dither_full/<stem>__<preset>__streaming_numba.png
       build/test_dither_full/<stem>_original<ext>   — source copy (written once)
     """
     _BUILD_FULL_DIR.mkdir(parents=True, exist_ok=True)
@@ -329,10 +331,9 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
         shutil.copy2(src, original_dest)
 
     cfg = PRESET_IMAGE_CONFIGS[preset_name]
-    if mode == "numba":
+    if mode == "streaming_numba":
         pytest.importorskip("numba", reason="numba not installed")
         from hokku_server.dither_streaming_numba import NumbaDither
-        from hokku_server.image_renderer import ImageRenderer
         with open_image_for_render(src) as img:
             raw = ImageRenderer(NumbaDither()).render_panel_bytes(img, cfg, "landscape")
     else:
