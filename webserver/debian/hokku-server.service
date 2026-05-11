@@ -8,8 +8,9 @@ StartLimitBurst=5
 Type=simple
 ExecStart=/usr/bin/hokku-server /var/lib/hokku/config.json
 Environment="PYTHONUNBUFFERED=1"
+Environment="NUMBA_CACHE_DIR=/var/lib/hokku/numba_cache"
 DynamicUser=yes
-StateDirectory=hokku
+StateDirectory=hokku hokku/numba_cache
 CacheDirectory=hokku
 Restart=on-failure
 RestartSec=30

@@ -1,3 +1,13 @@
+hokku-server (3.0.0~alpha1-21) unstable; urgency=high
+
+  * Fix Numba JIT cache failure on deployed package: postinst-created
+    numba_cache/ was root-owned (755), so DynamicUser had no write access.
+    Move to StateDirectory=hokku hokku/numba_cache so systemd creates and
+    chowns the cache dir to the service user before the process starts.
+    NUMBA_CACHE_DIR=/var/lib/hokku/numba_cache stays in the service env.
+
+ -- hokku <hokku@hokku>  Sun, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-19) unstable; urgency=low
 
   * Add NumbaUnconstrainedDither (dither_unconstrained_numba.py): full-canvas

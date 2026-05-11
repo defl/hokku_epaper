@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.0
+
+### ~250× faster image conversion
+
+The dither pipeline's inner pixel loop is now compiled to native code via **Numba JIT** (`@numba.njit(nogil=True)`). On a Raspberry Pi the full 3200×1600 panel converts in roughly **1–2 seconds** instead of 4–8 minutes. The GIL is released during the compiled loop, so multiple concurrent renders in the thread pool make genuine CPU progress instead of serialising.
+
+The new default ditherer (`NumbaStreamingDither`) uses the same stripe-by-stripe memory model as before (≤ 50 MB peak), so memory usage is unchanged.
+
+### Architecture: strategy-pattern dither + renderer
+
+- **`AbstractDither`** ABC with four concrete implementations:
+  - `StreamingDither` — pure-Python, stripe-based (slow, baseline)
+  - `UnconstrainedDither` — pure-Python, full-canvas (~60 MB peak)
+  - `NumbaStreamingDither` — JIT stripe-based, production default
+  - `NumbaUnconstrainedDither` — JIT full-canvas, for quality comparisons
+- **`AbstractImageRenderer`** / **`ImageRenderer`** — renderer takes any `AbstractDither` as a strategy; swapping the dither changes memory/speed without touching rendering logic.
+
+### Face-aware dithering
+
+YuNet face detection (OpenCV DNN) is now integrated into the pre-processing pipeline. When enabled, detected faces are used to bias chroma and sharpness enhancements toward the subject. Configurable via `face_detector` in `AppConfig`.
+
+### Parallel render pool
+
+`image_worker_thread_count` in `AppConfig` controls the number of threads in the render pool. Default 1; increase to overlap renders when multiple images are queued. Safe with `NumbaStreamingDither` because the JIT loop releases the GIL.
+
+---
+
 ## 2.1
 
 Two big themes: **in-browser image management** (no more Samba or SSH) and **bulletproof deep-sleep / refresh handling** (the v2.0 firmware had several edge cases where a frame could get stuck never updating, or wake at the wrong time, or be hard to reflash). Plus the unified "60 s post-display awake window" model that replaced three separate ad-hoc waits.
