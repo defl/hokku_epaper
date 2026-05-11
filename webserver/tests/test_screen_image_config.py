@@ -22,6 +22,8 @@ from hokku_server.image_renderer import ImageRenderer, open_image_for_render
 from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
 from hokku_server.screen_image_config import ScreenImageConfig, _screen_image_config_from_dict
 
+from tests._helpers import is_oversize_fixture
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -137,6 +139,7 @@ def test_visual_render_all_test_images(_wipe_build_dir):
     test_images = sorted(
         p for p in _TEST_IMAGES_DIR.iterdir()
         if p.suffix.lower() in _IMAGE_EXTS
+        and not is_oversize_fixture(p)
     )
     assert test_images, f"No test images found in {_TEST_IMAGES_DIR}"
 

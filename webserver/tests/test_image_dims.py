@@ -5,13 +5,13 @@ images/bad/   — all corrupt/truncated; must return (None, None, <error>).
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
 
 from hokku_server.image_manager_abstract import _try_read_image_dims
-from hokku_server.image_renderer import MAX_IMAGE_PIXELS
+
+from tests._helpers import is_oversize_fixture
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_DIR = _REPO_ROOT / "images" / "test"
@@ -20,25 +20,9 @@ _BAD_DIR  = _REPO_ROOT / "images" / "bad"
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff", ".heic", ".heif", ".gif"}
 
 
-def _is_oversize_fixture(p: Path) -> bool:
-    """Skip synthetic oversize fixtures (e.g. synth_black_10000x10000.png).
-
-    They exist to exercise the decompression-bomb guard and are tested
-    separately — they intentionally exceed MAX_IMAGE_PIXELS and so will be
-    rejected at the header-read step.
-    """
-    m = re.search(r"(\d+)x(\d+)", p.name.lower())
-    if not m:
-        return False
-    try:
-        return int(m.group(1)) * int(m.group(2)) > MAX_IMAGE_PIXELS
-    except ValueError:
-        return False
-
-
 _test_images = sorted(
     p for p in _TEST_DIR.iterdir()
-    if p.suffix.lower() in _IMAGE_EXTS and not _is_oversize_fixture(p)
+    if p.suffix.lower() in _IMAGE_EXTS and not is_oversize_fixture(p)
 )
 _bad_images = sorted(
     p for p in _BAD_DIR.iterdir() if p.suffix.lower() in _IMAGE_EXTS

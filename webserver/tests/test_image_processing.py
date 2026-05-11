@@ -39,6 +39,8 @@ from hokku_server.image_config import ImageConfig, _bw_safe_image_config
 from hokku_server.image_renderer import ImageRenderer, compress_dynamic_range, open_image_for_render
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
+from tests._helpers import is_oversize_fixture
+
 # Panel ink L* limits — same derivation as image.py's private constants.
 _DISPLAY_BLACK_L = float(PALETTE_LAB[0, 0])
 _DISPLAY_WHITE_L = float(PALETTE_LAB[1, 0])
@@ -110,6 +112,7 @@ def _test_images() -> list[Path]:
     return sorted(
         p for p in _TEST_IMAGES_DIR.iterdir()
         if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
+        and not is_oversize_fixture(p)
     )
 
 

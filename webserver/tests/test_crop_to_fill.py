@@ -34,6 +34,8 @@ from hokku_server.display import TOTAL_BYTES
 from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
 from hokku_server.screen_image_config import ScreenImageConfig
 
+from tests._helpers import is_oversize_fixture
+
 
 def _render_indices(img, cfg, orientation, canvas_w, canvas_h, crop_to_fill_threshold=0.0, *, release_input=False):
     return ImageRenderer(NumbaStreamingDither()).render_indices(img, cfg, orientation, canvas_w, canvas_h, crop_to_fill_threshold, release_input=release_input)
@@ -254,6 +256,7 @@ def test_visual_letterbox_all_images(_wipe_letterbox_build):
     test_images = sorted(
         p for p in _TEST_IMAGES_DIR.iterdir()
         if p.suffix.lower() in _IMAGE_EXTS
+        and not is_oversize_fixture(p)
     )
     assert test_images, f"No test images found in {_TEST_IMAGES_DIR}"
 

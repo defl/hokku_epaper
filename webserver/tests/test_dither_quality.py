@@ -56,6 +56,8 @@ from hokku_server.image_config import ImageConfig, Orientation
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
+from tests._helpers import is_oversize_fixture
+
 
 def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0, *, unconstrained=False):
     dither = NumbaUnconstrainedDither() if unconstrained else NumbaStreamingDither()
@@ -111,6 +113,7 @@ def _test_images() -> list[Path]:
     return sorted(
         p for p in _TEST_IMAGES_DIR.iterdir()
         if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
+        and not is_oversize_fixture(p)
     )
 
 
