@@ -463,6 +463,10 @@ class AbstractImageManager(ABC):
                     convert_error=None,
                     screen_image_config_slug=None,
                 )
+            # Reset progress so the upcoming sync() starts a fresh batch
+            # rather than accumulating on top of a stale done/total pair.
+            self._progress = ConversionProgress(current_name=None, done=0, total=0)
+            self._inflight.clear()
             self._save_db()
             print("  Cache cleared")
 
