@@ -246,6 +246,12 @@ class AbstractImageManager(ABC):
                     done=self._progress.done,
                     total=self._progress.total + len(pending),
                 )
+                # Pre-reserve all pending names in _inflight right now, while
+                # still holding the lock.  Classify (phase 2) can take seconds
+                # with a large library; without this, a concurrent sync() call
+                # that fires during phase 2 would still see these images as
+                # pending (not yet inflight) and double-count them in the total.
+                self._inflight.update(r.name for r in pending)
             needs_thumb = [
                 r for r in self._records.values()
                 if r.image_width is not None and not self._thumb_path(r).exists()
@@ -723,10 +729,9 @@ class AbstractImageManager(ABC):
 
         expected_slug = screen_cfg.cache_slug()
 
-        with self._db_lock:
-            if name in self._inflight:
-                return  # already submitted by a concurrent call
-            self._inflight.add(name)
+        # _inflight was already populated by sync() under the lock, so no need
+        # to add here.  The assert is a safety net during development.
+        assert name in self._inflight, f"{name!r} missing from _inflight at dispatch"
 
         render_args = (
             str(src_path),

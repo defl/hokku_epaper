@@ -2292,7 +2292,7 @@ async function refreshStatus() {
         else                   etaStr = ` — ~${(secs / 3600).toFixed(1)}h left`;
       }
       proc.className = 'processing-indicator';
-      proc.textContent = `Dithering ${data.converting_name || '...'} (${Math.min(done + 1, total)} of ${total})${etaStr}`;
+      proc.textContent = `Dithering (${done} of ${total} done)${etaStr}`;
     } else {
       proc.className = 'processing-indicator idle';
       proc.textContent = 'Idle';
