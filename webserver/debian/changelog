@@ -1,3 +1,11 @@
+hokku-server (3.0.0~alpha1-16) unstable; urgency=low
+
+  * Add test_face_detect.py: contract tests for OpenCVYuNetFaceDetector
+    (3 portraits must detect, 7 non-portraits must not, missing file returns
+    False). Skips gracefully when opencv not installed.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-15) unstable; urgency=low
 
   * Restore yunet_opencv face detection: re-add face_detect_abstract.py,
