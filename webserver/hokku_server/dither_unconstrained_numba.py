@@ -11,7 +11,8 @@ Intended uses:
   * ``test_dither_quality.py`` time_intensive side-by-side renders alongside
     all four dither strategies.
 
-Requires: ``numba >= 0.56`` (``pip install numba``).  Import is deferred to
+Requires: ``numba >= 0.59`` (``pip install numba``).  0.59+ is needed for
+NumPy 2.x compatibility (``numpy.core`` was removed in NumPy 2.0).  Import is deferred to
 instantiation so other dither classes remain importable if numba is absent.
 """
 from __future__ import annotations

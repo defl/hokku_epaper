@@ -1,3 +1,13 @@
+hokku-server (3.0.0~alpha1-22) unstable; urgency=high
+
+  * Fix numba/NumPy 2.x incompatibility: numpy.core was removed in NumPy 2.0;
+    numba<0.59 breaks with ImportError at JIT time. Bump postinst constraint
+    from >=0.56 to >=0.59. Also tighten the install check to exercise a real
+    njit call so a broken existing install (old numba against NumPy 2.x) is
+    caught and upgraded even when "import numba" alone would succeed.
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-21) unstable; urgency=high
 
   * Fix Numba JIT cache failure on deployed package: postinst-created

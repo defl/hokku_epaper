@@ -53,12 +53,16 @@ if ! python3 -c "import cv2" 2>/dev/null; then
     echo "Warning: Could not install opencv-python-headless. Face detection will be unavailable."
 fi
 
-# Install numba via pip — required for NumbaDither (JIT-compiled dither inner
-# loop). Not available as a Debian package; pip is the only distribution path.
-if ! python3 -c "import numba" 2>/dev/null; then
-    echo "Installing numba via pip..."
-    pip3 install --break-system-packages "numba>=0.56" 2>/dev/null || \
-    pip3 install "numba>=0.56" 2>/dev/null || \
+# Install numba via pip — required for NumbaStreamingDither (JIT-compiled dither
+# inner loop). Not available as a Debian package; pip is the only distribution
+# path. numba>=0.59 is required for NumPy 2.x compatibility (numpy.core was
+# removed in NumPy 2.0; older numba versions break with an ImportError at JIT
+# time). We verify with a real njit call so an existing but broken install
+# (e.g. numba 0.56–0.58 against NumPy 2.x) is also caught and upgraded.
+if ! python3 -c "import numba; numba.njit(lambda x: x)(1)" 2>/dev/null; then
+    echo "Installing/upgrading numba (>=0.59 required for NumPy 2.x)..."
+    pip3 install --break-system-packages "numba>=0.59" 2>/dev/null || \
+    pip3 install "numba>=0.59" 2>/dev/null || \
     echo "Warning: Could not install numba. The dither pipeline requires numba; rendering will fail."
 fi
 

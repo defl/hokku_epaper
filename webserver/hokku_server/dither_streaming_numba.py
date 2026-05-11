@@ -5,7 +5,8 @@ inner ``for y: for x:`` loop is compiled to native code with
 ``@numba.njit(nogil=True, cache=True)``, releasing the GIL so parallel
 thread-pool renders can overlap without blocking the Python interpreter.
 
-Requires: ``numba >= 0.56`` (``pip install numba``).  The module can be
+Requires: ``numba >= 0.59`` (``pip install numba``).  0.59+ is needed for
+NumPy 2.x compatibility (``numpy.core`` was removed in NumPy 2.0).  The module can be
 imported without numba; the ImportError is deferred to instantiation time
 so other dither classes are not affected.
 
