@@ -1,3 +1,13 @@
+hokku-server (3.0.0~alpha1-23) unstable; urgency=high
+
+  * Fix NumPy 2.x / scipy incompatibility: system python3-scipy is compiled
+    against NumPy 1.x and raises "AttributeError: _ARRAY_API not found" when
+    numba triggers ensure_blas() during its first JIT compile. Add postinst
+    check that imports scipy.linalg.cython_blas (the C ext that actually
+    breaks) and upgrades to scipy>=1.14 if it fails.
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-22) unstable; urgency=high
 
   * Fix numba/NumPy 2.x incompatibility: numpy.core was removed in NumPy 2.0;
