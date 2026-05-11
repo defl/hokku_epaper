@@ -199,6 +199,35 @@ def test_clear_cache_triggers_immediate_reconversion(live_client):
     )
 
 
+def test_api_status_200_and_shape(live_client):
+    """/api/status must return 200 with the expected top-level keys.
+
+    Regression for AttributeError when flask_app.py referenced a field that
+    was removed from the Observations dataclass (e.g. has_face after face
+    detection was dropped).  Any attribute access on obs that doesn't exist
+    will blow up here rather than silently on the Pi.
+    """
+    client, _, name = live_client
+    resp = client.get("/hokku/api/status")
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.data[:200]}"
+
+    data = resp.get_json()
+    assert data is not None, "Response was not valid JSON"
+
+    # Top-level structure
+    assert "upload_files" in data
+    assert "failed_files" in data
+    assert "serve_data" in data
+
+    # Per-file entries: check every field referenced in flask_app is present
+    # and that no stale fields from removed features are referenced.
+    for entry in data["upload_files"]:
+        assert "name" in entry
+        assert "dithered" in entry
+        assert "is_bw" in entry          # classifier observation — must exist
+        assert "has_face" not in entry   # removed with face detection
+
+
 def test_serve_binary_no_images_returns_404_or_503(app_config: AppConfig, tmp_path: Path):
     """With no images uploaded the endpoint must return 503 (not 200)."""
     state = _make_state(app_config)
