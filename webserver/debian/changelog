@@ -1,3 +1,15 @@
+hokku-server (3.0.0~alpha1-18) unstable; urgency=low
+
+  * Remove all silent test skips on hard dependencies and committed images.
+    numba and cv2 are required — `import numba/cv2` replaces importorskip in
+    test_dither_numba, test_dither_quality, test_image_renderer.
+    All test images are in the repo — pytest.skip/skipif replaced with
+    assert/hard failure in test_face_detect, test_image_processing,
+    test_render_worker, test_memory_budget.
+    Only RLIMIT_AS / Windows skips remain (genuine OS-level absence).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-17) unstable; urgency=low
 
   * test_face_detect.py: make cv2 a hard top-level import (was importorskip);
