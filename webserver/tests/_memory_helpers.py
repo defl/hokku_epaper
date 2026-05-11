@@ -94,7 +94,11 @@ image_path = payload['image_path']
 render_kwargs = payload.get('render_kwargs', {})
 from pillow_heif import register_heif_opener
 register_heif_opener()
-from hokku_server.image import open_image_for_render, render_panel_bytes
+from hokku_server.dither_streaming import StreamingDither
+from hokku_server.image_renderer import ImageRenderer, open_image_for_render
+
+def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0):
+    return ImageRenderer(StreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
 from hokku_server.image_config import ImageConfig
 from hokku_server.dither_config import DitherConfig
 cfg = render_kwargs['cfg']

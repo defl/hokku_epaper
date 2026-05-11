@@ -1,4 +1,4 @@
-"""NumbaDither: streaming dither with a Numba-JIT pixel loop.
+"""NumbaDither: streaming dither with a Numba-JIT pixel loop (streaming variant).
 
 Same stripe-by-stripe memory model as StreamingDither (≤ 50 MB peak); the
 inner ``for y: for x:`` loop is compiled to native code with

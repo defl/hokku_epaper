@@ -28,7 +28,7 @@ from PIL import Image, ImageOps
 
 from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES
-from hokku_server.image import IMAGE_EXTENSIONS
+from hokku_server.image_renderer import IMAGE_EXTENSIONS
 from hokku_server.screen_image_config import ScreenImageConfig
 
 
@@ -279,10 +279,6 @@ class AbstractImageManager(ABC):
                 )
             except Exception as e:
                 print(f"  Classification failed for {rec.name!r}: {e}")
-        # Free the detector — the ~57 MB DNN graph is released back to the OS
-        # before any (potentially long) render work begins.
-        self._classifier.release_detector()
-
         # Phase 3: dispatch renders with the pre-computed ScreenImageConfigs.
         for rec in pending:
             self._submit_one(rec.name, screen_configs.get(rec.name))

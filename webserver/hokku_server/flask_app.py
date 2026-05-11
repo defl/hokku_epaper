@@ -26,9 +26,11 @@ from flask import (
 from pillow_heif import register_heif_opener
 from werkzeug.utils import secure_filename
 
+import io
 import os
 import psutil
 import subprocess
+from PIL import Image, UnidentifiedImageError
 try:
     from importlib.metadata import version as _pkg_version, PackageNotFoundError
 except ImportError:  # py<3.8 — not expected
@@ -38,7 +40,11 @@ except ImportError:  # py<3.8 — not expected
 from hokku_server.app_state import AppState
 from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES, VISUAL_H, VISUAL_W
-from hokku_server.image import IMAGE_EXTENSIONS
+from hokku_server.image_renderer import (
+    IMAGE_EXTENSIONS,
+    MAX_UPLOAD_BYTES,
+    MAX_UPLOAD_PIXELS,
+)
 from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS, PRESET_META
 from hokku_server.screen_headers import parse_battery_header, parse_frame_state
 from hokku_server.time_utils import calculate_sleep_seconds, format_duration_human
@@ -127,6 +133,9 @@ def create_app(
     config_path is optional but required for save-config to work.
     """
     app = Flask(__name__, template_folder=_resolve_template_folder(template_folder))
+    # Coarse byte-size guard — Flask rejects oversize uploads with 413 before
+    # we ever read the body, so a multi-gigabyte stream can't exhaust RAM.
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
     static_root = _resolve_static_folder()
     app_version = _read_version()
@@ -253,8 +262,32 @@ def create_app(
             if ext not in IMAGE_EXTENSIONS:
                 skipped.append({"name": name, "reason": f"unsupported extension {ext}"})
                 continue
+            data = f.read()
+            # Header-only dimension probe — PIL only reads the header here so
+            # this is cheap and safe even for a decompression-bomb PNG. Reject
+            # before writing to disk so we never decode a giant pixel buffer.
             try:
-                manager.add(name, f.read())
+                with Image.open(io.BytesIO(data)) as probe:
+                    w, h = probe.size
+            except Image.DecompressionBombError:
+                # PIL refused even the header — declared dimensions are
+                # astronomically large. Treat as a too-large image.
+                skipped.append({
+                    "name": name,
+                    "reason": f"image too large; cap {MAX_UPLOAD_PIXELS:,} px",
+                })
+                continue
+            except (UnidentifiedImageError, OSError):
+                skipped.append({"name": name, "reason": "unreadable image"})
+                continue
+            if w * h > MAX_UPLOAD_PIXELS:
+                skipped.append({
+                    "name": name,
+                    "reason": f"image too large ({w}x{h}); cap {MAX_UPLOAD_PIXELS:,} px",
+                })
+                continue
+            try:
+                manager.add(name, data)
                 saved.append(name)
             except FileExistsError:
                 skipped.append({"name": name, "reason": "already exists; remove to replace"})
@@ -480,10 +513,11 @@ def create_app(
             cfg = _image_config_from_dict(image_blob)
         except (TypeError, ValueError) as e:
             return jsonify({"error": f"invalid image config: {e}"}), 400
-        from hokku_server.image import open_image_for_render, render_preview_png
+        from hokku_server.image_renderer import ImageRenderer, open_image_for_render
+        from hokku_server.dither_streaming import StreamingDither
         print(f"  Preview: {name!r}")
         with open_image_for_render(path) as img:
-            png = render_preview_png(img, cfg, state.config.orientation)
+            png = ImageRenderer(StreamingDither()).render_preview_png(img, cfg, state.config.orientation)
         print(f"  Preview done: {name!r}")
         return _png_response(png)
 

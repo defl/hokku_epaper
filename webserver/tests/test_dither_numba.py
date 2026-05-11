@@ -10,7 +10,7 @@ import pytest
 numba = pytest.importorskip("numba", reason="numba not installed")
 
 from hokku_server.dither_config import DitherConfig
-from hokku_server.dither_numba import NumbaDither
+from hokku_server.dither_streaming_numba import NumbaDither
 from hokku_server.dither_streaming import StreamingDither
 from hokku_server.display import PALETTE_MEASURED_RGB
 

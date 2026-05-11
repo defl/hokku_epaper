@@ -18,7 +18,6 @@ def test_defaults():
     assert cfg.version == _CURRENT_VERSION
     assert cfg.image_config_default == PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
     assert cfg.classifier_bw_detect_enabled is True
-    assert cfg.classifier_face_detect_enabled is True
 
 
 def test_cache_slug_changes_with_orientation():
@@ -40,14 +39,9 @@ def test_cache_slug_changes_with_image_config_default():
 
 
 def test_cache_slug_changes_with_classifier_flags():
-    both_off = AppConfig(classifier_bw_detect_enabled=False, classifier_face_detect_enabled=False)
-    bw_on  = AppConfig(classifier_bw_detect_enabled=True,  classifier_face_detect_enabled=False)
-    face_on = AppConfig(classifier_bw_detect_enabled=False, classifier_face_detect_enabled=True)
-    both_on = AppConfig(classifier_bw_detect_enabled=True,  classifier_face_detect_enabled=True)
-    assert both_off.cache_slug() != bw_on.cache_slug()
-    assert both_off.cache_slug() != face_on.cache_slug()
-    assert bw_on.cache_slug() != face_on.cache_slug()
-    assert both_on.cache_slug() != both_off.cache_slug()
+    bw_off = AppConfig(classifier_bw_detect_enabled=False)
+    bw_on = AppConfig(classifier_bw_detect_enabled=True)
+    assert bw_off.cache_slug() != bw_on.cache_slug()
 
 
 def test_save_load_roundtrip(tmp_path: Path):
@@ -100,22 +94,17 @@ def test_unversioned_config_load_writes_back(tmp_path: Path):
     assert data["version"] == _CURRENT_VERSION
 
 
-def test_all_three_image_configs_roundtrip(tmp_path: Path):
-    face_cfg = PRESET_IMAGE_CONFIGS["floyd_steinberg"]
+def test_image_configs_roundtrip(tmp_path: Path):
     cfg = AppConfig(
         image_config_default=PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
         image_config_bw=PRESET_IMAGE_CONFIGS["floyd_steinberg"],
-        image_config_face=face_cfg,
         classifier_bw_detect_enabled=True,
-        classifier_face_detect_enabled=True,
     )
     p = tmp_path / "config.json"
     cfg.save(p)
     loaded = AppConfig.load(p)
     assert loaded == cfg
-    assert loaded.image_config_face == face_cfg
     assert loaded.classifier_bw_detect_enabled is True
-    assert loaded.classifier_face_detect_enabled is True
 
 
 def test_image_field_with_partial_blob_rejected(tmp_path: Path):
@@ -139,12 +128,12 @@ def test_v1_migrates_to_v2():
 
 
 def test_v2_migrates_to_v3():
-    """A v2 dict gains face_detector='yunet_opencv' on migration to v3."""
-    v2_blob = {"version": 2, "image_worker_thread_count": 1}
+    """A v2 dict (with or without face_detector) migrates to v3; face_detector is stripped."""
+    v2_blob = {"version": 2, "image_worker_thread_count": 1, "face_detector": "yunet_opencv"}
     from hokku_server.app_config import _migrate
     migrated = _migrate(v2_blob)
     assert migrated["version"] == _CURRENT_VERSION
-    assert migrated["face_detector"] == "yunet_opencv"
+    assert "face_detector" not in migrated
 
 
 def test_image_worker_thread_count_roundtrips(tmp_path: Path):

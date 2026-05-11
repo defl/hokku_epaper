@@ -3,10 +3,10 @@
 
 # Image processing (webserver)
 numpy
+numba                # JIT-compiled dither inner loop (NumbaDither)
 Pillow
 pillow-heif          # HEIC/HEIF support
 pillow-avif-plugin   # AVIF support
-opencv-python        # face detection (cv2)
 
 # Web server
 Flask

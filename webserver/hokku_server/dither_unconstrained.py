@@ -296,23 +296,7 @@ def dither(canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
     ``dither_constrained.dither_with_prep`` for production rendering
     within the 50 MB budget.
     """
-    algorithms = {"floyd_steinberg", "atkinson", "stucki", "noop"}
-    if cfg.algorithm not in algorithms:
-        raise ValueError(f"Unknown algorithm: {cfg.algorithm!r}")
-    if cfg.lut_name not in ("euclidean", "hue_aware"):
-        raise ValueError(f"Unknown lut_name: {cfg.lut_name!r}")
-
-    lut, lut_scale = _lut_and_scale(cfg)
-
-    if cfg.algorithm == "noop":
-        return _noop(canvas, lut, lut_scale, cfg.serpentine)
-
-    kernel = {
-        "floyd_steinberg": _FS_KERNEL,
-        "atkinson": _ATKINSON_KERNEL,
-        "stucki": _STUCKI_KERNEL,
-    }[cfg.algorithm]
-    return _full_canvas_diffusion(canvas, kernel, lut, lut_scale, cfg.serpentine)
+    return UnconstrainedDither().dither(canvas, cfg)
 
 
 # ── Public class ─────────────────────────────────────────────────────────────
@@ -330,5 +314,18 @@ class UnconstrainedDither(AbstractDither):
       * Offline rendering where RAM is not the bottleneck.
     """
 
+    _KERNELS: dict[str, _DiffusionKernel] = {
+        "floyd_steinberg": _FS_KERNEL,
+        "atkinson": _ATKINSON_KERNEL,
+        "stucki": _STUCKI_KERNEL,
+    }
+
     def dither(self, canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
-        return dither(canvas, cfg)
+        if cfg.algorithm not in self._KERNELS and cfg.algorithm != "noop":
+            raise ValueError(f"Unknown algorithm: {cfg.algorithm!r}")
+        if cfg.lut_name not in ("euclidean", "hue_aware"):
+            raise ValueError(f"Unknown lut_name: {cfg.lut_name!r}")
+        lut, lut_scale = _lut_and_scale(cfg)
+        if cfg.algorithm == "noop":
+            return _noop(canvas, lut, lut_scale, cfg.serpentine)
+        return _full_canvas_diffusion(canvas, self._KERNELS[cfg.algorithm], lut, lut_scale, cfg.serpentine)

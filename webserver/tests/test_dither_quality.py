@@ -44,16 +44,22 @@ from hokku_server.display import (
     indices_to_preview_rgb,
     panel_bytes_to_indices,
 )
-from hokku_server.image import (
-    ImageConfig,
-    Orientation,
-    _is_near_grayscale,
-    open_image_for_render,
-    preview_png_from_panel_bytes,
-    render_panel_bytes,
-    render_preview_png,
-)
+from hokku_server.dither_streaming import StreamingDither
+from hokku_server.dither_unconstrained import UnconstrainedDither
+from hokku_server.image_abc import preview_png_from_panel_bytes
+from hokku_server.image_classifier import _is_near_grayscale
+from hokku_server.image_config import ImageConfig, Orientation
+from hokku_server.image_renderer import ImageRenderer, open_image_for_render
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
+
+
+def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0, *, unconstrained=False):
+    dither = UnconstrainedDither() if unconstrained else StreamingDither()
+    return ImageRenderer(dither).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
+
+
+def render_preview_png(img, cfg, orientation, max_side_px=800, crop_to_fill_threshold=0.0):
+    return ImageRenderer(StreamingDither()).render_preview_png(img, cfg, orientation, max_side_px, crop_to_fill_threshold)
 
 
 # ── module-level helpers ──────────────────────────────────────────────────────
@@ -274,7 +280,7 @@ def test_image_config_cache_slugs_are_distinct():
 
 # ── slow: full-scale visual output ────────────────────────────────────────────
 
-_MODES = ["streaming", "unconstrained"]
+_MODES = ["streaming", "unconstrained", "numba"]
 
 
 def _preview_params():
@@ -323,9 +329,16 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
         shutil.copy2(src, original_dest)
 
     cfg = PRESET_IMAGE_CONFIGS[preset_name]
-    unconstrained = mode == "unconstrained"
-    with open_image_for_render(src) as img:
-        raw = render_panel_bytes(img, cfg, "landscape", unconstrained=unconstrained)
+    if mode == "numba":
+        pytest.importorskip("numba", reason="numba not installed")
+        from hokku_server.dither_streaming_numba import NumbaDither
+        from hokku_server.image_renderer import ImageRenderer
+        with open_image_for_render(src) as img:
+            raw = ImageRenderer(NumbaDither()).render_panel_bytes(img, cfg, "landscape")
+    else:
+        unconstrained = mode == "unconstrained"
+        with open_image_for_render(src) as img:
+            raw = render_panel_bytes(img, cfg, "landscape", unconstrained=unconstrained)
 
     assert len(raw) == TOTAL_BYTES
 

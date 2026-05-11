@@ -15,7 +15,7 @@ import pytest
 
 from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES
-from hokku_server.image_manager import _hash_name
+from hokku_server.image_manager_abstract import _hash_name
 
 
 def test_hash_name_stable():

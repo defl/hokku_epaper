@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 from hokku_server.app_config import AppConfig
-from hokku_server.image_manager import AbstractImageManager, SingleThreadedImageManager
+from hokku_server.image_manager_abstract import AbstractImageManager
+from hokku_server.image_manager_single import SingleThreadedImageManager
 
 # Suffixes as defined in image_manager
 _PANEL = "_panel.bin"
@@ -122,7 +123,6 @@ def test_scrub_off_keeps_old_slug_files(tmp_path, make_test_image):
         auto_clear_cache=False,
         # Disable classifier so the slug tracks image_config_default cleanly.
         classifier_bw_detect_enabled=False,
-        classifier_face_detect_enabled=False,
         image_config_default=replace(
             PRESET_IMAGE_CONFIGS["atkinson"],
             dither=replace(PRESET_IMAGE_CONFIGS["atkinson"].dither, algorithm="noop"),
@@ -178,7 +178,6 @@ def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
         auto_clear_cache=True,
         # Disable classifier so the slug tracks image_config_default cleanly.
         classifier_bw_detect_enabled=False,
-        classifier_face_detect_enabled=False,
         image_config_default=base_image,
     )
 
@@ -222,7 +221,6 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
         poll_interval_seconds=1, orientation="landscape",
         auto_clear_cache=True,
         classifier_bw_detect_enabled=False,
-        classifier_face_detect_enabled=False,
         image_config_default=base_image,
     )
 

@@ -44,42 +44,13 @@ if ! python3 -c "import pillow_heif" 2>/dev/null; then
     echo "Warning: Could not install pillow-heif. HEIC/HEIF support will be unavailable."
 fi
 
-# Install opencv (headless, no Qt/GTK/GStreamer) via pip if cv2 isn't
-# available. opencv-python-headless is the minimal build — it includes
-# FaceDetectorYN (objdetect, added 4.5.1), CascadeClassifier, and all the
-# image I/O we need. The contrib package adds patented extras (SIFT, etc.)
-# that we don't use and is significantly larger.
-if ! python3 -c "import cv2" 2>/dev/null; then
-    echo "Installing opencv-python-headless via pip..."
-    pip3 install --break-system-packages opencv-python-headless || \
-    pip3 install opencv-python-headless || \
-    echo "Warning: pip install of opencv-python-headless failed (see above). Face detection will be unavailable."
-    # Verify the install actually worked.
-    if ! python3 -c "import cv2" 2>/dev/null; then
-        echo "Warning: opencv-python-headless installed but cv2 is still not importable. Check pip output above."
-    fi
-fi
-
-# Install onnxruntime only when face_detector="yunet_onnx" is configured.
-# The default (yunet_opencv) and haar_opencv both run on plain opencv with
-# no onnxruntime dependency. Skipping this on first install saves ~100 MB of
-# download and install time on Pi-class hardware.
-_FACE_DETECTOR="yunet_opencv"
-if [ -f /var/lib/hokku/config.json ]; then
-    _FACE_DETECTOR=$(python3 -c \
-        "import json,sys; d=json.load(open('/var/lib/hokku/config.json')); \
-         print(d.get('face_detector','yunet_opencv'))" 2>/dev/null \
-        || echo "yunet_opencv")
-fi
-if [ "$_FACE_DETECTOR" = "yunet_onnx" ]; then
-    if ! python3 -c "import onnxruntime" 2>/dev/null; then
-        echo "Installing onnxruntime via pip (face_detector=yunet_onnx)..."
-        pip3 install --break-system-packages onnxruntime 2>/dev/null || \
-        pip3 install onnxruntime 2>/dev/null || \
-        echo "Warning: Could not install onnxruntime. The yunet_onnx detector will fail at startup."
-    fi
-else
-    echo "Skipping onnxruntime (face_detector=${_FACE_DETECTOR}; install manually if you switch to yunet_onnx)."
+# Install numba via pip — required for NumbaDither (JIT-compiled dither inner
+# loop). Not available as a Debian package; pip is the only distribution path.
+if ! python3 -c "import numba" 2>/dev/null; then
+    echo "Installing numba via pip..."
+    pip3 install --break-system-packages "numba>=0.56" 2>/dev/null || \
+    pip3 install "numba>=0.56" 2>/dev/null || \
+    echo "Warning: Could not install numba. The dither pipeline requires numba; rendering will fail."
 fi
 
 #DEBHELPER#

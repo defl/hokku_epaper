@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from hokku_server.app_config import AppConfig
-from hokku_server.image_manager import SingleThreadedImageManager
+from hokku_server.image_manager_single import SingleThreadedImageManager
 from hokku_server.serve_scheduler import ServeScheduler
 
 

@@ -12,11 +12,9 @@ from typing import TYPE_CHECKING
 
 from hokku_server.app_config import AppConfig
 from hokku_server.image_classifier import ImageClassifier
-from hokku_server.image_manager import (
-    AbstractImageManager,
-    MultiThreadedImageManager,
-    SingleThreadedImageManager,
-)
+from hokku_server.image_manager_abstract import AbstractImageManager
+from hokku_server.image_manager_multi import MultiThreadedImageManager
+from hokku_server.image_manager_single import SingleThreadedImageManager
 from hokku_server.serve_scheduler import ServeScheduler
 from hokku_server.worker_count import resolve_worker_count
 

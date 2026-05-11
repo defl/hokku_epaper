@@ -50,6 +50,14 @@ def _encode_panel_rgb_to_png(panel_rgb: NDArray[np.uint8], orientation: Orientat
     return buf.getvalue()
 
 
+def preview_png_from_panel_bytes(panel_bytes: bytes, orientation: "Orientation") -> bytes:
+    """Decode an already-rendered panel binary back to a PNG preview."""
+    from hokku_server.display import panel_bytes_to_indices, indices_to_preview_rgb
+    idx = panel_bytes_to_indices(panel_bytes)
+    rgb = indices_to_preview_rgb(idx)
+    return _encode_panel_rgb_to_png(rgb, orientation)
+
+
 def _apply_prepare_enhancements(canvas: Image.Image, cfg: ImageConfig) -> Image.Image:
     canvas = ImageOps.autocontrast(canvas, cutoff=cfg.prepare_autocontrast_cutoff)
     gamma_lut = [int(((i / 255.0) ** cfg.prepare_gamma) * 255) for i in range(256)] * 3

@@ -29,22 +29,22 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from hokku_server.dither import PALETTE_LAB, adaptive_saturate, rgb_to_lab
+from hokku_server.dither_streaming import PALETTE_LAB, adaptive_saturate, rgb_to_lab
 from hokku_server.dither_config import DitherConfig
 
 # Panel ink L* limits — same derivation as image.py's private constants.
 _DISPLAY_BLACK_L = float(PALETTE_LAB[0, 0])
 _DISPLAY_WHITE_L = float(PALETTE_LAB[1, 0])
-from hokku_server.image import (
-    _apply_prepare_enhancements,
-    _bw_safe_image_config,
-    _is_near_grayscale,
-    compress_dynamic_range,
-    open_image_for_render,
-    render_preview_png,
-)
-from hokku_server.image_config import ImageConfig
+from hokku_server.image_abc import _apply_prepare_enhancements
+from hokku_server.image_config import ImageConfig, _bw_safe_image_config
+from hokku_server.image_classifier import _is_near_grayscale
+from hokku_server.image_renderer import ImageRenderer, compress_dynamic_range, open_image_for_render
+from hokku_server.dither_streaming import StreamingDither
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
+
+
+def render_preview_png(img, cfg, orientation, max_side_px=800, crop_to_fill_threshold=0.0):
+    return ImageRenderer(StreamingDither()).render_preview_png(img, cfg, orientation, max_side_px, crop_to_fill_threshold)
 
 
 # ── shared helpers ────────────────────────────────────────────────────────────
@@ -528,8 +528,10 @@ def test_render_panel_bytes_honours_cfg_without_hidden_override():
     We verify this by rendering the SAME coloured image with hue-aware vs bw-safe
     configs and asserting the outputs differ (proving each cfg was actually honoured).
     """
-    from hokku_server.image import render_panel_bytes
     from hokku_server.display import TOTAL_BYTES
+
+    def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0):
+        return ImageRenderer(StreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
 
     # A hue-aware cfg that boosts saturation.
     cfg_hue = replace(

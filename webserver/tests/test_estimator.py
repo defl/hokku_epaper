@@ -19,7 +19,8 @@ from dataclasses import replace
 import pytest
 
 from hokku_server.app_config import AppConfig
-from hokku_server.image_manager import ConversionProgress, ImageRecord, SingleThreadedImageManager
+from hokku_server.image_manager_abstract import ConversionProgress, ImageRecord
+from hokku_server.image_manager_single import SingleThreadedImageManager
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

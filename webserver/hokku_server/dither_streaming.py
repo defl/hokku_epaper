@@ -252,99 +252,6 @@ def noop_dither(
     return lut[idx[..., 0], idx[..., 1], idx[..., 2]].astype(np.uint8)
 
 
-def _run_streaming(
-    canvas: CanvasLike,
-    kernel: DiffusionKernel,
-    lut: NDArray[np.uint8],
-    lut_scale: float,
-    serpentine: bool,
-    prep_stripe: PrepStripe | None = None,
-    stripe_h: int = _DEFAULT_STRIPE_H,
-) -> UInt8Array:
-    """Streaming error-diffusion dither (rolling-window implementation).
-
-    Holds only ``max_dy + 1`` rows of float32 working state plus one cached
-    pre-processed stripe at a time.  The full-panel float32 buffer is never
-    materialised.
-    """
-    if not (np.isfinite(lut_scale) and lut_scale > 0):
-        raise ValueError(f"lut_scale must be positive and finite, got {lut_scale}")
-    n = lut.shape[0]
-    if lut.shape != (n, n, n):
-        raise ValueError(f"lut must be a cube, got {lut.shape}")
-
-    if isinstance(canvas, Image.Image):
-        canvas = np.asarray(canvas)
-    canvas_arr = np.asarray(canvas)
-    if canvas_arr.ndim != 3 or canvas_arr.shape[2] != 3:
-        raise ValueError(f"canvas must be H×W×3 RGB, got {canvas_arr.shape}")
-    H, W = int(canvas_arr.shape[0]), int(canvas_arr.shape[1])
-
-    use_prep = canvas_arr.dtype == np.uint8 and prep_stripe is not None
-
-    pal_rgb = PALETTE_MEASURED_RGB
-    lut_max = n - 1
-    result_idx = np.empty((H, W), dtype=np.uint8)
-
-    max_dy = max(dy for _, dy, _ in kernel)
-    n_rows = max_dy + 1
-    rolling = np.zeros((n_rows, W, 3), dtype=np.float32)
-
-    stripe_y0 = -1
-    stripe_data: NDArray[np.float32] | None = None
-
-    def _row_pixels(y: int) -> NDArray[np.float32]:
-        nonlocal stripe_y0, stripe_data
-        if not use_prep:
-            return canvas_arr[y].astype(np.float32, copy=True)
-        sh = stripe_h
-        new_y0 = (y // sh) * sh
-        if new_y0 != stripe_y0:
-            stripe_data = None
-            y1 = min(new_y0 + sh, H)
-            stripe_data = prep_stripe(canvas_arr[new_y0:y1])  # type: ignore[misc]
-            stripe_y0 = new_y0
-        assert stripe_data is not None
-        return stripe_data[y - stripe_y0].astype(np.float32, copy=True)
-
-    rolling[0] += _row_pixels(0)
-
-    for y in range(H):
-        reverse = serpentine and (y % 2 == 0)
-        x_iter = range(W - 1, -1, -1) if reverse else range(W)
-
-        for x in x_iter:
-            r = min(max(rolling[0, x, 0], 0.0), 255.0)
-            g = min(max(rolling[0, x, 1], 0.0), 255.0)
-            b = min(max(rolling[0, x, 2], 0.0), 255.0)
-            ri = min(int(r / lut_scale), lut_max)
-            gi = min(int(g / lut_scale), lut_max)
-            bi = min(int(b / lut_scale), lut_max)
-            idx = int(lut[ri, gi, bi])
-            result_idx[y, x] = idx
-            er = r - pal_rgb[idx, 0]
-            eg = g - pal_rgb[idx, 1]
-            eb = b - pal_rgb[idx, 2]
-            for dx, dy, wgt in kernel:
-                eff_dx = -dx if reverse else dx
-                nx = x + eff_dx
-                if 0 <= nx < W and y + dy < H:
-                    rolling[dy, nx, 0] += er * wgt
-                    rolling[dy, nx, 1] += eg * wgt
-                    rolling[dy, nx, 2] += eb * wgt
-
-        if y + 1 < H:
-            for i in range(n_rows - 1):
-                rolling[i] = rolling[i + 1]
-            rolling[n_rows - 1].fill(0)
-            rolling[0] += _row_pixels(y + 1)
-
-        if y % 200 == 0:
-            print(f"  Dithering (streaming): {y}/{H}")
-
-    return result_idx
-
-
 # ── Public class ─────────────────────────────────────────────────────────────
 
 
@@ -361,7 +268,7 @@ class StreamingDither(AbstractDither):
         lut, scale = lut_and_scale_for_dither_config(cfg)
         if cfg.algorithm == "noop":
             return noop_dither(canvas, lut, scale, cfg.serpentine)
-        return _run_streaming(canvas, _KERNEL_FOR[cfg.algorithm], lut, scale, cfg.serpentine)
+        return self._diffuse(canvas, _KERNEL_FOR[cfg.algorithm], lut, scale, cfg.serpentine)
 
     def dither_with_prep(
         self,
@@ -374,10 +281,106 @@ class StreamingDither(AbstractDither):
         lut, scale = lut_and_scale_for_dither_config(cfg)
         if cfg.algorithm == "noop":
             return noop_dither(canvas, lut, scale, cfg.serpentine)
-        return _run_streaming(
+        return self._diffuse(
             canvas, _KERNEL_FOR[cfg.algorithm], lut, scale, cfg.serpentine,
             prep_stripe=prep_stripe, stripe_h=stripe_h,
         )
+
+    @staticmethod
+    def _diffuse(
+        canvas: CanvasLike,
+        kernel: DiffusionKernel,
+        lut: NDArray[np.uint8],
+        lut_scale: float,
+        serpentine: bool,
+        prep_stripe: PrepStripe | None = None,
+        stripe_h: int = _DEFAULT_STRIPE_H,
+    ) -> UInt8Array:
+        """Streaming error-diffusion dither (rolling-window implementation).
+
+        Holds only ``max_dy + 1`` rows of float32 working state plus one cached
+        pre-processed stripe at a time.  The full-panel float32 buffer is never
+        materialised.
+        """
+        if not (np.isfinite(lut_scale) and lut_scale > 0):
+            raise ValueError(f"lut_scale must be positive and finite, got {lut_scale}")
+        n = lut.shape[0]
+        if lut.shape != (n, n, n):
+            raise ValueError(f"lut must be a cube, got {lut.shape}")
+
+        if isinstance(canvas, Image.Image):
+            canvas = np.asarray(canvas)
+        canvas_arr = np.asarray(canvas)
+        if canvas_arr.ndim != 3 or canvas_arr.shape[2] != 3:
+            raise ValueError(f"canvas must be H×W×3 RGB, got {canvas_arr.shape}")
+        H, W = int(canvas_arr.shape[0]), int(canvas_arr.shape[1])
+
+        use_prep = canvas_arr.dtype == np.uint8 and prep_stripe is not None
+
+        pal_rgb = PALETTE_MEASURED_RGB
+        lut_max = n - 1
+        result_idx = np.empty((H, W), dtype=np.uint8)
+
+        max_dy = max(dy for _, dy, _ in kernel)
+        n_rows = max_dy + 1
+        rolling = np.zeros((n_rows, W, 3), dtype=np.float32)
+
+        stripe_y0 = -1
+        stripe_data: NDArray[np.float32] | None = None
+
+        def _row_pixels(y: int) -> NDArray[np.float32]:
+            nonlocal stripe_y0, stripe_data
+            if not use_prep:
+                return canvas_arr[y].astype(np.float32, copy=True)
+            sh = stripe_h
+            new_y0 = (y // sh) * sh
+            if new_y0 != stripe_y0:
+                stripe_data = None
+                y1 = min(new_y0 + sh, H)
+                stripe_data = prep_stripe(canvas_arr[new_y0:y1])  # type: ignore[misc]
+                stripe_y0 = new_y0
+            assert stripe_data is not None
+            return stripe_data[y - stripe_y0].astype(np.float32, copy=True)
+
+        rolling[0] += _row_pixels(0)
+
+        for y in range(H):
+            reverse = serpentine and (y % 2 == 0)
+            x_iter = range(W - 1, -1, -1) if reverse else range(W)
+
+            for x in x_iter:
+                r = min(max(rolling[0, x, 0], 0.0), 255.0)
+                g = min(max(rolling[0, x, 1], 0.0), 255.0)
+                b = min(max(rolling[0, x, 2], 0.0), 255.0)
+                ri = min(int(r / lut_scale), lut_max)
+                gi = min(int(g / lut_scale), lut_max)
+                bi = min(int(b / lut_scale), lut_max)
+                idx = int(lut[ri, gi, bi])
+                result_idx[y, x] = idx
+                er = r - pal_rgb[idx, 0]
+                eg = g - pal_rgb[idx, 1]
+                eb = b - pal_rgb[idx, 2]
+                for dx, dy, wgt in kernel:
+                    eff_dx = -dx if reverse else dx
+                    nx = x + eff_dx
+                    if 0 <= nx < W and y + dy < H:
+                        rolling[dy, nx, 0] += er * wgt
+                        rolling[dy, nx, 1] += eg * wgt
+                        rolling[dy, nx, 2] += eb * wgt
+
+            if y + 1 < H:
+                for i in range(n_rows - 1):
+                    rolling[i] = rolling[i + 1]
+                rolling[n_rows - 1].fill(0)
+                rolling[0] += _row_pixels(y + 1)
+
+            if y % 200 == 0:
+                print(f"  Dithering (streaming): {y}/{H}")
+
+        return result_idx
+
+
+_run_streaming = StreamingDither._diffuse  # backward-compat alias
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

@@ -14,10 +14,8 @@ import threading
 from pathlib import Path
 
 from hokku_server.app_config import AppConfig
-from hokku_server.image_manager import (
-    MultiThreadedImageManager,
-    SingleThreadedImageManager,
-)
+from hokku_server.image_manager_multi import MultiThreadedImageManager
+from hokku_server.image_manager_single import SingleThreadedImageManager
 
 
 def test_single_threaded_does_not_spawn_threads(

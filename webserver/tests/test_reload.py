@@ -34,10 +34,8 @@ from hokku_server.app_state import AppState, build_manager
 from hokku_server.app_config import AppConfig
 from hokku_server.flask_app import create_app
 from hokku_server.image_classifier import ImageClassifier
-from hokku_server.image_manager import (
-    MultiThreadedImageManager,
-    SingleThreadedImageManager,
-)
+from hokku_server.image_manager_multi import MultiThreadedImageManager
+from hokku_server.image_manager_single import SingleThreadedImageManager
 from hokku_server.serve_scheduler import ServeScheduler
 from hokku_server.watcher import Watcher
 

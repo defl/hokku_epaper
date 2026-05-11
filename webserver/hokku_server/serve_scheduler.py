@@ -15,7 +15,7 @@ import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from hokku_server.image_manager import AbstractImageManager
+from hokku_server.image_manager_abstract import AbstractImageManager
 from hokku_server.screen_headers import battery_percent, parse_battery_header
 
 

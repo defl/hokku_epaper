@@ -54,19 +54,17 @@ def render_one(
         pass  # HEIF not installed; non-HEIF images still work
 
     from pathlib import Path
-
-    from hokku_server.image import (
-        open_image_for_render,
-        preview_png_from_panel_bytes,
-        render_panel_bytes,
-    )
+    from hokku_server.dither_streaming import StreamingDither
+    from hokku_server.image_abc import preview_png_from_panel_bytes
+    from hokku_server.image_renderer import ImageRenderer, open_image_for_render
     from hokku_server.image_config import _image_config_from_dict
 
     cfg = _image_config_from_dict(image_config_dict)
+    renderer = ImageRenderer(StreamingDither())
     with open_image_for_render(Path(image_path)) as img:
-        panel_bytes = render_panel_bytes(
+        panel_bytes = renderer.render_panel_bytes(
             img, cfg, orientation,  # type: ignore[arg-type]
-            crop_to_fill_threshold=crop_to_fill_threshold,
+            crop_to_fill_threshold,
         )
     preview_bytes = preview_png_from_panel_bytes(panel_bytes, orientation)  # type: ignore[arg-type]
     return panel_bytes, preview_bytes

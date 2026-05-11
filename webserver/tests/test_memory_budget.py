@@ -93,29 +93,21 @@ def test_full_render_huge_jpeg_under_50mb(huge_jpeg: Path) -> None:
 
 
 @pytest.mark.time_intensive
-def test_full_render_huge_png_documents_decode_limit() -> None:
-    """A 10 000 × 10 000 PNG cannot fit the 50 MB budget.
+def test_full_render_huge_png_rejected_by_cap() -> None:
+    """A 10 000 × 10 000 PNG is rejected by the decompression-bomb cap.
 
-    PNG decoding cannot be downscaled in flight (no equivalent of JPEG
-    ``draft``), so the full ~300 MB uint8 buffer must be materialised
-    before ``thumbnail`` can shrink it. This test documents that limit:
-    it asserts the render *does* exceed 50 MB, so a future regression
-    that secretly fixes the case (e.g. by adopting libvips) flips the
-    test red and forces us to update the budget guarantees.
+    Without streaming PNG decode in PIL, the full ~300 MB uint8 buffer would
+    otherwise materialise before ``thumbnail`` can shrink it — fatal on a
+    Pi. ``MAX_IMAGE_PIXELS`` now rejects such files at header read, so RSS
+    growth stays minimal and ``open_image_for_render`` raises ``ValueError``.
     """
+    from hokku_server.image_renderer import open_image_for_render
+
     image_path = _TEST_IMAGES / "synth_black_10000x10000.png"
     if not image_path.is_file():
         pytest.skip(f"synthetic image not present: {image_path}")
-    delta, baseline = peak_rss_subprocess(image_path, cfg=_real_cfg())
-    delta_mb = delta / (1024 * 1024)
-    print(f"\n  10000x10000 PNG: render peak = {delta_mb:.1f} MB "
-          f"(baseline {baseline / 1024 / 1024:.1f} MB)")
-    assert delta > 200 * 1024 * 1024, (
-        f"a 10 000×10 000 PNG should still exceed 200 MB without a streaming "
-        f"PNG decoder — got {delta_mb:.1f} MB. If this test is now passing, "
-        f"the PNG-decode path has improved and this test (and the budget "
-        f"docstring) need updating."
-    )
+    with pytest.raises((ValueError, Image.DecompressionBombError)):
+        open_image_for_render(image_path)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -131,7 +123,7 @@ def test_compress_dynamic_range_peak_under_1mb_per_row() -> None:
     row. Float64 intermediates would blow this; float32 should keep us well
     under 1 MB even with the function's transient buffers.
     """
-    from hokku_server.image import compress_dynamic_range
+    from hokku_server.image_renderer import compress_dynamic_range
     row = np.random.default_rng(0).integers(
         0, 256, size=(1, 3200, 3), dtype=np.uint8
     ).astype(np.float32)
@@ -161,8 +153,8 @@ def test_compress_dynamic_range_peak_under_30mb_per_stripe() -> None:
     end-to-end budget — the streaming dither holds at most one cached
     stripe at a time.
     """
-    from hokku_server.image import compress_dynamic_range
-    from hokku_server.dither import DEFAULT_STRIPE_H
+    from hokku_server.image_renderer import compress_dynamic_range
+    from hokku_server.dither_abc import _DEFAULT_STRIPE_H as DEFAULT_STRIPE_H
     stripe = np.random.default_rng(0).integers(
         0, 256, size=(DEFAULT_STRIPE_H, 3200, 3), dtype=np.uint8
     )

@@ -12,8 +12,8 @@ dependencies = [
     "flask>=2.0",
     "pillow>=9.0",
     "numpy>=1.20",
+    "numba>=0.56",
     "pillow-heif>=0.10",
-    "opencv-python-headless>=4.5.1",
     "psutil>=5.9",
 ]
 
@@ -24,19 +24,13 @@ hokku-server = "hokku_server:main"
 test = [
     "pytest>=7.0",
 ]
-yunet-onnx = [
-    "onnxruntime>=1.15",
-]
-numba = [
-    "numba>=0.56",
-]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["hokku_server*"]
 
 [tool.setuptools.package-data]
-hokku_server = ["models/*.onnx", "models/ATTRIBUTION.md"]
+hokku_server = ["models/ATTRIBUTION.md"]
 
 [tool.pytest.ini_options]
 addopts = ["-m", "not time_intensive"]

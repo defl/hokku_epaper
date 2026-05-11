@@ -80,7 +80,7 @@ def test_example_config_no_unknown_fields():
     cfg_fields = {f.name for f in fields(AppConfig)}
     # image_config_* are parsed specially and not in fields() as plain keys
     # after the nested parse — check them separately.
-    structural_extras = {"image_config_default", "image_config_bw", "image_config_face"}
+    structural_extras = {"image_config_default", "image_config_bw"}
     unknown = set(data.keys()) - cfg_fields - structural_extras
     assert not unknown, (
         f"Unknown keys in config.example.json (possible typos): {sorted(unknown)}. "
@@ -92,7 +92,6 @@ def test_example_config_classifier_flags():
     """Classifier flags should be explicitly set in the example (not left to defaults)."""
     data = _load_example()
     assert "classifier_bw_detect_enabled" in data
-    assert "classifier_face_detect_enabled" in data
 
 
 def test_example_config_upload_and_cache_dirs_are_nonempty():

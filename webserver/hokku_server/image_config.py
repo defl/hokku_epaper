@@ -41,6 +41,18 @@ class ImageConfig:
         return hashlib.sha256(raw.encode()).hexdigest()[:14]
 
 
+def _bw_safe_image_config(cfg: "ImageConfig") -> "ImageConfig":
+    """Return *cfg* with saturation boosters disabled (safe for B&W images)."""
+    from dataclasses import replace
+    return replace(
+        cfg,
+        color_enhance=1.05,
+        use_adaptive_saturate=False,
+        adaptive_vivid=False,
+        scale_chroma=False,
+    )
+
+
 def _image_config_from_dict(blob: Any, *, field_path: str = "image_config") -> ImageConfig:
     """Build an ImageConfig from a nested JSON object (or default if absent).
 

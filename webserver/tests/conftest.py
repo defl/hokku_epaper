@@ -15,11 +15,9 @@ register_heif_opener()
 from hokku_server.app_config import AppConfig
 from hokku_server.dither_config import DitherConfig
 from hokku_server.image_config import ImageConfig
-from hokku_server.image_manager import (
-    AbstractImageManager,
-    MultiThreadedImageManager,
-    SingleThreadedImageManager,
-)
+from hokku_server.image_manager_abstract import AbstractImageManager
+from hokku_server.image_manager_multi import MultiThreadedImageManager
+from hokku_server.image_manager_single import SingleThreadedImageManager
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 
