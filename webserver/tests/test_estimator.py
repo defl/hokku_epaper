@@ -269,3 +269,85 @@ def test_pixel_sum_across_multiple_pending(app_config: AppConfig):
     assert mgr.estimate_remaining_seconds() == pytest.approx(0.56)
 
 
+# ── parallelism and inflight correctness ──────────────────────────────────────
+
+def test_estimate_divided_by_worker_count(app_config: AppConfig):
+    """ETA must scale down proportionally with worker count.
+
+    With 4 workers the estimate should be 4× lower than with 1 worker.
+    Pre-fix the code returned the serial estimate without dividing by workers,
+    causing wildly inflated ETAs (e.g. 8× too high with 8 workers).
+    """
+    records = [
+        _rec("ref.png", 1000, "ok",      conversion_seconds=1.0, width=1000, height=1),
+        _rec("p1.png",  1000, "pending",                          width=1000, height=1),
+        _rec("p2.png",  1000, "pending",                          width=1000, height=1),
+        _rec("p3.png",  1000, "pending",                          width=1000, height=1),
+        _rec("p4.png",  1000, "pending",                          width=1000, height=1),
+    ]
+    # Serial estimate = 4 × 1.0 s = 4.0 s
+    # With 4 workers → 4.0 / 4 = 1.0 s
+
+    # SingleThreadedImageManager.resolved_worker_count == 1
+    serial_mgr = _manager_with(app_config, records, _converting(total=4))
+    serial_eta = serial_mgr.estimate_remaining_seconds()
+    assert serial_eta == pytest.approx(4.0), f"expected 4.0 s serial, got {serial_eta}"
+
+    # Pretend it has 4 workers via a thin subclass
+    class _FourWorkerMgr(SingleThreadedImageManager):
+        @property
+        def resolved_worker_count(self) -> int:
+            return 4
+
+    mgr4 = _FourWorkerMgr(app_config)
+    mgr4._records = {r.name: r for r in records}
+    mgr4._progress = _converting(total=4)
+    parallel_eta = mgr4.estimate_remaining_seconds()
+    assert parallel_eta == pytest.approx(1.0), f"expected 1.0 s with 4 workers, got {parallel_eta}"
+    assert serial_eta / parallel_eta == pytest.approx(4.0)
+
+
+def test_inflight_images_excluded_from_estimate(app_config: AppConfig):
+    """Inflight images (currently rendering) must not inflate the ETA.
+
+    An inflight image still has convert_status='pending' until the worker
+    finishes, so naively iterating pending records counts it twice — once as
+    'work remaining' and once as a rendered image contributing to the rate.
+    Pre-fix this caused ETAs to be ~(total/remaining)× too high.
+    """
+    # Rate: 1000 px → 1.0 s → 0.001 s/px
+    # Truly pending (not inflight): a.png 1000 px → ETA 1.0 s
+    # Inflight (being rendered right now): b.png 1000 px — must NOT be counted
+    records = [
+        _rec("ref.png", 1000, "ok",      conversion_seconds=1.0, width=1000, height=1),
+        _rec("a.png",   1000, "pending",                          width=1000, height=1),
+        _rec("b.png",   1000, "pending",                          width=1000, height=1),
+    ]
+    mgr = _manager_with(app_config, records, _converting(total=2, done=0))
+
+    # Mark b.png as inflight (dispatched to worker, still pending in DB)
+    mgr._inflight.add("b.png")
+
+    eta = mgr.estimate_remaining_seconds()
+    # Only a.png is truly pending → 1.0 s (not 2.0 s which would include b.png)
+    assert eta == pytest.approx(1.0), (
+        f"expected 1.0 s (excluding inflight b.png), got {eta}"
+    )
+
+
+def test_all_pending_inflight_returns_none(app_config: AppConfig):
+    """When every pending image is already inflight, return None.
+
+    All work is already dispatched; there's nothing left to schedule,
+    so we can't give a meaningful 'time until next dispatch' estimate.
+    """
+    records = [
+        _rec("ref.png", 1000, "ok",      conversion_seconds=1.0, width=1000, height=1),
+        _rec("a.png",   1000, "pending",                          width=1000, height=1),
+    ]
+    mgr = _manager_with(app_config, records, _converting(total=1, done=0))
+    mgr._inflight.add("a.png")  # already dispatched
+
+    assert mgr.estimate_remaining_seconds() is None
+
+

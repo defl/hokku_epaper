@@ -419,7 +419,13 @@ class AbstractImageManager(ABC):
         if self._progress.total - self._progress.done <= 0:
             return None
 
-        pending = [r for r in self._records.values() if r.convert_status == "pending"]
+        # Exclude images that are currently inflight (already being rendered but
+        # still have convert_status="pending" until the worker finishes).
+        # Including them inflates the pixel count that needs estimating.
+        pending = [
+            r for r in self._records.values()
+            if r.convert_status == "pending" and r.name not in self._inflight
+        ]
         if not pending:
             return None
 
@@ -439,8 +445,14 @@ class AbstractImageManager(ABC):
 
         total_pixels = sum(r.image_width * r.image_height for r in converted_px)
         total_time   = sum(r.last_conversion_seconds for r in converted_px)
-        rate = total_time / total_pixels  # seconds per pixel
-        return sum(r.image_width * r.image_height * rate for r in pending_px)
+        rate = total_time / total_pixels  # seconds per pixel (single-threaded rate)
+
+        # Divide by worker count because renders run in parallel. Without this
+        # division the estimate is off by ~worker_count× (e.g. 8× too high with
+        # 8 workers).
+        workers = max(1, self.resolved_worker_count)
+        serial_estimate = sum(r.image_width * r.image_height * rate for r in pending_px)
+        return serial_estimate / workers
 
     # ── Cache control ────────────────────────────────────────────
 
