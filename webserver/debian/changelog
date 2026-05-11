@@ -1,3 +1,20 @@
+hokku-server (3.0.0~alpha1-14) unstable; urgency=low
+
+  * Consolidate dither/image pipeline: remove shims (dither.py,
+    dither_constrained.py, image.py, image_manager.py), drop all face
+    detection code and models, rename dither_numba.py →
+    dither_streaming_numba.py, make numba a hard dependency (pyproject.toml
+    + requirements.txt + postinst pip-install), remove opencv/onnxruntime
+    postinst blocks, inline StreamingDither._diffuse() and
+    UnconstrainedDither.dither() dispatch, require AbstractDither on
+    ImageRenderer construction, parametrize dither and renderer tests over
+    all three concrete classes.
+  * Fix AttributeError on /hokku/api/status: remove obs.has_face reference
+    (face detection removed) and drop "Face detected" row from UI detail
+    table.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-13) unstable; urgency=low
 
   * Rename Python package webserver → hokku_server; update all internal
