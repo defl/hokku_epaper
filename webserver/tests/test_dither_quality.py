@@ -44,7 +44,9 @@ from hokku_server.display import (
     indices_to_preview_rgb,
     panel_bytes_to_indices,
 )
+import numba  # hard dep — must be installed
 from hokku_server.dither_streaming import StreamingDither
+from hokku_server.dither_streaming_numba import NumbaDither
 from hokku_server.dither_unconstrained import UnconstrainedDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
 from hokku_server.image_classifier import _is_near_grayscale
@@ -332,7 +334,6 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
 
     cfg = PRESET_IMAGE_CONFIGS[preset_name]
     if mode == "streaming_numba":
-        from hokku_server.dither_streaming_numba import NumbaDither
         with open_image_for_render(src) as img:
             raw = ImageRenderer(NumbaDither()).render_panel_bytes(img, cfg, "landscape")
     else:
