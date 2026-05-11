@@ -1,3 +1,23 @@
+hokku-server (3.0.0~alpha1-24) unstable; urgency=medium
+
+  * Fix dither progress counter never clearing after clear_caches: reset
+    _progress and _inflight in clear_caches() so the next sync() batch
+    starts from done=0/total=0 rather than accumulating on a stale total.
+  * Fix double-counted dither total with large libraries: pre-reserve
+    pending images in _inflight inside the sync() lock so a concurrent
+    watcher sync() during the classify phase cannot add them a second time.
+  * UI: self-host Shippori Mincho font (OFL 1.1) — removes all Google
+    Fonts requests on page load.
+  * UI: screens table shows last-served thumbnail (clickable to full image);
+    Details modal shows thumbnail + filename.
+  * UI: fix seen_at timestamp display (seconds were treated as ms).
+  * UI: fix stale "Dithering 12/12" badge persisting after batch completes.
+  * UI: fix broken row borders caused by display:flex on <td>.
+  * UI: overdue battery warning now shows percentage alongside voltage.
+  * README: document zero external requests on page load.
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-23) unstable; urgency=high
 
   * Fix NumPy 2.x / scipy incompatibility: system python3-scipy is compiled
