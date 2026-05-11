@@ -1,6 +1,8 @@
 """AppConfig: load/save roundtrip, defaults, cache_slug, version + migrations."""
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -58,15 +60,17 @@ def test_save_load_roundtrip(tmp_path: Path):
 
 
 def test_load_missing_exits(tmp_path: Path):
-    with pytest.raises(SystemExit):
-        AppConfig.load(tmp_path / "nope.json")
+    with contextlib.redirect_stderr(io.StringIO()):
+        with pytest.raises(SystemExit):
+            AppConfig.load(tmp_path / "nope.json")
 
 
 def test_load_invalid_json_exits(tmp_path: Path):
     p = tmp_path / "bad.json"
     p.write_text("{not json")
-    with pytest.raises(SystemExit):
-        AppConfig.load(p)
+    with contextlib.redirect_stderr(io.StringIO()):
+        with pytest.raises(SystemExit):
+            AppConfig.load(p)
 
 
 def test_version_written_on_save(tmp_path: Path):
@@ -114,8 +118,9 @@ def test_image_field_with_partial_blob_rejected(tmp_path: Path):
         "version": _CURRENT_VERSION,
         "image_config_default": {"dither": {}},
     }))
-    with pytest.raises(SystemExit):
-        AppConfig.load(p)
+    with contextlib.redirect_stderr(io.StringIO()):
+        with pytest.raises(SystemExit):
+            AppConfig.load(p)
 
 
 def test_v1_migrates_to_v2():
