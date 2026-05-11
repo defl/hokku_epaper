@@ -1,3 +1,22 @@
+hokku-server (3.0.0~alpha1-15) unstable; urgency=low
+
+  * Restore yunet_opencv face detection: re-add face_detect_abstract.py,
+    face_detect_factory.py, face_detect_yunet_opencv.py, and the YuNet
+    ONNX model. Remove only the unused haar_opencv and yunet_onnx detectors.
+  * image_classifier.py: inline grayscale helpers (_is_near_grayscale,
+    _check_grayscale); restore Observations.has_face and face-detection
+    dispatch logic; add opencv-python-headless pip-install to postinst.
+  * app_config.py: narrow FaceDetectorName to Literal["yunet_opencv"];
+    fix _default_bw_image_config import (was image.py, now image_config).
+  * flask_app.py: fix IMAGE_EXTENSIONS import source; restore pixel-count
+    gate on upload route; fix render_preview_png call site.
+  * pyproject.toml: add opencv-python-headless dependency; include ONNX
+    model in package-data.
+  * config.example.json: add classifier_face_detect_enabled, face_detector,
+    image_config_face fields.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-14) unstable; urgency=low
 
   * Consolidate dither/image pipeline: remove shims (dither.py,
