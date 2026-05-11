@@ -1,6 +1,6 @@
 """ImageRenderer: production image renderer backed by a pluggable dither strategy.
 
-Accepts any ``AbstractDither`` instance at construction.  Use ``NumbaDither()``
+Accepts any ``AbstractDither`` instance at construction.  Use ``NumbaStreamingDither()``
 for the default path (same ≤50 MB rolling-window memory model as ``StreamingDither``
 but with a Numba-JIT inner loop that releases the GIL and runs at native speed),
 or ``UnconstrainedDither()`` for the full-canvas reference path.
@@ -8,9 +8,9 @@ or ``UnconstrainedDither()`` for the full-canvas reference path.
 Usage::
 
     from hokku_server.image_renderer import ImageRenderer
-    from hokku_server.dither_streaming_numba import NumbaDither
+    from hokku_server.dither_streaming_numba import NumbaStreamingDither
 
-    renderer = ImageRenderer(NumbaDither())
+    renderer = ImageRenderer(NumbaStreamingDither())
     panel_bytes = renderer.render_panel_bytes(img, cfg, "landscape")
 """
 from __future__ import annotations
@@ -190,13 +190,13 @@ def render_panel_bytes_from_path(
     dither=None,
 ) -> bytes:
     """Full convert: open file → render full panel bytes.  Logs progress."""
-    from hokku_server.dither_streaming_numba import NumbaDither
+    from hokku_server.dither_streaming_numba import NumbaStreamingDither
     print(f"Converting: {path.name}")
     t0 = time.time()
     img = open_image_for_render(path)
     print(f"  {path.name}: {img.size[0]}x{img.size[1]}")
     if dither is None:
-        dither = NumbaDither()
+        dither = NumbaStreamingDither()
     renderer = ImageRenderer(dither)
     raw = renderer.render_panel_bytes(img, cfg, orientation)
     print(f"  {path.name}: done in {time.time() - t0:.1f}s")
@@ -210,7 +210,7 @@ class ImageRenderer(AbstractImageRenderer):
     ----------
     dither:
         Any ``AbstractDither`` implementation.  Required — no default.
-        Typical choices: ``StreamingDither()``, ``NumbaDither()``,
+        Typical choices: ``StreamingDither()``, ``NumbaStreamingDither()``,
         ``UnconstrainedDither()``.
     """
 

@@ -505,10 +505,10 @@ def create_app(
         except (TypeError, ValueError) as e:
             return jsonify({"error": f"invalid image config: {e}"}), 400
         from hokku_server.image_renderer import ImageRenderer, open_image_for_render
-        from hokku_server.dither_streaming_numba import NumbaDither
+        from hokku_server.dither_streaming_numba import NumbaStreamingDither
         print(f"  Preview: {name!r}")
         with open_image_for_render(path) as img:
-            png = ImageRenderer(NumbaDither()).render_preview_png(img, cfg, state.config.orientation)
+            png = ImageRenderer(NumbaStreamingDither()).render_preview_png(img, cfg, state.config.orientation)
         print(f"  Preview done: {name!r}")
         return _png_response(png)
 

@@ -31,7 +31,8 @@ from PIL import Image
 
 from hokku_server.display import TOTAL_BYTES
 from hokku_server.dither_config import DitherConfig
-from hokku_server.dither_streaming import PALETTE_LAB, StreamingDither, adaptive_saturate, rgb_to_lab
+from hokku_server.dither_streaming import PALETTE_LAB, adaptive_saturate, rgb_to_lab
+from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import _apply_prepare_enhancements
 from hokku_server.image_classifier import _is_near_grayscale
 from hokku_server.image_config import ImageConfig, _bw_safe_image_config
@@ -44,7 +45,7 @@ _DISPLAY_WHITE_L = float(PALETTE_LAB[1, 0])
 
 
 def render_preview_png(img, cfg, orientation, max_side_px=800, crop_to_fill_threshold=0.0):
-    return ImageRenderer(StreamingDither()).render_preview_png(img, cfg, orientation, max_side_px, crop_to_fill_threshold)
+    return ImageRenderer(NumbaStreamingDither()).render_preview_png(img, cfg, orientation, max_side_px, crop_to_fill_threshold)
 
 
 # ── shared helpers ────────────────────────────────────────────────────────────
@@ -527,7 +528,7 @@ def test_render_panel_bytes_honours_cfg_without_hidden_override():
     configs and asserting the outputs differ (proving each cfg was actually honoured).
     """
     def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0):
-        return ImageRenderer(StreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
+        return ImageRenderer(NumbaStreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
 
     # A hue-aware cfg that boosts saturation.
     cfg_hue = replace(

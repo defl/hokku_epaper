@@ -11,8 +11,9 @@ from PIL import Image
 from hokku_server.display import PALETTE_MEASURED_RGB
 from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming import StreamingDither
-from hokku_server.dither_streaming_numba import NumbaDither
+from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.dither_unconstrained import UnconstrainedDither
+from hokku_server.dither_unconstrained_numba import NumbaUnconstrainedDither
 from hokku_server.image_config import ImageConfig
 from hokku_server.image_renderer import ImageRenderer
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
@@ -20,9 +21,8 @@ from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 def _dither_params():
     return [
-        pytest.param(StreamingDither(), id="streaming"),
-        pytest.param(UnconstrainedDither(), id="unconstrained"),
-        pytest.param(NumbaDither(), id="numba"),
+        pytest.param(NumbaStreamingDither(), id="numba_streaming"),
+        pytest.param(NumbaUnconstrainedDither(), id="numba_unconstrained"),
     ]
 
 
@@ -57,13 +57,13 @@ def _noop_cfg() -> ImageConfig:
 
 # ── Construction ──────────────────────────────────────────────────────────────
 
-def test_default_dither_is_streaming() -> None:
-    r = ImageRenderer(StreamingDither())
-    assert isinstance(r.dither, StreamingDither)
+def test_dither_stored_is_numba_streaming() -> None:
+    r = ImageRenderer(NumbaStreamingDither())
+    assert isinstance(r.dither, NumbaStreamingDither)
 
 
 def test_explicit_dither_stored() -> None:
-    d = UnconstrainedDither()
+    d = NumbaUnconstrainedDither()
     r = ImageRenderer(d)
     assert r.dither is d
 
@@ -120,12 +120,9 @@ def test_all_strategies_produce_valid_output(dither) -> None:
     assert int(idx.max()) < n_palette
 
 
+@pytest.mark.time_intensive
 def test_streaming_and_unconstrained_agree_on_preprocessed_canvas() -> None:
-    """Dither classes must produce identical output when given the same float32 canvas.
-
-    We bypass the renderer and call dither() directly so preprocessing is
-    identical (none — the canvas is already float32).
-    """
+    """Pure-Python dithers must produce identical output on the same float32 canvas."""
     cfg = DitherConfig(
         algorithm="floyd_steinberg",
         lut_name="euclidean",
@@ -144,8 +141,9 @@ def test_streaming_and_unconstrained_agree_on_preprocessed_canvas() -> None:
     )
 
 
-def test_numba_and_streaming_agree_on_preprocessed_canvas() -> None:
-    """NumbaDither must match StreamingDither on the same float32 canvas."""
+@pytest.mark.time_intensive
+def test_numba_streaming_and_streaming_agree_on_preprocessed_canvas() -> None:
+    """NumbaStreamingDither must match StreamingDither on the same float32 canvas."""
     cfg = DitherConfig(
         algorithm="floyd_steinberg",
         lut_name="euclidean",
@@ -157,8 +155,8 @@ def test_numba_and_streaming_agree_on_preprocessed_canvas() -> None:
     arr = np.asarray(canvas, dtype=np.float32)
 
     idx_s = StreamingDither().dither(arr, cfg)
-    idx_n = NumbaDither().dither(arr, cfg)
+    idx_n = NumbaStreamingDither().dither(arr, cfg)
     np.testing.assert_array_equal(
         idx_s, idx_n,
-        err_msg="NumbaDither diverged from StreamingDither on identical preprocessed canvas",
+        err_msg="NumbaStreamingDither diverged from StreamingDither on identical preprocessed canvas",
     )

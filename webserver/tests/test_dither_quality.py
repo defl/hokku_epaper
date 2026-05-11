@@ -45,9 +45,11 @@ from hokku_server.display import (
     panel_bytes_to_indices,
 )
 import numba  # hard dep — must be installed
+from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming import StreamingDither
-from hokku_server.dither_streaming_numba import NumbaDither
+from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.dither_unconstrained import UnconstrainedDither
+from hokku_server.dither_unconstrained_numba import NumbaUnconstrainedDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
 from hokku_server.image_classifier import _is_near_grayscale
 from hokku_server.image_config import ImageConfig, Orientation
@@ -56,12 +58,12 @@ from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 
 def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0, *, unconstrained=False):
-    dither = UnconstrainedDither() if unconstrained else StreamingDither()
+    dither = NumbaUnconstrainedDither() if unconstrained else NumbaStreamingDither()
     return ImageRenderer(dither).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
 
 
 def render_preview_png(img, cfg, orientation, max_side_px=800, crop_to_fill_threshold=0.0):
-    return ImageRenderer(StreamingDither()).render_preview_png(img, cfg, orientation, max_side_px, crop_to_fill_threshold)
+    return ImageRenderer(NumbaStreamingDither()).render_preview_png(img, cfg, orientation, max_side_px, crop_to_fill_threshold)
 
 
 # ── module-level helpers ──────────────────────────────────────────────────────
@@ -203,8 +205,12 @@ def test_bw_image_renders_without_error():
     cfg = PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]  # has adaptive_vivid=True
     # Use a real (non-noop) preset here because the B&W guard only fires on
     # configs that have adaptive_saturate / adaptive_vivid enabled.
-    # Keep the image tiny to stay fast at full-panel resolution.
-    raw = render_panel_bytes(_make_grey(10, 10), cfg, "landscape")
+    # Use NumbaStreamingDither: the B&W guard runs upstream of error diffusion,
+    # so it is exercised identically, and the full-panel render finishes in <1s
+    # instead of ~13s under pure-Python StreamingDither.
+    raw = ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
+        _make_grey(10, 10), cfg, "landscape", 0.0
+    )
     assert len(raw) == TOTAL_BYTES
     idx = panel_bytes_to_indices(raw)
     assert 1 in set(idx.flatten().tolist())  # white letterbox pixels present
@@ -282,7 +288,7 @@ def test_image_config_cache_slugs_are_distinct():
 
 # ── slow: full-scale visual output ────────────────────────────────────────────
 
-_MODES = ["streaming", "unconstrained", "streaming_numba"]
+_MODES = ["streaming", "unconstrained", "numba_streaming", "numba_unconstrained"]
 
 
 def _preview_params():
@@ -316,14 +322,14 @@ def _slow_ids():
 def test_dither_full_scale(src: Path, preset_name: str, mode: str):
     """Render at full panel resolution; write decoded PNG to build/test_dither_full/.
 
-    All three rendering paths (streaming, unconstrained, streaming_numba) are
-    exercised for every image × preset combination so the output files can be
-    compared visually.
+    All four rendering paths are exercised for every image × preset combination
+    so the output files can be compared visually.
 
     Output layout (flat):
       build/test_dither_full/<stem>__<preset>__streaming.png
       build/test_dither_full/<stem>__<preset>__unconstrained.png
-      build/test_dither_full/<stem>__<preset>__streaming_numba.png
+      build/test_dither_full/<stem>__<preset>__numba_streaming.png
+      build/test_dither_full/<stem>__<preset>__numba_unconstrained.png
       build/test_dither_full/<stem>_original<ext>   — source copy (written once)
     """
     _BUILD_FULL_DIR.mkdir(parents=True, exist_ok=True)
@@ -333,13 +339,14 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
         shutil.copy2(src, original_dest)
 
     cfg = PRESET_IMAGE_CONFIGS[preset_name]
-    if mode == "streaming_numba":
-        with open_image_for_render(src) as img:
-            raw = ImageRenderer(NumbaDither()).render_panel_bytes(img, cfg, "landscape")
-    else:
-        unconstrained = mode == "unconstrained"
-        with open_image_for_render(src) as img:
-            raw = render_panel_bytes(img, cfg, "landscape", unconstrained=unconstrained)
+    _DITHER_FOR_MODE = {
+        "streaming":           StreamingDither(),
+        "unconstrained":       UnconstrainedDither(),
+        "numba_streaming":     NumbaStreamingDither(),
+        "numba_unconstrained": NumbaUnconstrainedDither(),
+    }
+    with open_image_for_render(src) as img:
+        raw = ImageRenderer(_DITHER_FOR_MODE[mode]).render_panel_bytes(img, cfg, "landscape")
 
     assert len(raw) == TOTAL_BYTES
 
@@ -383,3 +390,46 @@ def test_dither_preview(src: Path, preset_name: str):
     w, h = _png_size(png_bytes)
     assert max(w, h) <= 800
     assert w > h, f"{src.name}/{preset_name}: expected landscape aspect, got {w}x{h}"
+
+
+# ── slow: parity tests (reference vs Numba) ───────────────────────────────────
+
+def _parity_cfg() -> DitherConfig:
+    return DitherConfig(
+        algorithm="floyd_steinberg",
+        lut_name="euclidean",
+        serpentine=False,
+        hue_cutoff_deg=95.0,
+        neutral_chroma=8.0,
+    )
+
+
+def _parity_canvas() -> np.ndarray:
+    rng = np.random.default_rng(7)
+    return rng.integers(0, 256, (32, 32, 3), dtype=np.uint8).astype(np.float32)
+
+
+@pytest.mark.time_intensive
+def test_numba_streaming_matches_streaming() -> None:
+    """NumbaStreamingDither must produce bit-identical results to StreamingDither."""
+    cfg = _parity_cfg()
+    canvas = _parity_canvas()
+    ref = StreamingDither().dither(canvas, cfg)
+    got = NumbaStreamingDither().dither(canvas, cfg)
+    np.testing.assert_array_equal(
+        ref, got,
+        err_msg="NumbaStreamingDither diverged from StreamingDither on identical input",
+    )
+
+
+@pytest.mark.time_intensive
+def test_numba_unconstrained_matches_unconstrained() -> None:
+    """NumbaUnconstrainedDither must produce bit-identical results to UnconstrainedDither."""
+    cfg = _parity_cfg()
+    canvas = _parity_canvas()
+    ref = UnconstrainedDither().dither(canvas, cfg)
+    got = NumbaUnconstrainedDither().dither(canvas, cfg)
+    np.testing.assert_array_equal(
+        ref, got,
+        err_msg="NumbaUnconstrainedDither diverged from UnconstrainedDither on identical input",
+    )

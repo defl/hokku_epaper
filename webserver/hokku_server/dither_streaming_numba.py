@@ -1,4 +1,4 @@
-"""NumbaDither: streaming dither with a Numba-JIT pixel loop (streaming variant).
+"""NumbaStreamingDither: streaming dither with a Numba-JIT pixel loop.
 
 Same stripe-by-stripe memory model as StreamingDither (≤ 50 MB peak); the
 inner ``for y: for x:`` loop is compiled to native code with
@@ -48,8 +48,7 @@ def _make_jit_fn():
         import numba
     except ImportError as exc:
         raise ImportError(
-            "NumbaDither requires numba (pip install numba).  "
-            "Use StreamingDither or UnconstrainedDither without it."
+            "NumbaStreamingDither requires numba (pip install numba)."
         ) from exc
 
     @numba.njit(nogil=True, cache=True)
@@ -158,7 +157,7 @@ def _make_jit_fn():
     return _diffuse_stripe
 
 
-_jit_fn = None  # Lazy: built on first NumbaDither use.
+_jit_fn = None  # Lazy: built on first NumbaStreamingDither use.
 
 
 def _get_jit_fn():
@@ -179,7 +178,7 @@ def _kernel_arrays(kernel: DiffusionKernel):
 # ── Public class ─────────────────────────────────────────────────────────────
 
 
-class NumbaDither(AbstractDither):
+class NumbaStreamingDither(AbstractDither):
     """Streaming dither whose inner pixel loop is compiled to native code.
 
     Identical memory budget to ``StreamingDither`` (rolling window + per-stripe

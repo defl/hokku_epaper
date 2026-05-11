@@ -12,9 +12,8 @@ from hokku_server.dither_streaming import (
     dither,
     noop_dither,
 )
-from hokku_server.dither_streaming import StreamingDither
-from hokku_server.dither_streaming_numba import NumbaDither
-from hokku_server.dither_unconstrained import UnconstrainedDither
+from hokku_server.dither_streaming_numba import NumbaStreamingDither
+from hokku_server.dither_unconstrained_numba import NumbaUnconstrainedDither
 
 
 # ── LUT and palette ───────────────────────────────────────────────────────────
@@ -64,9 +63,8 @@ def test_cache_slug_stable_and_distinct():
 
 def _concrete_classes():
     return [
-        pytest.param(StreamingDither, id="streaming"),
-        pytest.param(UnconstrainedDither, id="unconstrained"),
-        pytest.param(NumbaDither, id="numba"),
+        pytest.param(NumbaStreamingDither, id="numba_streaming"),
+        pytest.param(NumbaUnconstrainedDither, id="numba_unconstrained"),
     ]
 
 

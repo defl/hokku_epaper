@@ -15,7 +15,7 @@ import pytest
 
 from hokku_server.display import TOTAL_BYTES
 from hokku_server.dither_config import DitherConfig
-from hokku_server.dither_streaming import StreamingDither
+from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
 from hokku_server.image_config import ImageConfig, _image_config_from_dict
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
@@ -132,7 +132,7 @@ def test_visual_render_all_test_images(_wipe_build_dir):
       build/test_screen_image/<stem>_original<ext>
     """
     def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0):
-        return ImageRenderer(StreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
+        return ImageRenderer(NumbaStreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
 
     test_images = sorted(
         p for p in _TEST_IMAGES_DIR.iterdir()

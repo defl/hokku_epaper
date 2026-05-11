@@ -26,8 +26,7 @@ from PIL import Image
 
 from hokku_server.app_config import AppConfig
 from hokku_server.dither_config import DitherConfig
-from hokku_server.dither_streaming import StreamingDither
-from hokku_server.dither_unconstrained import UnconstrainedDither
+from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
 from hokku_server.image_config import ImageConfig
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
@@ -36,9 +35,8 @@ from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
 from hokku_server.screen_image_config import ScreenImageConfig
 
 
-def _render_indices(img, cfg, orientation, canvas_w, canvas_h, crop_to_fill_threshold=0.0, *, release_input=False, unconstrained=False):
-    dither = UnconstrainedDither() if unconstrained else StreamingDither()
-    return ImageRenderer(dither).render_indices(img, cfg, orientation, canvas_w, canvas_h, crop_to_fill_threshold, release_input=release_input)
+def _render_indices(img, cfg, orientation, canvas_w, canvas_h, crop_to_fill_threshold=0.0, *, release_input=False):
+    return ImageRenderer(NumbaStreamingDither()).render_indices(img, cfg, orientation, canvas_w, canvas_h, crop_to_fill_threshold, release_input=release_input)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -251,7 +249,7 @@ def test_visual_letterbox_all_images(_wipe_letterbox_build):
       …
     """
     def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0):
-        return ImageRenderer(StreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
+        return ImageRenderer(NumbaStreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
 
     test_images = sorted(
         p for p in _TEST_IMAGES_DIR.iterdir()
