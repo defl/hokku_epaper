@@ -24,6 +24,7 @@ hokku-server = "hokku_server:main"
 [project.optional-dependencies]
 test = [
     "pytest>=7.0",
+    "pytest-xdist>=3.5",
 ]
 
 [tool.setuptools.packages.find]
@@ -34,8 +35,9 @@ include = ["hokku_server*"]
 hokku_server = ["models/ATTRIBUTION.md", "models/face_detection_yunet_2023mar.onnx"]
 
 [tool.pytest.ini_options]
-addopts = ["-m", "not time_intensive"]
+addopts = ["-m", "not time_intensive and not serial", "-n", "8", "--dist=loadfile"]
 markers = [
     "time_intensive: slow tests (full-resolution dither runs); enable with `pytest -m time_intensive`",
     "slow: moderately slow tests (process pool spin-up, idle recycle)",
+    "serial: tests that must run alone (e.g. absolute-memory measurements); excluded from default parallel run, run with `pytest -m serial -n 0`",
 ]
