@@ -1,8 +1,16 @@
+hokku-server (3.0.0~alpha1-17) unstable; urgency=low
+
+  * test_face_detect.py: make cv2 a hard top-level import (was importorskip);
+    missing opencv now causes a collection error rather than a quiet skip.
+  * debian/control: add opencv-python-headless to pip-install comment.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-16) unstable; urgency=low
 
   * Add test_face_detect.py: contract tests for OpenCVYuNetFaceDetector
     (3 portraits must detect, 7 non-portraits must not, missing file returns
-    False). Skips gracefully when opencv not installed.
+    False).
 
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
 
