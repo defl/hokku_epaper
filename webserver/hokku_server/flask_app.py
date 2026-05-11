@@ -343,7 +343,7 @@ def create_app(
 
     @app.route("/hokku/api/classifier/clear", methods=["POST"])
     def api_classifier_clear():
-        """Wipe all cached classifier observations (is_bw / has_face).
+        """Wipe all cached classifier observations (is_bw).
 
         Deletes image_classifier.json. The next sync will re-run detection
         on every image. Already-rendered panel .bin files are NOT touched —
@@ -378,7 +378,6 @@ def create_app(
                 "image_height": r.image_height,
                 "last_conversion_seconds": r.last_conversion_seconds,
                 "is_bw": obs.is_bw if obs else None,
-                "has_face": obs.has_face if obs else None,
             }
             upload_files.append(entry)
             if r.convert_status == "failed":
