@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 
 import numpy as np
+import psutil
 import pytest
 
 from hokku_server.memory_guard import memory_limit, supported
@@ -34,7 +35,7 @@ def test_noop_on_windows() -> None:
 @pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_AS not available on Windows")
 def test_large_alloc_within_limit_succeeds() -> None:
     """An allocation that fits within the limit must succeed."""
-    import psutil
+
 
     baseline = psutil.Process().memory_info().vms
     # Allow 200 MB above current virtual size.
@@ -47,7 +48,7 @@ def test_large_alloc_within_limit_succeeds() -> None:
 @pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_AS not available on Windows")
 def test_excessive_alloc_raises_memory_error() -> None:
     """An allocation that exceeds the virtual-address ceiling must raise MemoryError."""
-    import psutil
+
 
     baseline = psutil.Process().memory_info().vms
     # Grant only 5 MB above current virtual size — far too little for a 100 MB array.
@@ -64,7 +65,7 @@ def test_limit_restored_after_context() -> None:
 
     before = resource.getrlimit(resource.RLIMIT_AS)
 
-    import psutil
+
     baseline = psutil.Process().memory_info().vms
     tight = baseline + 5 * 1024 * 1024
     try:

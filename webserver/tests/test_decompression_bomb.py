@@ -20,11 +20,17 @@ import pytest
 from PIL import Image
 
 from hokku_server import image_renderer
+from hokku_server.app_state import AppState, build_manager
+from hokku_server.flask_app import create_app
+from hokku_server.image_classifier import ImageClassifier
 from hokku_server.image_renderer import (
     MAX_IMAGE_PIXELS,
+    MAX_SOURCE_LONG,
+    MAX_SOURCE_SHORT,
     MAX_UPLOAD_PIXELS,
     open_image_for_render,
 )
+from hokku_server.serve_scheduler import ServeScheduler
 
 
 def _crc(chunk_type: bytes, data: bytes) -> bytes:
@@ -84,11 +90,6 @@ def test_open_image_for_render_rejects_massive_bomb(tmp_path: Path):
 
 
 def _build_client(app_config):
-    from hokku_server.app_state import AppState, build_manager
-    from hokku_server.flask_app import create_app
-    from hokku_server.image_classifier import ImageClassifier
-    from hokku_server.serve_scheduler import ServeScheduler
-
     clf = ImageClassifier(app_config)
     mgr = build_manager(app_config, clf)
     sch = ServeScheduler(mgr)
@@ -151,11 +152,6 @@ def test_upload_pixel_cap_matches_image_cap():
 
 def test_open_image_shrinks_when_oversize_in_both_dirs(tmp_path: Path):
     """An image that exceeds 2x screen in BOTH directions gets shrunk."""
-    from hokku_server.image_renderer import (
-        MAX_SOURCE_LONG,
-        MAX_SOURCE_SHORT,
-    )
-
     # Build a real image just over the 2x-both threshold but under MAX_IMAGE_PIXELS.
     # 4000x3000 = 12 MP, > (3200, 2400) in both dims.
     src = tmp_path / "oversize_both.png"

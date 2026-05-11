@@ -1,6 +1,7 @@
 """ImageClassifier: dispatch policy, caching, persistence, clear_cache."""
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from dataclasses import replace
@@ -45,7 +46,6 @@ def _config(
 
 
 def _sha1(path: Path) -> str:
-    import hashlib
     h = hashlib.sha1()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):

@@ -14,6 +14,7 @@ import threading
 from pathlib import Path
 
 from hokku_server.app_config import AppConfig
+from hokku_server.display import TOTAL_BYTES
 from hokku_server.image_manager_multi import MultiThreadedImageManager
 from hokku_server.image_manager_single import SingleThreadedImageManager
 
@@ -54,7 +55,6 @@ def test_multi_threaded_runs_in_parallel(app_config: AppConfig, monkeypatch):
         # If both workers reach this barrier the test thread will too.
         # If only one reaches it, the timeout trips a BrokenBarrierError.
         barrier.wait()
-        from hokku_server.display import TOTAL_BYTES
         return (b"\x00" * TOTAL_BYTES, b"\x89PNG\r\n\x1a\n")
 
     monkeypatch.setattr("hokku_server.render_worker.render_one", fake_render_one)

@@ -1,12 +1,19 @@
 """Shared test fixtures."""
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from PIL import Image
 from pillow_heif import register_heif_opener
+
+# Ensure the repo root is on sys.path so that ``tools.*`` modules are importable
+# (e.g. ``from tools.screen_sim import fetch_screen`` in test_integration.py).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 # Register the HEIF/HEIC opener once for the whole test session so that
 # PIL.Image.open() works on .heic files in the slow visual tests.

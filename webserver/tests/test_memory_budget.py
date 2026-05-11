@@ -15,10 +15,13 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import psutil
 import pytest
 from PIL import Image
 
+from hokku_server.dither_abc import _DEFAULT_STRIPE_H as DEFAULT_STRIPE_H
 from hokku_server.image_config import ImageConfig
+from hokku_server.image_renderer import compress_dynamic_range, open_image_for_render
 from hokku_server.memory_guard import memory_limit, supported as memguard_supported
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 from tests._memory_helpers import (
@@ -100,7 +103,7 @@ def test_full_render_huge_png_rejected_by_cap() -> None:
     Pi. ``MAX_IMAGE_PIXELS`` now rejects such files at header read, so RSS
     growth stays minimal and ``open_image_for_render`` raises ``ValueError``.
     """
-    from hokku_server.image_renderer import open_image_for_render
+
 
     image_path = _TEST_IMAGES / "synth_black_10000x10000.png"
     assert image_path.is_file(), f"Test image missing from repo: {image_path}"
@@ -121,7 +124,7 @@ def test_compress_dynamic_range_peak_under_1mb_per_row() -> None:
     row. Float64 intermediates would blow this; float32 should keep us well
     under 1 MB even with the function's transient buffers.
     """
-    from hokku_server.image_renderer import compress_dynamic_range
+
     row = np.random.default_rng(0).integers(
         0, 256, size=(1, 3200, 3), dtype=np.uint8
     ).astype(np.float32)
@@ -151,8 +154,8 @@ def test_compress_dynamic_range_peak_under_30mb_per_stripe() -> None:
     end-to-end budget — the streaming dither holds at most one cached
     stripe at a time.
     """
-    from hokku_server.image_renderer import compress_dynamic_range
-    from hokku_server.dither_abc import _DEFAULT_STRIPE_H as DEFAULT_STRIPE_H
+
+
     stripe = np.random.default_rng(0).integers(
         0, 256, size=(DEFAULT_STRIPE_H, 3200, 3), dtype=np.uint8
     )
@@ -190,7 +193,7 @@ def test_memory_guard_raises_memory_error_when_exceeded() -> None:
 
     Validates the hard-guarantee semantics on platforms that support it.
     """
-    import psutil
+
     cur = int(psutil.Process().memory_info().rss)
     # Cap 1 MB above current RSS — any meaningful new allocation should fail.
     cap = cur + 1 * 1024 * 1024

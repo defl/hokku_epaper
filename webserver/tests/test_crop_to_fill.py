@@ -27,16 +27,18 @@ from PIL import Image
 from hokku_server.app_config import AppConfig
 from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming import StreamingDither
-from hokku_server.image_renderer import ImageRenderer
+from hokku_server.dither_unconstrained import UnconstrainedDither
+from hokku_server.image_abc import preview_png_from_panel_bytes
+from hokku_server.image_config import ImageConfig
+from hokku_server.image_renderer import ImageRenderer, open_image_for_render
+from hokku_server.display import TOTAL_BYTES
+from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
+from hokku_server.screen_image_config import ScreenImageConfig
 
 
 def _render_indices(img, cfg, orientation, canvas_w, canvas_h, crop_to_fill_threshold=0.0, *, release_input=False, unconstrained=False):
-    from hokku_server.dither_unconstrained import UnconstrainedDither
     dither = UnconstrainedDither() if unconstrained else StreamingDither()
     return ImageRenderer(dither).render_indices(img, cfg, orientation, canvas_w, canvas_h, crop_to_fill_threshold, release_input=release_input)
-from hokku_server.image_config import ImageConfig
-from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
-from hokku_server.screen_image_config import ScreenImageConfig
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -248,10 +250,6 @@ def test_visual_letterbox_all_images(_wipe_letterbox_build):
       build/test_letterbox/<stem>__landscape_0pct.png
       …
     """
-    from hokku_server.image_abc import preview_png_from_panel_bytes
-    from hokku_server.image_renderer import open_image_for_render
-    from hokku_server.display import TOTAL_BYTES
-
     def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0):
         return ImageRenderer(StreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
 

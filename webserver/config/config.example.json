@@ -44,7 +44,7 @@
     "dither": {
       "algorithm": "floyd_steinberg",
       "lut_name": "euclidean",
-      "serpentine": false,
+      "serpentine": true,
       "hue_cutoff_deg": 95.0,
       "neutral_chroma": 8.0
     },

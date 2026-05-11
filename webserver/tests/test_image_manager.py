@@ -9,13 +9,16 @@ is a no-op.
 """
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 
 import pytest
+from PIL import Image as _Image
 
 from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES
 from hokku_server.image_manager_abstract import _hash_name
+from hokku_server.screen_image_config import ScreenImageConfig
 
 
 def test_hash_name_stable():
@@ -32,7 +35,6 @@ def test_register_and_convert(app_config: AppConfig, image_manager_factory, make
     mgr.sync()
     mgr.wait_for_idle()
 
-    from hokku_server.screen_image_config import ScreenImageConfig
     records = mgr.list()
     assert [r.name for r in records] == ["a.png", "b.png"]
     assert all(r.convert_status == "ok" for r in records)
@@ -239,8 +241,6 @@ def test_worker_error_marks_failed_sibling_unaffected(
 
 def _tiny_png_bytes() -> bytes:
     """Smallest valid 1x1 PNG."""
-    from io import BytesIO
-    from PIL import Image as _Image
     buf = BytesIO()
     _Image.new("RGB", (1, 1), (0, 0, 0)).save(buf, format="PNG")
     return buf.getvalue()

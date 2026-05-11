@@ -23,6 +23,9 @@ import time
 from pathlib import Path
 
 import pytest
+from werkzeug.serving import make_server
+
+from tools.screen_sim import fetch_screen
 
 from hokku_server.app_state import AppState, build_manager
 from hokku_server.app_config import AppConfig
@@ -249,8 +252,6 @@ def http_server(app_config: AppConfig, tmp_path: Path):
 
     Yields (base_url, state) and tears down the server after the test.
     """
-    from werkzeug.serving import make_server
-
     state = _make_state(app_config)
     _upload_and_sync(state, _TEST_IMAGE)
 

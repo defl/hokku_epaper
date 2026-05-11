@@ -1,9 +1,10 @@
 """Dither LUTs, noop kernel, cache_slug stability, and concrete-class smoke tests."""
-import importlib
-
+import numba  # hard dep — must be installed
 import numpy as np
 import pytest
 
+from hokku_server.display import PALETTE_MEASURED_RGB
+from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming import (
     PALETTE_LAB,
     _cached_euclidean_lut,
@@ -12,10 +13,8 @@ from hokku_server.dither_streaming import (
     noop_dither,
 )
 from hokku_server.dither_streaming import StreamingDither
+from hokku_server.dither_streaming_numba import NumbaDither
 from hokku_server.dither_unconstrained import UnconstrainedDither
-from hokku_server.dither_config import DitherConfig
-
-_NUMBA_AVAILABLE = importlib.util.find_spec("numba") is not None
 
 
 # ── LUT and palette ───────────────────────────────────────────────────────────
@@ -64,19 +63,11 @@ def test_cache_slug_stable_and_distinct():
 # ── Concrete class parametrization ────────────────────────────────────────────
 
 def _concrete_classes():
-    params = [
+    return [
         pytest.param(StreamingDither, id="streaming"),
         pytest.param(UnconstrainedDither, id="unconstrained"),
+        pytest.param(NumbaDither, id="numba"),
     ]
-    if _NUMBA_AVAILABLE:
-        from hokku_server.dither_streaming_numba import NumbaDither
-        params.append(pytest.param(NumbaDither, id="numba"))
-    else:
-        params.append(pytest.param(
-            None, id="numba",
-            marks=pytest.mark.skip(reason="numba not installed"),
-        ))
-    return params
 
 
 def _fs_cfg() -> DitherConfig:
@@ -96,7 +87,7 @@ def _synth(h: int = 32, w: int = 32) -> np.ndarray:
 
 @pytest.mark.parametrize("cls", _concrete_classes())
 def test_dither_output_shape_and_dtype(cls) -> None:
-    from hokku_server.display import PALETTE_MEASURED_RGB
+
     d = cls()
     result = d.dither(_synth(32, 32), _fs_cfg())
     assert result.shape == (32, 32)
@@ -105,7 +96,7 @@ def test_dither_output_shape_and_dtype(cls) -> None:
 
 @pytest.mark.parametrize("cls", _concrete_classes())
 def test_dither_output_valid_palette_indices(cls) -> None:
-    from hokku_server.display import PALETTE_MEASURED_RGB
+
     n_palette = len(PALETTE_MEASURED_RGB)
     d = cls()
     result = d.dither(_synth(32, 32), _fs_cfg())

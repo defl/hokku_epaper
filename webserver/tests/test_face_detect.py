@@ -24,6 +24,8 @@ from pathlib import Path
 import cv2  # hard dependency — must be installed (opencv-python-headless>=4.7)
 import pytest
 
+from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
+
 _IMAGES = Path(__file__).resolve().parents[2] / "images" / "test"
 
 _PORTRAITS = [
@@ -45,7 +47,6 @@ _NON_PORTRAITS = [
 
 @pytest.fixture(scope="module")
 def face_detector():
-    from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
     return OpenCVYuNetFaceDetector()
 
 

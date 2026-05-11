@@ -24,8 +24,9 @@ Fast tests (always run):
 from __future__ import annotations
 
 import json
+import threading as _threading
 import unittest.mock
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -207,7 +208,7 @@ def test_reload_manager_wired_with_new_classifier(app_config: AppConfig, tmp_pat
 
 def test_watcher_syncs_immediately_on_construction(app_config: AppConfig):
     """Thread starts in the constructor and syncs without any external call."""
-    import threading as _threading
+
     state = _make_state(app_config)
     synced = _threading.Event()
     original_sync = state.manager.sync
@@ -223,7 +224,7 @@ def test_watcher_syncs_immediately_on_construction(app_config: AppConfig):
 
 def test_watcher_wake_triggers_extra_sync(app_config: AppConfig):
     """wake() interrupts the sleep and causes a sync before the interval expires."""
-    import threading as _threading
+
     state = _make_state(app_config)
     sync_count = 0
     second_sync_done = _threading.Event()
@@ -248,7 +249,7 @@ def test_watcher_wake_triggers_extra_sync(app_config: AppConfig):
 
 def test_watcher_calls_sync_on_manager(app_config: AppConfig):
     """Watcher daemon thread calls sync() on the current manager each iteration."""
-    import threading as _threading
+
     state = _make_state(app_config)
     synced = _threading.Event()
     original_sync = state.manager.sync
@@ -264,7 +265,7 @@ def test_watcher_calls_sync_on_manager(app_config: AppConfig):
 
 def test_watcher_follows_new_manager_after_reload(app_config: AppConfig, tmp_path: Path):
     """After AppState.reload(), the next sync uses the NEW manager."""
-    import threading as _threading
+
     state = _make_state(app_config)
     new_cfg = _alt_config(app_config, tmp_path)
     state.reload(new_cfg)
@@ -284,7 +285,7 @@ def test_watcher_follows_new_manager_after_reload(app_config: AppConfig, tmp_pat
 
 def test_watcher_uses_new_poll_interval_after_reload(app_config: AppConfig, tmp_path: Path):
     """After reload, the watcher waits for the new config's poll_interval."""
-    import threading as _threading
+
     state = _make_state(app_config)
     new_cfg = replace(app_config, poll_interval_seconds=42)
     state.reload(new_cfg)
@@ -325,7 +326,7 @@ def test_watcher_uses_new_poll_interval_after_reload(app_config: AppConfig, tmp_
 
 def test_watcher_stop_exits_cleanly(app_config: AppConfig):
     """stop() causes the thread to exit after its current sync completes."""
-    import threading as _threading
+
     state = _make_state(app_config)
     exited = _threading.Event()
 
@@ -387,7 +388,7 @@ def test_flask_config_post_reloads_state(flask_client, tmp_path: Path):
     old_manager = state.manager
 
     # Send a brightness change via the full image_config_default dict.
-    from dataclasses import asdict
+
     new_image = asdict(replace(state.config.image_config_default, prepare_brightness=0.8))
     resp = client.post(
         "/hokku/api/config",
@@ -402,7 +403,7 @@ def test_flask_config_post_reloads_state(flask_client, tmp_path: Path):
 def test_flask_config_get_reflects_reloaded_config(flask_client, tmp_path: Path):
     """GET /hokku/api/config after a reload returns the new config, not the old one."""
     client, state, _ = flask_client
-    from dataclasses import asdict
+
     new_image = asdict(replace(state.config.image_config_default, prepare_brightness=0.75))
     client.post(
         "/hokku/api/config",

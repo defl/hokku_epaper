@@ -13,6 +13,7 @@ import pytest
 from hokku_server.app_config import AppConfig
 from hokku_server.image_manager_abstract import AbstractImageManager
 from hokku_server.image_manager_single import SingleThreadedImageManager
+from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 # Suffixes as defined in image_manager
 _PANEL = "_panel.bin"
@@ -114,8 +115,6 @@ def test_scrub_off_keeps_old_slug_files(tmp_path, make_test_image):
     """With auto_clear_cache=False, old-slug files for registered images survive."""
     upload = tmp_path / "up"; upload.mkdir()
     cache  = tmp_path / "ca"; cache.mkdir()
-
-    from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
     base_cfg = AppConfig(
         upload_dir=str(upload), cache_dir=str(cache), port=18080,

@@ -1,11 +1,15 @@
 """Smoke tests for ImageRenderer and the AbstractImageRenderer interface."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numba  # hard dep — must be installed
 import numpy as np
 import pytest
 from PIL import Image
 
+from hokku_server.display import PALETTE_MEASURED_RGB
+from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming import StreamingDither
 from hokku_server.dither_streaming_numba import NumbaDither
 from hokku_server.dither_unconstrained import UnconstrainedDither
@@ -29,8 +33,6 @@ def _synth_img(w: int = 64, h: int = 64) -> Image.Image:
 
 
 def _noop_cfg() -> ImageConfig:
-    from dataclasses import replace
-    from hokku_server.dither_config import DitherConfig
     base = PRESET_IMAGE_CONFIGS["floyd_steinberg"]
     return replace(
         base,
@@ -82,7 +84,7 @@ def test_render_indices_shape(dither, orientation: str) -> None:
 
 @pytest.mark.parametrize("dither", _dither_params())
 def test_render_indices_valid_palette_values(dither) -> None:
-    from hokku_server.display import PALETTE_MEASURED_RGB
+
     n_palette = len(PALETTE_MEASURED_RGB)
     r = ImageRenderer(dither)
     idx = r.render_indices(_synth_img(), _noop_cfg(), "portrait", 32, 32)
@@ -106,7 +108,7 @@ def test_render_preview_png_returns_bytes(dither) -> None:
 @pytest.mark.parametrize("dither", _dither_params())
 def test_all_strategies_produce_valid_output(dither) -> None:
     """Every strategy must produce valid palette indices — correct shape and dtype."""
-    from hokku_server.display import PALETTE_MEASURED_RGB
+
     n_palette = len(PALETTE_MEASURED_RGB)
     cfg = _noop_cfg()
     idx = ImageRenderer(dither).render_indices(
@@ -124,8 +126,6 @@ def test_streaming_and_unconstrained_agree_on_preprocessed_canvas() -> None:
     We bypass the renderer and call dither() directly so preprocessing is
     identical (none — the canvas is already float32).
     """
-    from hokku_server.dither_config import DitherConfig
-
     cfg = DitherConfig(
         algorithm="floyd_steinberg",
         lut_name="euclidean",
@@ -146,9 +146,6 @@ def test_streaming_and_unconstrained_agree_on_preprocessed_canvas() -> None:
 
 def test_numba_and_streaming_agree_on_preprocessed_canvas() -> None:
     """NumbaDither must match StreamingDither on the same float32 canvas."""
-    from hokku_server.dither_config import DitherConfig
-    from hokku_server.dither_streaming_numba import NumbaDither
-
     cfg = DitherConfig(
         algorithm="floyd_steinberg",
         lut_name="euclidean",
