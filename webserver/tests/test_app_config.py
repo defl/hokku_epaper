@@ -128,12 +128,12 @@ def test_v1_migrates_to_v2():
 
 
 def test_v2_migrates_to_v3():
-    """A v2 dict (with or without face_detector) migrates to v3; face_detector is stripped."""
-    v2_blob = {"version": 2, "image_worker_thread_count": 1, "face_detector": "yunet_opencv"}
+    """A v2 dict migrates to v3 by adding face_detector = 'yunet_opencv'."""
+    v2_blob = {"version": 2, "image_worker_thread_count": 1}
     from hokku_server.app_config import _migrate
     migrated = _migrate(v2_blob)
     assert migrated["version"] == _CURRENT_VERSION
-    assert "face_detector" not in migrated
+    assert migrated.get("face_detector") == "yunet_opencv"
 
 
 def test_image_worker_thread_count_roundtrips(tmp_path: Path):

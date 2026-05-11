@@ -1,4 +1,4 @@
-"""AppConfig dataclass: persisted server settings.
+﻿"""AppConfig dataclass: persisted server settings.
 
 Strict, schema-driven parser with a version field and migration chain.
 Unversioned configs (no "version" key) are silently replaced with a
@@ -23,6 +23,9 @@ Orientation = Literal["landscape", "portrait"]
 _CURRENT_VERSION = 3
 
 
+FaceDetectorName = Literal["yunet_opencv"]
+
+
 def _migrate_v1_to_v2(d: dict) -> dict:
     """Add image_worker_thread_count (default 1 = serial, matching old behaviour)."""
     d["image_worker_thread_count"] = 1
@@ -30,8 +33,8 @@ def _migrate_v1_to_v2(d: dict) -> dict:
 
 
 def _migrate_v2_to_v3(d: dict) -> dict:
-    """No-op: face_detector field was added then removed in 3.0."""
-    d.pop("face_detector", None)
+    """Add face_detector (default 'yunet_opencv', matching pre-3.0 behaviour)."""
+    d["face_detector"] = "yunet_opencv"
     return d
 
 
@@ -80,19 +83,33 @@ class AppConfig:
     #: N > 1 = exactly N workers; the user is responsible for having enough RAM.
     image_worker_thread_count: int = 1
 
-    # Image pipeline: default and B&W presets.
+    # Image pipeline: default, B&W, and face presets.
     image_config_default: ImageConfig = field(
         default_factory=lambda: PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
     )
     classifier_bw_detect_enabled: bool = True
     image_config_bw: ImageConfig = field(default_factory=_default_bw_image_config)
+    classifier_face_detect_enabled: bool = True
+    #: Which face-detection backend the classifier should use.
+    #:   yunet_opencv (default): cv2.FaceDetectorYN — heaviest, ~80–120 MB.
+    #:   haar_opencv:            cv2.CascadeClassifier — lightest, ~10–30 MB,
+    #:                           lower accuracy.
+    #:   yunet_onnx:             same YuNet model but onnxruntime — ~30–50 MB,
+    #:                           same accuracy as yunet_opencv.
+    face_detector: FaceDetectorName = "yunet_opencv"
+    image_config_face: ImageConfig = field(
+        default_factory=lambda: PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
+    )
 
     def cache_slug(self) -> str:
         """Path-safe fingerprint of fields that affect cached panel output."""
         payload = {
             "image_config_default": self.image_config_default.cache_slug(),
             "image_config_bw": self.image_config_bw.cache_slug(),
+            "image_config_face": self.image_config_face.cache_slug(),
             "classifier_bw_detect_enabled": self.classifier_bw_detect_enabled,
+            "classifier_face_detect_enabled": self.classifier_face_detect_enabled,
+            "face_detector": self.face_detector,
             "orientation": self.orientation,
             "crop_to_fill_threshold": self.crop_to_fill_threshold,
         }
@@ -117,12 +134,16 @@ class AppConfig:
         image_config_bw = _image_config_from_dict(
             data.get("image_config_bw"), field_path="image_config_bw"
         )
+        image_config_face = _image_config_from_dict(
+            data.get("image_config_face"), field_path="image_config_face"
+        )
 
-        _image_fields = {"image_config_default", "image_config_bw"}
+        _image_fields = {"image_config_default", "image_config_bw", "image_config_face"}
 
         kwargs: dict[str, Any] = {
             "image_config_default": image_config_default,
             "image_config_bw": image_config_bw,
+            "image_config_face": image_config_face,
         }
         for f in fields(cls):
             if f.name in _image_fields:

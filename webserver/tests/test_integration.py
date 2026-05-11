@@ -225,7 +225,7 @@ def test_api_status_200_and_shape(live_client):
         assert "name" in entry
         assert "dithered" in entry
         assert "is_bw" in entry          # classifier observation — must exist
-        assert "has_face" not in entry   # removed with face detection
+        assert "has_face" in entry       # face detection observation — must exist
 
 
 def test_serve_binary_no_images_returns_404_or_503(app_config: AppConfig, tmp_path: Path):

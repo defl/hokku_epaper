@@ -28,6 +28,7 @@ def _config(
     tmp_path: Path,
     *,
     bw: bool = False,
+    face: bool = False,
     **overrides,
 ) -> AppConfig:
     upload = tmp_path / "up"
@@ -38,6 +39,7 @@ def _config(
         upload_dir=str(upload),
         cache_dir=str(cache),
         classifier_bw_detect_enabled=bw,
+        classifier_face_detect_enabled=face,
         **overrides,
     )
 

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -1803,8 +1803,7 @@ function renderScreens(screens) {
     overdue.forEach(s => {
       let line = `<strong>${s.name}</strong> — ${formatMinutesLate(s.late)}`;
       if (s.battery_mv != null) {
-        const pct = s.battery_percent != null ? ` / ${s.battery_percent}%` : '';
-        line += ` (last battery: ${(s.battery_mv/1000).toFixed(2)} V${pct})`;
+        line += ` (last battery: ${(s.battery_mv/1000).toFixed(2)} V)`;
       }
       html += `<li>${line}</li>`;
     });
@@ -2148,6 +2147,7 @@ function showImageDetails(fname) {
     ['Last displayed', formatLastDisplayed(sd.last_request)],
     ['Display time', sd.total_show_formatted || '0m'],
     ['B&amp;W detected', yesno(entry.is_bw)],
+    ['Face detected',  yesno(entry.has_face)],
   ];
   document.getElementById('img-detail-table').innerHTML =
     rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');

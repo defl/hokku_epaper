@@ -44,6 +44,15 @@ if ! python3 -c "import pillow_heif" 2>/dev/null; then
     echo "Warning: Could not install pillow-heif. HEIC/HEIF support will be unavailable."
 fi
 
+# Install opencv-python-headless via pip — required for YuNet face detection.
+# The Debian package (python3-opencv) lacks the DNN module on many platforms.
+if ! python3 -c "import cv2" 2>/dev/null; then
+    echo "Installing opencv-python-headless via pip..."
+    pip3 install --break-system-packages "opencv-python-headless>=4.7" 2>/dev/null || \
+    pip3 install "opencv-python-headless>=4.7" 2>/dev/null || \
+    echo "Warning: Could not install opencv-python-headless. Face detection will be unavailable."
+fi
+
 # Install numba via pip — required for NumbaDither (JIT-compiled dither inner
 # loop). Not available as a Debian package; pip is the only distribution path.
 if ! python3 -c "import numba" 2>/dev/null; then
