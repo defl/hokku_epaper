@@ -533,9 +533,12 @@ def _pi_config_mismatch(existing_config, pi_credentials):
 
 # -------- flashing --------
 
-def write_config(port, config):
-    print("  Writing configuration...", end=" ", flush=True)
-    nvs_binary = _build_nvs_binary(config)
+def _flash_nvs_binary(port, nvs_binary):
+    """Write a pre-built NVS binary to the device.  Separated from
+    write_config() so callers that need to flash firmware first can
+    pre-build the binary (slow IDF subprocess) before the firmware
+    flash, then call this immediately after — avoiding the ~20s build
+    window during which the device is running with an erased NVS."""
     try:
         import esptool
     except ImportError:
@@ -573,6 +576,12 @@ def write_config(port, config):
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+def write_config(port, config):
+    print("  Writing configuration...", end=" ", flush=True)
+    nvs_binary = _build_nvs_binary(config)
+    return _flash_nvs_binary(port, nvs_binary)
 
 
 def flash_firmware(port):
@@ -738,13 +747,13 @@ def main_menu(device, pi_credentials=None, pi_install_ran=False):
             print("  First, let's configure the device.")
             new_config = prompt_config(config, pi_credentials)
             if new_config:
-                # Flash before writing NVS: the merged binary covers the NVS
-                # partition range and would erase it if written first.
+                nvs_binary = _build_nvs_binary(new_config)
                 if flash_firmware(port):
-                    write_config(port, new_config)
-                    config = new_config
-                    print("  Setup complete.")
-                    check_boot(port)
+                    print("  Writing configuration...", end=" ", flush=True)
+                    if _flash_nvs_binary(port, nvs_binary):
+                        config = new_config
+                        print("  Setup complete.")
+                        check_boot(port)
             print("  Re-reading device state...")
             config, firmware_current, device_version, release_version = _refresh_device_state(port)
             config = config or {}
@@ -753,9 +762,11 @@ def main_menu(device, pi_credentials=None, pi_install_ran=False):
                 device_version = release_version
 
         elif choice == "3":
+            nvs_binary = _build_nvs_binary(config) if config else None
             if flash_firmware(port):
-                if config:
-                    write_config(port, config)
+                if nvs_binary:
+                    print("  Writing configuration...", end=" ", flush=True)
+                    _flash_nvs_binary(port, nvs_binary)
                 check_boot(port)
                 print("  Re-reading device state...")
                 config, firmware_current, device_version, release_version = _refresh_device_state(port)
@@ -823,10 +834,20 @@ def run_configure_and_flash(pi_credentials=None):
     if new_config is None:
         print("  Aborted — no changes written.")
         return 1
+    # Pre-build NVS binary before flashing so write_config runs immediately
+    # after the flash with no subprocess delay.  Without this, the slow
+    # nvs_partition_gen subprocess (~20s on Windows) runs after the flash,
+    # during which the device boots with an erased NVS and displays the
+    # config-mismatch error — which is then visible for ~1s before the NVS
+    # write resets the device.
+    print("  Preparing configuration...", end=" ", flush=True)
+    nvs_binary = _build_nvs_binary(new_config)
+    print("done.")
     if not flash_firmware(port):
         print("  ERROR: firmware flash failed.")
         return 1
-    if not write_config(port, new_config):
+    print("  Writing configuration...", end=" ", flush=True)
+    if not _flash_nvs_binary(port, nvs_binary):
         print("  ERROR: failed to write configuration.")
         return 1
     check_boot(port)
@@ -869,8 +890,9 @@ def run_configure_only(pi_credentials=None):
 def run_flash_only():
     """Direct: flash firmware keeping existing NVS config. Post-flash boot check.
 
-    The merged firmware binary fills the NVS partition range with 0xFF, so we
-    read and save the existing config before flashing and restore it after."""
+    Pre-builds the NVS binary before flashing so it can be written immediately
+    after the flash, closing the window where the device would boot with an
+    erased NVS and display a spurious config-mismatch error."""
     device = _prepare(require_firmware=True)
     if device is None:
         return 1
@@ -879,11 +901,17 @@ def run_flash_only():
 
     print("  Flash firmware only (keep existing config)")
     print("  ------------------------------------------")
+    nvs_binary = None
+    if existing:
+        print("  Preparing configuration...", end=" ", flush=True)
+        nvs_binary = _build_nvs_binary(existing)
+        print("done.")
     if not flash_firmware(port):
         print("  ERROR: firmware flash failed.")
         return 1
-    if existing:
-        if not write_config(port, existing):
+    if nvs_binary:
+        print("  Writing configuration...", end=" ", flush=True)
+        if not _flash_nvs_binary(port, nvs_binary):
             print("  WARNING: firmware flashed but failed to restore config.")
             print("  Run 'configure only' to re-enter your settings.")
             return 1
