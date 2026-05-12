@@ -77,11 +77,21 @@ The Config tab controls how the server behaves and how images are converted. All
 
 <a href="../images/ui_config_dither.png"><img src="../images/ui_config_dither.png" width="480"></a>
 
-**Dither preset** — six presets covering common use cases, from a faithful general-purpose conversion to modes optimised for high contrast, soft tones, or vivid colours. The server also exposes individual knobs for users who want to tune further. Changing the preset doesn't automatically re-convert existing images — use the **Clear Cache & Re-convert** button to regenerate everything with the new settings. For a full explanation of what each setting does and the reasoning behind the defaults, see [dithering.md](dithering.md).
+**Dither preset** — six presets covering common use cases, from a faithful general-purpose conversion to modes optimised for high contrast, soft tones, or vivid colours. There are three independent preset slots: one for general images, one for detected black-and-white photos, and one for detected faces — so you can use a high-contrast monochrome preset for B&W shots while keeping a softer general preset for everything else. The server also exposes individual knobs for users who want to tune beyond the presets. Changing any preset doesn't automatically re-convert existing images — use the **Clear Cache & Re-convert** button to regenerate everything with the new settings. For a full explanation of what each setting does and the reasoning behind the defaults, see [dithering.md](dithering.md).
 
-**Context-aware conversion** — two toggles control whether the server detects image content before choosing a conversion approach. B&W detection routes monochrome photos through a pipeline tuned for black-and-white rather than colour dithering. Face detection routes photos containing faces through a pipeline that prioritises skin tone rendering. Both run entirely locally. You can disable either if you prefer a consistent single approach across all images.
+**Context-aware conversion** — two toggles control whether the server analyses image content before choosing a conversion approach. B&W detection identifies monochrome photos and routes them through a separate pipeline tuned for black-and-white rather than colour dithering. Face detection identifies photos containing faces and routes them through a pipeline that prioritises skin tone rendering. Both run entirely locally using on-device models — nothing leaves your network. You can disable either toggle if you prefer a single consistent approach across all images, or if the detection is occasionally misclassifying something.
+
+**Poll interval** — how often the web app checks the server for status updates (queue progress, new images, screen check-ins). Default is 10 seconds. Raise it if you want to reduce network chatter on a slow connection; lower it if you want near-instant updates during large uploads.
 
 **Clear Cache & Re-convert** — wipes all converted images and regenerates them from the originals using the current settings. Use this after changing orientation, dither preset, or crop-to-fill threshold. The process runs in the background; the status strip on the Images tab shows progress.
+
+**Config file options** — a few settings can't be changed from the web app and need to be edited in the config file directly (`/var/lib/hokku/config.json` on a deb install, or `./config.json` from source). These are:
+
+- **`mdns_hostname`** — the mDNS/Bonjour hostname the server advertises on your network. When set (default: `"hokku"`), the server is reachable as `hokku.local` in addition to its IP address, which means you can bookmark `http://hokku.local:8080/` and never worry about the IP changing. Set to an empty string to disable mDNS.
+- **`port`** — the port the server listens on (default: `8080`). Change this if something else on your server is already using 8080.
+- **`upload_dir`** / **`cache_dir`** — where originals and converted images are stored. The defaults are sensible for a deb install; override these if you want to put your photo library on a different drive or mount point.
+
+After editing the config file, restart the server (`systemctl restart hokku-server`) for changes to take effect.
 
 ---
 
