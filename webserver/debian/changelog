@@ -1,3 +1,16 @@
+hokku-server (3.0.0~alpha1-25) unstable; urgency=low
+
+  * Add mDNS / Bonjour advertisement (python-zeroconf): server registers as
+    Hokku._http._tcp.local. with A-record hokku-server.local and TXT
+    path=/hokku/ui so browsers reach it at http://hokku-server.local:<port>
+    without knowing the IP address.
+  * AppConfig v4: new mdns_enabled field (default True); migration from v3
+    adds it transparently. Set false to suppress advertisement.
+  * postinst: pip-install zeroconf>=0.38. Soft dependency — missing zeroconf
+    logs a warning and the server starts normally.
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-24) unstable; urgency=medium
 
   * Fix dither progress counter never clearing after clear_caches: reset

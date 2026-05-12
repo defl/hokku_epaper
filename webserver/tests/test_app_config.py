@@ -169,3 +169,28 @@ def test_v1_file_loads_with_default_worker_count(tmp_path: Path):
     p.write_text(json.dumps(v1_data))
     loaded = AppConfig.load(p)
     assert loaded.image_worker_thread_count == 1
+
+
+def test_mdns_enabled_default_is_true():
+    assert AppConfig().mdns_enabled is True
+
+
+def test_mdns_enabled_roundtrips(tmp_path: Path):
+    cfg = AppConfig(mdns_enabled=False)
+    p = tmp_path / "config.json"
+    cfg.save(p)
+    loaded = AppConfig.load(p)
+    assert loaded.mdns_enabled is False
+
+
+def test_v3_migrates_to_v4():
+    """A v3 dict gains mdns_enabled=True after migration."""
+    v3_blob = {"version": 3, "image_worker_thread_count": 1, "face_detector": "yunet_opencv"}
+    migrated = _migrate(v3_blob)
+    assert migrated["version"] == _CURRENT_VERSION
+    assert migrated["mdns_enabled"] is True
+
+
+def test_cache_slug_invariant_to_mdns_enabled():
+    """mDNS flag doesn't affect rendered output so it must not influence the slug."""
+    assert AppConfig(mdns_enabled=True).cache_slug() == AppConfig(mdns_enabled=False).cache_slug()

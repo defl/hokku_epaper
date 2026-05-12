@@ -11,6 +11,7 @@ from hokku_server.app_config import AppConfig
 from hokku_server.app_state import AppState, build_manager
 from hokku_server.flask_app import create_app
 from hokku_server.image_classifier import ImageClassifier
+from hokku_server.mdns import start_mdns
 from hokku_server.serve_scheduler import ServeScheduler
 from hokku_server.watcher import Watcher
 
@@ -82,6 +83,7 @@ def main() -> None:
     logging.getLogger("werkzeug").addFilter(_SilentFilter())
 
     print(f"  Starting server on port {config.port}...")
+    _zc = start_mdns(config.port) if config.mdns_enabled else None  # noqa: F841
     app.run(host="0.0.0.0", port=config.port)
 
 

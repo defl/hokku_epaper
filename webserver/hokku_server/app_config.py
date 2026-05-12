@@ -20,7 +20,7 @@ from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
 
 Orientation = Literal["landscape", "portrait"]
 
-_CURRENT_VERSION = 3
+_CURRENT_VERSION = 4
 
 
 FaceDetectorName = Literal["yunet_opencv"]
@@ -38,10 +38,17 @@ def _migrate_v2_to_v3(d: dict) -> dict:
     return d
 
 
+def _migrate_v3_to_v4(d: dict) -> dict:
+    """Add mdns_enabled (default True — advertise on LAN via Bonjour)."""
+    d["mdns_enabled"] = True
+    return d
+
+
 # v(N) → v(N+1) upgrade functions. Populated as the schema evolves.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
+    3: _migrate_v3_to_v4,
 }
 
 
@@ -100,6 +107,10 @@ class AppConfig:
     image_config_face: ImageConfig = field(
         default_factory=lambda: PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
     )
+
+    #: Advertise the server as ``hokku-server.local`` via mDNS (Bonjour/Avahi)
+    #: so browsers on the LAN can find it without knowing the IP address.
+    mdns_enabled: bool = True
 
     def cache_slug(self) -> str:
         """Path-safe fingerprint of fields that affect cached panel output."""
