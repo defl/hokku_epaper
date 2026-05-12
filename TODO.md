@@ -29,6 +29,6 @@ compress_dynamic_range currently does a hard linear L* squeeze: L_out = L_in * r
 ```
 
 
-Future
- - Remove dither_streaming.py
- - Numba dither_unconstrained.py into dither_unconstrained_numba.py 
+- Firmware configurable IP, if set go to URL, if not set connect to hokku-server.local (mdns)
+- mdns setup for server and client in the configurator
+- Add to features that it's zeroconf by default but overridable if you want.

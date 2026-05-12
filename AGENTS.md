@@ -48,6 +48,11 @@ Firmware packaging (single merged file)
 - `build.bat` / `build_worktree.bat` should run `idf.py build` then this merge step. Keep only the merged file under `firmware/release/`.
 - When tagging a GitHub release, attach the merged file as the single firmware asset. The setup tool downloads it from the latest release if `firmware/release/` is empty. If no `hokku-firmware_*.bin` asset is found the tool aborts — never publish a release missing this file.
 
+Build permission
+================
+- **DO NOT build the `.deb` unless the user explicitly gives permission** for that specific change. "Looks good" or "sounds reasonable" are NOT build authorisations. Wait for a clear "build it", "go ahead and build", or equivalent.
+- **One permission is not all permissions.** Each build requires its own explicit authorisation. Do not chain builds or assume a previous "go ahead" covers the next one.
+
 Building the hokku-server .deb on Windows (via Docker)
 ======================================================
 `webserver/build-deb.sh` needs Debian tooling (`dpkg-buildpackage`, `debhelper`, `pybuild-plugin-pyproject`) that isn't available on Windows. Use Docker Desktop with a `debian:trixie` container. One-shot command that works from Git Bash:

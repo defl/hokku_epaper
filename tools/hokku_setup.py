@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hokku/Huessen E-Ink Frame Setup.
+"""Hokku - setup.
 
 Main-menu driven installer that orchestrates:
   - Raspberry Pi OS SD card imaging + webserver install (optional)
@@ -21,8 +21,8 @@ import release_cache
 
 def _banner():
     print()
-    print("  Hokku/Huessen E-Ink Frame Setup")
-    print("  ================================")
+    print("  Hokku - setup")
+    print("  =============")
     print()
 
 
@@ -481,6 +481,8 @@ def main():
         action, last_rc = _dispatch(choice)
         if action == "exit":
             break
+        input("\n  Press Enter to return to main menu...")
+        print()
 
     if _pause_on_exit:
         input("\n  Press Enter to close this window. ")

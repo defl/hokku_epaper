@@ -9,7 +9,7 @@ esptool automatically resets the ESP32-S3 into download mode via the
 USB-Serial/JTAG interface, flashes the NVS partition, and resets back.
 
 Usage:
-    hokku-config set --ssid MyWifi --password secret --url http://server:8080/hokku/
+    hokku-config set --ssid MyWifi --password secret --url http://hokku.local:8080/hokku/
     hokku-config get
     hokku-config backup [config_backup.json]
     hokku-config restore config_backup.json
@@ -122,7 +122,8 @@ def _build_nvs_binary(config_dict):
     csv_lines.append(f"{NVS_NAMESPACE},namespace,,")
     csv_lines.append(f"cfg_ver,data,u8,{CONFIG_VERSION}")
     for key, value in config_dict.items():
-        # Escape commas in values
+        if not isinstance(value, str):
+            continue  # cfg_ver and any other non-string fields are handled separately
         escaped = value.replace('"', '""')
         csv_lines.append(f'{key},data,string,"{escaped}"')
 

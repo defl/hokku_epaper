@@ -304,22 +304,118 @@ def show_current_config(config):
     if not config:
         print("  No configuration found on device.")
         return
-    ip, port = _parse_server_url(config.get("image_url", ""))
+    host, port = _parse_server_url(config.get("image_url", ""))
     print("  Current configuration:")
     print(f"    WiFi SSID:     {config.get('wifi_ssid', '(not set)')}")
     print(f"    WiFi Password: {'****' if config.get('wifi_pass') else '(not set)'}")
-    print(f"    Server:        {ip or '(not set)'}:{port or 8080}")
+    print(f"    Server:        {host or '(not set)'}:{port or 8080}")
     print(f"    Screen Name:   {config.get('screen_name', '(not set)')}")
     print()
 
 
-def _check_server_reachable(ip, port):
-    import urllib.request
+def _mdns_resolve(hostname, timeout=3.0):
+    """Resolve a .local hostname via mDNS multicast. Returns IP string or None.
+    Uses only the standard library — no zeroconf dependency needed."""
+    import socket, struct, threading
+
+    def _encode_name(name):
+        out = b''
+        for label in name.rstrip('.').split('.'):
+            b = label.encode('ascii')
+            out += bytes([len(b)]) + b
+        return out + b'\x00'
+
+    # mDNS query packet: QU bit set so the responder sends a unicast reply
+    packet = struct.pack('!HHHHHH', 0, 0, 1, 0, 0, 0)
+    packet += _encode_name(hostname) + struct.pack('!HH', 1, 0x8001)  # A, QU+IN
+
+    result = [None]
+
+    def _run():
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.settimeout(timeout)
+            sock.bind(('', 0))
+            sock.sendto(packet, ('224.0.0.251', 5353))
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                try:
+                    data, _ = sock.recvfrom(4096)
+                except socket.timeout:
+                    break
+                # Walk the answer section looking for an A record
+                try:
+                    ancount = struct.unpack('!H', data[6:8])[0]
+                    qdcount = struct.unpack('!H', data[4:6])[0]
+                    pos = 12
+                    # Skip questions
+                    for _ in range(qdcount):
+                        while pos < len(data):
+                            if data[pos] & 0xc0 == 0xc0:
+                                pos += 2; break
+                            if data[pos] == 0:
+                                pos += 1; break
+                            pos += data[pos] + 1
+                        pos += 4
+                    # Parse answers
+                    for _ in range(ancount):
+                        while pos < len(data):
+                            if data[pos] & 0xc0 == 0xc0:
+                                pos += 2; break
+                            if data[pos] == 0:
+                                pos += 1; break
+                            pos += data[pos] + 1
+                        if pos + 10 > len(data):
+                            break
+                        rtype, _, _, rdlen = struct.unpack('!HHIH', data[pos:pos + 10])
+                        pos += 10
+                        if rtype == 1 and rdlen == 4:  # A record
+                            result[0] = socket.inet_ntoa(data[pos:pos + 4])
+                            return
+                        pos += rdlen
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout + 0.5)
+    return result[0]
+
+
+def _resolve_host(hostname):
+    """Return an IP for hostname. Tries getaddrinfo first (works on modern
+    Windows/macOS/Linux for .local via the OS mDNS stack), then falls back
+    to a manual mDNS query for .local names."""
+    import socket
+    try:
+        return socket.getaddrinfo(hostname, None, socket.AF_INET)[0][4][0]
+    except socket.gaierror:
+        pass
+    if hostname.endswith('.local'):
+        return _mdns_resolve(hostname)
+    return None
+
+
+def _check_server_reachable(host, port):
+    import urllib.request, urllib.error
+    ip = _resolve_host(host)
+    if ip is None:
+        return False, None
     try:
         urllib.request.urlopen(f"http://{ip}:{port}/hokku/api/time", timeout=5)
-        return True
+        return True, ip
+    except urllib.error.HTTPError:
+        return True, ip   # got an HTTP response — server is up, endpoint may differ
     except Exception:
-        return False
+        return False, ip
 
 
 def prompt_config(existing_config=None, pi_credentials=None):
@@ -360,33 +456,42 @@ def prompt_config(existing_config=None, pi_credentials=None):
     # else keep existing
 
     # --- server IP/port ---
-    current_ip, current_port = _parse_server_url(cfg.get("image_url", ""))
-    default_ip = pi.get("server_ip") or current_ip
+    current_host, current_port = _parse_server_url(cfg.get("image_url", ""))
+    default_host = pi.get("server_ip") or current_host or "hokku.local"
     default_port = current_port or 8080
 
-    prompt = f"  Server IP [{default_ip}]: " if default_ip else "  Server IP (e.g. 192.168.1.10): "
+    prompt = f"  Server hostname or IP [{default_host}]: "
     val = input(prompt).strip()
     if val:
-        current_ip = val
-    elif default_ip:
-        current_ip = default_ip
+        current_host = val
+    elif default_host:
+        current_host = default_host
     else:
-        print("  Server IP is required.")
+        print("  Server hostname or IP is required.")
         return None
 
     prompt = f"  Server Port [{default_port}]: "
     val = input(prompt).strip()
     current_port = int(val) if val else default_port
 
-    cfg["image_url"] = f"http://{current_ip}:{current_port}/hokku/screen/"
+    cfg["image_url"] = f"http://{current_host}:{current_port}/hokku/screen/"
 
-    print(f"  Checking server at {current_ip}:{current_port}...", end=" ", flush=True)
-    if _check_server_reachable(current_ip, current_port):
-        print("OK")
+    print(f"  Checking server at {current_host}:{current_port}...", end=" ", flush=True)
+    reachable, resolved_ip = _check_server_reachable(current_host, current_port)
+    if reachable:
+        if resolved_ip and resolved_ip != current_host:
+            print(f"OK  ({resolved_ip})")
+        else:
+            print("OK")
     else:
-        print("NOT REACHABLE")
-        print(f"  WARNING: Could not connect to {current_ip}:{current_port}")
-        print("  Make sure the webserver is running before the frame tries to connect.")
+        if resolved_ip is None and current_host.endswith('.local'):
+            print("NOT FOUND")
+            print(f"  WARNING: Could not resolve {current_host} via mDNS.")
+            print("  Make sure the server is running and on the same network.")
+        else:
+            print("NOT REACHABLE")
+            print(f"  WARNING: Resolved {current_host} to {resolved_ip} but could not connect.")
+            print("  Make sure the webserver is running before the frame tries to connect.")
         if input("  Continue anyway? [Y/n]: ").strip().lower() == "n":
             return None
 
@@ -413,8 +518,8 @@ def _pi_config_mismatch(existing_config, pi_credentials):
     if pi_credentials.get("wifi_pass") and existing_config.get("wifi_pass") != pi_credentials["wifi_pass"]:
         diffs.append("wifi_pass")
     if pi_credentials.get("server_ip"):
-        ip, _ = _parse_server_url(existing_config.get("image_url", ""))
-        if ip != pi_credentials["server_ip"]:
+        host, _ = _parse_server_url(existing_config.get("image_url", ""))
+        if host != pi_credentials["server_ip"]:
             diffs.append("server_ip")
     return diffs
 
@@ -698,12 +803,17 @@ def run_configure_and_flash(pi_credentials=None):
     print("  --------------------------")
     new_config = prompt_config(existing, pi_credentials)
     if new_config is None:
+        print("  Aborted — no changes written.")
         return 1
     if not write_config(port, new_config):
+        print("  ERROR: failed to write configuration.")
         return 1
     if not flash_firmware(port):
+        print("  ERROR: firmware flash failed.")
         return 1
     check_boot(port)
+    print()
+    print("  Done — firmware flashed and configuration written.")
     return 0
 
 
@@ -719,10 +829,22 @@ def run_configure_only(pi_credentials=None):
     print("  ---------------------------------------")
     new_config = prompt_config(existing, pi_credentials)
     if new_config is None:
+        print("  Aborted — no changes written.")
         return 1
     if not write_config(port, new_config):
+        print("  ERROR: failed to write configuration.")
         return 1
-    print("  Device will restart with new configuration.")
+    print()
+    print("  Configuration written successfully.")
+    host, port_num = _parse_server_url(new_config.get("image_url", ""))
+    if host:
+        print(f"  Server:      {host}:{port_num or 8080}")
+    if new_config.get("wifi_ssid"):
+        print(f"  WiFi SSID:   {new_config['wifi_ssid']}")
+    if new_config.get("screen_name"):
+        print(f"  Screen name: {new_config['screen_name']}")
+    print()
+    print("  The frame will restart and connect on the next scheduled refresh.")
     return 0
 
 
@@ -736,6 +858,9 @@ def run_flash_only():
     print("  Flash firmware only (keep existing config)")
     print("  ------------------------------------------")
     if not flash_firmware(port):
+        print("  ERROR: firmware flash failed.")
         return 1
     check_boot(port)
+    print()
+    print("  Done — firmware flashed successfully.")
     return 0
