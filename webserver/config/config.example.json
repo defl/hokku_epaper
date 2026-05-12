@@ -5,7 +5,7 @@
     "1200",
     "1800"
   ],
-  "upload_dir": "/var/lib/hokku/upload",
+  "upload_dir": "/var/lib/hokku/images",
   "cache_dir": "/var/lib/hokku/cache",
   "port": 8080,
   "poll_interval_seconds": 10,

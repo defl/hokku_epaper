@@ -82,7 +82,7 @@ class AppConfig:
 
     version: int = _CURRENT_VERSION
     refresh_image_at_time: tuple[str, ...] = ("0600", "1200", "1800")
-    upload_dir: str = "/var/lib/hokku/upload"
+    upload_dir: str = "/var/lib/hokku/images"
     cache_dir: str = "/var/lib/hokku/cache"
     port: int = 8080
     poll_interval_seconds: int = 10
@@ -174,20 +174,16 @@ class AppConfig:
 
     @classmethod
     def load(cls, path: Path) -> "AppConfig":
-        """Read JSON from path. exit(1) on missing or unparseable JSON.
+        """Read JSON from path. exit(1) on unparseable JSON.
 
-        Valid JSON without 'version' → returns a fresh default v1 and writes
-        it back to *path* (self-healing).
+        Missing file or valid JSON without 'version' → writes a fresh default
+        and continues (self-healing).
         """
         if not path.exists():
-            print(f"Error: config file not found: {path}", file=sys.stderr)
-            print(
-                "  To create one, copy the example and edit upload_dir / cache_dir:\n"
-                "    cp webserver/config/config.example.json <your-config.json>\n"
-                "  Then set upload_dir and cache_dir to writable directories.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            cfg = cls()
+            cfg.save(path)
+            print(f"  Config not found — created default v{_CURRENT_VERSION}: {path}")
+            return cfg
         try:
             with open(path) as f:
                 data = json.load(f)

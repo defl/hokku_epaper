@@ -4,7 +4,7 @@ set -e
 # Create data directories. /var/lib/hokku is the systemd StateDirectory;
 # it gets chowned to the DynamicUser at service start. Subdirs we create
 # here end up owned by the dynamic user once they're inside that tree.
-mkdir -p /var/lib/hokku/upload /var/lib/hokku/cache
+mkdir -p /var/lib/hokku/images /var/lib/hokku/cache
 
 # Config file deliberately NOT created here. The service (running as
 # DynamicUser) creates it itself on first load, which ensures correct
