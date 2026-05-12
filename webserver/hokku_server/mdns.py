@@ -1,8 +1,8 @@
 """Bonjour / mDNS advertisement for the Hokku HTTP service.
 
 Advertises ``_http._tcp.local.`` so that browsers and devices on the LAN
-can reach the server at the fixed address ``hokku-server.local`` without
-knowing its IP.  The service appears as ``Hokku._http._tcp.local.`` with a
+can reach the server at ``<hostname>.local`` without knowing its IP.
+The service appears as ``Hokku._http._tcp.local.`` with a
 ``path=/hokku/ui`` TXT record.
 """
 from __future__ import annotations
@@ -12,8 +12,6 @@ import sys
 from typing import Any
 
 from zeroconf import ServiceInfo, Zeroconf
-
-_MDNS_HOSTNAME = "hokku-server"  # resolves as hokku-server.local on the LAN
 
 
 def _get_local_ip() -> str:
@@ -26,11 +24,14 @@ def _get_local_ip() -> str:
         return "127.0.0.1"
 
 
-def start_mdns(port: int) -> Any:
+def start_mdns(port: int, hostname: str) -> Any:
     """Register the Hokku HTTP service via mDNS.
 
     Advertises as ``Hokku._http._tcp.local.`` with A-record
-    ``hokku-server.local.`` pointing to the local LAN IP.
+    ``<hostname>.local.`` pointing to the local LAN IP.
+
+    *hostname* is the label before ``.local`` (e.g. ``"hokku-server"``).
+    Pass an empty string to skip registration (caller's responsibility).
 
     Returns the ``Zeroconf`` instance (keep the reference alive for the life
     of the process).  Logs and returns ``None`` on unexpected failure.
@@ -43,11 +44,11 @@ def start_mdns(port: int) -> Any:
             addresses=[socket.inet_aton(local_ip)],
             port=port,
             properties={"path": "/hokku/ui"},
-            server=f"{_MDNS_HOSTNAME}.local.",
+            server=f"{hostname}.local.",
         )
         zc = Zeroconf()
         zc.register_service(info)
-        print(f"  mDNS: advertised as {_MDNS_HOSTNAME}.local ({local_ip}:{port})")
+        print(f"  mDNS: advertised as {hostname}.local ({local_ip}:{port})")
         return zc
     except Exception as exc:
         print(f"  mDNS: registration failed — {exc}", file=sys.stderr)

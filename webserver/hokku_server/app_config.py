@@ -39,8 +39,12 @@ def _migrate_v2_to_v3(d: dict) -> dict:
 
 
 def _migrate_v3_to_v4(d: dict) -> dict:
-    """Add mdns_enabled (default True — advertise on LAN via Bonjour)."""
-    d["mdns_enabled"] = True
+    """Add mdns_hostname (default 'hokku-server' — advertise as hokku-server.local).
+
+    Replaces the old boolean mdns_enabled field. Empty string = off.
+    """
+    d.pop("mdns_enabled", None)  # remove boolean if present from earlier alpha
+    d["mdns_hostname"] = "hokku-server"
     return d
 
 
@@ -108,9 +112,10 @@ class AppConfig:
         default_factory=lambda: PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
     )
 
-    #: Advertise the server as ``hokku-server.local`` via mDNS (Bonjour/Avahi)
-    #: so browsers on the LAN can find it without knowing the IP address.
-    mdns_enabled: bool = True
+    #: mDNS / Bonjour hostname (the part before ``.local``).
+    #: The server advertises itself as ``<mdns_hostname>.local`` on the LAN.
+    #: Empty string disables mDNS advertisement entirely.
+    mdns_hostname: str = "hokku-server"
 
     def cache_slug(self) -> str:
         """Path-safe fingerprint of fields that affect cached panel output."""

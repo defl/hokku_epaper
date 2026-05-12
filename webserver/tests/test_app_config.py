@@ -171,26 +171,48 @@ def test_v1_file_loads_with_default_worker_count(tmp_path: Path):
     assert loaded.image_worker_thread_count == 1
 
 
-def test_mdns_enabled_default_is_true():
-    assert AppConfig().mdns_enabled is True
+def test_mdns_hostname_default():
+    assert AppConfig().mdns_hostname == "hokku-server"
 
 
-def test_mdns_enabled_roundtrips(tmp_path: Path):
-    cfg = AppConfig(mdns_enabled=False)
+def test_mdns_hostname_empty_means_off():
+    cfg = AppConfig(mdns_hostname="")
+    assert cfg.mdns_hostname == ""
+
+
+def test_mdns_hostname_roundtrips(tmp_path: Path):
+    cfg = AppConfig(mdns_hostname="my-frame")
     p = tmp_path / "config.json"
     cfg.save(p)
     loaded = AppConfig.load(p)
-    assert loaded.mdns_enabled is False
+    assert loaded.mdns_hostname == "my-frame"
+
+
+def test_mdns_hostname_empty_roundtrips(tmp_path: Path):
+    cfg = AppConfig(mdns_hostname="")
+    p = tmp_path / "config.json"
+    cfg.save(p)
+    loaded = AppConfig.load(p)
+    assert loaded.mdns_hostname == ""
 
 
 def test_v3_migrates_to_v4():
-    """A v3 dict gains mdns_enabled=True after migration."""
+    """A v3 dict gains mdns_hostname='hokku-server' after migration."""
     v3_blob = {"version": 3, "image_worker_thread_count": 1, "face_detector": "yunet_opencv"}
     migrated = _migrate(v3_blob)
     assert migrated["version"] == _CURRENT_VERSION
-    assert migrated["mdns_enabled"] is True
+    assert migrated["mdns_hostname"] == "hokku-server"
 
 
-def test_cache_slug_invariant_to_mdns_enabled():
-    """mDNS flag doesn't affect rendered output so it must not influence the slug."""
-    assert AppConfig(mdns_enabled=True).cache_slug() == AppConfig(mdns_enabled=False).cache_slug()
+def test_v4_migration_removes_old_mdns_enabled():
+    """Old alpha v4 configs with mdns_enabled bool get it removed and hostname added."""
+    old_v3_blob = {"version": 3, "image_worker_thread_count": 1, "face_detector": "yunet_opencv",
+                   "mdns_enabled": True}
+    migrated = _migrate(old_v3_blob)
+    assert "mdns_enabled" not in migrated
+    assert migrated["mdns_hostname"] == "hokku-server"
+
+
+def test_cache_slug_invariant_to_mdns_hostname():
+    """mDNS hostname doesn't affect rendered output so it must not influence the slug."""
+    assert AppConfig(mdns_hostname="hokku-server").cache_slug() == AppConfig(mdns_hostname="").cache_slug()

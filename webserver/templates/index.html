@@ -999,10 +999,13 @@
 
     <div class="config-row">
       <label>mDNS / Bonjour:</label>
-      <label class="toggle" data-tip="Advertise this server as hokku-server.local on the local network so you can reach it without knowing its IP address.&#10;Disable if you have mDNS conflicts or don't need local discovery.">
-        <input type="checkbox" id="mdns-enabled">
-        <span id="mdns-enabled-label">On</span>
-      </label>
+      <span class="ctrl-tip" data-tip="Advertise this server on the local network so you can reach it at &lt;hostname&gt;.local without knowing its IP address.&#10;&#10;The hostname is the part before .local — e.g. 'hokku-server' makes it reachable at hokku-server.local.&#10;&#10;Uncheck to disable mDNS advertisement entirely (useful if you have conflicts with another device using the same name, or if your router handles local DNS itself).&#10;&#10;Note: changing the hostname only takes effect after a server restart.">
+        <input type="checkbox" id="mdns-enabled" onchange="onMdnsToggle()">
+      </span>
+      <span id="mdns-hostname-wrap" style="display:inline-flex; align-items:center; gap:4px; margin-left:6px;">
+        <input type="text" id="mdns-hostname" placeholder="hokku-server" style="width:160px;">
+        <span style="color:var(--stone); font-size:0.92em;">.local</span>
+      </span>
     </div>
 
     <div class="config-row">
@@ -1634,13 +1637,20 @@ function onWorkerModeChange() {
 }
 
 async function saveConfig() {
+  if (document.getElementById('mdns-enabled').checked &&
+      !document.getElementById('mdns-hostname').value.trim()) {
+    showToast('mDNS hostname cannot be empty — enter a name or uncheck mDNS');
+    return;
+  }
   const data = {
     refresh_image_at_time: refreshTimes,
     poll_interval_seconds: parseInt(document.getElementById('poll-interval').value) || 10,
     orientation: document.getElementById('orientation').value,
     debug_fast_refresh: document.getElementById('debug-fast-refresh').checked,
     auto_clear_cache: document.getElementById('auto-clear-cache').checked,
-    mdns_enabled: document.getElementById('mdns-enabled').checked,
+    mdns_hostname: document.getElementById('mdns-enabled').checked
+      ? (document.getElementById('mdns-hostname').value.trim() || '')
+      : '',
     crop_to_fill_threshold: (parseInt(document.getElementById('crop-to-fill-threshold').value) || 0) / 100,
     image_worker_thread_count: (() => {
       const mode = document.getElementById('image-worker-mode').value;
@@ -2216,9 +2226,12 @@ async function loadConfig() {
     document.getElementById('auto-clear-cache').checked = autoClear;
     document.getElementById('auto-clear-cache-label').textContent = autoClear ? 'On' : 'Off';
 
-    const mdnsOn = cfg.mdns_enabled !== false;
+    const mdnsHostname = cfg.mdns_hostname ?? 'hokku-server';
+    const mdnsOn = mdnsHostname.length > 0;
     document.getElementById('mdns-enabled').checked = mdnsOn;
-    document.getElementById('mdns-enabled-label').textContent = mdnsOn ? 'On' : 'Off';
+    document.getElementById('mdns-hostname').value = mdnsHostname;
+    document.getElementById('mdns-hostname-wrap').style.opacity = mdnsOn ? '' : '0.4';
+    document.getElementById('mdns-hostname').disabled = !mdnsOn;
     const fillPct = Math.round(((cfg.crop_to_fill_threshold ?? 0.20)) * 100);
     document.getElementById('crop-to-fill-threshold').value = fillPct;
     document.getElementById('fill-threshold-val').textContent = fillPct + '%';
@@ -2528,9 +2541,12 @@ document.getElementById('auto-clear-cache').addEventListener('change', function(
   if (this.checked) scrubStaleCache();
 });
 
-document.getElementById('mdns-enabled').addEventListener('change', function() {
-  document.getElementById('mdns-enabled-label').textContent = this.checked ? 'On' : 'Off';
-});
+function onMdnsToggle() {
+  const on = document.getElementById('mdns-enabled').checked;
+  document.getElementById('mdns-hostname').disabled = !on;
+  document.getElementById('mdns-hostname-wrap').style.opacity = on ? '' : '0.4';
+  if (on) document.getElementById('mdns-hostname').focus();
+}
 
 // ── Header strip: logo + randomly tiled line segments ───────────────
 (function buildHeaderStrip() {

@@ -83,7 +83,7 @@ def main() -> None:
     logging.getLogger("werkzeug").addFilter(_SilentFilter())
 
     print(f"  Starting server on port {config.port}...")
-    _zc = start_mdns(config.port) if config.mdns_enabled else None  # noqa: F841
+    _zc = start_mdns(config.port, config.mdns_hostname) if config.mdns_hostname else None  # noqa: F841
     app.run(host="0.0.0.0", port=config.port)
 
 

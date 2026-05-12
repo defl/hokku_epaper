@@ -1,3 +1,14 @@
+hokku-server (3.0.0~alpha1-28) unstable; urgency=low
+
+  * Replace mdns_enabled bool with mdns_hostname string in AppConfig v4:
+    empty = off, non-empty = advertise as <hostname>.local. v3→v4 migration
+    updated accordingly; old alpha mdns_enabled bool cleaned up if present.
+  * UI: mDNS row now has a checkbox + text field + static ".local" label.
+    Checkbox disables/greys the field; save blocked with toast if checked
+    but field is empty. Hostname field focused automatically on enable.
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-27) unstable; urgency=low
 
   * UI: expose mdns_enabled in the config panel as "mDNS / Bonjour" toggle
