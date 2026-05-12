@@ -479,13 +479,17 @@ static uint16_t epaper_read_tsc(void)
     epaper_wait_busy();
 
     uint8_t rx[2] = {0};
-    spi_transaction_t t = {
-        .cmd       = 0,
-        .length    = 0,
-        .rxlength  = 16,
-        .rx_buffer = rx,
+    spi_transaction_ext_t t = {
+        .base = {
+            .flags     = SPI_TRANS_VARIABLE_CMD,
+            .length    = 0,
+            .rxlength  = 16,
+            .rx_buffer = rx,
+        },
+        .command_bits = 0,  /* no command byte — raw data read; command_bits=8 default
+                               would send 0x00 (PSR) and corrupt CTRL1 scan parameters */
     };
-    esp_err_t ret = spi_device_polling_transmit(spi_handle, &t);
+    esp_err_t ret = spi_device_polling_transmit(spi_handle, (spi_transaction_t *)&t);
     gpio_set_level(PIN_CTRL1, 1);
 
     if (ret != ESP_OK) {
@@ -686,12 +690,6 @@ static void epaper_init_panel(void)
 /* Send 480K to a specific panel via DTM (0x10). ctrl_pin selects the panel. */
 static void epaper_send_panel(int ctrl_pin, const uint8_t *image)
 {
-    /* Read TSC before each panel — the original firmware does this inside
-     * its send_panel() per panel (IROM 0x4200be0c calls read_tsc() at
-     * entry).  Value is logged for diagnostics. */
-    uint16_t tsc = epaper_read_tsc();
-    ESP_LOGI(TAG, "TSC Data = 0x%02X, 0x%02X", (tsc >> 8) & 0xFF, tsc & 0xFF);
-
     gpio_set_level(ctrl_pin, 0);
     static uint8_t buf[SPI_CHUNK_SIZE];
 
@@ -794,6 +792,10 @@ static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_
     ESP_LOGI(TAG, "SYS=%d PWR_EN=%d RST=%d BUSY=%d",
              gpio_get_level(PIN_SYS_POWER), gpio_get_level(PIN_EPAPER_PWR_EN),
              gpio_get_level(PIN_EPAPER_RST), gpio_get_level(PIN_EPAPER_BUSY));
+
+    /* Stock v2.0.26 firmware calls read_tsc() once, before panel 0 (CTRL1) only. */
+    uint16_t tsc = epaper_read_tsc();
+    ESP_LOGI(TAG, "TSC Data = 0x%02X, 0x%02X", (tsc >> 8) & 0xFF, tsc & 0xFF);
 
     ESP_LOGI(TAG, "Sending 480K to CTRL1 (panel 0)...");
     epaper_send_panel(PIN_CTRL1, ctrl1_data);

@@ -728,9 +728,11 @@ def main_menu(device, pi_credentials=None, pi_install_ran=False):
             print("  First, let's configure the device.")
             new_config = prompt_config(config, pi_credentials)
             if new_config:
-                write_config(port, new_config)
-                config = new_config
+                # Flash before writing NVS: the merged binary covers the NVS
+                # partition range and would erase it if written first.
                 if flash_firmware(port):
+                    write_config(port, new_config)
+                    config = new_config
                     print("  Setup complete.")
                     check_boot(port)
             print("  Re-reading device state...")
@@ -791,8 +793,12 @@ def run(pi_credentials=None, pi_install_ran=False):
 
 
 def run_configure_and_flash(pi_credentials=None):
-    """Direct: prompt for config, write NVS, then flash firmware, then
-    post-flash boot check. No inner menu."""
+    """Direct: prompt for config, flash firmware, then write NVS config,
+    then post-flash boot check. No inner menu.
+
+    Flash must happen before the NVS write: the merged firmware binary
+    spans 0x0–0xFCxxx and fills the NVS gap (0x9000–0xEFFF) with 0xFF,
+    so flashing after writing config would erase the NVS partition."""
     device = _prepare(require_firmware=True)
     if device is None:
         return 1
@@ -805,11 +811,11 @@ def run_configure_and_flash(pi_credentials=None):
     if new_config is None:
         print("  Aborted — no changes written.")
         return 1
-    if not write_config(port, new_config):
-        print("  ERROR: failed to write configuration.")
-        return 1
     if not flash_firmware(port):
         print("  ERROR: firmware flash failed.")
+        return 1
+    if not write_config(port, new_config):
+        print("  ERROR: failed to write configuration.")
         return 1
     check_boot(port)
     print()
