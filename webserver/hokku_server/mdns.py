@@ -4,15 +4,14 @@ Advertises ``_http._tcp.local.`` so that browsers and devices on the LAN
 can reach the server at the fixed address ``hokku-server.local`` without
 knowing its IP.  The service appears as ``Hokku._http._tcp.local.`` with a
 ``path=/hokku/ui`` TXT record.
-
-The ``zeroconf`` package is optional — if it is not installed the function
-logs a warning and returns ``None`` instead of raising.
 """
 from __future__ import annotations
 
 import socket
 import sys
 from typing import Any
+
+from zeroconf import ServiceInfo, Zeroconf
 
 _MDNS_HOSTNAME = "hokku-server"  # resolves as hokku-server.local on the LAN
 
@@ -34,20 +33,13 @@ def start_mdns(port: int) -> Any:
     ``hokku-server.local.`` pointing to the local LAN IP.
 
     Returns the ``Zeroconf`` instance (keep the reference alive for the life
-    of the process) or ``None`` if ``zeroconf`` is not available.
+    of the process).  Logs and returns ``None`` on unexpected failure.
     """
     try:
-        from zeroconf import ServiceInfo, Zeroconf
-    except ImportError:
-        print("  mDNS: zeroconf not installed — service not advertised", file=sys.stderr)
-        return None
-
-    try:
         local_ip = _get_local_ip()
-
         info = ServiceInfo(
             "_http._tcp.local.",
-            f"Hokku._http._tcp.local.",
+            "Hokku._http._tcp.local.",
             addresses=[socket.inet_aton(local_ip)],
             port=port,
             properties={"path": "/hokku/ui"},

@@ -1,3 +1,12 @@
+hokku-server (3.0.0~alpha1-26) unstable; urgency=low
+
+  * Make zeroconf a hard dependency: add zeroconf>=0.38 to pyproject.toml;
+    remove try/except ImportError from mdns.py. Server fails loudly if
+    zeroconf is missing rather than silently skipping advertisement.
+    Also bump numba constraint in pyproject.toml to >=0.59 (matches postinst).
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-25) unstable; urgency=low
 
   * Add mDNS / Bonjour advertisement (python-zeroconf): server registers as
