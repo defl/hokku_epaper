@@ -1,12 +1,7 @@
 ﻿"""AbstractFaceDetector + shared preprocess helpers.
 
-Concrete detectors live in:
-- face_detect_yunet_opencv.py : OpenCVYuNetFaceDetector  (cv2.FaceDetectorYN)
-- face_detect_haar_opencv.py  : OpenCVHaarFaceDetector   (cv2.CascadeClassifier)
-- face_detect_yunet_onnx.py   : ONNXYuNetFaceDetector    (onnxruntime + YuNet)
-
-Selection is driven by ``AppConfig.face_detector``; see
-``face_detect_factory.build_face_detector``.
+The sole concrete detector is ``OpenCVYuNetFaceDetector`` in
+``face_detect_yunet_opencv.py`` (cv2.FaceDetectorYN + YuNet ONNX model).
 """
 from __future__ import annotations
 

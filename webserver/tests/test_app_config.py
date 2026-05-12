@@ -132,13 +132,14 @@ def test_v1_migrates_to_v2():
     assert migrated["image_worker_thread_count"] == 1
 
 
-def test_v2_migrates_to_v3():
-    """A v2 dict migrates to v3 by adding face_detector = 'yunet_opencv'."""
+def test_v2_migrates_forward():
+    """A v2 dict migrates all the way to current version without error."""
     v2_blob = {"version": 2, "image_worker_thread_count": 1}
 
     migrated = _migrate(v2_blob)
     assert migrated["version"] == _CURRENT_VERSION
-    assert migrated.get("face_detector") == "yunet_opencv"
+    # face_detector was added in v2→v3 then removed in v4→v5; must not survive.
+    assert "face_detector" not in migrated
 
 
 def test_image_worker_thread_count_roundtrips(tmp_path: Path):
@@ -196,21 +197,32 @@ def test_mdns_hostname_empty_roundtrips(tmp_path: Path):
     assert loaded.mdns_hostname == ""
 
 
-def test_v3_migrates_to_v4():
-    """A v3 dict gains mdns_hostname='hokku-server' after migration."""
+def test_v3_migrates_forward():
+    """A v3 dict gains mdns_hostname and loses face_detector after full migration."""
     v3_blob = {"version": 3, "image_worker_thread_count": 1, "face_detector": "yunet_opencv"}
     migrated = _migrate(v3_blob)
     assert migrated["version"] == _CURRENT_VERSION
     assert migrated["mdns_hostname"] == "hokku"
+    assert "face_detector" not in migrated
 
 
-def test_v4_migration_removes_old_mdns_enabled():
-    """Old alpha v4 configs with mdns_enabled bool get it removed and hostname added."""
+def test_v3_migration_removes_old_mdns_enabled():
+    """Old alpha configs with mdns_enabled bool get it removed and hostname added."""
     old_v3_blob = {"version": 3, "image_worker_thread_count": 1, "face_detector": "yunet_opencv",
                    "mdns_enabled": True}
     migrated = _migrate(old_v3_blob)
     assert "mdns_enabled" not in migrated
     assert migrated["mdns_hostname"] == "hokku"
+    assert "face_detector" not in migrated
+
+
+def test_v4_migrates_to_v5_removes_face_detector():
+    """A v4 dict loses face_detector in the v4→v5 migration."""
+    v4_blob = {"version": 4, "image_worker_thread_count": 1, "face_detector": "yunet_opencv",
+               "mdns_hostname": "hokku"}
+    migrated = _migrate(v4_blob)
+    assert migrated["version"] == _CURRENT_VERSION
+    assert "face_detector" not in migrated
 
 
 def test_cache_slug_invariant_to_mdns_hostname():

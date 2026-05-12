@@ -13,8 +13,8 @@ from pathlib import Path
 
 import numpy as np
 
-from hokku_server.app_config import AppConfig, FaceDetectorName
-from hokku_server.face_detect_factory import build_face_detector
+from hokku_server.app_config import AppConfig
+from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
 from hokku_server.image_config import ImageConfig
 from hokku_server.screen_image_config import ScreenImageConfig
 
@@ -43,15 +43,9 @@ def _check_grayscale(path: Path) -> bool:
 
 @dataclass(frozen=True)
 class Observations:
-    """Raw per-image detection results.  None = not yet observed.
-
-    ``face_detector`` records which backend produced ``has_face``. When the
-    configured detector changes, cached ``has_face`` is treated as stale and
-    re-run; ``is_bw`` is detector-independent and stays valid.
-    """
+    """Raw per-image detection results.  None = not yet observed."""
     is_bw: bool | None = None
     has_face: bool | None = None
-    face_detector: FaceDetectorName | None = None
 
 
 class ImageClassifier:
@@ -136,19 +130,12 @@ class ImageClassifier:
                 obs = replace(obs, is_bw=_check_grayscale(path))
                 dirty = True
 
-            # Treat cached has_face as stale if it was produced by a
-            # different detector — re-run with the currently-configured one.
-            face_stale = (
-                obs.has_face is None
-                or obs.face_detector != cfg.face_detector
-            )
-            if cfg.classifier_face_detect_enabled and face_stale:
+            if cfg.classifier_face_detect_enabled and obs.has_face is None:
                 if self._face_detector is None:
-                    self._face_detector = build_face_detector(cfg)
+                    self._face_detector = OpenCVYuNetFaceDetector()
                 obs = replace(
                     obs,
                     has_face=self._face_detector.has_face(path),
-                    face_detector=cfg.face_detector,
                 )
                 dirty = True
 
@@ -173,7 +160,7 @@ class ImageClassifier:
             out[sha1] = Observations(
                 is_bw=d.get("is_bw"),
                 has_face=d.get("has_face"),
-                face_detector=d.get("face_detector"),
+                # face_detector key in old DB files is intentionally ignored
             )
         return out
 

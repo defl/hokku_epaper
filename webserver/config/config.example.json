@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 5,
   "refresh_image_at_time": [
     "0600",
     "1200",
@@ -39,7 +39,7 @@
   },
   "classifier_bw_detect_enabled": true,
   "classifier_face_detect_enabled": true,
-  "face_detector": "yunet_opencv",
+  "mdns_hostname": "hokku",
   "image_config_bw": {
     "dither": {
       "algorithm": "floyd_steinberg",

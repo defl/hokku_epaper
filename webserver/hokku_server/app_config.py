@@ -20,10 +20,7 @@ from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
 
 Orientation = Literal["landscape", "portrait"]
 
-_CURRENT_VERSION = 4
-
-
-FaceDetectorName = Literal["yunet_opencv"]
+_CURRENT_VERSION = 5
 
 
 def _migrate_v1_to_v2(d: dict) -> dict:
@@ -39,7 +36,7 @@ def _migrate_v2_to_v3(d: dict) -> dict:
 
 
 def _migrate_v3_to_v4(d: dict) -> dict:
-    """Add mdns_hostname (default 'hokku-server' — advertise as hokku-server.local).
+    """Add mdns_hostname (default 'hokku' — advertise as hokku.local).
 
     Replaces the old boolean mdns_enabled field. Empty string = off.
     """
@@ -48,11 +45,18 @@ def _migrate_v3_to_v4(d: dict) -> dict:
     return d
 
 
+def _migrate_v4_to_v5(d: dict) -> dict:
+    """Remove face_detector — there is now only one backend (yunet_opencv)."""
+    d.pop("face_detector", None)
+    return d
+
+
 # v(N) → v(N+1) upgrade functions. Populated as the schema evolves.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
+    4: _migrate_v4_to_v5,
 }
 
 
@@ -101,13 +105,6 @@ class AppConfig:
     classifier_bw_detect_enabled: bool = True
     image_config_bw: ImageConfig = field(default_factory=_default_bw_image_config)
     classifier_face_detect_enabled: bool = True
-    #: Which face-detection backend the classifier should use.
-    #:   yunet_opencv (default): cv2.FaceDetectorYN — heaviest, ~80–120 MB.
-    #:   haar_opencv:            cv2.CascadeClassifier — lightest, ~10–30 MB,
-    #:                           lower accuracy.
-    #:   yunet_onnx:             same YuNet model but onnxruntime — ~30–50 MB,
-    #:                           same accuracy as yunet_opencv.
-    face_detector: FaceDetectorName = "yunet_opencv"
     image_config_face: ImageConfig = field(
         default_factory=lambda: PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
     )
@@ -125,7 +122,6 @@ class AppConfig:
             "image_config_face": self.image_config_face.cache_slug(),
             "classifier_bw_detect_enabled": self.classifier_bw_detect_enabled,
             "classifier_face_detect_enabled": self.classifier_face_detect_enabled,
-            "face_detector": self.face_detector,
             "orientation": self.orientation,
             "crop_to_fill_threshold": self.crop_to_fill_threshold,
         }
