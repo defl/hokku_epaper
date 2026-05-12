@@ -937,6 +937,18 @@
         </div>
         <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Hover any knob label to see what it does.</p>
         <div id="bw-advanced-panel"></div>
+        <div class="dither-preview-block">
+          <div class="config-row">
+            <label>Preview on:</label>
+            <select id="bw-preview-image"></select>
+            <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview('bw')" id="bw-preview-btn">Preview</button>
+            <span class="info" id="bw-preview-status"></span>
+          </div>
+          <div id="bw-preview-result" class="dither-preview-result" hidden>
+            <img id="bw-preview-img" alt="Dither preview">
+            <div class="dither-preview-mask" id="bw-preview-mask" hidden>Dithering…</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -970,6 +982,18 @@
         </div>
         <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Hover any knob label to see what it does.</p>
         <div id="face-advanced-panel"></div>
+        <div class="dither-preview-block">
+          <div class="config-row">
+            <label>Preview on:</label>
+            <select id="face-preview-image"></select>
+            <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview('face')" id="face-preview-btn">Preview</button>
+            <span class="info" id="face-preview-status"></span>
+          </div>
+          <div id="face-preview-result" class="dither-preview-result" hidden>
+            <img id="face-preview-img" alt="Dither preview">
+            <div class="dither-preview-mask" id="face-preview-mask" hidden>Dithering…</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1532,33 +1556,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── Preview button ────────────────────────────────────────────────
 function updatePreviewImageOptions(uploadList) {
-  const sel = document.getElementById('dither-preview-image');
-  if (!sel) return;
-  const current = sel.value;
   // The preview endpoint renders from the original file, not the cached
   // binary, so include all uploaded images regardless of dither status.
   const available = (uploadList || []).map(e => e.name);
-  if (!available.length) {
-    sel.innerHTML = '<option value="">(upload an image first)</option>';
-    return;
-  }
-  // Only rebuild if the list changed — avoids blowing away the user's selection.
-  const newKey = available.join('|');
-  if (sel.dataset.key === newKey) return;
-  sel.dataset.key = newKey;
-  sel.innerHTML = available.map(n => `<option value="${n}">${n}</option>`).join('');
-  if (available.includes(current)) sel.value = current;
+  ['default', 'bw', 'face'].forEach(panelId => {
+    const sel = document.getElementById(_pfx(panelId) + '-preview-image');
+    if (!sel) return;
+    const current = sel.value;
+    if (!available.length) {
+      sel.innerHTML = '<option value="">(upload an image first)</option>';
+      return;
+    }
+    // Only rebuild if the list changed — avoids blowing away the user's selection.
+    const newKey = available.join('|');
+    if (sel.dataset.key === newKey) return;
+    sel.dataset.key = newKey;
+    sel.innerHTML = available.map(n => `<option value="${n}">${n}</option>`).join('');
+    if (available.includes(current)) sel.value = current;
+  });
 }
 
-async function runDitherPreview() {
-  const imgSel = document.getElementById('dither-preview-image');
+async function runDitherPreview(panelId) {
+  const pfx = _pfx(panelId);
+  const imgSel = document.getElementById(pfx + '-preview-image');
   const filename = imgSel.value;
   if (!filename) { showToast('Pick an image to preview'); return; }
 
-  const btn = document.getElementById('dither-preview-btn');
-  const status = document.getElementById('dither-preview-status');
-  const resultDiv = document.getElementById('dither-preview-result');
-  const mask = document.getElementById('dither-preview-mask');
+  const btn      = document.getElementById(pfx + '-preview-btn');
+  const status   = document.getElementById(pfx + '-preview-status');
+  const resultDiv = document.getElementById(pfx + '-preview-result');
+  const mask     = document.getElementById(pfx + '-preview-mask');
 
   btn.disabled = true;
   status.textContent = '';
@@ -1571,7 +1598,7 @@ async function runDitherPreview() {
     const resp = await fetch('/hokku/api/dither/preview', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: filename, image: ditherState}),
+      body: JSON.stringify({name: filename, image: _getState(panelId)}),
     });
     if (!resp.ok) {
       let err = `HTTP ${resp.status}`;
@@ -1580,7 +1607,7 @@ async function runDitherPreview() {
     }
     const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
-    const resultImg = document.getElementById('dither-preview-img');
+    const resultImg = document.getElementById(pfx + '-preview-img');
     // Revoke the previous object URL so we don't leak.
     if (resultImg.dataset.url) URL.revokeObjectURL(resultImg.dataset.url);
     resultImg.dataset.url = url;
