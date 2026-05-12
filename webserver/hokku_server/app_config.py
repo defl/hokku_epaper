@@ -44,7 +44,7 @@ def _migrate_v3_to_v4(d: dict) -> dict:
     Replaces the old boolean mdns_enabled field. Empty string = off.
     """
     d.pop("mdns_enabled", None)  # remove boolean if present from earlier alpha
-    d["mdns_hostname"] = "hokku-server"
+    d["mdns_hostname"] = "hokku"
     return d
 
 
@@ -115,7 +115,7 @@ class AppConfig:
     #: mDNS / Bonjour hostname (the part before ``.local``).
     #: The server advertises itself as ``<mdns_hostname>.local`` on the LAN.
     #: Empty string disables mDNS advertisement entirely.
-    mdns_hostname: str = "hokku-server"
+    mdns_hostname: str = "hokku"
 
     def cache_slug(self) -> str:
         """Path-safe fingerprint of fields that affect cached panel output."""

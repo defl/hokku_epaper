@@ -172,7 +172,7 @@ def test_v1_file_loads_with_default_worker_count(tmp_path: Path):
 
 
 def test_mdns_hostname_default():
-    assert AppConfig().mdns_hostname == "hokku-server"
+    assert AppConfig().mdns_hostname == "hokku"
 
 
 def test_mdns_hostname_empty_means_off():
@@ -201,7 +201,7 @@ def test_v3_migrates_to_v4():
     v3_blob = {"version": 3, "image_worker_thread_count": 1, "face_detector": "yunet_opencv"}
     migrated = _migrate(v3_blob)
     assert migrated["version"] == _CURRENT_VERSION
-    assert migrated["mdns_hostname"] == "hokku-server"
+    assert migrated["mdns_hostname"] == "hokku"
 
 
 def test_v4_migration_removes_old_mdns_enabled():
@@ -210,9 +210,9 @@ def test_v4_migration_removes_old_mdns_enabled():
                    "mdns_enabled": True}
     migrated = _migrate(old_v3_blob)
     assert "mdns_enabled" not in migrated
-    assert migrated["mdns_hostname"] == "hokku-server"
+    assert migrated["mdns_hostname"] == "hokku"
 
 
 def test_cache_slug_invariant_to_mdns_hostname():
     """mDNS hostname doesn't affect rendered output so it must not influence the slug."""
-    assert AppConfig(mdns_hostname="hokku-server").cache_slug() == AppConfig(mdns_hostname="").cache_slug()
+    assert AppConfig(mdns_hostname="hokku").cache_slug() == AppConfig(mdns_hostname="").cache_slug()
