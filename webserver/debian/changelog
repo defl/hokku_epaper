@@ -1,3 +1,16 @@
+hokku-server (3.0.0~alpha1-30) unstable; urgency=low
+
+  * Show Next: make button functional; pre-determine next image at startup
+    and after each serve for stable "Is next" badge. Alphabetical tie-breaking
+    replaces random. Choice persists across restarts.
+  * Remove face_detector config field (AppConfig v4→v5): only one backend
+    exists; delete factory shim; migrate old configs automatically.
+  * Add Preview on: to B&W and Face pipeline advanced editors (was only on
+    default pipeline). Reuse same runDitherPreview/updatePreviewImageOptions
+    code paths via existing _pfx/_getState helpers.
+
+ -- Hokku <hokku@hokku>  Mon, 12 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-29) unstable; urgency=low
 
   * Fix ETA estimator: exclude inflight images and divide by worker count.
