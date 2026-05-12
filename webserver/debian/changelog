@@ -1,3 +1,17 @@
+hokku-server (3.0.0~alpha1-29) unstable; urgency=low
+
+  * Fix ETA estimator: exclude inflight images and divide by worker count.
+    Wildly inflated ETAs (42m predicted, ~29s actual) caused by counting
+    already-rendering images as pending and using serial timing without
+    dividing by resolved_worker_count. Adds 3 new unit tests.
+  * Show Next: make the button actually work (was a no-op stub). Pre-determine
+    the next image at startup and after each serve so the "Is next" badge is
+    stable for the entire wait period. Alphabetical tie-breaking replaces
+    random tie-breaking so the choice is deterministic and persisted across
+    restarts. Clicking Show Next on another image overrides the choice.
+
+ -- Hokku <hokku@hokku>  Mon, 12 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-28) unstable; urgency=low
 
   * Replace mdns_enabled bool with mdns_hostname string in AppConfig v4:
