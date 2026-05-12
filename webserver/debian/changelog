@@ -1,3 +1,12 @@
+hokku-server (3.0.0~alpha2-1) unstable; urgency=low
+
+  * 3.0.0-alpha2 release: new UI design, context-aware dithering (B&W + face
+    detection), parallel multi-core rendering, mDNS support, three independent
+    dither profiles, live ETA, failed-image panel, per-photo details view,
+    guided Windows installer for Pi + frame setup.
+
+ -- Hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha1-30) unstable; urgency=low
 
   * Show Next: make button functional; pre-determine next image at startup
