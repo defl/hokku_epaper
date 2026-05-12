@@ -17,7 +17,7 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 - **Correct out of the box** — pre-set for the best results on this panel without any tweaking.
 - **Adapts to each photo** — it can tell a black-and-white photo from a colour one, and recognise faces (all done locally, nothing leaves your network), and picks the best conversion approach for each automatically.
 - **No ugly borders** — photos that are close to the right shape get a subtle crop to fill the screen cleanly instead of showing a letterbox band.
-- **Tunable to the nth degree** — 6 presets to choose from, per-photo overrides, and plenty of knobs if you enjoy that sort of thing. ([Details on dithering](docs/dithering.md))
+- **Tunable to the nth degree** — three independent conversion profiles (general, black-and-white, faces), 6 presets each, per-photo overrides, and plenty of knobs if you enjoy that sort of thing. ([Details on dithering](docs/dithering.md))
 - **Colour-accurate** — calibrated against the actual panel, not a theoretical colour profile.
 
 **Smart about frames**
@@ -36,6 +36,7 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 - **Fast even on small hardware** — converting a big library of photos uses all available CPU cores and finishes much sooner than doing them one at a time. A Raspberry Pi Zero 2 W handles a multi-frame setup without breaking a sweat.
 - **Bad photos are handled gracefully** — if a photo can't be converted, it's set aside with an explanation rather than silently vanishing. You can retry or remove it with one click.
 - **Progress while you wait** — a status bar shows how many photos are being converted and roughly how long it'll take.
+- **Find it on your network by name** — the server advertises itself as `hokku.local` via mDNS, so you can bookmark `http://hokku.local:8080/` and never chase a changing IP address again.
 - **Runs on basically anything, installs in minutes** — a Debian package for Linux that starts automatically, or run from source on macOS, Windows, or a Raspberry Pi. The firmware comes pre-built and the setup wizard flashes it over USB. No build tools, no command line.
 - **One-click re-convert** — changed orientation or want to try a different look? One button re-processes everything from scratch.
 
