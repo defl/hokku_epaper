@@ -998,6 +998,14 @@
     </div>
 
     <div class="config-row">
+      <label>mDNS / Bonjour:</label>
+      <label class="toggle" data-tip="Advertise this server as hokku-server.local on the local network so you can reach it without knowing its IP address.&#10;Disable if you have mDNS conflicts or don't need local discovery.">
+        <input type="checkbox" id="mdns-enabled">
+        <span id="mdns-enabled-label">On</span>
+      </label>
+    </div>
+
+    <div class="config-row">
       <label>Image workers:</label>
       <span class="ctrl-tip" data-tip="Auto: uses all CPU cores minus 1, capped by free memory (~50 MB per worker).&#10;Single threaded: serial processing — safest, lowest memory.&#10;Custom: enter an exact worker count (1–1000).&#10;More workers = faster batch conversion but more RAM and CPU.">
         <select id="image-worker-mode" onchange="onWorkerModeChange()">
@@ -1632,6 +1640,7 @@ async function saveConfig() {
     orientation: document.getElementById('orientation').value,
     debug_fast_refresh: document.getElementById('debug-fast-refresh').checked,
     auto_clear_cache: document.getElementById('auto-clear-cache').checked,
+    mdns_enabled: document.getElementById('mdns-enabled').checked,
     crop_to_fill_threshold: (parseInt(document.getElementById('crop-to-fill-threshold').value) || 0) / 100,
     image_worker_thread_count: (() => {
       const mode = document.getElementById('image-worker-mode').value;
@@ -2206,6 +2215,10 @@ async function loadConfig() {
     const autoClear = !!cfg.auto_clear_cache;
     document.getElementById('auto-clear-cache').checked = autoClear;
     document.getElementById('auto-clear-cache-label').textContent = autoClear ? 'On' : 'Off';
+
+    const mdnsOn = cfg.mdns_enabled !== false;
+    document.getElementById('mdns-enabled').checked = mdnsOn;
+    document.getElementById('mdns-enabled-label').textContent = mdnsOn ? 'On' : 'Off';
     const fillPct = Math.round(((cfg.crop_to_fill_threshold ?? 0.20)) * 100);
     document.getElementById('crop-to-fill-threshold').value = fillPct;
     document.getElementById('fill-threshold-val').textContent = fillPct + '%';
@@ -2513,6 +2526,10 @@ window.addEventListener('drop', e => {
 document.getElementById('auto-clear-cache').addEventListener('change', function() {
   document.getElementById('auto-clear-cache-label').textContent = this.checked ? 'On' : 'Off';
   if (this.checked) scrubStaleCache();
+});
+
+document.getElementById('mdns-enabled').addEventListener('change', function() {
+  document.getElementById('mdns-enabled-label').textContent = this.checked ? 'On' : 'Off';
 });
 
 // ── Header strip: logo + randomly tiled line segments ───────────────
