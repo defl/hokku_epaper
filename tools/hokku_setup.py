@@ -79,6 +79,8 @@ def _print_device_status(status):
         rv = dev.get("release_version")
         if rv and dev.get("firmware_current") is True:
             print(f"  Firmware:  {dv}  (up to date)")
+        elif rv and dev.get("firmware_current") == "newer":
+            print(f"  Firmware:  {dv}  (up to date — device is ahead of this release)")
         elif rv and dev.get("firmware_current") is False:
             print(f"  Firmware:  {dv}  (UPDATE AVAILABLE → {rv})")
         else:

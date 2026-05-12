@@ -192,7 +192,14 @@ def parse_device_state(nvs_data, app_header):
                 result["release_version"] = ver
         if app_header and len(app_header) >= 256 and len(release_header) >= 256:
             # Skip first 24 bytes (esp_image_header_t changed by esptool at flash)
-            result["firmware_current"] = (app_header[24:] == release_header[24:])
+            if app_header[24:] == release_header[24:]:
+                result["firmware_current"] = True
+            else:
+                # Bytes differ — compare version strings (YYYYMMDDHHMMSSZ timestamps
+                # sort lexicographically, so > means device is ahead of the release).
+                dv = result.get("device_version") or ""
+                rv = result.get("release_version") or ""
+                result["firmware_current"] = "newer" if dv > rv else False
 
     if nvs_data:
         config = _read_nvs(nvs_data)
@@ -686,6 +693,8 @@ def main_menu(device, pi_credentials=None, pi_install_ran=False):
             print(f"  Firmware available:  {release_version}")
         if firmware_current is True:
             print("  Status: up to date")
+        elif firmware_current == "newer":
+            print("  Status: up to date (device has newer firmware than this release)")
         elif firmware_current is False:
             print("  Status: UPDATE AVAILABLE")
         elif device_version:
@@ -702,7 +711,8 @@ def main_menu(device, pi_credentials=None, pi_install_ran=False):
         elif not pi_install_ran and config:
             default = "4"  # existing config user didn't set — leave it alone
         elif firmware_current is False:
-            default = "3"
+            default = "3"  # device is older — offer firmware update
+        # firmware_current == "newer": device is ahead of local release, no flash default
         else:
             default = "1"
 
