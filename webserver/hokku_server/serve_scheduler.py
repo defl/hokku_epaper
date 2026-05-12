@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import threading
 import time
 from dataclasses import asdict, dataclass, replace
@@ -91,16 +90,26 @@ class ServeScheduler:
         self._stats: dict[str, ServeStats] = {}
         self._screens: dict[str, ScreenTelemetryEntry] = {}
         self._last_served: tuple[str, float] | None = None
+        self._next_name: str | None = None
         self._load()
+        # Pre-determine the next image right now so the UI can show it
+        # immediately without waiting for the first screen request.
+        with self._lock:
+            ready = [r for r in self._manager.list() if r.convert_status == "ok"]
+            if ready:
+                ready_names = {r.name for r in ready}
+                self._reconcile(ready_names)
+                if self._next_name is None or self._next_name not in ready_names:
+                    self._precompute_next_locked(ready_names)
 
     # ── Rotation ─────────────────────────────────────────────────
 
     def pick_next(self) -> str | None:
-        """Lowest show_index among ready images. Random tie-break.
+        """Return the pre-determined next image (or recompute if it became invalid).
 
-        Reconciles state with manager.list() before picking — adds new entries,
-        drops orphans, resets show_index for everyone when a new image appears
-        so it gets a fair chance immediately.
+        Reconciles state with manager.list() before returning — adds new
+        entries, drops orphans, resets show_index for everyone when a new
+        image appears so it gets a fair chance immediately.
         """
         with self._lock:
             ready = [r for r in self._manager.list() if r.convert_status == "ok"]
@@ -108,17 +117,24 @@ class ServeScheduler:
             self._reconcile(ready_names)
 
             if not ready:
+                if self._next_name is not None:
+                    self._next_name = None
+                    self._save()
                 return None
 
-            entries = [(name, self._stats[name].show_index) for name in ready_names]
-            min_idx = min(idx for _, idx in entries)
-            candidates = [name for name, idx in entries if idx == min_idx]
-            chosen = random.choice(candidates)
-            return chosen
+            # If the pre-determined choice is still valid, honour it.
+            if self._next_name in ready_names:
+                return self._next_name
+
+            # Pre-determined image was deleted or not yet set — recompute.
+            self._precompute_next_locked(ready_names)
+            self._save()
+            return self._next_name
 
     def mark_served(self, name: str) -> None:
         """Bump rotation pointer and stats. Attributes elapsed time to the
-        previously-served image."""
+        previously-served image. Pre-computes the *next* next image so the
+        UI reflects the upcoming choice immediately."""
         with self._lock:
             now = time.time()
             self._attribute_show_time(now)
@@ -131,6 +147,13 @@ class ServeScheduler:
                 total_show_minutes=cur.total_show_minutes,
             )
             self._last_served = (name, now)
+            # Consumed — pick the next one right now so the badge is stable.
+            self._next_name = None
+            ready_names = {
+                r.name for r in self._manager.list() if r.convert_status == "ok"
+            }
+            self._reconcile(ready_names)
+            self._precompute_next_locked(ready_names)
             self._save()
 
     # ── Stats retrieval ──────────────────────────────────────────
@@ -146,6 +169,23 @@ class ServeScheduler:
     def last_served(self) -> tuple[str, float] | None:
         with self._lock:
             return self._last_served
+
+    def peek_next(self) -> str | None:
+        """Return the pre-determined next image name without consuming it."""
+        with self._lock:
+            return self._next_name
+
+    def set_next(self, name: str) -> None:
+        """Force a specific image to be served next (overrides rotation order).
+
+        Raises ValueError if the image is not currently ready to serve.
+        """
+        with self._lock:
+            ready = {r.name for r in self._manager.list() if r.convert_status == "ok"}
+            if name not in ready:
+                raise ValueError(f"Image {name!r} is not ready to serve")
+            self._next_name = name
+            self._save()
 
     # ── Screen telemetry ─────────────────────────────────────────
 
@@ -223,6 +263,28 @@ class ServeScheduler:
 
     # ── Internals ────────────────────────────────────────────────
 
+    def _precompute_next_locked(self, ready_names: set[str]) -> None:
+        """Pick and store the next image to serve. Must be called under self._lock.
+
+        Selects the image with the lowest show_index; alphabetical order breaks
+        ties deterministically so the choice is stable for the entire wait
+        period between serves.
+        """
+        if not ready_names:
+            self._next_name = None
+            return
+        entries = [
+            (name, self._stats[name].show_index)
+            for name in ready_names
+            if name in self._stats
+        ]
+        if not entries:
+            self._next_name = None
+            return
+        min_idx = min(idx for _, idx in entries)
+        candidates = sorted(name for name, idx in entries if idx == min_idx)
+        self._next_name = candidates[0]
+
     def _reconcile(self, ready_names: set[str]) -> None:
         # Drop orphans.
         for name in list(self._stats.keys()):
@@ -281,10 +343,14 @@ class ServeScheduler:
                 self._last_served = (ls["name"], float(ls["served_at"]))
             except (TypeError, ValueError):
                 pass
+        nn = data.get("next_image")
+        if isinstance(nn, str):
+            self._next_name = nn
 
     def _save(self) -> None:
         payload = {
             "version": 1,
+            "next_image": self._next_name,
             "last_served": (
                 {"name": self._last_served[0], "served_at": self._last_served[1]}
                 if self._last_served else None

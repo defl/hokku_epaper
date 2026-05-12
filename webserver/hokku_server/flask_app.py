@@ -309,7 +309,13 @@ def create_app(
         rec = state.manager.status(name)
         if rec is None:
             return jsonify({"error": f"image {name!r} not found"}), 404
-        return jsonify({"ok": True, "note": "rotation will get to this image next cycle"})
+        if rec.convert_status != "ok":
+            return jsonify({"error": f"image {name!r} is not ready (status: {rec.convert_status})"}), 409
+        try:
+            state.scheduler.set_next(name)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 409
+        return jsonify({"ok": True, "next_image": name})
 
     @app.route("/hokku/api/clear_cache", methods=["POST"])
     def api_clear_cache():
@@ -431,6 +437,7 @@ def create_app(
             "converting_done": progress.done,
             "converting_total": progress.total,
             "converting_eta_seconds": manager.estimate_remaining_seconds(),
+            "next_image": scheduler.peek_next(),
             "cache_used_bytes": disk["cache_used_bytes"],
             "disk_free_bytes": disk["disk_free_bytes"],
             "image_worker_count_resolved": state.manager.resolved_worker_count,

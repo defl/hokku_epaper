@@ -582,6 +582,16 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .image-card .card-actions button:disabled { background: var(--bamboo-soft); color: var(--bamboo); cursor: not-allowed; }
+  .image-card .next-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px;
+    font-size: 0.78em; font-weight: 600;
+    color: var(--matcha);
+    background: rgba(91, 122, 78, 0.10);
+    border: 1px solid var(--matcha);
+    border-radius: 4px;
+    cursor: default; user-select: none;
+  }
 
   /* ── Confirmation modal ───────────────────────────────────── */
   .modal-backdrop {
@@ -2093,7 +2103,7 @@ async function deleteAllFailed(failed) {
 let lastUploadFiles = [];
 let lastServeData = {};
 
-function renderImageGrid(uploadFiles, serveData) {
+function renderImageGrid(uploadFiles, serveData, nextImage) {
   lastUploadFiles = uploadFiles;
   lastServeData   = serveData;
   const grid = document.getElementById('image-grid');
@@ -2103,12 +2113,18 @@ function renderImageGrid(uploadFiles, serveData) {
     if (entry.status === 'failed') return;
     const fname    = entry.name;
     const dithered = entry.dithered;
+    const isNext   = dithered && fname === nextImage;
     const card = document.createElement('div');
     card.className = 'image-card' + (dithered ? '' : ' pending');
     const pendingBadge = dithered ? '' :
       '<div class="pending-badge" title="Dithered version for the e-ink display is still being generated">Dithering…</div>';
     const thumbHtml = `<img src="/hokku/api/thumbnail/${encodeURIComponent(fname)}" alt="${escapeHtml(fname)}"
          style="cursor:pointer" title="Click to view original">`;
+    // Rotation action: "Is next" badge (non-interactive) when this image is up
+    // next; otherwise an active "Show Next" button to force it to the front.
+    const rotationHtml = !dithered ? '' : isNext
+      ? '<span class="next-badge">↑ Is next</span>'
+      : '<button class="btn btn-secondary btn-small shownext-btn" data-name="">Show Next</button>';
     card.innerHTML = `
       <button class="delete-btn" data-name="" title="Delete this image">&#x1F5D1;</button>
       ${pendingBadge}
@@ -2116,7 +2132,7 @@ function renderImageGrid(uploadFiles, serveData) {
       <div class="card-body">
         <div class="filename">${escapeHtml(fname)}</div>
         <div class="card-actions">
-          ${dithered ? '<button class="btn btn-primary btn-small shownext-btn" data-name="">Show Next</button>' : ''}
+          ${rotationHtml}
           <button class="btn btn-secondary btn-small details-btn" data-name="">Details</button>
         </div>
       </div>
@@ -2350,7 +2366,7 @@ async function refreshStatus() {
 
     // Image grid — render every uploaded file (dithered or pending)
     const uploadList = data.upload_files || data.pool_files.map(n => ({name: n, dithered: true}));
-    renderImageGrid(uploadList, data.serve_data);
+    renderImageGrid(uploadList, data.serve_data, data.next_image || null);
     renderFailedList(data.failed_files || []);
     updatePreviewImageOptions(uploadList);
   } catch (e) {
