@@ -1710,6 +1710,9 @@ async function saveConfig() {
     });
     if (resp.ok) {
       showToast('Configuration saved');
+      // Update the debug banner immediately from the saved checkbox value.
+      const debugOn = document.getElementById('debug-fast-refresh').checked;
+      document.getElementById('debug-active-banner').style.display = debugOn ? 'block' : 'none';
       // Only refresh the volatile status (queue / screens) — DON'T reload the
       // form from the server, since the server now reflects exactly what the
       // user just submitted.
