@@ -754,6 +754,8 @@ def main_menu(device, pi_credentials=None, pi_install_ran=False):
 
         elif choice == "3":
             if flash_firmware(port):
+                if config:
+                    write_config(port, config)
                 check_boot(port)
                 print("  Re-reading device state...")
                 config, firmware_current, device_version, release_version = _refresh_device_state(port)
@@ -865,17 +867,26 @@ def run_configure_only(pi_credentials=None):
 
 
 def run_flash_only():
-    """Direct: flash firmware keeping existing NVS config. Post-flash boot check."""
+    """Direct: flash firmware keeping existing NVS config. Post-flash boot check.
+
+    The merged firmware binary fills the NVS partition range with 0xFF, so we
+    read and save the existing config before flashing and restore it after."""
     device = _prepare(require_firmware=True)
     if device is None:
         return 1
     port = device["port"]
+    existing = device.get("config") or {}
 
     print("  Flash firmware only (keep existing config)")
     print("  ------------------------------------------")
     if not flash_firmware(port):
         print("  ERROR: firmware flash failed.")
         return 1
+    if existing:
+        if not write_config(port, existing):
+            print("  WARNING: firmware flashed but failed to restore config.")
+            print("  Run 'configure only' to re-enter your settings.")
+            return 1
     check_boot(port)
     print()
     print("  Done — firmware flashed successfully.")
