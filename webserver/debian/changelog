@@ -1,3 +1,20 @@
+hokku-server (3.0.0~alpha3-1) unstable; urgency=low
+
+  * Fix mDNS: use hostname-scoped service instance name so multiple hokku
+    servers on the same LAN no longer cause NonUniqueNameException at startup.
+  * Fix mDNS: retry loop (3 attempts, 3 s back-off) with proper Zeroconf
+    cleanup on failure; log exception type for easier diagnostics.
+  * Fix mDNS: Conflicts=avahi-daemon.service/socket in systemd unit so avahi
+    (including socket-activated unit) is evicted before hokku-server starts.
+  * Fix mDNS: restart advertisement when mdns_hostname changes via config API.
+  * Fix app_config: missing config.json creates a default instead of exiting.
+  * Pi installer: set gpu_mem=16 in firstrun.sh (~240 MB freed on Pi Zero 2 W).
+  * Pi installer: create 1 GB swapfile in firstboot-install.sh (Pi OS Bookworm
+    dropped dphys-swapfile; default zram adds no real memory capacity).
+  * Pi installer: disable avahi-daemon.socket in addition to the service.
+
+ -- Hokku <hokku@hokku>  Tue, 12 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha2-2) unstable; urgency=low
 
   * Default image_worker_thread_count to 0 (auto) instead of 1 (serial).
