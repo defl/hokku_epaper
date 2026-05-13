@@ -42,7 +42,7 @@ Download the `.deb` from the latest GitHub release, then:
 apt install ./hokku-server_2.1.20-1_all.deb
 ```
 
-The package installs a systemd service that starts automatically on boot. The web GUI will be at `http://<your-server>:8080/`. Photos go into `/var/lib/hokku/upload/` — use the web uploader, or install Samba so you can drop files in from any machine on your network.
+The package installs a systemd service that starts automatically on boot. The web GUI will be at `http://<your-server>:8080/`. Photos go into `/var/lib/hokku/images/` — use the web uploader, or install Samba so you can drop files in from any machine on your network.
 
 Useful service commands:
 
@@ -54,14 +54,15 @@ journalctl -u hokku-server -f     # follow the logs
 
 **Configuration**
 
-The server reads its config from (in order): the `HOKKU_CONFIG` environment variable, `./config.json`, `/var/lib/hokku/config.json`, `/etc/hokku/config.json`. Changes saved via the web app are written back to whichever file was loaded. Timezone follows the host OS — set it with `sudo timedatectl set-timezone <IANA>` on the Pi.
+The server takes the config file path as a command-line argument. The `.deb` install handles this automatically — the systemd service passes `/var/lib/hokku/config.json` and the file is created with sensible defaults on first start. Timezone follows the host OS — set it with `timedatectl set-timezone <IANA>` on the Pi.
 
-A minimal config looks like this:
+A minimal config looks like this (the `version` field is required — without it the server replaces the file with a fresh default):
 
 ```json
 {
+  "version": 5,
   "refresh_image_at_time": ["0600", "1200", "1800"],
-  "upload_dir": "/var/lib/hokku/upload",
+  "upload_dir": "/var/lib/hokku/images",
   "cache_dir": "/var/lib/hokku/cache",
   "port": 8080,
   "orientation": "landscape"
@@ -80,10 +81,10 @@ source .venv/bin/activate   # Linux / macOS
 .venv\Scripts\activate      # Windows
 pip install -r requirements.txt
 cd webserver
-python -m webserver
+python -m hokku_server
 ```
 
-The `cd webserver` step is required — the server package lives there. Photos go in `webserver/images/upload/`. Web GUI at `http://<your-server>:8080/`.
+The `cd webserver` step is required — the server package lives there. On first start without a config file it writes a fresh default (including `upload_dir`, which defaults to `/var/lib/hokku/images` — change this in the config to a local path if you're not running on Linux). Web GUI at `http://<your-server>:8080/`.
 
 ---
 
