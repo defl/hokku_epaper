@@ -1199,6 +1199,16 @@ raspi-config nonint do_wifi_country {country} 2>/dev/null || iw reg set {country
 # systemd-timesyncd to pick up the new zone.
 timedatectl set-timezone "{timezone}" 2>/dev/null || ln -sf /usr/share/zoneinfo/{timezone} /etc/localtime
 
+# --- reduce GPU memory split ---
+# The Pi Zero 2 W has 512 MB RAM. The default GPU reservation is 64-256 MB;
+# hokku-server is headless so 16 MB is plenty. This frees ~240 MB for userspace
+# which is critical for the dithering pipeline and numba JIT compilation.
+if grep -q '^gpu_mem=' /boot/firmware/config.txt 2>/dev/null; then
+    sed -i 's/^gpu_mem=.*/gpu_mem=16/' /boot/firmware/config.txt
+else
+    echo 'gpu_mem=16' >> /boot/firmware/config.txt
+fi
+
 # --- expand rootfs ---
 raspi-config --expand-rootfs 2>/dev/null || true
 
@@ -1356,7 +1366,28 @@ SMBEOF
     systemctl enable smbd
 fi
 
-# Stop avahi install beacon — hokku.local is now served by the app's zeroconf
+# --- 1 GB swapfile ---
+# Pi OS Bookworm no longer ships dphys-swapfile; the default zram swap is
+# compressed RAM and adds no real memory capacity. A disk-backed swapfile is
+# essential for the dithering pipeline (large HEIC files + numba JIT).
+if [ ! -f /swapfile ]; then
+    echo "Creating 1 GB swapfile..."
+    fallocate -l 1G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=1024 status=progress
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    echo "Swapfile created and activated."
+else
+    echo "Swapfile already exists, skipping."
+fi
+
+# Stop avahi install beacon — hokku.local is now served by the app's zeroconf.
+# The socket unit must also be stopped/disabled; if left active it holds port
+# 5353 via socket activation and relaunches avahi when zeroconf sends its
+# mDNS probe, causing NonUniqueNameException on every hokku-server start.
+systemctl stop avahi-daemon.socket 2>/dev/null || true
+systemctl disable avahi-daemon.socket 2>/dev/null || true
 systemctl stop avahi-daemon 2>/dev/null || true
 systemctl disable avahi-daemon 2>/dev/null || true
 

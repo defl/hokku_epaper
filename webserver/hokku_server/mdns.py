@@ -2,8 +2,9 @@
 
 Advertises ``_http._tcp.local.`` so that browsers and devices on the LAN
 can reach the server at ``<hostname>.local`` without knowing its IP.
-The service appears as ``Hokku._http._tcp.local.`` with a
-``path=/hokku/ui`` TXT record.
+The service appears as ``Hokku <hostname>._http._tcp.local.`` with a
+``path=/hokku/ui`` TXT record. Using the hostname in the instance name
+keeps multiple hokku servers on the same LAN from colliding during probing.
 """
 from __future__ import annotations
 
@@ -36,23 +37,48 @@ def start_mdns(port: int, hostname: str) -> Any:
     Returns the ``Zeroconf`` instance (keep the reference alive for the life
     of the process).  Logs and returns ``None`` on unexpected failure.
     """
-    try:
-        local_ip = _get_local_ip()
-        info = ServiceInfo(
-            "_http._tcp.local.",
-            "Hokku._http._tcp.local.",
-            addresses=[socket.inet_aton(local_ip)],
-            port=port,
-            properties={"path": "/hokku/ui"},
-            server=f"{hostname}.local.",
-        )
-        zc = Zeroconf()
-        zc.register_service(info)
-        print(f"  mDNS: advertised as {hostname}.local ({local_ip}:{port})")
-        return zc
-    except Exception as exc:
-        print(f"  mDNS: registration failed — {exc}", file=sys.stderr)
-        return None
+    local_ip = _get_local_ip()
+    # Service instance name is unique per hostname so multiple hokku servers
+    # on the same LAN don't collide during mDNS probing.
+    # The A record (server=) is what drives <hostname>.local resolution.
+    instance = f"Hokku {hostname}._http._tcp.local."
+    info = ServiceInfo(
+        "_http._tcp.local.",
+        instance,
+        addresses=[socket.inet_aton(local_ip)],
+        port=port,
+        properties={"path": "/hokku/ui"},
+        server=f"{hostname}.local.",
+    )
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):
+        zc = None
+        try:
+            zc = Zeroconf()
+            zc.register_service(info)
+            print(f"  mDNS: advertised as {hostname}.local ({local_ip}:{port})")
+            return zc
+        except Exception as exc:
+            last_exc = exc
+            # Always close on failure — an unclosed Zeroconf instance keeps
+            # background threads alive and will respond to future probes as if
+            # it owns the name, causing NonUniqueNameException on every retry.
+            if zc is not None:
+                try:
+                    zc.close()
+                except Exception:
+                    pass
+            if attempt < 3:
+                print(
+                    f"  mDNS: attempt {attempt} failed ({type(exc).__name__}: {exc})"
+                    f" — retrying in 3 s",
+                    file=sys.stderr,
+                )
+                import time
+                time.sleep(3)
+
+    print(f"  mDNS: registration failed — {type(last_exc).__name__}: {last_exc}", file=sys.stderr)
+    return None
 
 
 def stop_mdns(zc: Any) -> None:

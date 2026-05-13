@@ -1,6 +1,12 @@
 [Unit]
 Description=Hokku Server
 After=network.target
+# avahi-daemon conflicts with the Python zeroconf library — both compete for
+# the mDNS multicast group on port 5353, causing NonUniqueNameException on
+# service registration. avahi is only needed as the install beacon
+# (hokku-installing.local); stop it as soon as hokku-server takes over.
+Conflicts=avahi-daemon.service avahi-daemon.socket
+After=network.target avahi-daemon.service avahi-daemon.socket
 StartLimitIntervalSec=600
 StartLimitBurst=5
 
