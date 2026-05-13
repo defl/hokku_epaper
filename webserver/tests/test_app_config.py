@@ -59,10 +59,12 @@ def test_save_load_roundtrip(tmp_path: Path):
     assert loaded == cfg
 
 
-def test_load_missing_exits(tmp_path: Path):
-    with contextlib.redirect_stderr(io.StringIO()):
-        with pytest.raises(SystemExit):
-            AppConfig.load(tmp_path / "nope.json")
+def test_load_missing_creates_default(tmp_path: Path):
+    p = tmp_path / "nope.json"
+    cfg = AppConfig.load(p)
+    assert p.exists()
+    assert isinstance(cfg, AppConfig)
+    assert cfg.version == AppConfig().version
 
 
 def test_load_invalid_json_exits(tmp_path: Path):

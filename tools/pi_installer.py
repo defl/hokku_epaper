@@ -1,9 +1,9 @@
 r"""Raspberry Pi OS installer for the hokku-server.
 
 Downloads/caches a Pi OS 64-bit Lite image, writes it to an SD card, injects
-firstrun hooks that configure wifi, user, SSH, avahi, samba (optional), and
-the hokku-server .deb on first boot. Then waits for the Pi to come up on
-mDNS and answer HTTP.
+firstrun hooks that configure wifi, user, SSH, samba (optional), and
+the hokku-server .deb on first boot. Then waits for the Pi's webserver
+to come up at hokku.local.
 
 Windows-only (uses \\.\PhysicalDriveN and wmic). Admin required.
 """
@@ -25,13 +25,14 @@ import release_cache
 
 REPO_ROOT = release_cache.REPO_ROOT
 CACHE_DIR = release_cache.CACHE_DIR
-PI_OS_HOSTNAME = "hokku-server"
+PI_OS_HOSTNAME = "hokku"
 PI_OS_DEFAULT_USER = "hokku"
 PI_OS_DEFAULT_PASS = "hokku"
 WEBSERVER_PORT = 8080
 # First boot on a Pi Zero 2 W installs ~90 Debian packages (and optionally samba,
 # another ~36 packages + ~100 MB). Over wifi on a tiny SoC that's 5-10 minutes.
 # 60s was catastrophically optimistic.
+INSTALLING_BEACON_WAIT_SECS = 300   # Boot 1 takes ~1-2 min; 5 min is generous
 WEBSERVER_WAIT_SECS = 900
 
 PI_OS_LATEST_URL = "https://downloads.raspberrypi.com/raspios_lite_arm64_latest"
@@ -99,6 +100,22 @@ def validate_wifi_password(s):
     bad = _bad_chars(s)
     if bad:
         return False, f"WiFi password contains disallowed characters: {_char_report(bad)}"
+    return True, ""
+
+
+def validate_mdns_hostname(s):
+    """Return (ok, reason). Valid mDNS label: a-z0-9 and hyphens, no leading/trailing hyphen."""
+    if not s:
+        return False, "Hostname is empty"
+    if len(s) > 63:
+        return False, f"Hostname is {len(s)} chars (max 63)"
+    if not s[0].isalnum():
+        return False, "Hostname must start with a letter or digit"
+    if s[-1] == "-":
+        return False, "Hostname must not end with a hyphen"
+    for ch in s.lower():
+        if not (ch.isalnum() or ch == "-"):
+            return False, f"Hostname contains disallowed character: {ch!r} (allowed: a-z 0-9 -)"
     return True, ""
 
 
@@ -611,7 +628,7 @@ def _prompt_validated(prompt, validator, hidden=False, default=None):
 
 
 _STICKY_KEYS = ("wifi_ssid", "wifi_pass", "user", "password", "ssh_enabled",
-                "samba", "country", "timezone")
+                "samba", "country", "timezone", "mdns_hostname")
 
 
 def _masked(s):
@@ -689,6 +706,21 @@ def collect_install_config():
                    default_yes=samba_default)
 
     print()
+    print("  Bonjour / mDNS")
+    mdns_default = sticky.get("mdns_hostname", "hokku")
+    use_mdns = _yesno("Advertise the webserver via Bonjour (*.local)?",
+                      default_yes=bool(mdns_default))
+    if use_mdns:
+        mdns_hostname = _prompt_with_sticky(
+            "Bonjour hostname (the part before .local)",
+            validate_mdns_hostname,
+            mdns_default if mdns_default else None,
+            default="hokku",
+        )
+    else:
+        mdns_hostname = ""
+
+    print()
     print("  Regional settings")
     print("  (country sets the WiFi regulatory domain — the radio won't associate")
     print("   without it. Timezone sets the Pi's system clock via timedatectl.)")
@@ -715,7 +747,8 @@ def collect_install_config():
         "samba": samba,
         "country": country,
         "timezone": timezone,
-        # server_ip is populated later, after mDNS resolves hokku-server.local.
+        "mdns_hostname": mdns_hostname,
+        # server_ip is populated later by resolving hokku.local after the webserver is up.
         "server_ip": None,
     }
 
@@ -806,7 +839,7 @@ def write_image_to_disk(image_path, drive):
     print(f"  Writing {image_path.name} to {fmt_drive_id(drive)} ...")
     if is_xz:
         print(f"  (The .img.xz is decompressed on the fly — the actual amount")
-        print(f"   written to the card is ~2.5 GB, not the {image_path.stat().st_size // 1024**2} MB source.)")
+        print(f"   written to the card is ~3 GB, not the {image_path.stat().st_size // 1024**2} MB source.)")
     print("  This takes 3-10 minutes. Do not remove the card.")
 
     vol_handles = _dismount_volumes(disk_index)
@@ -940,16 +973,61 @@ def fetch_latest_release_deb():
     return cached
 
 
+def select_release_interactive():
+    """Fetch all GitHub releases, let the user pick one, download its .deb.
+    Returns Path or None."""
+    print("  Querying GitHub releases...")
+    try:
+        releases = release_cache.get_all_releases()
+    except urllib.error.HTTPError as e:
+        print(f"  ERROR: GitHub API returned {e.code} {e.reason}")
+        return None
+    except Exception as e:
+        print(f"  ERROR: could not reach GitHub: {e}")
+        return None
+
+    if not releases:
+        print("  No releases found on GitHub.")
+        return None
+
+    print()
+    print("  Available releases:")
+    for i, rel in enumerate(releases, 1):
+        tag = rel.get("tag_name", "?")
+        date = (rel.get("published_at") or "")[:10]
+        marker = "  (latest)" if i == 1 else ""
+        print(f"    {i}. {tag}  ({date}){marker}")
+    print()
+
+    while True:
+        choice = input(f"  Select release [1-{len(releases)}] (Enter = latest): ").strip()
+        if choice == "":
+            idx = 0
+            break
+        if choice.isdigit() and 1 <= int(choice) <= len(releases):
+            idx = int(choice) - 1
+            break
+        print("  Invalid choice, try again.")
+
+    selected = releases[idx]
+    tag = selected.get("tag_name", "?")
+    asset = release_cache.find_asset(selected, _deb_name_matches)
+    if asset is None:
+        print(f"  ERROR: release {tag} has no hokku-server_*.deb asset.")
+        return None
+    return release_cache.ensure_cached_asset(asset, CACHE_DIR, label=f"(release {tag})")
+
+
 def locate_deb_package_interactive():
-    """Auto-find the .deb, or fetch it from the latest GitHub release; if both
+    """Auto-find the .deb, or let the user pick a GitHub release; if both
     fail, ask the user for a path. Returns Path or None."""
     deb = find_deb_package()
     if deb:
         return deb
 
     print()
-    print("  No hokku-server_*.deb found locally. Fetching latest GitHub release...")
-    deb = fetch_latest_release_deb()
+    print("  No hokku-server_*.deb found locally.")
+    deb = select_release_interactive()
     if deb:
         return deb
 
@@ -1076,6 +1154,15 @@ else
     systemctl disable ssh
 fi
 
+# --- avahi (mDNS install beacon: hokku-installing.local) ---
+# Stays up during the long apt install so you can SSH in and check progress.
+# Disabled at the end of firstboot-install.sh; hokku.local takes over via the
+# app's own zeroconf once the webserver is running.
+sed -i 's/^[#]*host-name=.*/host-name=hokku-installing/' /etc/avahi/avahi-daemon.conf || true
+grep -q '^host-name=' /etc/avahi/avahi-daemon.conf || \
+    sed -i '/^\\[server\\]/a host-name=hokku-installing' /etc/avahi/avahi-daemon.conf || true
+systemctl enable avahi-daemon
+
 # --- wifi via NetworkManager (Bookworm default) ---
 mkdir -p /etc/NetworkManager/system-connections
 UUID=$(cat /proc/sys/kernel/random/uuid)
@@ -1118,9 +1205,6 @@ network={{
 }}
 EOF
 chmod 600 /etc/wpa_supplicant/wpa_supplicant.conf
-
-# --- avahi (mDNS) ---
-systemctl enable avahi-daemon 2>/dev/null || true
 
 # --- wifi country code ---
 # Without a regulatory domain set, the WiFi chip runs in 'world' mode and
@@ -1290,6 +1374,10 @@ SMBEOF
     systemctl enable smbd
 fi
 
+# Stop avahi install beacon — hokku.local is now served by the app's zeroconf
+systemctl stop avahi-daemon 2>/dev/null || true
+systemctl disable avahi-daemon 2>/dev/null || true
+
 # Disable self
 systemctl disable hokku-firstboot.service
 rm -f /etc/systemd/system/hokku-firstboot.service
@@ -1302,66 +1390,86 @@ echo "=== firstboot-install.sh done $(date) ==="
 
 # ---------- Wait for Pi on network ----------
 
-def wait_for_mdns(hostname):
-    """Poll for hostname.local resolution. No timeout. Ctrl-C to cancel."""
-    fqdn = f"{hostname}.local"
+def wait_for_installing_beacon(timeout=INSTALLING_BEACON_WAIT_SECS, ssh_enabled=False):
+    """Phase 1: poll for hokku-installing.local on mDNS (avahi beacon, Boot 1).
+    On success prints the SSH hint and returns True. Returns False on timeout."""
+    fqdn = "hokku-installing.local"
+    t_min = timeout // 60
+    print(f"  Phase 1/2: waiting for {fqdn} (Boot 1 — OS setup, ~1-2 min, up to {t_min} min)")
     print()
-    print(f"  Waiting for {fqdn} on the network...")
-    print("  (no timeout — Ctrl-C to cancel; first boot can take several minutes)")
-    spin = "|/-\\"
-    i = 0
+    bar_width = 36
     start = time.time()
     while True:
+        elapsed = int(time.time() - start)
+        if elapsed > timeout:
+            break
         try:
             ip = socket.gethostbyname(fqdn)
-            print(f"\n  Found {fqdn} at {ip} (after {int(time.time() - start)}s).")
-            return ip
+            e_min, e_sec = divmod(elapsed, 60)
+            sys.stdout.write(f"\r  {'':>{bar_width + 28}}\r")
+            print(f"  {fqdn} is up at {ip} after {e_min}:{e_sec:02d}.")
+            if ssh_enabled:
+                print()
+                print(f"  Boot 2 (package install) is now running.")
+                print(f"  You can SSH in to watch progress:")
+                print(f"    ssh hokku@hokku-installing.local")
+                print(f"    tail -f /var/log/hokku-firstboot-install.log")
+            return True
         except socket.gaierror:
             pass
-        elapsed = int(time.time() - start)
-        sys.stdout.write(f"\r  waiting {spin[i % 4]}  [{elapsed}s elapsed] ")
+        remaining = max(0, timeout - elapsed)
+        filled = min(bar_width, int(bar_width * elapsed / timeout))
+        bar = "█" * filled + "░" * (bar_width - filled)
+        e_min, e_sec = divmod(elapsed, 60)
+        r_min, r_sec = divmod(remaining, 60)
+        sys.stdout.write(f"\r  [{bar}]  {e_min}:{e_sec:02d} elapsed  {r_min}:{r_sec:02d} remaining  ")
         sys.stdout.flush()
-        i += 1
         time.sleep(2)
+    print()
+    print(f"  TIMEOUT: {fqdn} did not appear.")
+    print("  Boot 1 (OS setup) may have failed. Check the SD card and power supply.")
+    return False
 
 
 def wait_for_webserver(hostname, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SECS,
                        ssh_enabled=False):
-    """Poll HTTP /hokku/api/time. Returns True if reachable within timeout."""
-    url = f"http://{hostname}.local:{port}/hokku/api/time"
-    print(f"  Waiting up to {timeout // 60}m for webserver at {url}")
-    print("  (first boot installs ~90 packages + samba if chosen — be patient).")
+    """Poll /hokku/api/status and check for 'server_time' in the JSON response.
+    Returns True if a genuine hokku webserver responds within timeout."""
+    url = f"http://{hostname}.local:{port}/hokku/api/status"
+    print(f"  Polling {url}")
+    print()
+    bar_width = 36
     start = time.time()
-    deadline = start + timeout
-    last_status = start
-    while time.time() < deadline:
+    while True:
+        elapsed = int(time.time() - start)
+        remaining = max(0, timeout - elapsed)
+        if elapsed > timeout:
+            break
         try:
-            with urllib.request.urlopen(url, timeout=3) as r:
-                if r.status == 200:
-                    print(f"\n  Webserver OK (after {int(time.time() - start)}s).")
+            with urllib.request.urlopen(url, timeout=5) as r:
+                if r.status == 200 and "server_time" in json.loads(r.read()):
+                    e_min, e_sec = divmod(elapsed, 60)
+                    sys.stdout.write(f"\r  {'':>{bar_width + 28}}\r")  # clear line
+                    print(f"  Webserver up after {e_min}:{e_sec:02d}.")
                     return True
         except Exception:
             pass
-        # Progress: one dot every 2s, a status line every 30s with elapsed.
-        sys.stdout.write(".")
+        filled = min(bar_width, int(bar_width * elapsed / timeout))
+        bar = "█" * filled + "░" * (bar_width - filled)
+        e_min, e_sec = divmod(elapsed, 60)
+        r_min, r_sec = divmod(remaining, 60)
+        sys.stdout.write(f"\r  [{bar}]  {e_min}:{e_sec:02d} elapsed  {r_min}:{r_sec:02d} remaining  ")
         sys.stdout.flush()
-        if time.time() - last_status >= 30:
-            elapsed = int(time.time() - start)
-            print(f" [{elapsed}s elapsed]")
-            last_status = time.time()
         time.sleep(2)
     print()
     print("  TIMEOUT: webserver did not respond.")
     print("  The .deb install may still be running in the background.")
     if ssh_enabled:
         print("  SSH in and check /var/log/hokku-firstboot-install.log.")
-    else:
-        print("  SSH was left disabled, so the log isn't reachable remotely.")
-        print("  Re-run this installer with 'Enable SSH login?' set to 'y' to diagnose.")
     return False
 
 
-def check_existing_server(hostname=PI_OS_HOSTNAME):
+def check_existing_server(hostname="hokku"):
     """Quick probe without waiting. Returns True if a hokku-server is already running."""
     fqdn = f"{hostname}.local"
     print(f"  Probing {fqdn}...", end=" ", flush=True)
@@ -1372,8 +1480,8 @@ def check_existing_server(hostname=PI_OS_HOSTNAME):
         return False
     print(f"resolved to {ip}.")
     try:
-        with urllib.request.urlopen(f"http://{fqdn}:{WEBSERVER_PORT}/hokku/api/time", timeout=3) as r:
-            if r.status == 200:
+        with urllib.request.urlopen(f"http://{fqdn}:{WEBSERVER_PORT}/hokku/api/status", timeout=3) as r:
+            if r.status == 200 and "server_time" in json.loads(r.read()):
                 print("  Webserver is running.")
                 return True
     except Exception as e:
@@ -1382,6 +1490,29 @@ def check_existing_server(hostname=PI_OS_HOSTNAME):
 
 
 # ---------- Orchestration ----------
+
+def _apply_mdns_config(mdns_hostname):
+    """POST mdns_hostname to the running server's config API. Logs result."""
+    url = f"http://hokku.local:{WEBSERVER_PORT}/hokku/api/config"
+    body = json.dumps({"mdns_hostname": mdns_hostname}).encode()
+    req = urllib.request.Request(
+        url, data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            result = json.loads(r.read())
+        if result.get("ok"):
+            if mdns_hostname:
+                print(f"  Bonjour configured: {mdns_hostname}.local")
+            else:
+                print("  Bonjour disabled on the server.")
+        else:
+            print(f"  WARNING: server rejected Bonjour config update: {result}")
+    except Exception as e:
+        print(f"  WARNING: could not apply Bonjour config: {e}")
+
 
 def run():
     """Run the full Pi OS install flow. Returns dict with install config
@@ -1418,6 +1549,32 @@ def run():
     print("  --------------------------------------")
     cfg = collect_install_config()
 
+    # mDNS conflict check — before the destructive write.
+    if cfg["mdns_hostname"]:
+        fqdn = f"{cfg['mdns_hostname']}.local"
+        while True:
+            print(f"  Checking if {fqdn} is already on the network...", end=" ", flush=True)
+            try:
+                ip = socket.gethostbyname(fqdn)
+                print(f"already exists at {ip}!")
+                print(f"  WARNING: {fqdn} will conflict with the new server once installed.")
+                print("  Options:")
+                print("    [r] Check again  (resolve the conflict first)")
+                print("    [c] Continue anyway")
+                print("    [b] Bail (go back and change the hostname)")
+                while True:
+                    choice = input("  Choice [r/c/b]: ").strip().lower()
+                    if choice in ("r", "c", "b"):
+                        break
+                if choice == "b":
+                    return None
+                if choice == "c":
+                    break
+                # 'r' → loop and check again
+            except socket.gaierror:
+                print("free.")
+                break
+
     # Refresh letters in case Windows has (un)mounted anything since Step 1.
     drive["letters"] = list_drive_letters_for(drive["index"])
     print()
@@ -1450,29 +1607,53 @@ def run():
     print()
     print("  Step 4 of 4: Wait for Pi to come online")
     print("  --------------------------------------")
-    print("  Insert the SD card into the Pi Zero W2 and power it on.")
+    print()
+    print("  ╔══════════════════════════════════════════════╗")
+    print("  ║                                              ║")
+    print("  ║    INSERT SD CARD INTO PI AND POWER IT ON    ║")
+    print("  ║                                              ║")
+    print("  ╚══════════════════════════════════════════════╝")
     print()
     print("  !! FIRST BOOT IS SLOW !!")
     print("     - Boot 1: customizes the OS, then reboots (~1-2 min)")
     print("     - Boot 2: runs apt update + installs the .deb (+samba, if chosen)")
     print("     - Total first-boot time: typically 3-8 minutes,")
     print("       longer on slow SD cards or slow internet.")
-    if cfg["ssh_enabled"]:
-        print("     - If something seems stuck, SSH in and tail:")
-        print("         /var/log/hokku-firstboot-install.log")
-        print("         /boot/firmware/firstrun.log")
-    else:
-        print("     - If something seems stuck there's no way to inspect logs")
-        print("       remotely (SSH was left disabled). Re-run this installer")
-        print("       and answer 'y' to 'Enable SSH login?' to get remote access")
-        print("       to /var/log/hokku-firstboot-install.log etc.")
+    print()
+    print("  hokku.local will appear once the install is complete.")
+    print()
+    input("  Press Enter once the card is inserted and the Pi is powered on... ")
+    print()
+    beacon_ok = False
+    webserver_ok = False
     try:
-        pi_ip = wait_for_mdns(cfg["hostname"])
+        while not beacon_ok:
+            beacon_ok = wait_for_installing_beacon(ssh_enabled=cfg["ssh_enabled"])
+            if not beacon_ok:
+                if not _yesno("  Keep waiting?", default_yes=True):
+                    break
+        if beacon_ok:
+            print()
+            print("  Phase 2/2: waiting for hokku.local webserver (Boot 2 — package install)")
+            print()
+            while not webserver_ok:
+                webserver_ok = wait_for_webserver("hokku", ssh_enabled=cfg["ssh_enabled"])
+                if not webserver_ok:
+                    if not _yesno("  Keep waiting?", default_yes=True):
+                        break
     except KeyboardInterrupt:
         print("\n  Cancelled by user.")
         return None
 
-    webserver_ok = wait_for_webserver(cfg["hostname"], ssh_enabled=cfg["ssh_enabled"])
+    pi_ip = None
+    try:
+        pi_ip = socket.gethostbyname("hokku.local")
+    except socket.gaierror:
+        pass
+
+    # Apply the requested Bonjour config if it differs from the server default.
+    if webserver_ok and cfg["mdns_hostname"] != "hokku":
+        _apply_mdns_config(cfg["mdns_hostname"])
 
     return {
         "wifi_ssid": cfg["wifi_ssid"],

@@ -12,6 +12,7 @@ import urllib.request
 from pathlib import Path
 
 GITHUB_RELEASES_LATEST = "https://api.github.com/repos/defl/hokku_epaper/releases/latest"
+GITHUB_RELEASES_ALL = "https://api.github.com/repos/defl/hokku_epaper/releases"
 
 REPO_ROOT = Path(__file__).parent.parent
 CACHE_DIR = REPO_ROOT / ".cache"
@@ -33,6 +34,16 @@ def get_latest_release():
     with urllib.request.urlopen(req, timeout=15) as r:
         _cached_release = json.loads(r.read().decode("utf-8"))
     return _cached_release
+
+
+def get_all_releases():
+    """Fetch all releases from GitHub, newest first. Raises on failure."""
+    req = urllib.request.Request(
+        GITHUB_RELEASES_ALL,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "hokku-setup"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read().decode("utf-8"))
 
 
 def find_asset(release, name_predicate):
