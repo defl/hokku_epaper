@@ -53,3 +53,18 @@ def start_mdns(port: int, hostname: str) -> Any:
     except Exception as exc:
         print(f"  mDNS: registration failed — {exc}", file=sys.stderr)
         return None
+
+
+def stop_mdns(zc: Any) -> None:
+    """Unregister all services and close the Zeroconf instance.
+
+    Safe to call with ``None`` (no-op).
+    """
+    if zc is None:
+        return
+    try:
+        zc.unregister_all_services()
+        zc.close()
+        print("  mDNS: advertisement stopped")
+    except Exception as exc:
+        print(f"  mDNS: error while stopping — {exc}", file=sys.stderr)

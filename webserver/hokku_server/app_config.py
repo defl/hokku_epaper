@@ -96,7 +96,7 @@ class AppConfig:
     #: 0 = auto (cpu_count − 1, capped by available RAM at ~50 MB/worker).
     #: 1 = serial (legacy default).
     #: N > 1 = exactly N workers; the user is responsible for having enough RAM.
-    image_worker_thread_count: int = 1
+    image_worker_thread_count: int = 0
 
     # Image pipeline: default, B&W, and face presets.
     image_config_default: ImageConfig = field(

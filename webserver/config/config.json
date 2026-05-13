@@ -13,7 +13,7 @@
   "orientation": "landscape",
   "auto_clear_cache": false,
   "crop_to_fill_threshold": 0.0,
-  "image_worker_thread_count": 1,
+  "image_worker_thread_count": 0,
   "image_config_default": {
     "dither": {
       "algorithm": "floyd_steinberg",

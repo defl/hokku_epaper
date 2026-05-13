@@ -83,7 +83,8 @@ def main() -> None:
     logging.getLogger("werkzeug").addFilter(_SilentFilter())
 
     print(f"  Starting server on port {config.port}...")
-    _zc = start_mdns(config.port, config.mdns_hostname) if config.mdns_hostname else None  # noqa: F841
+    _zc = start_mdns(config.port, config.mdns_hostname) if config.mdns_hostname else None
+    state._zc = _zc  # hand ownership to AppState so config reloads can restart mDNS
     app.run(host="0.0.0.0", port=config.port)
 
 

@@ -1,3 +1,10 @@
+hokku-server (3.0.0~alpha2-2) unstable; urgency=low
+
+  * Default image_worker_thread_count to 0 (auto) instead of 1 (serial).
+    New installs now use all available cores out of the box.
+
+ -- Hokku <hokku@hokku>  Mon, 12 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha2-1) unstable; urgency=low
 
   * 3.0.0-alpha2 release: new UI design, context-aware dithering (B&W + face

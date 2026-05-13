@@ -15,6 +15,7 @@ from hokku_server.image_classifier import ImageClassifier
 from hokku_server.image_manager_abstract import AbstractImageManager
 from hokku_server.image_manager_multi import MultiThreadedImageManager
 from hokku_server.image_manager_single import SingleThreadedImageManager
+from hokku_server.mdns import start_mdns, stop_mdns
 from hokku_server.serve_scheduler import ServeScheduler
 from hokku_server.worker_count import resolve_worker_count
 
@@ -57,6 +58,7 @@ class AppState:
         manager: AbstractImageManager,
         scheduler: ServeScheduler,
         watcher: "Watcher | None" = None,
+        zc: object = None,
     ) -> None:
         self._lock = threading.Lock()
         self.config = config
@@ -64,6 +66,7 @@ class AppState:
         self.manager = manager
         self.scheduler = scheduler
         self.watcher = watcher
+        self._zc = zc  # live Zeroconf instance (None if mDNS disabled)
 
     def reload(self, new_config: AppConfig) -> None:
         """Rebuild classifier + manager + scheduler from *new_config* and swap atomically.
@@ -85,6 +88,9 @@ class AppState:
         if not cache_dir.is_dir():
             raise ValueError(f"cache_dir does not exist: {cache_dir}")
 
+        # Capture old mDNS hostname before swapping config.
+        old_hostname = self.config.mdns_hostname
+
         # Build outside the lock — ImageManager.__init__ reads from disk and
         # may take a moment; we don't want to block route handlers for that.
         new_classifier = ImageClassifier(new_config)
@@ -100,6 +106,15 @@ class AppState:
 
         # Shut the old manager down outside the lock (releases its workers).
         old_manager.shutdown()
+
+        # Restart mDNS if the hostname changed (or toggled on/off).
+        if new_config.mdns_hostname != old_hostname:
+            stop_mdns(self._zc)
+            if new_config.mdns_hostname:
+                self._zc = start_mdns(new_config.port, new_config.mdns_hostname)
+            else:
+                self._zc = None
+                print("  mDNS: disabled (mdns_hostname is empty)")
 
         print(f"  Config reloaded in-process — pipeline slug: {new_config.cache_slug()}")
         print(
