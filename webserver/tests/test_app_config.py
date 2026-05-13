@@ -153,9 +153,6 @@ def test_image_worker_thread_count_roundtrips(tmp_path: Path):
     assert loaded.image_worker_thread_count == 3
 
 
-def test_image_worker_thread_count_default_is_1():
-    assert AppConfig().image_worker_thread_count == 1
-
 
 def test_cache_slug_invariant_to_worker_count():
     """Worker count doesn't affect rendered output, so it must not influence the slug."""

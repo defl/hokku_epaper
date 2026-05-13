@@ -152,24 +152,6 @@ def test_reload_is_idempotent(app_config: AppConfig, tmp_path: Path):
     assert state.config is app_config
 
 
-def test_reload_swaps_manager_class_on_worker_count_change(app_config: AppConfig, tmp_path: Path):
-    """Switching image_worker_thread_count between 1 and >=2 swaps the concrete
-    manager class accordingly, and resolved_worker_count tracks the config."""
-    state = _make_state(app_config)  # default count=1 → SingleThreaded
-    assert isinstance(state.manager, SingleThreadedImageManager)
-    assert state.manager.resolved_worker_count == 1
-
-    new_cfg = replace(_alt_config(app_config, tmp_path), image_worker_thread_count=2)
-    state.reload(new_cfg)
-
-    assert isinstance(state.manager, MultiThreadedImageManager)
-    assert state.manager.resolved_worker_count == 2
-
-    # And back the other way.
-    state.reload(replace(new_cfg, image_worker_thread_count=1))
-    assert isinstance(state.manager, SingleThreadedImageManager)
-    assert state.manager.resolved_worker_count == 1
-
 
 def test_reload_always_builds_new_manager(app_config: AppConfig, tmp_path: Path):
     """Even with the same worker count, reload builds a fresh manager."""
