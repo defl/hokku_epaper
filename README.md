@@ -1,4 +1,4 @@
-<img src="images/logo/logo_alt_white.png" width="640">
+<img src="images/readme_banner.png" width="640">
 
 Everything you'd want from a photo frame: accurate colours, full privacy, a clean web app, and the ability to run as many frames as you like from one cheap server. Open source replacement firmware and image server for the Hokku / Huessen 13.3" six-colour e-ink frame.
 
