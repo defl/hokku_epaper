@@ -42,7 +42,7 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 
 ## The web app
 
-<img src="images/ui.png" width="640">
+<img src="images/ui.png" width="500">
 
 Three tabs: **Images** (your photo library — upload, preview, manage), **Screens** (live status of each frame — battery, WiFi, last seen, next update), and **Config** (refresh schedule, orientation, conversion settings). Everything updates live without a page reload. For a full walkthrough of every feature see the **[user manual](docs/manual.md)**.
 
@@ -56,7 +56,7 @@ See **[Hardware](docs/hardware.md)** for where to buy the frame and the recommen
 
 ## Installation
 
-<img src="images/frame_x_pi.png" width="640">
+<img src="images/frame_x_pi.png" width="500">
 
 Hokku loves Pi! If you need to pick one up, the **[hardware guide](docs/hardware.md)** has a tested parts list that arrives next-day in the US. Connect both to your computer, run `hokku_setup.bat`, and the guided installer takes care of the rest.
 
