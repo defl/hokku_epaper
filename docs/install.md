@@ -154,7 +154,7 @@ The frame reads its configuration from NVS (non-volatile storage), written over 
 |---|---|
 | WiFi SSID | 1–32 bytes, no quotes, backslashes, or newlines |
 | WiFi Password | 8–63 characters, or empty for an open network |
-| Server IP | The LAN IP of the machine running the image server |
+| Server IP or hostname | The LAN IP or mDNS hostname of the machine running the image server (e.g. `192.168.1.10` or `hokku.local`) |
 | Server Port | `8080` (default) |
 | Screen Name | Optional, up to 64 bytes UTF-8, e.g. `Living Room` |
 
