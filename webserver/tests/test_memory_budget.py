@@ -195,10 +195,11 @@ def test_memory_guard_raises_memory_error_when_exceeded() -> None:
     """
 
     cur = int(psutil.Process().memory_info().vms)
-    # Cap 1 MB above current VMS — any meaningful new allocation should fail.
-    # RLIMIT_AS limits virtual address space (vms), not resident set size (rss).
-    cap = cur + 1 * 1024 * 1024
-    with pytest.raises(MemoryError):
+    # Allow 5 MB above current VMS — tight enough that a 100 MB numpy allocation
+    # must fail. RLIMIT_AS limits virtual address space (vms). The 5 MB headroom
+    # is needed so setrlimit itself doesn't fail due to in-flight allocations.
+    cap = cur + 5 * 1024 * 1024
+    with pytest.raises((MemoryError, np.core._exceptions._ArrayMemoryError)):
         with memory_limit(cap):
-            # Try to allocate 50 MB — must fail.
-            _waste = bytearray(50 * 1024 * 1024)  # noqa: F841
+            # Try to allocate 100 MB — must fail.
+            _waste = np.zeros(100 * 1024 * 1024, dtype=np.uint8)  # noqa: F841
