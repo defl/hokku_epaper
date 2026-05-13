@@ -1,3 +1,9 @@
+hokku-server (3.0.0~beta1-1) unstable; urgency=low
+
+  * 3.0.0-beta1 release.
+
+ -- Hokku <hokku@hokku>  Mon, 12 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~alpha3-1) unstable; urgency=low
 
   * Fix mDNS: use hostname-scoped service instance name so multiple hokku
