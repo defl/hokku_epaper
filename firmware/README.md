@@ -1,20 +1,8 @@
-# Firmware
+# Firmware — Developer Notes
 
 Custom firmware for the Hokku/Huessen 13.3" Spectra 6 e-paper frame. Downloads images from the server, displays them, and deep sleeps until the server tells it to wake.
 
-## For users
-
-You don't need to build the firmware — pre-built binaries are included in `firmware/release/`. Just run the setup tool:
-
-```bash
-cd tools
-pip install pyserial esptool
-python hokku_setup.py
-```
-
-Or on Windows: double-click `hokku_setup.bat` in the root directory.
-
-## For developers
+For flashing and configuration see [docs/install.md](../docs/install.md).
 
 ### Requirements
 
@@ -36,18 +24,10 @@ The build timestamp is embedded as the firmware version (YYYYMMDDHHMMSSZ format)
 The setup tool handles flashing automatically. For manual flashing:
 
 ```bash
-esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash \
-  --flash-mode dio --flash-freq 80m --flash-size 16MB \
-  0x0 build/bootloader/bootloader.bin \
-  0x8000 build/partition_table/partition-table.bin \
-  0x10000 build/hokku_epaper.bin
+esptool.py --chip esp32s3 --port /dev/ttyACM0 write_flash 0x0 hokku-firmware_<tag>.bin
 ```
 
 On Windows, replace `/dev/ttyACM0` with `COM3` (or whichever port your device is on).
-
-### Configuration
-
-All configuration (WiFi SSID/password, server URL, screen name) is stored in the NVS partition, not in source code. Use `hokku_setup.py` or `hokku_config.py` to write it.
 
 ### Important notes
 

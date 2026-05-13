@@ -2,12 +2,20 @@ __pycache__/
 .venv/
 .claude/
 .private/
-build/
+.cache/
+.temp/
 
-# Debian build artifacts
+# Runtime DB files that may be created in the source tree by accident
+image_manager.json
+serve_scheduler.json
+
+# Debian build artifacts (land in builds/, never the repo root)
+/builds/
+build/
 *.deb
 *.buildinfo
 *.changes
+*.log
 webserver/.pybuild/
 webserver/build/
 webserver/hokku_server.egg-info/
@@ -17,3 +25,6 @@ webserver/debian/debhelper-build-stamp
 webserver/debian/files
 webserver/debian/*.debhelper
 webserver/debian/*.substvars
+
+# Releases
+firmware/release/

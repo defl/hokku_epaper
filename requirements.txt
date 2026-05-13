@@ -1,0 +1,24 @@
+# Direct dependencies — install these, pip resolves the rest.
+# Versions are not pinned; use the versions that work with your Python.
+
+# Image processing (webserver)
+numpy
+numba                # JIT-compiled dither inner loop (NumbaDither)
+Pillow
+pillow-heif          # HEIC/HEIF support
+pillow-avif-plugin   # AVIF support
+
+# Web server
+Flask
+
+# Firmware tools
+esptool
+pyserial
+rich
+rich-click
+
+# Runtime utilities
+psutil               # auto worker-count (resolve_worker_count) + memory-budget tests
+
+# Tests
+pytest

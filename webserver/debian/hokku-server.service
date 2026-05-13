@@ -1,17 +1,26 @@
 [Unit]
-Description=Hokku Spectra 6 image server
+Description=Hokku Server
 After=network.target
+# avahi-daemon conflicts with the Python zeroconf library — both compete for
+# the mDNS multicast group on port 5353, causing NonUniqueNameException on
+# service registration. avahi is only needed as the install beacon
+# (hokku-installing.local); stop it as soon as hokku-server takes over.
+Conflicts=avahi-daemon.service avahi-daemon.socket
+After=network.target avahi-daemon.service avahi-daemon.socket
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/hokku-server
+ExecStartPre=-/bin/sh -c 'test -f /var/lib/hokku/config.json || cp /usr/share/hokku-server/config.json /var/lib/hokku/config.json'
+ExecStart=/usr/bin/hokku-server /var/lib/hokku/config.json
 Environment="PYTHONUNBUFFERED=1"
-Environment="HOKKU_CONFIG=/var/lib/hokku/config.json"
+Environment="NUMBA_CACHE_DIR=/var/lib/hokku/numba_cache"
 DynamicUser=yes
-StateDirectory=hokku
+StateDirectory=hokku hokku/numba_cache
 CacheDirectory=hokku
 Restart=on-failure
-RestartSec=5
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target

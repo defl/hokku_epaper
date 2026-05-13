@@ -1,105 +1,66 @@
-# Hokku / Huessen 13.3" E-Ink Frame — Open Source Firmware & Image Server
+<img src="images/readme_banner.png" width="640">
 
-Replacement firmware and self-hosted image server for the Hokku / Huessen 13.3" six-colour e-ink photo frame. Runs entirely on your local network — no cloud, no accounts, no third-party servers.
+Everything you'd want from a photo frame: accurate colours, full privacy, a clean web app, and the ability to run as many frames as you like from one cheap server. Open source replacement firmware and image server for the Hokku / Huessen 13.3" six-colour e-ink frame.
 
-![Web GUI](images/server.png)
-
-## Features
-
-A self-hosted photo frame that actually works — no cloud, no accounts, no monthly sign-ups you forgot about.
+## Core features
 
 **Photos, your way**
-- **Local-only.** Your photos never leave your network. No cloud, no third-party servers, no telemetry.
-- **Drag-and-drop upload** straight into the web app — single files or dozens at a time, with a live progress list. Works on phones too.
-- **Browse in a grid**, preview originals *and* the dithered version side-by-side (so you see exactly what the frame will show before it shows it), delete anything you don't want with a one-click trash button.
-- **All the formats you actually have:** JPEG, PNG, HEIC/HEIF, AVIF, WebP, GIF, TIFF, BMP. Phone photos auto-rotate thanks to EXIF.
-- **Landscape or portrait** — flip a switch, the server re-dithers everything to match the mounting.
-- **"Show next" on any image** when you want to force a specific photo onto the frame at the next refresh.
+- **Local-only** — your photos never leave your network. No cloud, no third-party servers, no telemetry. The web app itself makes no external requests — fonts and assets are self-hosted, so nothing is phoned home just by opening a browser tab. Your hardware and open source software means you're in full control.
+- **Drag-and-drop upload** — single files or dozens at a time, straight into the web app, with a live progress list. Works on phones too.
+- **Browse in a grid** — preview exactly what the frame will show before it shows it, original and converted version side by side. Delete anything you don't want with one click.
+- **Click any photo** — see how it was processed and compare the original against what's going to the frame at full size.
+- **All the formats you actually have** — JPEG, PNG, HEIC/HEIF, AVIF, WebP, GIF, TIFF, BMP. Anything from 90's formats to modern iPhone and Android. Phone photos auto-rotate.
+- **Landscape or portrait** — flip a switch and everything re-converts to match how the frame is mounted.
+- **Jump the queue** — pick any photo in the library to be the next one shown on the frame.
 
 **Looks good on e-paper**
-- **Three dither algorithms to choose from**, including a hue-aware Atkinson recipe that handles skin tones and whites without the usual blue-speckle / pink-noise failure modes. ([the dithering rabbit hole →](docs/dithering.md))
-- **Calibrated to real Spectra 6 panel colours**, not theoretical sRGB, for accurate rendering.
+- **Correct out of the box** — pre-set for the best results on this panel without any tweaking.
+- **Adapts to each photo** — it can tell a black-and-white photo from a colour one, and recognise faces (all done locally, nothing leaves your network), and picks the best conversion approach for each automatically.
+- **No ugly borders** — photos that are close to the right shape get a subtle crop to fill the screen cleanly instead of showing a letterbox band.
+- **Tunable to the nth degree** — three independent conversion profiles (general, black-and-white, faces), 6 presets each, per-photo overrides, and plenty of knobs if you enjoy that sort of thing. ([Details on dithering](docs/dithering.md))
+- **Colour-accurate** — calibrated against the actual panel, not a theoretical colour profile.
 
 **Smart about frames**
-- **Multiple frames, one server.** Each frame gets a name and shows up in a dashboard table with battery level, last-seen time, WiFi signal, and when it'll next update.
-- **Fair image rotation** — least-shown image goes next, randomised tie-breaking, newly-uploaded photos jump to the front.
-- **Per-image stats** (shown count, total display time, last-seen) so you can see which shots are getting the most air time.
-- **Ultra-low power on battery** — ~8 µA in deep sleep, so a full charge lasts months. Live battery indicator per frame on the web app (red below 20 %) so you know when to plug in.
-- **Errors show up on the screen.** If something goes wrong — wrong WiFi password, server unreachable, configuration missing — the frame renders a readable explanation right on the e-paper instead of silently giving up. No serial-cable debugging required.
-- **Overdue-frame warning** banner if a frame is more than an hour late on its scheduled refresh — so you know to check WiFi or the battery before you notice a stale photo on the wall.
-- **Schedule-driven refreshes** (e.g. 06:00, 12:00, 18:00) with timezone support; the frame sleeps between refreshes and wakes on its own.
-- **Clock-synced** — every refresh carries the server's wall-clock, and the dashboard shows drift in seconds for every frame.
-- **Per-frame diagnostics modal** — one click opens the frame's self-reported state (firmware version, boot count, wake cause, WiFi cache hit, free heap, etc.) without a serial cable.
-- **Button on the side** forces an immediate refresh regardless of schedule.
+- **Multiple frames, one server** — each frame gets a name and shows up in a dashboard with battery level, WiFi signal, and when it'll next update.
+- **Fair rotation** — every photo gets its turn. Newly uploaded photos go to the front of the queue; after that, whichever image has been shown least goes next.
+- **Battery lasts months** — the frame uses almost no power between refreshes. The web app shows a battery level for each frame and flags it red when it's getting low.
+- **Problems show up on the screen** — if something goes wrong (wrong WiFi password, server unreachable) the frame displays a plain-English explanation on the e-paper itself instead of going blank. No plugging in a laptop to debug.
+- **Late-frame warning** — if a frame misses its scheduled update by more than an hour, the web app flags it so you know to check WiFi or the battery.
+- **Scheduled updates** — set the times you want the photo to change (e.g. morning, noon, evening) and the frame wakes up on its own. No constant connection needed.
+- **Settings are on the server** — change the schedule, orientation, or anything else in the web app and every frame picks it up automatically. No restarts, no reflashing.
+- **Instant refresh** — there's a button on the frame that forces an immediate update whenever you want one.
+- **Diagnostics on demand** — one click in the web app shows the frame's status without needing a cable.
 
 **Easy to run**
-- **Upload, download and manage everything from the web app.** No extra servers, no Linux config, no Samba share to mount. Just works out of the box.
-- **Runs happily on a Raspberry Pi.** Hundreds of 20+ MP photos, dithered once and served from cache thereafter — the per-request load is a file-copy, not image processing. A Pi Zero 2 W handles a multi-frame setup without breaking a sweat.
-- **Debian package** with a systemd service for a one-line install, or run from source on any Python 3.9+ host (Linux, macOS, Windows, Raspberry Pi).
-- **Pre-built firmware + a wizard flasher** — no ESP-IDF toolchain required. Walks you through WiFi, server address, and naming in a few clicks.
-- **Configuration lives on the server** (timezone, schedule, orientation, dither choice) — change it once in the web app, every frame picks it up on its next refresh.
-- **Clear Cache & Re-convert** one-click button for when you change orientation, dither algorithm, or want to re-render everything from scratch.
+- **Everything through the web app** — upload, browse, configure. No command line, no shared drives to set up.
+- **Fast even on small hardware** — converting a big library of photos uses all available CPU cores and finishes much sooner than doing them one at a time. A Raspberry Pi Zero 2 W handles a multi-frame setup without breaking a sweat.
+- **Bad photos are handled gracefully** — if a photo can't be converted, it's set aside with an explanation rather than silently vanishing. You can retry or remove it with one click.
+- **Progress while you wait** — a status bar shows how many photos are being converted and roughly how long it'll take.
+- **Find it on your network by name** — the server advertises itself as `hokku.local` via mDNS, so you can bookmark `http://hokku.local:8080/` and never chase a changing IP address again.
+- **Runs on basically anything, installs in minutes** — a Debian package for Linux that starts automatically, or run from source on macOS, Windows, or a Raspberry Pi. The firmware comes pre-built and the setup wizard flashes it over USB. No build tools, no command line.
+- **One-click re-convert** — changed orientation or want to try a different look? One button re-processes everything from scratch.
+
+## The web app
+
+<img src="images/ui.png" width="500">
+
+Three tabs: **Images** (your photo library — upload, preview, manage), **Screens** (live status of each frame — battery, WiFi, last seen, next update), and **Config** (refresh schedule, orientation, conversion settings). Everything updates live without a page reload. For a full walkthrough of every feature see the **[user manual](docs/manual.md)**.
 
 ## System Requirements
 
-**Server side** — where you host the image server:
-- Any Linux, macOS, Windows, or Raspberry Pi host with Python 3.9+.
-- ~256 MB of RAM is plenty. Dithering a fresh upload briefly peaks a little higher while Pillow decodes the source, but it's single-threaded, transient, and you can feed it a slow machine.
-- Disk: ~2 MB per image for the dithered cache + preview + thumbnail, plus however big your originals are. A thousand photos fits comfortably on any SD card.
-- Networking: anywhere on the same LAN as the frame. No open-internet access needed.
+**Server side** — any Linux, macOS, Windows, or Raspberry Pi on the same local network as the frame. A Raspberry Pi Zero 2 W is the recommended choice: cheap, silent, always-on, and more than fast enough. Around 512 MB of RAM; a few GB of disk for photos.
 
-**Frame side** — the ESP32-S3 board already inside your Hokku / Huessen frame:
-- ESP32-S3 with 16 MB flash and 8 MB octal PSRAM. This is what ships in the frame — the pre-built firmware matches.
-- One USB-C cable (any USB-A-to-C or C-to-C works) for first-time flashing and re-configuration.
-- 2.4 GHz WiFi (open / WPA2 / WPA3). 5 GHz not supported by the chip.
+**Frame side** — a Hokku Designs / Huessen 13.3" six-colour e-ink frame (ESP32-S3 inside), a data-capable USB-C cable for first-time setup, and a 2.4 GHz WiFi network.
+
+See **[Hardware](docs/hardware.md)** for where to buy the frame and the recommended Pi kit.
 
 ## Installation
 
-You need two things running:
+<img src="images/frame_x_pi.png" width="500">
 
-1. **The image server**, on a computer on your network.
-2. **The firmware**, flashed onto the frame over USB.
+Hokku loves Pi! If you need to pick one up, the **[hardware guide](docs/hardware.md)** has a tested parts list that arrives next-day in the US. Connect both to your computer, run `hokku_setup.bat`, and the guided installer takes care of the rest.
 
-### 1. Install the image server
-
-**Debian / Ubuntu** (recommended):
-```bash
-# Download the .deb from the latest release, then:
-apt install ./hokku-server_2.1.20-1_all.deb
-```
-Starts automatically via systemd. Web GUI at `http://<your-server>:8080/`. Use web upload, drop photos into `/var/lib/hokku/upload/` — or install Samba so you can manage that folder from any machine on your network.
-
-**Any platform** (from source):
-```bash
-cd webserver
-pip install flask pillow numpy pillow-heif
-python webserver.py
-```
-Photos go in `/images/upload/`. Web GUI at `http://<your-server>:8080/`.
-
-### 2. Flash and configure the frame
-
-1. Take off the front cover — it's magnetically attached, be careful, it damages easily.
-2. Connect a USB-C cable from your computer to the board on the back.
-3. Run the setup tool:
-
-   **Windows** (easiest — just double-click):
-   ```
-   hokku_setup.bat
-   ```
-
-   **Any platform**:
-   ```bash
-   cd tools
-   pip install pyserial esptool
-   python hokku_setup.py
-   ```
-
-The setup tool walks you through WiFi, the server address, and a name for this frame. It flashes the firmware and writes the configuration over USB — no toolchain or compilation needed.
-
-![Setup tool configuring a frame](images/configurator.png)
-
-Once configured, the frame will fetch its first image and then settle into its refresh schedule.
+Prefer terminal tabs, mysterious pip errors, and the satisfaction of doing things the hard way? We've got you covered: **[Manual installation guide](docs/install.md)**.
 
 ## Buttons and LEDs
 
@@ -107,20 +68,17 @@ Once configured, the frame will fetch its first image and then settle into its r
 
 **Two tiny LEDs** on the bottom of the frame:
 
-- **Red** — blinks at 1 Hz whenever a USB host (computer) is plugged in. Off on battery. This is a "host is present" indicator rather than a strict "charging" one — a dumb wall charger doesn't trigger it, although the battery still charges in the background.
-- **Green** — solid while the frame is talking to WiFi during a refresh. Otherwise off.
-
-## Supported Image Formats
-
-JPEG, PNG, BMP, TIFF, WebP, GIF, HEIC/HEIF, AVIF. Drop any of these into the upload directory or into the web gui and the server takes care of the rest.
+- **Red** — blinks when a computer is connected over USB. A plain wall charger won't trigger it, though the battery still charges fine either way.
+- **Green** — on while the frame is fetching a new photo over WiFi. Off the rest of the time.
 
 ## More Documentation
 
-- **[Technical details](docs/tech_details.md)** — state machine, REST API, hardware map, firmware internals.
-- **[Image server documentation](webserver/README.md)** — install, web GUI, API endpoints, systemd service.
+- **[User manual](docs/manual.md)** — full guide to the web app, frame behaviour, and day-to-day use.
+- **[Installation](docs/install.md)** — step-by-step server + firmware setup for those who prefer the scenic route.
 - **[Dithering pipeline](docs/dithering.md)** — why it looks the way it does; failure modes and countermeasures.
 - **[Firmware documentation](firmware/README.md)** — building from source, manual flashing, developer notes.
 - **[Firmware design spec](docs/firmware_design.md)** — the state-machine spec the current firmware implements.
+- **[Hardware](docs/hardware.md)** — where to buy the frame and the recommended Pi server kit.
 - **[Hardware facts](docs/hardware_facts.md)** — confirmed GPIO map, SPI config, init sequence, USB-detection findings.
 - **[Changelog](CHANGELOG.md)** — release history.
 - **[Disclaimer](DISCLAIMER.md)** — warranty (none), intended use, reverse-engineering notes, privacy.
@@ -130,3 +88,7 @@ JPEG, PNG, BMP, TIFF, WebP, GIF, HEIC/HEIF, AVIF. Drop any of these into the upl
 I bought this frame in October 2025 from [Wayfair](https://www.wayfair.com/decor-pillows/pdp/hokku-designs-133-inch-wifi-epaper-art-photo-frame-w115006181.html) for about $280 — the cheapest Spectra 6 e-ink display I could find. The stock firmware didn't reliably update the image and was generally a pain to work with, so it was time to replace it. There's no public documentation on the hardware, so I had to do everything the hard way. Decided to make it an experiment in vibe coding something complex; the repo contains zero lines of human-written code.
 
 Claude Opus 4.6-4.7 was used throughout. Unfortunately, one cannot simply tell AI to build this firmware and hope it works — it takes a lot of pushing, prodding and domain knowledge for it to finally do what I needed it to do. AI proved excellent at analysing the original firmware, but needed a lot of hand-holding when writing the hardware interface. My conclusion is that AI, at the time of building this, is a savant fruitfly with ADHD: absolutely blow-me-away amazing at some things, has no idea what it did a minute ago, plain stupid at times, and way too eager to just _do_ things if you don't hold it in check. Can't recommend a vibe-coding career in embedded software just quite yet :)
+
+---
+
+[![CI](https://github.com/defl/hokku_epaper/actions/workflows/ci.yml/badge.svg)](https://github.com/defl/hokku_epaper/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-GPL--3.0%20%2B%20Commons%20Clause-blue)](LICENSE.txt)

@@ -11,8 +11,11 @@ Depends: ${python3:Depends}, ${misc:Depends},
  python3-flask,
  python3-pil,
  python3-numpy,
- python3-pip,
- libheif-dev
+ python3-psutil,
+ python3-pip
+# Note: numba, pillow-heif, and opencv-python-headless are not available as
+# Debian packages (or lack required modules). They are installed automatically
+# via pip by the postinst script.
 Description: Spectra 6 e-ink image server for Hokku/Huessen frames
  Converts and serves images for Hokku e-paper frames using
  Floyd-Steinberg dithering to the 6-color Spectra 6 palette.

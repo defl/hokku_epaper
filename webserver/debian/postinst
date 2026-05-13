@@ -4,14 +4,11 @@ set -e
 # Create data directories. /var/lib/hokku is the systemd StateDirectory;
 # it gets chowned to the DynamicUser at service start. Subdirs we create
 # here end up owned by the dynamic user once they're inside that tree.
-mkdir -p /var/lib/hokku/upload /var/lib/hokku/cache
+mkdir -p /var/lib/hokku/images /var/lib/hokku/cache
 
-# Config file deliberately NOT created here. The service (running as
-# DynamicUser) creates it itself on first load, which ensures correct
-# ownership. Legacy configs at /etc/hokku/config.json are auto-migrated
-# into /var/lib/hokku/config.json by the webserver on first run, and
-# the legacy file is left in place as a backup.
-#
+# Config file is NOT created here. The service's ExecStartPre copies
+# /usr/share/hokku-server/config.json to /var/lib/hokku/config.json on
+# first start, running as DynamicUser so ownership is correct.
 # If this postinst wrote config.json as root, subsequent saves from
 # the web UI would fail with PermissionError because DynamicUser's
 # transient UID doesn't match root. StateDirectory only chowns top-
@@ -42,6 +39,51 @@ if ! python3 -c "import pillow_heif" 2>/dev/null; then
     pip3 install --break-system-packages pillow-heif 2>/dev/null || \
     pip3 install pillow-heif 2>/dev/null || \
     echo "Warning: Could not install pillow-heif. HEIC/HEIF support will be unavailable."
+fi
+
+# Install opencv-python-headless via pip — required for YuNet face detection.
+# The Debian package (python3-opencv) lacks the DNN module on many platforms.
+if ! python3 -c "import cv2" 2>/dev/null; then
+    echo "Installing opencv-python-headless via pip..."
+    pip3 install --break-system-packages "opencv-python-headless>=4.7" 2>/dev/null || \
+    pip3 install "opencv-python-headless>=4.7" 2>/dev/null || \
+    echo "Warning: Could not install opencv-python-headless. Face detection will be unavailable."
+fi
+
+# Ensure scipy is compatible with the installed NumPy. NumPy 2.x requires
+# scipy>=1.14; the system python3-scipy package was compiled against NumPy 1.x
+# and raises "AttributeError: _ARRAY_API not found" at import time. Numba
+# triggers this during its first JIT compilation via ensure_blas(). We check
+# by importing the C extension directly — a plain "import scipy" succeeds even
+# on a broken install, but the C extension fails immediately.
+if ! python3 -c "import scipy.linalg.cython_blas" 2>/dev/null; then
+    echo "Installing/upgrading scipy for NumPy 2.x compatibility (>=1.14 required)..."
+    pip3 install --break-system-packages "scipy>=1.14" 2>/dev/null || \
+    pip3 install "scipy>=1.14" 2>/dev/null || \
+    echo "Warning: Could not upgrade scipy. Numba JIT compilation may fail."
+fi
+
+# Install zeroconf via pip — required for mDNS / Bonjour advertisement so
+# the server is discoverable as "Hokku on <hostname>" on the local network
+# without needing to know the IP address.
+if ! python3 -c "import zeroconf" 2>/dev/null; then
+    echo "Installing zeroconf for mDNS/Bonjour advertisement..."
+    pip3 install --break-system-packages "zeroconf>=0.38" 2>/dev/null || \
+    pip3 install "zeroconf>=0.38" 2>/dev/null || \
+    echo "Warning: Could not install zeroconf. mDNS advertisement will be unavailable."
+fi
+
+# Install numba via pip — required for NumbaStreamingDither (JIT-compiled dither
+# inner loop). Not available as a Debian package; pip is the only distribution
+# path. numba>=0.59 is required for NumPy 2.x compatibility (numpy.core was
+# removed in NumPy 2.0; older numba versions break with an ImportError at JIT
+# time). We verify with a real njit call so an existing but broken install
+# (e.g. numba 0.56–0.58 against NumPy 2.x) is also caught and upgraded.
+if ! python3 -c "import numba; numba.njit(lambda x: x)(1)" 2>/dev/null; then
+    echo "Installing/upgrading numba (>=0.59 required for NumPy 2.x)..."
+    pip3 install --break-system-packages "numba>=0.59" 2>/dev/null || \
+    pip3 install "numba>=0.59" 2>/dev/null || \
+    echo "Warning: Could not install numba. The dither pipeline requires numba; rendering will fail."
 fi
 
 #DEBHELPER#

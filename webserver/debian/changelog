@@ -1,3 +1,444 @@
+hokku-server (3.0.0~alpha3-1) unstable; urgency=low
+
+  * Fix mDNS: use hostname-scoped service instance name so multiple hokku
+    servers on the same LAN no longer cause NonUniqueNameException at startup.
+  * Fix mDNS: retry loop (3 attempts, 3 s back-off) with proper Zeroconf
+    cleanup on failure; log exception type for easier diagnostics.
+  * Fix mDNS: Conflicts=avahi-daemon.service/socket in systemd unit so avahi
+    (including socket-activated unit) is evicted before hokku-server starts.
+  * Fix mDNS: restart advertisement when mdns_hostname changes via config API.
+  * Fix app_config: missing config.json creates a default instead of exiting.
+  * Pi installer: set gpu_mem=16 in firstrun.sh (~240 MB freed on Pi Zero 2 W).
+  * Pi installer: create 1 GB swapfile in firstboot-install.sh (Pi OS Bookworm
+    dropped dphys-swapfile; default zram adds no real memory capacity).
+  * Pi installer: disable avahi-daemon.socket in addition to the service.
+
+ -- Hokku <hokku@hokku>  Tue, 12 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha2-2) unstable; urgency=low
+
+  * Default image_worker_thread_count to 0 (auto) instead of 1 (serial).
+    New installs now use all available cores out of the box.
+
+ -- Hokku <hokku@hokku>  Mon, 12 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha2-1) unstable; urgency=low
+
+  * 3.0.0-alpha2 release: new UI design, context-aware dithering (B&W + face
+    detection), parallel multi-core rendering, mDNS support, three independent
+    dither profiles, live ETA, failed-image panel, per-photo details view,
+    guided Windows installer for Pi + frame setup.
+
+ -- Hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-30) unstable; urgency=low
+
+  * Show Next: make button functional; pre-determine next image at startup
+    and after each serve for stable "Is next" badge. Alphabetical tie-breaking
+    replaces random. Choice persists across restarts.
+  * Remove face_detector config field (AppConfig v4→v5): only one backend
+    exists; delete factory shim; migrate old configs automatically.
+  * Add Preview on: to B&W and Face pipeline advanced editors (was only on
+    default pipeline). Reuse same runDitherPreview/updatePreviewImageOptions
+    code paths via existing _pfx/_getState helpers.
+
+ -- Hokku <hokku@hokku>  Mon, 12 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-29) unstable; urgency=low
+
+  * Fix ETA estimator: exclude inflight images and divide by worker count.
+    Wildly inflated ETAs (42m predicted, ~29s actual) caused by counting
+    already-rendering images as pending and using serial timing without
+    dividing by resolved_worker_count. Adds 3 new unit tests.
+  * Show Next: make the button actually work (was a no-op stub). Pre-determine
+    the next image at startup and after each serve so the "Is next" badge is
+    stable for the entire wait period. Alphabetical tie-breaking replaces
+    random tie-breaking so the choice is deterministic and persisted across
+    restarts. Clicking Show Next on another image overrides the choice.
+
+ -- Hokku <hokku@hokku>  Mon, 12 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-28) unstable; urgency=low
+
+  * Replace mdns_enabled bool with mdns_hostname string in AppConfig v4:
+    empty = off, non-empty = advertise as <hostname>.local. v3→v4 migration
+    updated accordingly; old alpha mdns_enabled bool cleaned up if present.
+  * UI: mDNS row now has a checkbox + text field + static ".local" label.
+    Checkbox disables/greys the field; save blocked with toast if checked
+    but field is empty. Hostname field focused automatically on enable.
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-27) unstable; urgency=low
+
+  * UI: expose mdns_enabled in the config panel as "mDNS / Bonjour" toggle
+    (default On). Reads from loadConfig(), written by saveConfig().
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-26) unstable; urgency=low
+
+  * Make zeroconf a hard dependency: add zeroconf>=0.38 to pyproject.toml;
+    remove try/except ImportError from mdns.py. Server fails loudly if
+    zeroconf is missing rather than silently skipping advertisement.
+    Also bump numba constraint in pyproject.toml to >=0.59 (matches postinst).
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-25) unstable; urgency=low
+
+  * Add mDNS / Bonjour advertisement (python-zeroconf): server registers as
+    Hokku._http._tcp.local. with A-record hokku-server.local and TXT
+    path=/hokku/ui so browsers reach it at http://hokku-server.local:<port>
+    without knowing the IP address.
+  * AppConfig v4: new mdns_enabled field (default True); migration from v3
+    adds it transparently. Set false to suppress advertisement.
+  * postinst: pip-install zeroconf>=0.38. Soft dependency — missing zeroconf
+    logs a warning and the server starts normally.
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-24) unstable; urgency=medium
+
+  * Fix dither progress counter never clearing after clear_caches: reset
+    _progress and _inflight in clear_caches() so the next sync() batch
+    starts from done=0/total=0 rather than accumulating on a stale total.
+  * Fix double-counted dither total with large libraries: pre-reserve
+    pending images in _inflight inside the sync() lock so a concurrent
+    watcher sync() during the classify phase cannot add them a second time.
+  * UI: self-host Shippori Mincho font (OFL 1.1) — removes all Google
+    Fonts requests on page load.
+  * UI: screens table shows last-served thumbnail (clickable to full image);
+    Details modal shows thumbnail + filename.
+  * UI: fix seen_at timestamp display (seconds were treated as ms).
+  * UI: fix stale "Dithering 12/12" badge persisting after batch completes.
+  * UI: fix broken row borders caused by display:flex on <td>.
+  * UI: overdue battery warning now shows percentage alongside voltage.
+  * README: document zero external requests on page load.
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-23) unstable; urgency=high
+
+  * Fix NumPy 2.x / scipy incompatibility: system python3-scipy is compiled
+    against NumPy 1.x and raises "AttributeError: _ARRAY_API not found" when
+    numba triggers ensure_blas() during its first JIT compile. Add postinst
+    check that imports scipy.linalg.cython_blas (the C ext that actually
+    breaks) and upgrades to scipy>=1.14 if it fails.
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-22) unstable; urgency=high
+
+  * Fix numba/NumPy 2.x incompatibility: numpy.core was removed in NumPy 2.0;
+    numba<0.59 breaks with ImportError at JIT time. Bump postinst constraint
+    from >=0.56 to >=0.59. Also tighten the install check to exercise a real
+    njit call so a broken existing install (old numba against NumPy 2.x) is
+    caught and upgraded even when "import numba" alone would succeed.
+
+ -- hokku <hokku@hokku>  Sun, 11 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-21) unstable; urgency=high
+
+  * Fix Numba JIT cache failure on deployed package: postinst-created
+    numba_cache/ was root-owned (755), so DynamicUser had no write access.
+    Move to StateDirectory=hokku hokku/numba_cache so systemd creates and
+    chowns the cache dir to the service user before the process starts.
+    NUMBA_CACHE_DIR=/var/lib/hokku/numba_cache stays in the service env.
+
+ -- hokku <hokku@hokku>  Sun, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-19) unstable; urgency=low
+
+  * Add NumbaUnconstrainedDither (dither_unconstrained_numba.py): full-canvas
+    Numba-JIT dither, GIL-releasing, ~60 MB peak, mirrors UnconstrainedDither.
+  * Rename NumbaDither → NumbaStreamingDither throughout.
+  * Switch default dither from StreamingDither to NumbaStreamingDither in
+    render_worker, flask_app, and image_renderer.
+  * Fast tests now use only NumbaStreamingDither / NumbaUnconstrainedDither;
+    StreamingDither and UnconstrainedDither restricted to time_intensive tests.
+  * Move all non-module-level imports to top level across 16 test files;
+    add repo root to conftest.py sys.path for tools.screen_sim importability.
+
+ -- hokku <hokku@localhost>  Sat, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-18) unstable; urgency=low
+
+  * Remove all silent test skips on hard dependencies and committed images.
+    numba and cv2 are required — `import numba/cv2` replaces importorskip in
+    test_dither_numba, test_dither_quality, test_image_renderer.
+    All test images are in the repo — pytest.skip/skipif replaced with
+    assert/hard failure in test_face_detect, test_image_processing,
+    test_render_worker, test_memory_budget.
+    Only RLIMIT_AS / Windows skips remain (genuine OS-level absence).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-17) unstable; urgency=low
+
+  * test_face_detect.py: make cv2 a hard top-level import (was importorskip);
+    missing opencv now causes a collection error rather than a quiet skip.
+  * debian/control: add opencv-python-headless to pip-install comment.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-16) unstable; urgency=low
+
+  * Add test_face_detect.py: contract tests for OpenCVYuNetFaceDetector
+    (3 portraits must detect, 7 non-portraits must not, missing file returns
+    False).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-15) unstable; urgency=low
+
+  * Restore yunet_opencv face detection: re-add face_detect_abstract.py,
+    face_detect_factory.py, face_detect_yunet_opencv.py, and the YuNet
+    ONNX model. Remove only the unused haar_opencv and yunet_onnx detectors.
+  * image_classifier.py: inline grayscale helpers (_is_near_grayscale,
+    _check_grayscale); restore Observations.has_face and face-detection
+    dispatch logic; add opencv-python-headless pip-install to postinst.
+  * app_config.py: narrow FaceDetectorName to Literal["yunet_opencv"];
+    fix _default_bw_image_config import (was image.py, now image_config).
+  * flask_app.py: fix IMAGE_EXTENSIONS import source; restore pixel-count
+    gate on upload route; fix render_preview_png call site.
+  * pyproject.toml: add opencv-python-headless dependency; include ONNX
+    model in package-data.
+  * config.example.json: add classifier_face_detect_enabled, face_detector,
+    image_config_face fields.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-14) unstable; urgency=low
+
+  * Consolidate dither/image pipeline: remove shims (dither.py,
+    dither_constrained.py, image.py, image_manager.py), drop all face
+    detection code and models, rename dither_numba.py →
+    dither_streaming_numba.py, make numba a hard dependency (pyproject.toml
+    + requirements.txt + postinst pip-install), remove opencv/onnxruntime
+    postinst blocks, inline StreamingDither._diffuse() and
+    UnconstrainedDither.dither() dispatch, require AbstractDither on
+    ImageRenderer construction, parametrize dither and renderer tests over
+    all three concrete classes.
+  * Fix AttributeError on /hokku/api/status: remove obs.has_face reference
+    (face detection removed) and drop "Face detected" row from UI detail
+    table.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-13) unstable; urgency=low
+
+  * Rename Python package webserver → hokku_server; update all internal
+    imports, pyproject.toml entry point, package-data, and test patch
+    targets. Old webserver/ directory removed.
+  * Service description: "Hokku Spectra 6 image server" → "Hokku Server".
+  * Add test_memory_guard.py: verifies RLIMIT_AS ceiling raises MemoryError
+    on Linux; verifies no-op + correct limit restore; Windows tests skip.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-12) unstable; urgency=low
+
+  * Auto worker count: retune for thread-pool model. Old constants
+    (250 MB reserve, 50 MB/worker) were calibrated for the process-pool
+    where each worker forked the full interpreter. Threads share memory;
+    measured incremental cost on Pi Zero 2 W is ~14 MB/worker under load.
+    New constants: 100 MB OS reserve, 30 MB/worker. On a Pi with 200 MB
+    free this resolves to 3 workers (matching the confirmed-safe manual
+    setting) instead of the over-conservative 1.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-11) unstable; urgency=low
+
+  * Fix missing static assets (logo.png, paper.png, line_seg_*.png): add
+    all files from static/ to debian/install so they land in
+    /usr/share/hokku-server/static/ alongside the templates.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-10) unstable; urgency=low
+
+  * Fix startup crash when cv2 is not installed: move cv2 import inside
+    method bodies in face_detect_abstract/yunet_opencv/haar_opencv so the
+    module can be imported without opencv present. load_image_resized
+    returns None on ImportError; detectors return False; server starts and
+    uses the default image config rather than crashing.
+  * postinst: remove 2>/dev/null from opencv pip install so failures are
+    visible in dpkg/journalctl output. Add post-install cv2 import check
+    to catch "installed but still not importable" cases.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-9) unstable; urgency=low
+
+  * Shrink install footprint: swap opencv-contrib-python-headless for
+    opencv-python-headless (contrib extras unused; FaceDetectorYN is in
+    the main objdetect module since 4.5.1). Remove libheif-dev from
+    Depends (runtime library is bundled by pillow-heif's pip wheel).
+    Skip onnxruntime pip-install unless face_detector=yunet_onnx is
+    set in config.json — saves ~100 MB on fresh installs with the
+    default yunet_opencv detector.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-8) unstable; urgency=low
+
+  * Memory: free face detector between sync batches. sync() now runs in
+    three phases (thumbnails → classify all → release detector → render).
+    The ~57 MB YuNet DNN graph is returned to the OS before any dither
+    work begins. On the Pi the detector is only resident during the brief
+    classification window, not across the entire render cycle.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-7) unstable; urgency=low
+
+  * Pluggable face detection: AbstractFaceDetector + three concretes
+    (yunet_opencv default, haar_opencv, yunet_onnx). New AppConfig field
+    `face_detector` selects between them; config schema bumped v2→v3 with
+    automatic migration. ImageClassifier observations carry which detector
+    produced a cached has_face so swapping detectors triggers re-detection
+    without invalidating the panel cache when results agree.
+  * postinst pip-installs onnxruntime alongside opencv-headless so the
+    yunet_onnx detector works out of the box.
+  * Memory measurements for all three detectors recorded in
+    docs/face_detection_memory_usage.md. Headline finding: yunet_opencv
+    is actually the lightest both at startup AND during inference on the
+    dev box; haar_opencv's detectMultiScale allocates ~110 MB transient
+    pyramids and is the heaviest. The pluggable architecture stays
+    valuable for future detectors but doesn't itself solve the Pi OOM —
+    look elsewhere in the per-render budget.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-6) unstable; urgency=low
+
+  * Build artifacts now land in <repo-root>/builds/ instead of the repo
+    root. webserver/build-deb.sh sweeps the .deb/.buildinfo/.changes files
+    dpkg-buildpackage drops; AGENTS.md and the Docker recipe updated to
+    match. No code change.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-5) unstable; urgency=low
+
+  * Split the three principal ImageManager classes into separate modules:
+    image_manager_abstract.py (AbstractImageManager + dataclasses + helpers),
+    image_manager_single.py (SingleThreadedImageManager), and
+    image_manager_multi.py (MultiThreadedImageManager). image_manager.py is
+    now a thin re-export module so existing imports keep working. No
+    behaviour change; pure file reorganisation.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-4) unstable; urgency=low
+
+  * Split ImageManager into AbstractImageManager + SingleThreadedImageManager
+    + MultiThreadedImageManager. ProcessPoolExecutor and the standalone
+    RenderPool class are gone. Default image_worker_thread_count=1 now uses
+    the inline single-threaded manager — no fork, no worker thread —
+    restoring v2.x-class memory behaviour on the Pi Zero 2 W (the alpha1
+    fork into a worker process duplicated opencv/PIL/numpy and OOM-killed
+    the service on 512 MB hosts). Worker count >= 2 (or 0 = auto) uses a
+    private ThreadPoolExecutor; single process, GIL-bound for now,
+    parallelism for free once the dither hot path releases the GIL.
+    _DbSaver removed (debounced async DB writes were a workaround for
+    cross-process callback latency, not needed with threads).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-3) unstable; urgency=low
+
+  * AppConfig: restore default upload_dir=/var/lib/hokku/upload and
+    cache_dir=/var/lib/hokku/cache (were "" in alpha1, causing service
+    to refuse start with "upload_dir is not set" when an existing
+    config.json from an older install lacked the keys). The systemd
+    StateDirectory creates and owns these paths, matching the example
+    config and the v2.x defaults.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-2) unstable; urgency=low
+
+  * Drop python3-opencv from Depends — the Debian package is the full GUI
+    build and pulls in Qt/GTK/GStreamer/ffmpeg (~500 MB on a headless Pi).
+    Install opencv-contrib-python-headless via pip in postinst instead,
+    matching the existing pillow-heif pattern. ~50 MB, no GUI deps.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 10 May 2026 00:00:00 +0000
+
+hokku-server (3.0.0~alpha1-1) unstable; urgency=low
+
+  * v3 alpha1: Japanese-paper web UI redesign, parallel image rendering
+    via ProcessPoolExecutor, memory-constrained dither pipeline
+    (≤50 MB/render with 100-row stripe batching, ~27% faster), failed-
+    conversions UI polish (retry-all, delete-all, dims + dither time in
+    details, exclusion from grid), fast-fail on unreadable images,
+    documentation overhaul (README rewrite, consolidated install/API
+    docs, dithering.md rewritten to match current pipeline).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 09 May 2026 00:00:00 +0000
+
+hokku-server (2.2.2-3) unstable; urgency=low
+
+  * Test fixtures and a -2 changelog reference scrubbed of personal-name
+    placeholders. No code-path change; rebuild only.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 23 Apr 2026 00:00:00 +0000
+
+hokku-server (2.2.2-2) unstable; urgency=low
+
+  * Lookup endpoints (DELETE / retry / original / thumbnail) no
+    longer mutate the URL filename through werkzeug.secure_filename
+    before look-up. secure_filename is right for upload (we want to
+    rename unsafe characters before writing), wrong for lookup (we
+    must match the on-disk name exactly — Samba- and SCP-uploaded
+    files keep spaces, accents, parens, etc.). New _safe_lookup_name
+    validator validates without mutating: rejects empty, '.', '..',
+    null bytes, and any path separator. Fixes "Retry failed: Image
+    not found" on filenames containing spaces or non-ASCII characters.
+  * Web GUI: dither preset description moved into a (?) popover next
+    to the preset selector (was a permanent inline span that bloated
+    the row). Advanced dithering pipeline replaced the native
+    <details> foldout with a [Custom...] button next to [Reset to
+    preset]; the button toggles a hidden panel and label flips to
+    [Hide advanced]; an x close button at panel top-right mirrors it.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 23 Apr 2026 00:00:00 +0000
+
+hokku-server (2.2.2-1) unstable; urgency=low
+
+  * Pi-deployment fixes carried over from the parallel pi2w branch on
+    top of the 2.2.x dither rewrite:
+      - upload_dir/cache_dir defaults moved to /var/lib/hokku/upload
+        and /var/lib/hokku/cache so DynamicUser StateDirectory writes
+        work out of the box. Stale /images/* paths in older
+        config.json files are migrated silently on load.
+      - Timezone is no longer a stored config key. The server reads
+        the host OS zone (set via timedatectl on the Pi). Removed
+        from DEFAULT_CONFIG, _SAVE_KEYS, /api/config, /api/status,
+        and the Configuration card in the web GUI; /api/time still
+        returns the system zone for display.
+      - Crash quarantine: a .processing marker is dropped before
+        each conversion and removed on success. Orphans at startup
+        are renamed to .failed. _list_images skips .failed entries
+        so one bad image can't restart-loop the service after an
+        OOM kill.
+      - New failed-conversions UI: /hokku/api/status returns
+        failed_files; /hokku/api/image/<name>/retry removes the
+        marker and re-queues the image. The web UI renders an
+        amber "Failed conversions" section with one-click Retry.
+      - Web UI: server time moved to the top-right corner and
+        trimmed to HH:MM:SS. Bulk upload is now sequential per-file
+        instead of one giant multipart POST (fixes "Failed to
+        fetch" on slow links). Non-images dropped via drag-drop
+        are silently filtered.
+      - _ensure_thumbnail uses Image.draft() to keep RAM bounded
+        when generating a 300x300 thumbnail from a 12 MP source.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 23 Apr 2026 00:00:00 +0000
+
 hokku-server (2.2.1-1) unstable; urgency=low
 
   * Dither pipeline memory footprint cut from ~490 MB to ~68 MB peak at
@@ -19,6 +460,9 @@ hokku-server (2.2.1-1) unstable; urgency=low
     presets) half-canvas matrix at 30 MB ceiling (proxies 100 MB at
     full canvas) plus opt-in @pytest.mark.memory full-canvas smoke
     tests verifying < 100 MB on the real production path.
+  * (Pi-deployment fixes from the parallel pi2w branch — paths,
+    timezone removal, crash quarantine, failed-images UI, sequential
+    upload — folded into 2.2.2-1 below as a follow-up commit.)
 
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 23 Apr 2026 00:00:00 +0000
 

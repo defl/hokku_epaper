@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hokku-server"
-version = "2.2.1"
+version = "3.0.0a3"
 description = "Spectra 6 e-ink image server for Hokku EL133UF1 display"
 requires-python = ">=3.9"
 license = {text = "GPL-3.0 (non-commercial)"}
@@ -12,16 +12,33 @@ dependencies = [
     "flask>=2.0",
     "pillow>=9.0",
     "numpy>=1.20",
+    "numba>=0.59",
+    "zeroconf>=0.38",
     "pillow-heif>=0.10",
+    "psutil>=5.9",
+    "opencv-python-headless>=4.7",
 ]
 
 [project.scripts]
-hokku-server = "webserver:main"
+hokku-server = "hokku_server:main"
 
-[tool.setuptools]
-py-modules = ["webserver"]
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-xdist>=3.5",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hokku_server*"]
+
+[tool.setuptools.package-data]
+hokku_server = ["models/ATTRIBUTION.md", "models/face_detection_yunet_2023mar.onnx"]
 
 [tool.pytest.ini_options]
+addopts = ["-m", "not time_intensive and not serial", "-n", "8", "--dist=loadfile"]
 markers = [
-    "memory: slow (~3 min) peak-memory regression tests; excluded with `-m 'not memory'`",
+    "time_intensive: slow tests (full-resolution dither runs); enable with `pytest -m time_intensive`",
+    "slow: moderately slow tests (process pool spin-up, idle recycle)",
+    "serial: tests that must run alone (e.g. absolute-memory measurements); excluded from default parallel run, run with `pytest -m serial -n 0`",
 ]

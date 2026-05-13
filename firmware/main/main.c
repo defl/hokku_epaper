@@ -177,22 +177,24 @@ RTC_NOINIT_ATTR static bool     last_sleep_err_known;  /* true once we've record
 /* Spurious-wake safety counter. */
 RTC_NOINIT_ATTR static uint8_t  consecutive_spurious_resets;
 
-/* How we got here, for the next boot's X-Frame-State last_sleep field. */
-#define LAST_SLEEP_MODE_NONE              0
-#define LAST_SLEEP_MODE_DEEP_SLEEP        1
-#define LAST_SLEEP_MODE_USB_RESTART       2  /* left USB_AWAKE via button-restart */
-#define LAST_SLEEP_MODE_BATTERY_RESTART   3  /* left BATTERY_IDLE via button-restart */
+/* How the previous boot ended — set before every esp_restart() or deep
+ * sleep entry, read by the next boot's X-Frame-State. */
+#define LAST_SLEEP_MODE_NONE            0  /* POR / fresh flash */
+#define LAST_SLEEP_MODE_TIMER_WAKE      1  /* timer-triggered restart from deep sleep */
+#define LAST_SLEEP_MODE_BUTTON_WAKE     2  /* button-triggered restart from deep sleep */
+#define LAST_SLEEP_MODE_USB_PLUG        3  /* USB plug wake from deep sleep (no restart) */
+#define LAST_SLEEP_MODE_BUTTON_USB      4  /* button pressed in USB_AWAKE */
+#define LAST_SLEEP_MODE_BUTTON_BATT     5  /* button pressed in BATTERY_IDLE */
+#define LAST_SLEEP_MODE_USB_SCHED       6  /* scheduled refresh restart from USB_AWAKE */
+#define LAST_SLEEP_MODE_SPURIOUS        7  /* spurious deep-sleep wake restart */
+#define LAST_SLEEP_MODE_POST_REFRESH    8  /* restart after perform_refresh completed */
 RTC_NOINIT_ATTR static uint8_t  last_sleep_mode;
 
-/* Button-press-triggered refresh marker. Set when the poll loop in
- * USB_AWAKE or BATTERY_IDLE detects a debounced button press; followed
- * by esp_restart(). On boot we check this and, if set, do a refresh
- * THEN continue into the regime selected by current usb_host state.
- *
- * Cleared EARLY in app_main (before attempting the refresh) so a
- * crashing refresh doesn't trap us in a button-induced restart loop. */
-#define ACTION_NONE                 0
-#define ACTION_REFRESH_FROM_BUTTON  1
+/* What this boot must do. Set before every esp_restart(); cleared early
+ * in app_main so a crashing boot doesn't loop on the same action. */
+#define ACTION_NONE          0  /* POR / no instruction — treat as first boot */
+#define ACTION_REFRESH       1  /* call perform_refresh() then restart */
+#define ACTION_ENTER_REGIME  2  /* skip refresh, enter regime based on USB state */
 RTC_NOINIT_ATTR static uint8_t  pending_action;
 
 /* ── NVS config (persisted across flashes via hokku-setup) ────────── */
@@ -477,13 +479,17 @@ static uint16_t epaper_read_tsc(void)
     epaper_wait_busy();
 
     uint8_t rx[2] = {0};
-    spi_transaction_t t = {
-        .cmd       = 0,
-        .length    = 0,
-        .rxlength  = 16,
-        .rx_buffer = rx,
+    spi_transaction_ext_t t = {
+        .base = {
+            .flags     = SPI_TRANS_VARIABLE_CMD,
+            .length    = 0,
+            .rxlength  = 16,
+            .rx_buffer = rx,
+        },
+        .command_bits = 0,  /* no command byte — raw data read; command_bits=8 default
+                               would send 0x00 (PSR) and corrupt CTRL1 scan parameters */
     };
-    esp_err_t ret = spi_device_polling_transmit(spi_handle, &t);
+    esp_err_t ret = spi_device_polling_transmit(spi_handle, (spi_transaction_t *)&t);
     gpio_set_level(PIN_CTRL1, 1);
 
     if (ret != ESP_OK) {
@@ -684,12 +690,6 @@ static void epaper_init_panel(void)
 /* Send 480K to a specific panel via DTM (0x10). ctrl_pin selects the panel. */
 static void epaper_send_panel(int ctrl_pin, const uint8_t *image)
 {
-    /* Read TSC before each panel — the original firmware does this inside
-     * its send_panel() per panel (IROM 0x4200be0c calls read_tsc() at
-     * entry).  Value is logged for diagnostics. */
-    uint16_t tsc = epaper_read_tsc();
-    ESP_LOGI(TAG, "TSC Data = 0x%02X, 0x%02X", (tsc >> 8) & 0xFF, tsc & 0xFF);
-
     gpio_set_level(ctrl_pin, 0);
     static uint8_t buf[SPI_CHUNK_SIZE];
 
@@ -792,6 +792,10 @@ static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_
     ESP_LOGI(TAG, "SYS=%d PWR_EN=%d RST=%d BUSY=%d",
              gpio_get_level(PIN_SYS_POWER), gpio_get_level(PIN_EPAPER_PWR_EN),
              gpio_get_level(PIN_EPAPER_RST), gpio_get_level(PIN_EPAPER_BUSY));
+
+    /* Stock v2.0.26 firmware calls read_tsc() once, before panel 0 (CTRL1) only. */
+    uint16_t tsc = epaper_read_tsc();
+    ESP_LOGI(TAG, "TSC Data = 0x%02X, 0x%02X", (tsc >> 8) & 0xFF, tsc & 0xFF);
 
     ESP_LOGI(TAG, "Sending 480K to CTRL1 (panel 0)...");
     epaper_send_panel(PIN_CTRL1, ctrl1_data);
@@ -1150,9 +1154,14 @@ static void build_frame_state_json(char *buf, size_t buflen,
     int64_t clk_now = (clk_now_t < 1577836800) ? 0 : (int64_t)clk_now_t;
 
     const char *last_sleep_str =
-        (last_sleep_mode == LAST_SLEEP_MODE_DEEP_SLEEP)      ? "deep_sleep" :
-        (last_sleep_mode == LAST_SLEEP_MODE_USB_RESTART)     ? "usb_restart" :
-        (last_sleep_mode == LAST_SLEEP_MODE_BATTERY_RESTART) ? "battery_restart" :
+        (last_sleep_mode == LAST_SLEEP_MODE_TIMER_WAKE)   ? "timer_wake" :
+        (last_sleep_mode == LAST_SLEEP_MODE_BUTTON_WAKE)  ? "button_wake" :
+        (last_sleep_mode == LAST_SLEEP_MODE_USB_PLUG)     ? "usb_plug" :
+        (last_sleep_mode == LAST_SLEEP_MODE_BUTTON_USB)   ? "button_usb" :
+        (last_sleep_mode == LAST_SLEEP_MODE_BUTTON_BATT)  ? "button_batt" :
+        (last_sleep_mode == LAST_SLEEP_MODE_USB_SCHED)    ? "usb_sched" :
+        (last_sleep_mode == LAST_SLEEP_MODE_SPURIOUS)     ? "spurious" :
+        (last_sleep_mode == LAST_SLEEP_MODE_POST_REFRESH) ? "post_refresh" :
         "none";
 
     int64_t uptime_s = (esp_timer_get_time() - boot_time_us) / 1000000LL;
@@ -1559,9 +1568,6 @@ static void enter_deep_sleep(int64_t sleep_us)
     gpio_set_level(PIN_WORK_LED, 0);
     gpio_set_level(PIN_WIFI_LED, 0);
 
-    /* Record our path so the next boot's X-Frame-State can report it. */
-    last_sleep_mode = LAST_SLEEP_MODE_DEEP_SLEEP;
-
     /* Timer wake */
     if (sleep_us > 0) {
         esp_sleep_enable_timer_wakeup((uint64_t)sleep_us);
@@ -1693,27 +1699,15 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 static void regime_usb_awake(int64_t boot_time_us);
 static void regime_battery_idle(int64_t boot_time_us);
 
-/* Signal a button-press refresh by setting the RTC action flag and
- * restarting. Boot path will detect the flag, clear it early, refresh,
- * and continue into whichever regime matches current usb_host state.
- * See docs/firmware_design.md "Button = full reboot".
- *
- * `sleep_mode` tells the next boot's X-Frame-State which regime we left:
- * LAST_SLEEP_MODE_USB_RESTART when pressed in USB_AWAKE,
- * LAST_SLEEP_MODE_BATTERY_RESTART when pressed during the BATTERY_IDLE
- * window. Caller-provides rather than introspecting current_regime so
- * it's impossible to forget to keep them in sync. */
-static void button_triggered_restart(uint8_t sleep_mode)
+/* Set RTC flags and restart. Every esp_restart() in the firmware goes
+ * through here so the reason is always recorded in last_sleep_mode. */
+static void trigger_restart(uint8_t action, uint8_t sleep_mode)
 {
-    ESP_LOGI(TAG, "Button pressed — restarting for fresh-state refresh");
-    pending_action = ACTION_REFRESH_FROM_BUTTON;
-    rtc_magic = RTC_MAGIC;
+    pending_action  = action;
     last_sleep_mode = sleep_mode;
-    /* Stop chg_monitor before touching the LED so the monitor task
-     * can't re-assert WORK_LED between our off-write and esp_restart. */
     chg_monitor_stop();
     gpio_set_level(PIN_WORK_LED, 0);
-    vTaskDelay(pdMS_TO_TICKS(50));  /* let log flush */
+    vTaskDelay(pdMS_TO_TICKS(50));
     esp_restart();
 }
 
@@ -1734,13 +1728,13 @@ static void regime_usb_awake(int64_t boot_time_us)
         }
 
         if (button1_pressed_debounced()) {
-            button_triggered_restart(LAST_SLEEP_MODE_USB_RESTART);
+            trigger_restart(ACTION_REFRESH, LAST_SLEEP_MODE_BUTTON_USB);
             return;
         }
 
         if (refresh_due()) {
-            perform_refresh("usb_sched", boot_time_us);
-            /* next_refresh_epoch now set from server response; loop continues */
+            trigger_restart(ACTION_REFRESH, LAST_SLEEP_MODE_USB_SCHED);
+            return;
         }
     }
 }
@@ -1772,7 +1766,7 @@ static void regime_battery_idle(int64_t boot_time_us)
         }
 
         if (button1_pressed_debounced()) {
-            button_triggered_restart(LAST_SLEEP_MODE_BATTERY_RESTART);
+            trigger_restart(ACTION_REFRESH, LAST_SLEEP_MODE_BUTTON_BATT);
             return;
         }
     }
@@ -1803,62 +1797,6 @@ static void regime_battery_idle(int64_t boot_time_us)
 /* ═══════════════════════════════════════════════════════════════════
  *  Wake-cause classification & initial action dispatch
  * ═══════════════════════════════════════════════════════════════════ */
-
-typedef enum {
-    WAKE_FIRST_BOOT,      /* POR / flash / rtc_magic stale — seed image */
-    WAKE_PENDING_ACTION,  /* RTC flag requests refresh (button-restart) */
-    WAKE_TIMER,           /* scheduled refresh due */
-    WAKE_BUTTON,          /* EXT1, GPIO 1 LOW — refresh */
-    WAKE_USB_PLUG,        /* EXT1, GPIO 14 LOW — NO refresh, enter USB regime */
-    WAKE_SPURIOUS,        /* unexplained restart — don't refresh, back to sleep */
-} wake_cause_t;
-
-/* Decide what triggered this boot. Order matters: pending_action wins
- * over every hardware cause so the button-restart path is reliable. */
-static wake_cause_t classify_wake(void)
-{
-    if (rtc_magic != RTC_MAGIC) return WAKE_FIRST_BOOT;
-
-    if (pending_action == ACTION_REFRESH_FROM_BUTTON) return WAKE_PENDING_ACTION;
-
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-
-    if (cause == ESP_SLEEP_WAKEUP_TIMER) return WAKE_TIMER;
-
-    if (cause == ESP_SLEEP_WAKEUP_EXT1) {
-        /* Inspect the wake pin status to decide which source fired.
-         * If both are LOW (USB plug while button pressed, or the
-         * GPIO 12-racing-GPIO 14 artefact), prefer USB_PLUG — it
-         * matches the hardware quirk where USB plug drives GPIO 12
-         * LOW anyway. */
-        uint64_t pins = esp_sleep_get_ext1_wakeup_status();
-        if (pins & (1ULL << PIN_USB_DETECT)) return WAKE_USB_PLUG;
-        if (pins & (1ULL << PIN_BUTTON_1))   return WAKE_BUTTON;
-        return WAKE_SPURIOUS;
-    }
-
-    /* UNDEFINED wakeup + last_sleep was DEEP_SLEEP = spurious reset
-     * (USB host disconnect, brownout, or silicon quirk) */
-    if (last_sleep_mode == LAST_SLEEP_MODE_DEEP_SLEEP) return WAKE_SPURIOUS;
-
-    /* Anything else (including esp_restart not via pending_action) is
-     * treated like a first boot for the purposes of "what do we do?" —
-     * err toward refresh to resync state. */
-    return WAKE_FIRST_BOOT;
-}
-
-static const char *wake_cause_name(wake_cause_t c)
-{
-    switch (c) {
-        case WAKE_FIRST_BOOT:     return "first_boot";
-        case WAKE_PENDING_ACTION: return "button_restart";
-        case WAKE_TIMER:          return "timer";
-        case WAKE_BUTTON:         return "button_wake";
-        case WAKE_USB_PLUG:       return "usb_plug";
-        case WAKE_SPURIOUS:       return "spurious";
-    }
-    return "?";
-}
 
 /* ═══════════════════════════════════════════════════════════════════
  *  app_main
@@ -1895,14 +1833,58 @@ void app_main(void)
 
     boot_count++;
 
-    /* ── Step 2: classify wake, capture pending_action EARLY ────────
+    /* ── Step 2: handle deep-sleep wakes ────────────────────────────
      *
-     * Grab pending_action and clear it NOW, before any refresh attempt.
-     * If the refresh crashes / triggers a watchdog reset, the next boot
-     * sees pending_action == NONE and we fall through to whatever the
-     * hardware cause dictates — no infinite "button press keeps crashing"
-     * loop. */
-    wake_cause_t wake = classify_wake();
+     * On a deep-sleep wake most peripherals are reset but the CPU
+     * resumes here (not at reset vector). We need a full esp_restart()
+     * before calling perform_refresh() to guarantee clean driver state.
+     *
+     * Timer / button wakes: set ACTION_REFRESH and restart immediately.
+     * USB-plug wake: no refresh needed — set ACTION_ENTER_REGIME and
+     *   fall through so we can finish GPIO init and enter USB_AWAKE.
+     * Spurious EXT1 (no recognised pin): restart into BATTERY_IDLE
+     *   which will quickly return to deep sleep. Safety cap prevents
+     *   repeated spurious wakes from draining the battery.
+     *
+     * Runs BEFORE pending_action is captured so we can overwrite it
+     * with the correct intent for the restart. */
+    {
+        esp_sleep_wakeup_cause_t sleep_cause = esp_sleep_get_wakeup_cause();
+        if (sleep_cause == ESP_SLEEP_WAKEUP_TIMER ||
+            sleep_cause == ESP_SLEEP_WAKEUP_EXT1) {
+            uint64_t pins = (sleep_cause == ESP_SLEEP_WAKEUP_EXT1)
+                            ? esp_sleep_get_ext1_wakeup_status() : 0;
+            if (pins & (1ULL << PIN_USB_DETECT)) {
+                /* USB plug: no restart needed, go directly to USB_AWAKE. */
+                pending_action  = ACTION_ENTER_REGIME;
+                last_sleep_mode = LAST_SLEEP_MODE_USB_PLUG;
+            } else if (sleep_cause == ESP_SLEEP_WAKEUP_TIMER ||
+                       (pins & (1ULL << PIN_BUTTON_1))) {
+                /* Timer or button: restart for clean state before refresh. */
+                pending_action  = ACTION_REFRESH;
+                last_sleep_mode = (sleep_cause == ESP_SLEEP_WAKEUP_TIMER)
+                                  ? LAST_SLEEP_MODE_TIMER_WAKE
+                                  : LAST_SLEEP_MODE_BUTTON_WAKE;
+                esp_restart();
+            } else {
+                /* Spurious EXT1 with no recognised pin. */
+                if (consecutive_spurious_resets < MAX_SPURIOUS_RESETS) {
+                    consecutive_spurious_resets++;
+                    pending_action  = ACTION_ENTER_REGIME;
+                    last_sleep_mode = LAST_SLEEP_MODE_SPURIOUS;
+                    esp_restart();
+                }
+                /* Cap hit: fall through for reflash reachability. */
+                consecutive_spurious_resets = 0;
+                pending_action = ACTION_ENTER_REGIME;
+            }
+        }
+    }
+
+    /* ── Step 3: capture and clear pending_action ───────────────────
+     *
+     * Cleared NOW so a crashing boot doesn't loop on the same action. */
+    uint8_t action = pending_action;
     pending_action = ACTION_NONE;
 
     /* ── Step 3: NVS + config ───────────────────────────────────────
@@ -1935,9 +1917,8 @@ void app_main(void)
      * boot messages should respect the mode too. */
     log_level_apply(usb_host_present());
 
-    ESP_LOGI(TAG, "Boot #%" PRIu32 ", wake=%s, usb=%s",
-             boot_count,
-             wake_cause_name(wake),
+    ESP_LOGI(TAG, "Boot #%" PRIu32 ", action=%u, last_sleep=%u, usb=%s",
+             boot_count, (unsigned)action, (unsigned)last_sleep_mode,
              usb_host_present() ? "computer" : "absent");
 
     vTaskDelay(pdMS_TO_TICKS(500));  /* analog front-end settle */
@@ -1946,90 +1927,48 @@ void app_main(void)
     last_battery_mv = read_battery_mv();
     ESP_LOGI(TAG, "Battery: %d mV", last_battery_mv);
 
-    /* ── Step 5: spurious-reset safety valve ────────────────────────
+    /* ── Step 5: dispatch on action ────────────────────────────────
      *
-     * If the wake looked unexplained AND there's a next-refresh schedule
-     * we haven't reached yet, just go back to sleep — the controller
-     * already displays the last image, no need to redo everything. Bounded
-     * so persistent spurious wakes can't lock us out of reflashing. */
-    if (wake == WAKE_SPURIOUS) {
-        if (consecutive_spurious_resets < MAX_SPURIOUS_RESETS) {
-            consecutive_spurious_resets++;
-            ESP_LOGI(TAG, "Spurious reset (%u/%u) — back to sleep",
-                     consecutive_spurious_resets, MAX_SPURIOUS_RESETS);
-            time_t now = now_epoch();
-            int64_t remaining_us = (next_refresh_epoch > 0 && now > 0 && next_refresh_epoch > now)
-                ? (int64_t)(next_refresh_epoch - now) * 1000000LL
-                : SLEEP_FALLBACK_3H_US;
-            /* No fresh download → clear pre-sleep epoch so next boot
-             * doesn't log a bogus sleep_err_s. */
-            pre_sleep_server_epoch = 0;
-            enter_deep_sleep(remaining_us);
-        }
-        ESP_LOGW(TAG, "Spurious-reset cap hit — treating as normal boot for reflash reachability");
-    }
-    /* Reset the counter once we've taken a path out: either this wasn't a
-     * spurious wake, or it was but we hit the cap and are breaking the loop
-     * to give the user a reflash window. Either way the streak ends here. */
+     * ACTION_NONE (POR/first boot) and ACTION_REFRESH both need a
+     * fresh perform_refresh(). After the refresh, restart with
+     * ACTION_ENTER_REGIME so the next boot enters the regime cleanly.
+     *
+     * ACTION_ENTER_REGIME: skip refresh, enter regime based on USB. */
     consecutive_spurious_resets = 0;
 
-    /* ── Step 6: config sanity — show error + enter battery idle ───
-     *
-     * If config is broken we can't download anything. Paint a helpful
-     * message and enter BATTERY_IDLE so the user has a window to reflash. */
-    if (config.cfg_ver != CONFIG_VERSION) {
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-                 "Config version\nmismatch.\n\n"
-                 "Expected: %d\nFound: %d\n\n"
-                 "Run hokku-setup to\nreconfigure.",
-                 CONFIG_VERSION, config.cfg_ver);
-        display_message(msg);
-        regime_battery_idle(boot_time);
-        return;
-    }
-    if (!config_is_valid()) {
-        display_message(
-            "Hokku installed but\n"
-            "cannot read config.\n\n"
-            "Connect USB and run\n"
-            "hokku-setup to\n"
-            "configure."
-        );
-        regime_battery_idle(boot_time);
-        return;
-    }
+    if (action == ACTION_NONE || action == ACTION_REFRESH) {
+        /* Config must be valid before we can download anything. */
+        if (config.cfg_ver != CONFIG_VERSION) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "Config version\nmismatch.\n\n"
+                     "Expected: %d\nFound: %d\n\n"
+                     "Run hokku-setup to\nreconfigure.",
+                     CONFIG_VERSION, config.cfg_ver);
+            display_message(msg);
+            regime_battery_idle(boot_time);
+            return;
+        }
+        if (!config_is_valid()) {
+            display_message(
+                "Hokku installed but\n"
+                "cannot read config.\n\n"
+                "Connect USB and run\n"
+                "hokku-setup to\n"
+                "configure."
+            );
+            regime_battery_idle(boot_time);
+            return;
+        }
 
-    /* ── Step 7: decide whether this boot should refresh ───────────
-     *
-     * Per spec: boot alone is NOT a refresh trigger. Only these cases
-     * lead to a refresh at boot time:
-     *
-     *   WAKE_FIRST_BOOT      — seed the image on install / after flash
-     *   WAKE_PENDING_ACTION  — user pressed the button while awake
-     *   WAKE_BUTTON          — user pressed the button while sleeping
-     *   WAKE_TIMER           — scheduled time hit
-     *
-     * These cases do NOT refresh:
-     *
-     *   WAKE_USB_PLUG — user just plugged USB. Spec is explicit: move
-     *                   into USB regime but don't change the image.
-     *   WAKE_SPURIOUS — handled above (early return to sleep). */
-    bool do_refresh = (wake == WAKE_FIRST_BOOT)
-                   || (wake == WAKE_PENDING_ACTION)
-                   || (wake == WAKE_BUTTON)
-                   || (wake == WAKE_TIMER);
-
-    if (do_refresh) {
         const char *label =
-            (wake == WAKE_FIRST_BOOT)     ? "first_boot" :
-            (wake == WAKE_PENDING_ACTION) ? "button_restart" :
-            (wake == WAKE_BUTTON)         ? "button_wake" :
-                                            "timer";
-        /* Report the regime we're ABOUT to enter (based on current USB
-         * state) rather than the transient "boot" string. If USB goes
-         * away during the refresh, regime_battery_idle will correct it
-         * on entry. */
+            (last_sleep_mode == LAST_SLEEP_MODE_TIMER_WAKE)  ? "timer" :
+            (last_sleep_mode == LAST_SLEEP_MODE_BUTTON_WAKE) ? "button_wake" :
+            (last_sleep_mode == LAST_SLEEP_MODE_BUTTON_USB)  ? "button_usb" :
+            (last_sleep_mode == LAST_SLEEP_MODE_BUTTON_BATT) ? "button_batt" :
+            (last_sleep_mode == LAST_SLEEP_MODE_USB_SCHED)   ? "usb_sched" :
+            "first_boot";
+
         current_regime = usb_host_present() ? "usb_awake" : "battery_idle";
 
         /* Snapshot the PREVIOUS sleep's anchor BEFORE perform_refresh
@@ -2045,13 +1984,9 @@ void app_main(void)
 
         perform_refresh(label, boot_time);
 
-        /* Sleep-error diagnostic: only meaningful on timer wakes where
-         * we have BOTH a prior sleep anchor AND a prior duration to
-         * compare against. `now` is post-refresh wall-clock, which
-         * bakes in ~20 s of this boot's WiFi+download+display time —
-         * inherent ±display-granular precision. Good enough to flag
-         * "is my frame waking minutes late" vs "seconds late". */
-        if (wake == WAKE_TIMER && prior_sleep_entry_epoch > 0 && prior_sleep_duration > 0) {
+        /* Sleep-error diagnostic: only meaningful on timer wakes. */
+        if (last_sleep_mode == LAST_SLEEP_MODE_TIMER_WAKE &&
+            prior_sleep_entry_epoch > 0 && prior_sleep_duration > 0) {
             time_t now = now_epoch();
             if (now > 0) {
                 int64_t actual_slept_s = (int64_t)now - prior_sleep_entry_epoch;
@@ -2062,12 +1997,12 @@ void app_main(void)
                 last_sleep_err_known = true;
             }
         }
+
+        /* Restart so the next boot enters its regime from clean state. */
+        trigger_restart(ACTION_ENTER_REGIME, LAST_SLEEP_MODE_POST_REFRESH);
     }
 
-    /* ── Step 8: enter the regime that matches current USB state ───
-     *
-     * Battery or USB, same decision rule: poll usb_host once. The
-     * regime functions own further transitions between each other. */
+    /* ── Step 6: enter the regime that matches current USB state ───*/
     if (usb_host_present()) {
         regime_usb_awake(boot_time);
     } else {

@@ -1,21 +1,21 @@
 # Dithering on the Spectra 6 e-ink panel
 
-This document explains how `webserver/webserver.py` converts arbitrary uploaded
-photos into the 6-color bitmap the EL133UF1 panel can display, and — more
+This document explains how the webserver converts arbitrary uploaded photos
+into the 6-colour bitmap the EL133UF1 panel can display, and — more
 importantly — *why* it does what it does. Every design choice here was driven
 by a specific visible failure on a specific test image; the sections below tell
 that story.
 
 If you change anything in the dithering pipeline, **update this document to
 match**. This file exists so a future maintainer (human or AI) doesn't have to
-re-run the whole investigation.
+re-run the whole investigation. `AGENTS.md` carries the same reminder.
 
 ---
 
 ## 1. The hardware constraint
 
-The 13.3" Spectra 6 (EL133UF1) is a 6-color electrophoretic display. Each of its
-1200 × 1600 pixels can be exactly one of:
+The 13.3" Spectra 6 (EL133UF1) is a 6-colour electrophoretic display. Each of
+its 1200 × 1600 pixels can be exactly one of:
 
 | # | Name   | Measured RGB       | Lab (L\*, a\*, b\*)     | Hue angle | Chroma |
 |---|--------|--------------------|-------------------------|-----------|--------|
@@ -28,319 +28,635 @@ The 13.3" Spectra 6 (EL133UF1) is a 6-color electrophoretic display. Each of its
 
 Two key properties:
 
-- **The palette is sparse.** Six anchors in a 3D color space leave huge gaps. A
-  warm mid-tone like peach skin (L≈60, a\*≈+15, b\*≈+15) sits far from every
-  primary. No palette entry is "close to" it.
+- **The palette is sparse.** Six anchors in a 3D colour space leave huge gaps.
+  A warm mid-tone like peach skin (L≈60, a\*≈+15, b\*≈+15) sits far from every
+  primary.
 - **The lightness range is clipped.** "White" is measured at L\*≈80, not 100 —
   the panel physically cannot reproduce paper-bright whites. Anything brighter
   than L\*=80 in the source has to be mapped down.
 
-Dithering is how we fake the missing colors: we alternate palette pixels in a
-pattern so the eye perceives an average. Floyd–Steinberg and Atkinson error
-diffusion are the classical tools for this.
+Dithering is how we fake the missing colours: we alternate palette pixels in a
+pattern so the eye perceives an average.
 
-## 2. Why the obvious approach fails
+---
 
-The naïve pipeline — "resize image, pick nearest palette per pixel, propagate
-the error à la Floyd–Steinberg" — produces four specific artifacts on our
-palette. Each one drove a concrete countermeasure in the current code.
+## 2. Code architecture
 
-### 2a. Blue speckles on warm skin
-
-Source: skin tone at L≈60, a\*≈+20, b\*≈+15 (warm pink).
-Closest palette entry: **White** (L\*=80, a≈−3).
-Residual error propagated forward: (+big L, +big a\*, +big b\*).
-
-After error accumulates for several pixels, the target point in Lab space has
-drifted so far that a different palette entry becomes closest. For warm skin
-drifting cool, that new closest entry is often **Blue** (L=30, a=+22, b=−55),
-because:
-- Its hue angle is −68° vs the pixel's +42° (off by ~110°), but
-- The Euclidean distance in Lab space still happens to be smallest after the
-  residual drift
-
-Result: occasional Blue pixels sprinkled through skin regions. Visually reads
-as a cold blue/magenta tint.
-
-**Fix: hue-aware palette LUT.** Before picking the nearest palette entry, we
-compute the pixel's hue angle and forbid any palette entry whose hue differs
-by more than ~95°. This rules out Blue for warm pixels entirely. Neutral
-palette entries (Black, White — chroma < 8 in Lab) are always allowed, so the
-rule only blocks hue *swaps*, not lightness choices.
-
-Code: `_build_rgb_lut_hue_aware()` in `webserver/webserver.py`.
-
-### 2b. Small saturated features vanishing
-
-Source: a child's pink tongue, 10 × 15 pixels.
-Each pixel wants Red (L=28), but source L≈55.
-Dithering's *only* way to produce perceived L≈55 is to alternate Red (L=28)
-and White (L=80) pixels.
-
-But Atkinson's "6/8 damping" (see §2c) throws away a quarter of the propagated
-error at every step. For a region only 10 pixels wide, by the time enough
-residual accumulates to force one Red pick, the neighboring pixels have
-already been chosen as White and their error is gone. The pattern never
-consolidates. The tongue renders as almost-uniform dark skin, not a pink tongue.
-
-**Fix: "vividness-preserved" dynamic-range compression + adaptive saturation
-boost.** Both covered in §4.
-
-### 2c. Phantom pink speckle in near-white regions
-
-Source: white beach umbrella fabric, genuinely RGB≈(245, 240, 230) (very
-slightly warm).
-Lab chroma ≈ 5 — technically non-neutral, but visually cream-white.
-After `ImageEnhance.Color(1.2)` and vividness compression, chroma is now ~7.
-
-Floyd–Steinberg cascades that tiny warm bias across adjacent white pixels.
-Every neighbor gets a little warmer in the residual. Eventually one pixel's
-target is just over the decision boundary, and Red gets picked. That Red's
-residual (subtract L=28, a=+46, b=+41 from a warm-white target) shoves
-*everything* around it back toward neutral. But the damage is done — the single
-Red pick is visible against the otherwise-white umbrella, and the surrounding
-cascade produces pink-noise speckle.
-
-This is the failure mode that killed our brief flirtation with "Floyd–Steinberg
-+ hue-aware" (`fs_hue_aware`, removed) as the default.
-
-**Fix: adaptive saturation boost + adaptive vividness.** Both covered in §4.
-
-### 2d. B&W photos developing a pink cast
-
-Any near-grayscale photo has residual chroma of ~1–3 Lab units from JPEG
-compression noise, film grain, scanning artifacts, etc. A saturation boost
-amplifies that noise into visible chroma. With the default pipeline that
-happened to be 1.25× chroma scaling on every pixel, a pure B&W wedding photo
-acquired a visible pink cast on skin highlights.
-
-**Fix: detect near-grayscale images and use a conservative preset.** Covered
-in §4.
-
-## 3. The shipped presets
-
-The web UI exposes the pipeline as three named **presets** plus a fully
-editable "Advanced dithering" panel. Selecting a preset loads its full
-configuration into the knobs; touching any knob flips the preset label to
-"Custom (your edits)" without changing values. Saving writes the complete
-nested config to `config.json`.
-
-| Preset key                 | UI label                                         | Default |
-|----------------------------|--------------------------------------------------|---------|
-| `atkinson_hue_aware`       | Atkinson — hue-aware (default)                   | **Yes** |
-| `atkinson_soft`            | Atkinson — soft, warm                            |         |
-| `floyd_steinberg_vivid`    | Floyd–Steinberg — vivid, warm (pre-2.0)          |         |
-
-Presets live in `DITHER_PRESETS` in `webserver/webserver.py`; each one is a
-full dither-config literal (no partials — every stage has an explicit value
-in every preset so the behaviour is inspectable at a glance).
-
-The pre-2.0 schema stored a single string key `dither_algorithm`; that key
-was dropped when the nested per-stage schema landed. Old config files with
-the legacy string are silently normalised to the default preset on load.
-
-## 4. The default pipeline in detail
-
-The default preset (`atkinson_hue_aware`) drives a ten-stage pipeline. Every
-stage is addressable from the UI; the values below are the defaults and the
-full schema lives in `DITHER_PRESETS["atkinson_hue_aware"]["dither"]`.
-
-### Stage 1 — `_prepare_canvas()` tonal chain
-
-Resize the image to fit 1200×1600 (portrait native) or 1600×1200 (landscape,
-rotated at the end), then apply the tonal adjustments in order. Every row
-below is toggleable/tunable per preset:
-
-1. `ImageOps.autocontrast(cutoff=0.5)` — stretch histogram ignoring the
-   darkest/brightest 0.5% of pixels.
-2. Gamma 0.85 — midtone lift.
-3. Brightness 1.0, Contrast 1.1, Sharpness 1.3 — modest punch.
-4. **Saturation boost** — see Step 1b below.
-
-The padding area (if the image aspect doesn't match the display's) is tracked
-as a boolean mask; those pixels get forced to White after dithering so they
-don't end up with speckle.
-
-#### Step 1b — `_adaptive_saturate()`
-
-Instead of PIL's `ImageEnhance.Color(1.25)` (which multiplies *all* chroma by
-1.25 uniformly — including the tiny chroma noise in near-white regions, which
-then cascades into §2c speckle), we do a Lab-space boost that is *gated by
-existing chroma*:
+The pipeline is split across several modules. Understanding the split helps
+locate the right file to change:
 
 ```
-factor(chroma) = 1.0                      if chroma ≤ 5.0
-                 1.25                     if chroma ≥ 15.0
-                 smooth ramp between
+webserver/webserver/
+├── dither_config.py       DitherConfig dataclass (algorithm, LUT, serpentine, …)
+├── image_config.py        ImageConfig dataclass (tonal chain + DitherConfig)
+├── presets.py             Named presets + PRESET_IMAGE_CONFIGS dict
+├── image_classifier.py    B&W / face detection → ImageConfig dispatch
+├── image.py               Top-level pipeline orchestration:
+│                            open_image_for_render(), render_panel_bytes(),
+│                            render_preview_png(), compress_dynamic_range()
+├── dither_constrained.py  Streaming error-diffusion (production, ≤ 50 MB):
+│                            adaptive_saturate(), build_rgb_lut*(),
+│                            dither(), dither_with_prep()
+├── dither_unconstrained.py Full-canvas reference dither (quality comparison only,
+│                            ~60 MB peak, NOT used in production)
+└── dither.py              Backward-compat re-export shim
 ```
 
-Pixels that are *already* saturated (tongues, lipstick, red shirts) get the
-full 1.25× boost. Pixels that are near-neutral (skin, gray clothing, white
-umbrellas) are left completely alone. This is the single most important
-change from the pre-V10 baseline: it breaks the "amplify noise → cascade"
-chain that was responsible for §2c.
+`dither.py` is a thin shim that re-exports everything from `dither_constrained`
+so older imports don't break. New code should import directly from the right
+module.
 
-Code: `_adaptive_saturate()` in `webserver/webserver.py`.
+### Data flow for a full render
 
-### Step 2 — `_compress_dynamic_range(adaptive_vivid=True)`
-
-The source image may contain L\*=100 pixels (paper-white); the panel can only
-show L\*≈80. Without remapping, the dither algorithm would burn all its
-"whitest" palette choices on pixels the panel couldn't reproduce anyway.
-
-We remap L\* linearly:
 ```
-L'_pixel = 0.55 + (L_source / 100.0) * (79.86 − 0.55)
-         ≈ L_source * 0.79
+ImageClassifier.screen_config_for(path, sha1)
+    └─ returns ScreenImageConfig { image_config, orientation, crop_threshold }
+
+image.render_panel_bytes(img, cfg, orientation)
+    ↓
+_render_indices(img, cfg, orientation, FULL_W, PANEL_H)
+    1. Resize / crop-to-fill → PIL canvas (uint8 RGB, ≤ 15 MB)
+    2. _apply_prepare_enhancements()   # autocontrast → gamma → b/c/s
+    3. Rotate canvas for landscape (−90°)
+    4. np.asarray(canvas) → uint8 H×W×3 array
+    5. dither_constrained.dither_with_prep(arr, cfg.dither, prep_stripe)
+           prep_stripe(100-row stripe) →
+               adaptive_saturate() + compress_dynamic_range()
+               → float32 stripe (3.8 MB)
+           _streaming_diffusion_dither()
+               rolling 2–3 row error buffer, LUT lookup per pixel
+    6. result_idx[padding_mask] = WHITE
+    ↓
+indices_to_panel_bytes(result_idx) → wire bytes
 ```
 
-If we stopped there (the pre-V10 behavior, `scale_chroma=False`), a pixel at
-Lab (75, 30, 20) would become (59, 30, 20) — the chroma-to-lightness ratio
-changes, and some originally-in-gamut saturated colors drift out of reach of
-Red/Green/Blue when dithered against the new darker L.
+---
 
-`adaptive_vivid=True` fixes this with another chroma-gated remap. For each
-pixel:
+## 3. Config dataclasses
+
+### `DitherConfig`
+
+```python
+@dataclass(frozen=True)
+class DitherConfig:
+    algorithm: "floyd_steinberg" | "atkinson" | "stucki" | "noop"
+    lut_name:  "euclidean" | "hue_aware"
+    serpentine: bool
+    hue_cutoff_deg: float   # hue_aware only — how many degrees off-hue to forbid
+    neutral_chroma: float   # chroma below which a palette entry is "neutral" (always allowed)
 ```
-c_factor(chroma) = 0.79                   if chroma ≤ 5    (fully scale chroma)
-                   1.00                   if chroma ≥ 15   (keep chroma)
+
+`cache_slug()` returns a 14-char SHA-256 prefix used to name panel `.bin`
+files. Two renders of the same source with the same `DitherConfig` produce the
+same cache key.
+
+### `ImageConfig`
+
+Wraps `DitherConfig` plus the tonal-chain settings:
+
+```python
+@dataclass(frozen=True)
+class ImageConfig:
+    dither: DitherConfig
+    prepare_autocontrast_cutoff: float
+    prepare_gamma: float
+    prepare_brightness: float
+    prepare_contrast: float
+    prepare_sharpness: float
+    color_enhance: float          # used only when use_adaptive_saturate=False
+    use_adaptive_saturate: bool
+    saturate_max_enhance: float
+    saturate_low_chroma_thresh: float
+    saturate_high_chroma_thresh: float
+    scale_chroma: bool            # legacy: uniformly scale chroma in DRC
+    adaptive_vivid: bool          # recommended: chroma-gated DRC (see §5b)
+    vivid_chroma_low: float
+    vivid_chroma_high: float
+```
+
+`AppConfig` holds three `ImageConfig` objects: `image_config_default`,
+`image_config_bw`, and `image_config_face`. The classifier selects among them
+per image.
+
+---
+
+## 4. Presets
+
+Six named presets cover the three algorithms in plain (Euclidean LUT) and
+hue-aware variants. The default is `atkinson_hue_aware`.
+
+| Preset key                  | Algorithm       | LUT        | Adaptive sat | Adaptive vivid | Default? |
+|-----------------------------|-----------------|------------|:------------:|:--------------:|:--------:|
+| `floyd_steinberg`           | Floyd-Steinberg | euclidean  |              |                |          |
+| `floyd_steinberg_hue_aware` | Floyd-Steinberg | hue_aware  | ✓            | ✓              |          |
+| `atkinson`                  | Atkinson        | euclidean  |              |                |          |
+| `atkinson_hue_aware`        | Atkinson        | hue_aware  | ✓            | ✓              | **Yes**  |
+| `stucki`                    | Stucki          | euclidean  |              |                |          |
+| `stucki_hue_aware`          | Stucki          | hue_aware  | ✓            | ✓              |          |
+
+Plain presets use `ImageEnhance.Color(1.2)` (flat PIL saturation) because they
+have no chroma-gated pipeline to protect near-neutral pixels.
+
+Hue-aware presets enable `adaptive_saturate` and `adaptive_vivid` because
+the hue-constrained LUT pairs well with chroma-selective saturation boosting —
+the LUT's hue gate prevents accumulated error from escaping to a wrong-hue
+palette entry even after the saturation boost.
+
+Presets live in `presets.py` as `PRESET_IMAGE_CONFIGS`, a plain
+`dict[str, ImageConfig]`. There are no partials; every field is spelled out so
+each preset is fully inspectable.
+
+---
+
+## 5. Why the naïve approach fails — and how each stage fixes it
+
+The naïve pipeline — resize, pick nearest palette per pixel, propagate error
+Floyd–Steinberg style — produces four specific artifacts on our palette. Each
+artifact drove a concrete countermeasure in the code.
+
+### 5a. Blue speckles on warm skin
+
+Source: skin tone L≈60, a\*≈+20, b\*≈+15 (warm pink).
+Closest palette entry: **White** (L\*=80, a≈−3, nearly neutral).
+Residual error propagated forward: large positive L, large positive a, large
+positive b.
+
+After several pixels the accumulated target drifts into a region where, despite
+the hue mismatch, the nearest Lab-Euclidean palette entry is **Blue**
+(L=30, a=+22, b=−55 — hue 110° off). Result: isolated blue speckles through
+skin regions.
+
+**Fix: hue-aware palette LUT** (`build_rgb_lut_hue_aware()`).
+At LUT build time, for every (R, G, B) grid point the code computes the
+pixel's hue angle and marks any palette entry "forbidden" if its hue differs
+by more than `hue_cutoff_deg` (default 95°). `np.inf` replaces the forbidden
+distances so `argmin` skips them. Neutral palette entries (chroma <
+`neutral_chroma`, i.e. Black and White) are **always** allowed — they have
+no meaningful hue, and forbidding them would leave very-low-chroma pixels
+with no valid pick.
+
+The LUT is a 32³ `uint8` cube (`32×32×32 = 32 768` cells); build takes ~40 ms
+and is cached with `@lru_cache`. At dither time, every pixel lookup is O(1).
+
+### 5b. Small saturated features vanishing
+
+Source: a child's pink tongue, ~10 × 15 pixels; each pixel should be Red
+(L=28) but source L≈55.
+
+The dither's only way to produce perceived L≈55 is to alternate Red (L=28)
+and White (L=80) pixels. But Atkinson's 6/8 damping throws away 25 % of the
+error at every step. For a region only 10 pixels wide, the residual never
+accumulates enough to force a Red pick before the neighbourhood has already
+been assigned White. The tongue renders as near-uniform skin colour.
+
+**Fix: adaptive saturation boost** (`adaptive_saturate()`).
+Instead of PIL's flat `ImageEnhance.Color(factor)` (which multiplies *all*
+chroma uniformly, including near-neutral noise), the code boosts only
+already-colourful pixels:
+
+```
+factor(chroma) = 1.0                        if chroma ≤ low_thresh (5.0)
+                 max_enhance (1.25)         if chroma ≥ high_thresh (15.0)
+                 smooth linear ramp between
+```
+
+Pixels that are already saturated (tongues, lipstick, red shirts) get the
+full 1.25× boost, pushing them firmly toward a coloured palette entry.
+Near-neutral pixels (skin highlights, white umbrellas) are left at 1.0× —
+no chroma amplification, no cascade into §5c.
+
+The math lives in `adaptive_saturate()` in `dither_constrained.py`, which
+works in float32 Lab space: RGB → Lab, scale a\* and b\* by `factor`, back to
+RGB. This is applied per-stripe (100 rows at a time) to stay within the
+memory budget (see §7).
+
+### 5c. Phantom pink speckle in near-white regions
+
+Source: white beach umbrella fabric, RGB≈(245, 240, 230), Lab chroma ≈ 5.
+Technically non-neutral, but visually cream-white.
+
+With flat `ImageEnhance.Color(1.2)`, the tiny warm bias is boosted to chroma
+≈ 7. Floyd–Steinberg then cascades that small bias from pixel to pixel. After
+several pixels the accumulated target crosses the decision boundary and Red
+gets picked. Red's residual shoves everything around it cool again — but the
+single Red pixel is visible against otherwise-white fabric, and the surrounding
+correction produces pink-noise speckle.
+
+**Fix: `adaptive_vivid=True` in `compress_dynamic_range()`.**
+
+The Spectra 6 panel's white ink is measured at L\*≈80, not 100. Without
+remapping, source pixels at L\*=100 and L\*=80 both end up at the White
+palette entry, and the dither has no room to represent them differently.
+`compress_dynamic_range()` linearly maps source L\* into the panel's range:
+
+```
+L'_pixel = black_L + (L_source / 100.0) × (white_L − black_L)
+         ≈ 0.55 + L_source × 0.79
+```
+
+Without any chroma treatment, compressing L by 0.79× also shifts the
+chroma-to-lightness ratio, making already-dim near-white pixels look
+relatively more saturated after mapping. `adaptive_vivid` fixes this
+with a chroma-gated remap applied alongside the L compression:
+
+```
+c_factor(chroma) = c_ratio (≈ 0.79)         if chroma ≤ vivid_chroma_low (5.0)
+                   1.0                       if chroma ≥ vivid_chroma_high (15.0)
                    smooth ramp between
-lab[...,1] *= c_factor
-lab[...,2] *= c_factor
 ```
 
-Near-neutral pixels (white umbrellas) get chroma scaled down so that tiny
-warm tints don't get relatively boosted after L compression — prevents §2c.
-Saturated pixels (tongues) keep their full chroma so Red/Blue/Green remain
-reachable — prevents §2b.
+Near-neutral pixels (white umbrellas, sky) have their chroma scaled down
+alongside L so that the tiny warm tint doesn't get a relative boost.
+Saturated pixels (tongues, red shirts) keep their full chroma (`c_factor=1.0`)
+so Red/Blue/Green remain reachable.
 
-Code: `_compress_dynamic_range()` in `webserver/webserver.py`.
+`compress_dynamic_range()` lives in `image.py` and is also called per-stripe.
 
-### Step 3 — Atkinson error diffusion + hue-aware LUT
+### 5d. B&W photos developing a pink cast
 
-Atkinson was chosen over Floyd–Steinberg because, once Steps 1b + 2 are in
-place, Atkinson's 6/8 damping produces a softer noise texture without
-sacrificing the saturation that FS full-cascade would give (adaptive
-saturation already did that work).
+Any near-greyscale photo has residual chroma of ~1–3 Lab units from JPEG
+compression noise, film grain, or scanning artifacts. Flat saturation
+amplifies that noise into visible colour.
 
-The palette picker is `_RGB_LUT_HUE_AWARE`, a 32³ precomputed 3D LUT that
-maps (R, G, B) to a palette index. At LUT build time, for every (R, G, B)
-grid point we compute its Lab hue angle and forbid palette entries whose
-hue differs by more than 95°. This costs ~40 ms at module import; at dither
-time, lookup is O(1) per pixel.
+**Fix: detect near-grayscale images and route them to a conservative
+`ImageConfig`.** The `ImageClassifier` (see §6) runs B&W detection and, if
+enabled, selects `AppConfig.image_config_bw` instead of the default. The B&W
+config typically has `use_adaptive_saturate=False`, `color_enhance=1.05` (very
+mild), `adaptive_vivid=False`, and an Euclidean LUT instead of hue-aware —
+because there is no meaningful hue in a grey image to protect, and the
+hue-aware LUT's extra cost buys nothing.
 
-Neutral palette entries (chroma < 8 in Lab, i.e. Black and White) are
-**always** allowed regardless of hue difference — otherwise very low-chroma
-source pixels with unstable hue angles would get weird forced picks.
+---
 
-Code: `_atkinson_dither()` and `_build_rgb_lut_hue_aware()` in `webserver/webserver.py`.
+## 6. Image classifier — per-image config dispatch
 
-### Step 4 — B&W detection and fallback
+```
+ImageClassifier.screen_config_for(path, sha1)
+  │
+  ├─ B&W detection enabled? → is_grayscale(path)?
+  │      → yes → use AppConfig.image_config_bw
+  │
+  ├─ Face detection enabled? → has_face(path)?
+  │      → yes → use AppConfig.image_config_face
+  │
+  └─ otherwise → use AppConfig.image_config_default
+```
 
-Before any of the above, `_maybe_apply_bw_fallback()` samples the source at
-200-pixel thumbnail resolution and checks the Nth-percentile Lab chroma. If
-it's below the configured threshold (defaults: 95th percentile, chroma 8),
-the image is treated as intentionally B&W (scan, film, monochrome edit) and
-the pipeline switches to a conservative override for that image only:
+Detection results (is_bw, has_face) are cached by sha1 of the original file
+in `<cache_dir>/image_classifier.json`. A restart doesn't re-detect; clearing
+the classifier cache (via `/api/classifier/clear`) forces fresh detection on
+the next sync.
 
-- Saturation → `mode: "global", value: 1.05` (flat 1.05× chroma)
-- DRC `chroma_mode` → `"off"` (no chroma compression)
-- Every other stage (palette LUT, kernel, tonal chain) runs exactly as
-  configured.
+Detection fires **before** the render, not inside it. `image.py`'s render
+functions take an explicit `ImageConfig` with no hidden fallback — the right
+config is already chosen before `render_panel_bytes` is called.
 
-This preserves pure grayscale B&W photos without the pink cast described in §2d.
+`is_grayscale()` samples a 200×200 thumbnail and checks whether the 95th-
+percentile Lab chroma is below `GRAYSCALE_CHROMA_THRESHOLD = 8.0`.
 
-The B&W check itself is a user-visible knob: it can be disabled, and both
-the threshold and the percentile are editable.
+Face detection (`face_detect.py`) uses OpenCV's Haar cascade. Presence of a
+face routes to `image_config_face`, which can be configured with settings tuned
+for skin tone accuracy (e.g. slightly tighter sharpness, no adaptive-vivid so
+skin highlights don't get overcooled).
 
-Code: `_maybe_apply_bw_fallback()` and the branch at the top of `_convert_image()`.
+---
 
-## 5. How the default was chosen
+## 7. Diffusion algorithms
 
-We ran a benchmark across 16 test images (14 in `.private/testpics/` plus the
-two photos that produced the original user complaints: the kids-on-swing with
-the hard-to-render tongue, and the beach-umbrella with the pink speckle).
+All three algorithms share a single inner loop in
+`_streaming_diffusion_dither()` (`dither_constrained.py`). The kernel is
+the only thing that differs.
 
+### Floyd-Steinberg
+
+```
+  # #  7/16
+3/16  5/16  1/16
+```
+
+Four neighbours; sums to 1.0 — all error is distributed. Produces smooth
+gradients. Can leave diagonal streaks in flat areas.
+
+### Atkinson
+
+```
+  # 1/8 1/8
+1/8 1/8 1/8
+    1/8
+```
+
+Six neighbours; sums to 6/8 = 0.75 — 25 % of the error is discarded at each
+step. This "6/8 damping" gives a characteristic look: high contrast, bold
+edges, mid-tones that may clip but the result is punchy. The Apple LaserWriter
+algorithm. Its damping is the reason adaptive saturation matters more for
+Atkinson — the discarded error makes it harder for low-chroma pixels to
+accumulate enough error to pick a saturated palette entry, so we pre-boost
+them.
+
+### Stucki
+
+```
+      # 8/42  4/42
+2/42 4/42 8/42 4/42 2/42
+1/42 2/42 4/42 2/42 1/42
+```
+
+Twelve neighbours across two rows; sums to 1.0. Wider diffusion kernel than
+Floyd-Steinberg (reaches two rows ahead), produces a more even noise texture
+without FS's diagonal streaks. Slower per pixel because of the larger kernel.
+
+### Serpentine scan
+
+Optional (`serpentine: bool` in `DitherConfig`). Alternate rows are processed
+right-to-left with the kernel's `dx` values mirrored, so quantisation error
+still flows only into unvisited pixels. Reduces directional streaking in smooth
+gradients. Disabled by default for backward compatibility.
+
+### noop
+
+Nearest-palette quantisation per pixel with no error diffusion at all.
+No blending, maximum sharpness, very visible banding. Used only in tests as a
+fast sanity check that the LUT and indexing are correct.
+
+---
+
+## 8. Palette LUTs
+
+Both LUTs are 32³ `uint8` cubes. At index time the algorithm does:
+
+```python
+ri = min(int(r / lut_scale), 31)
+gi = min(int(g / lut_scale), 31)
+bi = min(int(b / lut_scale), 31)
+palette_idx = lut[ri, gi, bi]
+```
+
+The 8-bit quantisation from 256 → 32 steps before the lookup introduces an
+error of at most ±4 counts, which is far below the dither noise and the
+panel's ink variability.
+
+### `euclidean` LUT
+
+For every (R, G, B) grid cell, convert to Lab and pick the palette entry with
+minimum Euclidean Lab distance. Simple, correct, fast to build.
+
+```python
+dists = ||lab_grid - PALETTE_LAB||²  # shape (32768, 6)
+lut = argmin(dists, axis=1).reshape(32, 32, 32)
+```
+
+### `hue_aware` LUT
+
+Same as Euclidean, but chromatic (chroma > `neutral_chroma`) palette entries
+whose hue angle differs from the source pixel's hue by more than
+`hue_cutoff_deg` are set to `np.inf` before `argmin`. This forces the nearest
+*same-hue* palette entry to win, preventing the error-cascade hue-swaps
+described in §5a.
+
+```python
+forbidden = (
+    (pix_chroma > neutral_chroma)     # pixel is chromatic
+    & (~neutral_pal)                  # palette entry is chromatic
+    & (dh_deg > hue_cutoff_deg)       # and hue is too far off
+)
+dists = where(forbidden, inf, dists)
+lut = argmin(dists, axis=1).reshape(32, 32, 32)
+```
+
+Both LUTs are cached with `@lru_cache`: `_cached_euclidean_lut()` (maxsize=1)
+and `_cached_hue_aware_lut(hue_cutoff_deg, neutral_chroma)` (maxsize=16).
+Build cost is ~40 ms each; subsequent calls are free.
+
+---
+
+## 9. The streaming (memory-constrained) architecture
+
+A full 3200 × 1600 panel render at float32 is 60 MB as a flat buffer. The
+original implementation held two such buffers (input + working) plus PIL
+intermediates — peak ~580 MB on large sources. The production target is a Pi
+Zero 2 W with 512 MB total RAM.
+
+The streaming architecture brings peak RSS to **≤ 50 MB** (measured: 34–37 MB
+on real photos) by never materialising a full-panel float buffer.
+
+### Rolling error buffer
+
+`_streaming_diffusion_dither()` holds only `max_dy + 1` rows of float32 RGB
+working state:
+
+- **Floyd-Steinberg** (`max_dy=1`): 2 rows × 3200 × 3 × 4 bytes = 77 KB
+- **Atkinson / Stucki** (`max_dy=2`): 3 rows × 3200 × 3 × 4 bytes = 115 KB
+
+Errors from row `y` flow into `rolling[1]` (one row ahead) or `rolling[2]`
+(two rows ahead). At the end of each row the buffer slides up:
+`rolling[i] = rolling[i+1]`, and `rolling[n-1]` is zeroed for the fresh row.
+
+### Stripe-cached preprocessing
+
+`adaptive_saturate` and `compress_dynamic_range` each allocate several
+working buffers the size of their input (Lab, chroma, factor, xyz, …). On a
+full panel that would be ~150 MB of transients. On a 100-row stripe
+(3.8 MB per RGB stripe) the transients stay under 30 MB.
+
+`dither_with_prep(canvas, cfg, prep_stripe, stripe_h=100)` accepts a callback:
+
+```python
+def prep_stripe(stripe_uint8: np.ndarray) -> np.ndarray:
+    # stripe_uint8: (100, W, 3) uint8
+    # returns: float32 of same shape, with adaptive_saturate + DRC applied
+```
+
+The streaming dither calls this lazily: when row `y` belongs to a new stripe,
+the old stripe is dropped (`stripe_data = None`) **before** the new one is
+allocated, so the GC can reclaim before the transients arrive.
+
+### Why the unconstrained path still exists
+
+`dither_unconstrained.py` is a self-contained copy of the original full-canvas
+algorithm with no shared code with `dither_constrained`. It is used by
+`test_dither_quality.py` to produce side-by-side PNGs for visual comparison
+and as a regression baseline — if the streaming output ever diverges from the
+reference algorithm, the test catches it. The unconstrained path is **never
+used in production** (peak ~60 MB per dither call, ~230 MB full render).
+
+### Memory budget breakdown
+
+At peak during a real-photo render (3200 × 1600, post-step-9 streaming):
+
+| Buffer | Size |
+|---|---:|
+| Resized panel canvas (PIL uint8 RGB) | 15.4 MB |
+| Result-index plane (uint8) | 5.1 MB |
+| Padding mask (bool) | 5.1 MB |
+| One DRC'd stripe cache (100 × 3200 × 3 × float32) | 3.8 MB |
+| Rolling error buffer (2–3 rows × 3200 × 3 × float32) | 0.1 MB |
+| LUT (cached, 32³ uint8) | 0.03 MB |
+| PIL + numpy bookkeeping, transients | ~5–6 MB |
+| **Subtotal** | **~35 MB** |
+
+See `docs/image_processing_memory_usage.md` for the full optimisation journey,
+stripe-height benchmarks, and measurement methodology.
+
+---
+
+## 10. Source-image ingestion (`open_image_for_render`)
+
+Before any pipeline stage runs, the source image is opened and normalised:
+
+1. **EXIF rotation** (`ImageOps.exif_transpose`) — phone photos are typically
+   stored landscape and tagged for portrait display; we rotate them up front.
+2. **Convert to RGB** — drop alpha, handle palette/CMYK/L modes.
+3. **Source cap and JPEG draft** — the panel's long edge is 3200 px.
+   Sources larger than 3200 px on the long edge trigger JPEG draft
+   (`Image.draft`) at the largest power-of-two scale factor that still lands
+   above the cap. A 6000 × 4000 JPEG decodes at 3000 × 2000 without ever
+   materialising the full 72 MB buffer. Non-JPEG formats fall back to
+   `thumbnail()` after open (their decoders have no equivalent of draft).
+4. **Return to caller** — the caller gets a `≤ 3200-long-edge` PIL image.
+   `render_panel_bytes` calls `img.close()` as soon as the panel canvas has
+   been composed (`release_input=True`), dropping the source buffer
+   mid-render.
+
+**PNG ceiling:** a 10 000 × 10 000 PNG requires ~285 MB decoded buffer before
+any cap can fire. This is a documented hard limit — the memory test asserts
+the peak exceeds 200 MB so any future fix that drops below 200 MB causes the
+test to go red and forces a budget-spec update.
+
+---
+
+## 11. Tonal preparation chain
+
+`_apply_prepare_enhancements()` runs before the rotate and before any
+float32 work:
+
+1. `ImageOps.autocontrast(cutoff=prepare_autocontrast_cutoff)` — stretch the
+   histogram, ignoring the darkest/brightest `cutoff`% of pixels.
+2. Gamma correction: a 256-entry point LUT that applies `(i/255)^gamma × 255`
+   per channel (default gamma 0.85 — midtone lift).
+3. PIL `ImageEnhance.Brightness`, `Contrast`, `Sharpness` in order.
+4. If `use_adaptive_saturate=False`: PIL `ImageEnhance.Color(color_enhance)`.
+   If `use_adaptive_saturate=True`: the flat colour step is **skipped here**;
+   the chroma-gated saturation boost runs later inside `prep_stripe`.
+
+All PIL operations work on the uint8 canvas, so each one peaks at about one
+extra 15 MB image and recycles quickly. The float32 work doesn't start until
+`dither_with_prep` is called.
+
+---
+
+## 12. Presets and the UI
+
+The web UI's preset dropdown populates from `PRESET_META` (labels +
+descriptions) in `presets.py`. Selecting a preset loads the full
+`ImageConfig` into all the Advanced panel knobs via the JS `ditherState`
+object. Touching any knob flips the preset label to "Custom (your edits)"
+without changing values. Saving writes the complete nested config to
+`config.json`.
+
+The config round-trips through `_image_config_from_dict()` in `image_config.py`
+which validates every field and raises on any missing key — no silent
+defaults inside the serialised form.
+
+---
+
+## 13. Benchmark results
+
+We benchmarked 16 test images across 12 candidate pipeline variants.
 Three metrics per image:
 
 1. **`neutral_leak`** — mean output Lab chroma for source pixels where source
    chroma < 10. Measures how badly the dither amplifies near-neutral regions
-   into visible color. Lower is better.
+   into visible colour. Lower is better.
 2. **`saturated_hit`** — fraction of source pixels with chroma > 25 whose
-   output has chroma > 15. Measures whether saturated source features survive
-   as saturated palette output. Higher is better.
+   output has chroma > 15. Measures whether saturated features survive as
+   saturated output. Higher is better.
 3. **`overall_dE`** — mean CIE76 ΔE between source and output. Classic
-   full-image color accuracy. Lower is better.
+   full-image colour accuracy. Lower is better.
 
-We tried 12 candidate variants (see `dither_test2/candidates.py`) including
-Floyd–Steinberg + hue-aware with uniform/vividness/adaptive chroma scaling,
-Atkinson variants, a luminance/chroma-separated diffusion, and combinations
-of all of these.
+Final aggregate across 16 images (lower neutral_leak and dE is better;
+higher sat_hit is better):
 
-Final aggregate across 16 images (lower is better for neutral_leak and dE;
-higher is better for sat_hit):
-
-| Variant                                | neutral_leak | sat_hit | dE    |
-|----------------------------------------|--------------|---------|-------|
-| pre-V10 atk_hue_aware (1.05 enhance)   | 6.05         | 0.721   | 35.24 |
-| fs_hue_aware (PR default, now retired) | 10.85        | 0.672   | 38.86 |
-| V5 FS + luma/chroma-split diffusion    | 6.35         | 0.661   | 37.33 |
-| V6 atk + adaptive_sat 1.30             | 6.55         | 0.758   | 35.45 |
-| V7 atk + vivid + adaptive_sat 1.25     | 4.84         | 0.703   | 34.90 |
-| V8 atk + vivid + uniform 1.10          | 4.68         | 0.673   | 34.91 |
-| **V10 atk + adaptive_vivid + adaptive_sat 1.25** | **5.74** | **0.752** | **35.27** |
-| V11 same as V10, enhance 1.35          | 6.02         | 0.764   | 35.38 |
+| Variant                                              | neutral_leak | sat_hit | dE    |
+|------------------------------------------------------|--------------|---------|-------|
+| pre-V10 atk_hue_aware (1.05 enhance)                | 6.05         | 0.721   | 35.24 |
+| fs_hue_aware (now retired default)                  | 10.85        | 0.672   | 38.86 |
+| V5 FS + luma/chroma-split diffusion                  | 6.35         | 0.661   | 37.33 |
+| V6 atk + adaptive_sat 1.30                           | 6.55         | 0.758   | 35.45 |
+| V7 atk + vivid + adaptive_sat 1.25                   | 4.84         | 0.703   | 34.90 |
+| V8 atk + vivid + uniform 1.10                        | 4.68         | 0.673   | 34.91 |
+| **V10 atk + adaptive_vivid + adaptive_sat 1.25**    | **5.74**     | **0.752** | **35.27** |
+| V11 same as V10, enhance 1.35                        | 6.02         | 0.764   | 35.38 |
 
 V10 is the only variant that improves on the pre-V10 baseline on **both**
-neutral_leak and sat_hit — that is, cleaner near-neutral regions *and* better
-saturated-feature preservation, simultaneously. V7 beats V10 on neutral_leak
-but loses on saturation (visible tongue loss). V11 pushes enhance to 1.35 and
+neutral_leak and sat_hit simultaneously. V7 beats V10 on neutral_leak but
+loses on saturation (visible tongue loss). V11 pushes enhance to 1.35 and
 skin tones start looking sunburnt on outdoor/skin-heavy photos.
 
-## 6. Research references
+---
 
-Key ideas from published work:
+## 14. File map
+
+```
+webserver/
+  webserver/
+    dither_config.py        DitherConfig dataclass + cache_slug()
+    image_config.py         ImageConfig dataclass + _image_config_from_dict()
+    presets.py              PRESET_IMAGE_CONFIGS, DEFAULT_PRESET, PRESET_META
+    image_classifier.py     B&W + face detection, per-image config dispatch
+    image.py                Full pipeline: open_image_for_render, _render_indices,
+                             render_panel_bytes, render_preview_png,
+                             compress_dynamic_range, _apply_prepare_enhancements,
+                             _is_near_grayscale
+    dither_constrained.py   Production streaming dither (≤ 50 MB peak):
+                             adaptive_saturate, build_rgb_lut,
+                             build_rgb_lut_hue_aware, dither, dither_with_prep,
+                             _streaming_diffusion_dither, noop_dither
+    dither_unconstrained.py Reference full-canvas dither (~60 MB dither peak):
+                             dither() — quality comparison / regression baseline only
+    dither.py               Re-export shim → dither_constrained
+    memory_guard.py         RLIMIT_AS context manager (opt-in, not yet wired)
+
+  tests/
+    test_dither_quality.py  Side-by-side streaming vs unconstrained PNGs
+    test_memory_budget.py   50 MB / render assertions (subprocess RSS sampling)
+    test_render_worker.py   render_one() smoke test in the pool worker context
+    _memory_helpers.py      Layer A (tracemalloc) / Layer C (subprocess + psutil)
+
+docs/
+  dithering.md                      ← this file
+  image_processing_memory_usage.md  ← full memory optimisation journey
+  image_processing_memory_usage.md  ← memory optimisation journey and measurements
+```
+
+---
+
+## 15. Research references
 
 - **Ostromoukhov 2001**, *A Simple and Efficient Error-Diffusion Algorithm*
   (SIGGRAPH). Variable per-pixel diffusion coefficients tuned for blue-noise
-  characteristics. Our adaptive saturation and adaptive vividness are
+  characteristics. Our adaptive saturation and adaptive vivid are
   chroma-based analogs of the same core idea (let the pixel's own properties
-  modulate the diffusion behavior).
+  modulate the diffusion behaviour).
 - **Hue-preserving chroma compression** — standard ICC/IS&T gamut-mapping
-  practice. `adaptive_vivid` is a chroma-gated version of this.
+  practice. `adaptive_vivid` is a chroma-gated variant.
 - **Atkinson (1984)** — Apple LaserWriter dither. 6/8 damping.
+- **Stucki (1981)** — two-row, 12-neighbour kernel. Used in commercial
+  typesetting systems; wider diffusion than FS without the FS diagonal artefacts.
 
-## 7. Where the code lives
+---
 
-- `webserver/webserver.py` — the production pipeline. Search for:
-  - `DITHER_PRESETS`, `DEFAULT_PRESET`, `DEFAULT_CONFIG`
-  - `_default_dither_config()`, `_normalize_dither_config()`, `_dither_config_hash()`
-  - `_prepare_canvas()` — tonal chain (autocontrast, gamma, brightness,
-    contrast, sharpness, saturation)
-  - `_adaptive_saturate()` — Lab-space chroma-gated saturation boost
-  - `_compress_dynamic_range()` — takes `scale_chroma`, `adaptive_vivid`,
-    `vivid_low`, `vivid_high`
-  - `_build_rgb_lut()` (Lab-Euclidean) and `_build_rgb_lut_hue_aware()` with
-    memoisation in `_get_lut()`
-  - `_floyd_steinberg_dither()` and `_atkinson_dither()`
-  - `_maybe_apply_bw_fallback()` + the branch in `_convert_image()`
-  - `_run_dither_pipeline()` — shared pipeline used by both full render and
-    `_render_dither_preview()` (the /api/dither/preview endpoint)
-  - `_cache_key()` and `_CACHE_VERSION`
-- `webserver/templates/index.html` — preset dropdown, collapsible Advanced
-  panel (rendered dynamically from `ditherState`), per-knob (?) help
-  popovers, preview button. The settings form is now loaded **once** at
-  page open (`/api/config`); the `/api/status` poll deliberately omits
-  config so user edits can't be clobbered mid-typing.
-- `webserver/tests/test_webserver.py` — unit tests covering the pipeline
-  knobs and preset semantics.
-- `dither_test2/` (untracked scratch area, can be deleted) — the benchmark
-  harness that chose V10, kept for reproduction.
+## 16. When this document is stale
 
-## 8. When this document is stale
-
-**Whenever dithering behavior changes** — a new algorithm, a tweak to
-`_adaptive_saturate` thresholds, a palette recalibration, a new failure mode
+**Whenever dithering behaviour changes** — a new algorithm, a tweak to
+`adaptive_saturate` thresholds, a palette recalibration, a new failure mode
 being fixed — update this document. It's the one artifact that's supposed to
-keep pace with the code for humans. A `CLAUDE.md` note reminds AI contributors
-of the same obligation.
+keep pace with the code for humans.
+
+Key triggers:
+- Adding a new `AlgorithmName` literal to `dither_config.py`
+- Changing kernel weights or the number of neighbours in any algorithm
+- Adding a new `LutName` or changing how the LUT is built
+- Changing `DEFAULT_STRIPE_H` (update §9 and `image_processing_memory_usage.md`)
+- Changing the tonal-chain order in `_apply_prepare_enhancements`
+- Adding a new classifier detector or dispatch priority
+- Changing palette calibration values in `display.py`
