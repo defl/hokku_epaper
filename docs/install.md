@@ -94,7 +94,7 @@ Skip this section if you're running the server on an existing machine. The setup
 Use the official [Raspberry Pi Imager](https://www.raspberrypi.com/software/) and configure these settings before writing:
 
 - **OS:** Raspberry Pi OS Lite 64-bit (no desktop needed)
-- **Hostname:** `hokku-server` (so it appears as `hokku-server.local` on the network)
+- **Hostname:** `hokku` (so it appears as `hokku.local` on the network)
 - **WiFi:** your SSID and password, plus the correct country code
 - **SSH:** enabled — strongly recommended, without it there's no way to check logs remotely
 - **User:** create a user (e.g. `hokku` / `hokku`)
@@ -103,12 +103,14 @@ Use the official [Raspberry Pi Imager](https://www.raspberrypi.com/software/) an
 Once the Pi boots and you can SSH in, install the `.deb`:
 
 ```bash
-scp hokku-server_*.deb hokku@hokku-server.local:~
-ssh hokku@hokku-server.local
+scp hokku-server_*.deb hokku@hokku.local:~
+ssh hokku@hokku.local
 sudo apt install ./hokku-server_*.deb
 ```
 
-**First boot is slow.** On a Pi Zero 2 W expect 3–8 minutes for the OS to fully initialise, install packages, and bring the webserver up. If you're waiting for `http://hokku-server.local:8080/` to respond, be patient. SSH in and tail `/var/log/hokku-firstboot-install.log` if you want to watch progress.
+The package creates a default config at `/var/lib/hokku/config.json` on first start and brings up the web UI at `http://hokku.local:8080/`.
+
+**First boot is slow.** On a Pi Zero 2 W expect 3–8 minutes for the OS to fully initialise, install packages, and bring the webserver up. SSH in and tail `/var/log/hokku-firstboot-install.log` if you want to watch progress.
 
 ---
 
@@ -225,21 +227,76 @@ It then presents a menu and pre-selects the most sensible option for the detecte
 
 > These options require Windows and administrator privileges. They write directly to the raw disk.
 
-1. **Select SD card** — the wizard scans for removable drives sized 2–256 GB and suggests the most likely candidate. You can confirm, wait for a different card to be inserted, or pick from a list of all drives manually.
+1. **Select version** — the wizard lists installable `.deb` packages from two sources, newest first:
+   - **Local builds** from `build/` (if you've built from source)
+   - **GitHub releases** not already present locally
 
-2. **Download Pi OS** — if no image is cached, the wizard downloads the latest Pi OS Lite 64-bit image (~550 MB compressed) from `downloads.raspberrypi.com` and caches it for future runs.
+   ```
+     Available versions:
+       1. hokku-server_3.0.0~alpha2-1_all.deb  [2026-05-12, local build]
+       2. hokku-server_3.0.0~alpha2-1_all.deb  [2026-05-12, GitHub v3.0.0-alpha2]
+       3. hokku-server_3.0.0~alpha1-30_all.deb  [2026-04-28, GitHub v3.0.0-alpha1]
 
-3. **Configure** — you're prompted for:
+     Select version [1-3]:
+   ```
+
+2. **Select SD card** — the wizard scans for removable drives sized 2–256 GB and suggests the most likely candidate. You can confirm, wait for a different card to be inserted, or pick from a list of all drives manually.
+
+3. **Download Pi OS** — if no image is cached, the wizard downloads the latest Pi OS Lite 64-bit image (~550 MB compressed) from `downloads.raspberrypi.com` and caches it for future runs.
+
+4. **Configure** — you're prompted for:
    - WiFi SSID and password (saved to `.cache/settings.json` for next run)
    - Linux username and password (defaults: `hokku` / `hokku`)
    - SSH enabled? (strongly recommended)
    - Samba (Windows file share) installed? (uses the same credentials)
+   - Bonjour/mDNS — whether to advertise the server on the network and under what hostname (e.g. `hokku.local`). If a hostname is given, the wizard checks whether it is already in use on the network before proceeding.
    - WiFi country code (ISO 3166, e.g. `GB`, `US`, `NL`)
    - Timezone (IANA, e.g. `Europe/London`, `America/Chicago`)
 
-4. **Write** — after you type `YES` to confirm, the image is decompressed on the fly and written to the SD card (~2.5 GB, takes 3–10 minutes). First-boot scripts are injected to configure the OS and install the hokku-server `.deb` automatically.
+5. **Write** — after you type `YES` to confirm, the image is decompressed on the fly and written to the SD card (~3 GB, takes 3–10 minutes). First-boot scripts are injected into the card's boot partition to configure the OS, copy the `.deb`, and run the install automatically on first boot.
 
-5. **Wait for the Pi** — insert the card, power on, and the wizard polls `hokku-server.local` until the webserver responds. First boot installs ~90 packages; on a Pi Zero 2 W allow 3–8 minutes. If SSH is enabled you can tail `/var/log/hokku-firstboot-install.log` in another window while you wait.
+6. **Wait for the Pi** — two distinct phases, each with a live progress bar showing elapsed and remaining time:
+
+   **Phase 1 — OS setup (Boot 1, up to 5 min).** The Pi runs `firstrun.sh`, which sets the hostname, configures WiFi via NetworkManager, creates the user, and enables SSH. It then announces itself on the network as `hokku-installing.local` via avahi and reboots. The wizard polls for this hostname to appear:
+
+   ```
+     Phase 1/2: waiting for hokku-installing.local (Boot 1 — OS setup, ~1-2 min, up to 5 min)
+
+     [████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  1:06 elapsed  3:54 remaining
+
+     hokku-installing.local is up at 192.168.x.x after 1:06.
+
+     Boot 2 (package install) is now running.
+     You can SSH in to watch progress:
+       ssh hokku@hokku-installing.local
+       tail -f /var/log/hokku-firstboot-install.log
+   ```
+
+   When `hokku-installing.local` resolves, the Pi's IP is known. If SSH was enabled you can log in immediately to watch the install log in real time. The `hokku-installing.local` name stays up for the entire duration of Boot 2 so you don't lose access mid-install.
+
+   **Phase 2 — package install (Boot 2, up to 15 min).** After the reboot, `firstboot-install.sh` runs: it calls `apt update`, installs the hokku-server `.deb` (pulling in ~90 Debian packages), and optionally installs Samba. The wizard probes the webserver **directly by IP** — not by hostname — to guarantee it is talking to the right machine even if another server is already using the configured `.local` name on the network:
+
+   ```
+     Phase 2/2: waiting for webserver at 192.168.x.x (Boot 2 — package install)
+
+     Polling http://192.168.x.x:8080/hokku/api/status
+
+     [████████████████████████░░░░░░░░░░░░]  5:25 elapsed  9:35 remaining
+
+     Webserver up after 5:25.
+   ```
+
+   The probe checks for a valid JSON response with a `server_time` field to confirm it is a genuine hokku server, not a different service that happens to return HTTP 200.
+
+   Once the webserver is confirmed up, `firstboot-install.sh` stops and disables avahi — `hokku-installing.local` disappears. The wizard then applies the requested Bonjour hostname via the server's config API (if it differs from the default `hokku`), and the server's own zeroconf library takes over advertising under the configured name:
+
+   ```
+     Bonjour configured: myhokku.local (192.168.x.x)
+
+     Server ready at http://myhokku.local:8080/ (IP 192.168.x.x).
+   ```
+
+   If either phase times out, the wizard asks `Keep waiting? [Y/n]` so you can extend the wait without restarting.
 
 **Configure + flash [3] / Configure only [4] / Flash only [5] — ESP32 frame**
 
@@ -269,7 +326,7 @@ It then presents a menu and pre-selects the most sensible option for the detecte
 
 **Pi SD card imaging requires Windows and admin** — on other platforms use the [Raspberry Pi Imager](https://www.raspberrypi.com/software/) manually and follow [section 1.2](#12-set-up-a-raspberry-pi-optional).
 
-**First boot very slow** — normal. The Pi installs ~90 Debian packages on first boot and waits for NTP clock sync before running `apt update`. On slow SD cards or a congested network this can push past 8 minutes. SSH in and tail `/var/log/hokku-firstboot-install.log` if you want to watch.
+**First boot very slow** — normal. The Pi installs ~90 Debian packages on first boot and waits for NTP clock sync before running `apt update`. On slow SD cards or a congested network this can push past 8 minutes. If SSH is enabled, log in via `hokku-installing.local` while Phase 1 is still running and tail `/var/log/hokku-firstboot-install.log` to watch progress.
 
 **Frame shows an error on the e-paper** — the firmware renders configuration and connectivity errors directly on screen. Read the message and fix the relevant setting (wrong WiFi password, wrong server IP, etc.), then re-run configure.
 
