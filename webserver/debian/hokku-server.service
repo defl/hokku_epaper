@@ -6,6 +6,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
+ExecStartPre=-/bin/sh -c 'test -f /var/lib/hokku/config.json || cp /usr/share/hokku-server/config.json /var/lib/hokku/config.json'
 ExecStart=/usr/bin/hokku-server /var/lib/hokku/config.json
 Environment="PYTHONUNBUFFERED=1"
 Environment="NUMBA_CACHE_DIR=/var/lib/hokku/numba_cache"

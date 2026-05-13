@@ -48,23 +48,19 @@ Three tabs: **Images** (your photo library — upload, preview, manage), **Scree
 
 ## System Requirements
 
-**Server side** — where you host the image server:
-- Any Linux, macOS, Windows, or Raspberry Pi. A Raspberry Pi Zero 2 W is more than enough.
-- Around 256 MB of RAM. A thousand photos takes a few GB of disk — nothing a basic SD card can't handle.
-- On the same local network as the frame. No internet access needed or used.
+**Server side** — any Linux, macOS, Windows, or Raspberry Pi on the same local network as the frame. A Raspberry Pi Zero 2 W is the recommended choice: cheap, silent, always-on, and more than fast enough. Around 512 MB of RAM; a few GB of disk for photos.
 
-**Frame side** — the board already inside your Hokku / Huessen frame:
-- The frame ships with an ESP32-S3 — the pre-built firmware is matched to it, nothing to worry about.
-- A data-capable USB-C cable for the initial setup. Any USB-A-to-C or C-to-C cable that isn't charge-only will do.
-- 2.4 GHz WiFi. The frame doesn't support 5 GHz.
+**Frame side** — a Hokku Designs / Huessen 13.3" six-colour e-ink frame (ESP32-S3 inside), a data-capable USB-C cable for first-time setup, and a 2.4 GHz WiFi network.
+
+See **[Hardware](docs/hardware.md)** for where to buy the frame and the recommended Pi kit.
 
 ## Installation
 
 <img src="images/frame_x_pi.png" width="640">
 
-Hokku loves Pi! Connect both to your computer, run `hokku_setup.bat`, and the guided installer takes care of the rest.
+Hokku loves Pi! If you need to pick one up, the **[hardware guide](docs/hardware.md)** has a tested parts list that arrives next-day in the US. Connect both to your computer, run `hokku_setup.bat`, and the guided installer takes care of the rest.
 
-Prefer terminal tabs, mysterious pip errors, and the thrill of doing things the long way? We've got you covered: **[Manual installation guide](docs/install.md)**.
+Prefer terminal tabs, mysterious pip errors, and the satisfaction of doing things the hard way? We've got you covered: **[Manual installation guide](docs/install.md)**.
 
 ## Buttons and LEDs
 
@@ -82,6 +78,7 @@ Prefer terminal tabs, mysterious pip errors, and the thrill of doing things the 
 - **[Dithering pipeline](docs/dithering.md)** — why it looks the way it does; failure modes and countermeasures.
 - **[Firmware documentation](firmware/README.md)** — building from source, manual flashing, developer notes.
 - **[Firmware design spec](docs/firmware_design.md)** — the state-machine spec the current firmware implements.
+- **[Hardware](docs/hardware.md)** — where to buy the frame and the recommended Pi server kit.
 - **[Hardware facts](docs/hardware_facts.md)** — confirmed GPIO map, SPI config, init sequence, USB-detection findings.
 - **[Changelog](CHANGELOG.md)** — release history.
 - **[Disclaimer](DISCLAIMER.md)** — warranty (none), intended use, reverse-engineering notes, privacy.

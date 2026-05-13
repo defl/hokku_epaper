@@ -16,7 +16,7 @@
   "image_worker_thread_count": 1,
   "image_config_default": {
     "dither": {
-      "algorithm": "atkinson",
+      "algorithm": "floyd_steinberg",
       "lut_name": "hue_aware",
       "serpentine": false,
       "hue_cutoff_deg": 95.0,

@@ -1,3 +1,4 @@
+config/config.json /usr/share/hokku-server/
 templates/index.html /usr/share/hokku-server/templates/
 static/logo.png /usr/share/hokku-server/static/
 static/paper.png /usr/share/hokku-server/static/

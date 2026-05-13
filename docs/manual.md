@@ -135,6 +135,7 @@ The battery level is reported to the server on every refresh and shown in the Sc
 
 The following docs cover specific subsystems in detail:
 
+- **[hardware.md](hardware.md)** — where to buy the frame and the recommended Pi server kit.
 - **[install.md](install.md)** — full installation reference: the setup wizard step by step, manual installation on any platform, configuration file format and loading order.
 - **[dithering.md](dithering.md)** — how images are converted to the six-colour palette, why the defaults are what they are, what each setting does, and how to tune for specific types of photo.
 - **[firmware_design.md](firmware_design.md)** — the state-machine spec the firmware implements, for developers.

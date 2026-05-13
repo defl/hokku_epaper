@@ -9,6 +9,7 @@ Windows-only (uses \\.\PhysicalDriveN and wmic). Admin required.
 """
 import ctypes
 import ctypes.wintypes as wt
+import datetime
 import getpass
 import json
 import lzma
@@ -938,133 +939,114 @@ def find_bootfs_letter(disk_index, timeout=30):
     return None
 
 
-def find_deb_package():
-    """Find a hokku-server_*.deb in the usual search locations (no prompting)."""
-    candidates = []
-    for d in [CACHE_DIR, REPO_ROOT, REPO_ROOT / "webserver"]:
-        if d.exists():
-            candidates.extend(sorted(d.glob("hokku-server_*.deb")))
-    return candidates[-1] if candidates else None
-
-
 def _deb_name_matches(name):
     return name.startswith("hokku-server_") and name.endswith(".deb")
 
 
-def fetch_latest_release_deb():
-    """Query GitHub's latest-release API and download the hokku-server .deb
-    to .cache/. Returns the cached Path or None on any failure."""
-    print("  Querying GitHub latest release...")
+BUILD_DIR = REPO_ROOT / "build"
+
+
+def _local_debs():
+    """Return .deb files from build/ and .cache/, newest-filename-sort first."""
+    seen = set()
+    debs = []
+    for d in [BUILD_DIR, CACHE_DIR]:
+        if d.exists():
+            for p in sorted(d.glob("hokku-server_*.deb"), reverse=True):
+                if p.name not in seen:
+                    seen.add(p.name)
+                    debs.append(p)
+    return debs
+
+
+def select_deb_interactive():
+    """Build a unified list of local .debs and GitHub releases, let the user
+    pick one, download if needed. Returns Path or None."""
+
+    # --- local builds ---
+    local = _local_debs()
+
+    # --- GitHub releases ---
+    print("  Querying GitHub releases...", end=" ", flush=True)
+    github_releases = []
     try:
-        release = release_cache.get_latest_release()
-    except urllib.error.HTTPError as e:
-        print(f"  ERROR: GitHub API returned {e.code} {e.reason}")
-        return None
+        github_releases = release_cache.get_all_releases()
+        print(f"{len(github_releases)} found.")
     except Exception as e:
-        print(f"  ERROR: could not reach GitHub: {e}")
+        print(f"failed ({e}).")
+
+    if not local and not github_releases:
+        print("  No .deb files found locally and could not reach GitHub.")
         return None
 
-    tag = release.get("tag_name", "?")
-    asset = release_cache.find_asset(release, _deb_name_matches)
-    if asset is None:
-        print(f"  ERROR: release {tag} has no hokku-server_*.deb asset.")
-        return None
-    cached = release_cache.ensure_cached_asset(asset, CACHE_DIR, label=f"(release {tag})")
-    return cached
+    # Build display list: local entries first, then GitHub entries for
+    # releases whose .deb is not already in local.
+    local_names = {p.name for p in local}
 
+    # Each entry: {"label": str, "kind": "local"|"github", "path": Path|None, "release": dict|None}
+    entries = []
+    for p in local:
+        mtime = p.stat().st_mtime
+        date = datetime.date.fromtimestamp(mtime).isoformat()
+        entries.append({
+            "label": f"{p.name}  [{date}, local build]",
+            "kind": "local",
+            "path": p,
+            "release": None,
+        })
+    for rel in github_releases:
+        asset = release_cache.find_asset(rel, _deb_name_matches)
+        if asset is None:
+            continue
+        if asset["name"] in local_names:
+            continue  # already shown as local
+        tag = rel.get("tag_name", "?")
+        date = (rel.get("published_at") or "")[:10]
+        entries.append({
+            "label": f"{asset['name']}  [{date}, GitHub {tag}]",
+            "kind": "github",
+            "path": None,
+            "release": rel,
+        })
 
-def select_release_interactive():
-    """Fetch all GitHub releases, let the user pick one, download its .deb.
-    Returns Path or None."""
-    print("  Querying GitHub releases...")
-    try:
-        releases = release_cache.get_all_releases()
-    except urllib.error.HTTPError as e:
-        print(f"  ERROR: GitHub API returned {e.code} {e.reason}")
-        return None
-    except Exception as e:
-        print(f"  ERROR: could not reach GitHub: {e}")
-        return None
-
-    if not releases:
-        print("  No releases found on GitHub.")
+    if not entries:
+        print("  No installable .deb versions found.")
         return None
 
     print()
-    print("  Available releases:")
-    for i, rel in enumerate(releases, 1):
-        tag = rel.get("tag_name", "?")
-        date = (rel.get("published_at") or "")[:10]
-        marker = "  (latest)" if i == 1 else ""
-        print(f"    {i}. {tag}  ({date}){marker}")
+    print("  Available versions:")
+    for i, e in enumerate(entries, 1):
+        print(f"    {i}. {e['label']}")
     print()
 
     while True:
-        choice = input(f"  Select release [1-{len(releases)}] (Enter = latest): ").strip()
-        if choice == "":
-            idx = 0
-            break
-        if choice.isdigit() and 1 <= int(choice) <= len(releases):
-            idx = int(choice) - 1
+        choice = input(f"  Select version [1-{len(entries)}]: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(entries):
+            selected = entries[int(choice) - 1]
             break
         print("  Invalid choice, try again.")
 
-    selected = releases[idx]
-    tag = selected.get("tag_name", "?")
-    asset = release_cache.find_asset(selected, _deb_name_matches)
-    if asset is None:
-        print(f"  ERROR: release {tag} has no hokku-server_*.deb asset.")
-        return None
+    if selected["kind"] == "local":
+        return selected["path"]
+
+    # GitHub — download to cache
+    rel = selected["release"]
+    tag = rel.get("tag_name", "?")
+    asset = release_cache.find_asset(rel, _deb_name_matches)
     return release_cache.ensure_cached_asset(asset, CACHE_DIR, label=f"(release {tag})")
 
 
 def locate_deb_package_interactive():
-    """Auto-find the .deb, or let the user pick a GitHub release; if both
-    fail, ask the user for a path. Returns Path or None."""
-    deb = find_deb_package()
+    """Always ask the user which version to install. Returns Path or None."""
+    deb = select_deb_interactive()
     if deb:
         return deb
 
     print()
-    print("  No hokku-server_*.deb found locally.")
-    deb = select_release_interactive()
-    if deb:
-        return deb
-
-    print()
-    print("  Could not auto-fetch the .deb. A .deb is required to install")
-    print("  hokku-server on the Pi. Options:")
+    print("  Could not obtain a .deb. Options:")
     print("    - Check your internet connection and retry")
-    print("    - Build one on a Linux box: cd webserver && ./build-deb.sh")
-    print("    - Enter the path to an existing .deb below")
-    print()
-
-    while True:
-        path_str = input("  Path to hokku-server_*.deb (blank to abort): ").strip().strip('"').strip("'")
-        if not path_str:
-            return None
-        p = Path(path_str)
-        if not p.exists():
-            print(f"  ERROR: {p} does not exist.")
-            continue
-        if not p.is_file():
-            print(f"  ERROR: {p} is not a file.")
-            continue
-        if not p.name.startswith("hokku-server_") or not p.suffix == ".deb":
-            print(f"  ERROR: {p.name} doesn't look like a hokku-server .deb (expected hokku-server_*.deb).")
-            if not _yesno("Use it anyway?", default_yes=False):
-                continue
-        # Cache it so future runs find it automatically.
-        try:
-            ensure_cache_dir()
-            cached = CACHE_DIR / p.name
-            if cached.resolve() != p.resolve():
-                shutil.copy2(p, cached)
-                print(f"  Cached to {cached} for future runs.")
-            return cached
-        except Exception as e:
-            print(f"  (Could not cache to .cache/: {e}. Using original path.)")
-            return p
+    print("    - Build locally: cd webserver && bash build-deb.sh  (needs Linux/Docker)")
+    return None
 
 
 def inject_boot_customization(bootfs_letter, cfg, deb_path):
@@ -1392,7 +1374,7 @@ echo "=== firstboot-install.sh done $(date) ==="
 
 def wait_for_installing_beacon(timeout=INSTALLING_BEACON_WAIT_SECS, ssh_enabled=False):
     """Phase 1: poll for hokku-installing.local on mDNS (avahi beacon, Boot 1).
-    On success prints the SSH hint and returns True. Returns False on timeout."""
+    Returns the Pi's IP on success, None on timeout."""
     fqdn = "hokku-installing.local"
     t_min = timeout // 60
     print(f"  Phase 1/2: waiting for {fqdn} (Boot 1 — OS setup, ~1-2 min, up to {t_min} min)")
@@ -1406,7 +1388,7 @@ def wait_for_installing_beacon(timeout=INSTALLING_BEACON_WAIT_SECS, ssh_enabled=
         try:
             ip = socket.gethostbyname(fqdn)
             e_min, e_sec = divmod(elapsed, 60)
-            sys.stdout.write(f"\r  {'':>{bar_width + 28}}\r")
+            sys.stdout.write(f"\r  {'':>{bar_width + 36}}\r")
             print(f"  {fqdn} is up at {ip} after {e_min}:{e_sec:02d}.")
             if ssh_enabled:
                 print()
@@ -1414,7 +1396,7 @@ def wait_for_installing_beacon(timeout=INSTALLING_BEACON_WAIT_SECS, ssh_enabled=
                 print(f"  You can SSH in to watch progress:")
                 print(f"    ssh hokku@hokku-installing.local")
                 print(f"    tail -f /var/log/hokku-firstboot-install.log")
-            return True
+            return ip
         except socket.gaierror:
             pass
         remaining = max(0, timeout - elapsed)
@@ -1428,14 +1410,15 @@ def wait_for_installing_beacon(timeout=INSTALLING_BEACON_WAIT_SECS, ssh_enabled=
     print()
     print(f"  TIMEOUT: {fqdn} did not appear.")
     print("  Boot 1 (OS setup) may have failed. Check the SD card and power supply.")
-    return False
+    return None
 
 
-def wait_for_webserver(hostname, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SECS,
+def wait_for_webserver(host, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SECS,
                        ssh_enabled=False):
     """Poll /hokku/api/status and check for 'server_time' in the JSON response.
+    `host` is an IP address or hostname used verbatim (no .local appended).
     Returns True if a genuine hokku webserver responds within timeout."""
-    url = f"http://{hostname}.local:{port}/hokku/api/status"
+    url = f"http://{host}:{port}/hokku/api/status"
     print(f"  Polling {url}")
     print()
     bar_width = 36
@@ -1449,7 +1432,7 @@ def wait_for_webserver(hostname, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SEC
             with urllib.request.urlopen(url, timeout=5) as r:
                 if r.status == 200 and "server_time" in json.loads(r.read()):
                     e_min, e_sec = divmod(elapsed, 60)
-                    sys.stdout.write(f"\r  {'':>{bar_width + 28}}\r")  # clear line
+                    sys.stdout.write(f"\r  {'':>{bar_width + 36}}\r")  # clear line
                     print(f"  Webserver up after {e_min}:{e_sec:02d}.")
                     return True
         except Exception:
@@ -1491,9 +1474,10 @@ def check_existing_server(hostname="hokku"):
 
 # ---------- Orchestration ----------
 
-def _apply_mdns_config(mdns_hostname):
-    """POST mdns_hostname to the running server's config API. Logs result."""
-    url = f"http://hokku.local:{WEBSERVER_PORT}/hokku/api/config"
+def _apply_mdns_config(host, mdns_hostname):
+    """POST mdns_hostname to the running server's config API. Logs result.
+    `host` is the IP (or hostname) to reach the server — not the new mDNS name."""
+    url = f"http://{host}:{WEBSERVER_PORT}/hokku/api/config"
     body = json.dumps({"mdns_hostname": mdns_hostname}).encode()
     req = urllib.request.Request(
         url, data=body,
@@ -1505,9 +1489,9 @@ def _apply_mdns_config(mdns_hostname):
             result = json.loads(r.read())
         if result.get("ok"):
             if mdns_hostname:
-                print(f"  Bonjour configured: {mdns_hostname}.local")
+                print(f"  Bonjour configured: {mdns_hostname}.local ({host})")
             else:
-                print("  Bonjour disabled on the server.")
+                print(f"  Bonjour disabled on the server ({host}).")
         else:
             print(f"  WARNING: server rejected Bonjour config update: {result}")
     except Exception as e:
@@ -1620,24 +1604,25 @@ def run():
     print("     - Total first-boot time: typically 3-8 minutes,")
     print("       longer on slow SD cards or slow internet.")
     print()
-    print("  hokku.local will appear once the install is complete.")
+    final_mdns = cfg["mdns_hostname"] or cfg["hostname"]
+    print(f"  {final_mdns}.local will appear once the install is complete.")
     print()
     input("  Press Enter once the card is inserted and the Pi is powered on... ")
     print()
-    beacon_ok = False
+    pi_ip = None
     webserver_ok = False
     try:
-        while not beacon_ok:
-            beacon_ok = wait_for_installing_beacon(ssh_enabled=cfg["ssh_enabled"])
-            if not beacon_ok:
+        while not pi_ip:
+            pi_ip = wait_for_installing_beacon(ssh_enabled=cfg["ssh_enabled"])
+            if not pi_ip:
                 if not _yesno("  Keep waiting?", default_yes=True):
                     break
-        if beacon_ok:
+        if pi_ip:
             print()
-            print("  Phase 2/2: waiting for hokku.local webserver (Boot 2 — package install)")
+            print(f"  Phase 2/2: waiting for webserver at {pi_ip} (Boot 2 — package install)")
             print()
             while not webserver_ok:
-                webserver_ok = wait_for_webserver("hokku", ssh_enabled=cfg["ssh_enabled"])
+                webserver_ok = wait_for_webserver(pi_ip, ssh_enabled=cfg["ssh_enabled"])
                 if not webserver_ok:
                     if not _yesno("  Keep waiting?", default_yes=True):
                         break
@@ -1645,17 +1630,10 @@ def run():
         print("\n  Cancelled by user.")
         return None
 
-    # Apply Bonjour config first — this switches what hostname the server advertises.
-    if webserver_ok and cfg["mdns_hostname"] != "hokku":
-        _apply_mdns_config(cfg["mdns_hostname"])
-
-    # Resolve IP from whichever hostname the server is now advertising.
+    # Apply Bonjour config via IP — hostname-based lookup would hit the wrong server.
     final_hostname = cfg["mdns_hostname"] or cfg["hostname"]
-    pi_ip = None
-    try:
-        pi_ip = socket.gethostbyname(f"{final_hostname}.local")
-    except socket.gaierror:
-        pass
+    if webserver_ok and cfg["mdns_hostname"] != "hokku":
+        _apply_mdns_config(pi_ip, cfg["mdns_hostname"])
 
     return {
         "wifi_ssid": cfg["wifi_ssid"],

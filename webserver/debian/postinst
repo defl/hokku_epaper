@@ -6,12 +6,9 @@ set -e
 # here end up owned by the dynamic user once they're inside that tree.
 mkdir -p /var/lib/hokku/images /var/lib/hokku/cache
 
-# Config file deliberately NOT created here. The service (running as
-# DynamicUser) creates it itself on first load, which ensures correct
-# ownership. Legacy configs at /etc/hokku/config.json are auto-migrated
-# into /var/lib/hokku/config.json by the webserver on first run, and
-# the legacy file is left in place as a backup.
-#
+# Config file is NOT created here. The service's ExecStartPre copies
+# /usr/share/hokku-server/config.json to /var/lib/hokku/config.json on
+# first start, running as DynamicUser so ownership is correct.
 # If this postinst wrote config.json as root, subsequent saves from
 # the web UI would fail with PermissionError because DynamicUser's
 # transient UID doesn't match root. StateDirectory only chowns top-

@@ -1,4 +1,4 @@
-"""Verify config/config.example.json stays in sync with AppConfig.
+"""Verify config/config.json (the default shipped config) stays in sync with AppConfig.
 
 If AppConfig fields are renamed, added, or their types change this test will
 catch it before shipping so users aren't handed a broken example file.
@@ -13,7 +13,7 @@ import pytest
 
 from hokku_server.app_config import AppConfig, _CURRENT_VERSION
 
-_EXAMPLE = Path(__file__).resolve().parents[2] / "webserver" / "config" / "config.example.json"
+_EXAMPLE = Path(__file__).resolve().parents[2] / "webserver" / "config" / "config.json"
 
 
 def _load_example() -> dict:
@@ -34,7 +34,7 @@ def test_example_config_is_valid_json():
 def test_example_config_version_is_current():
     data = _load_example()
     assert data.get("version") == _CURRENT_VERSION, (
-        f"config.example.json version={data.get('version')!r} "
+        f"config.json version={data.get('version')!r} "
         f"but _CURRENT_VERSION={_CURRENT_VERSION}. "
         "Bump the version in the example or update the migration chain."
     )
@@ -66,8 +66,8 @@ def test_example_config_has_all_known_fields():
     cfg_fields = {f.name for f in fields(AppConfig)}
     missing = cfg_fields - set(data.keys())
     assert not missing, (
-        f"Fields in AppConfig missing from config.example.json: {sorted(missing)}. "
-        "Add them to webserver/config/config.example.json."
+        f"Fields in AppConfig missing from config.json: {sorted(missing)}. "
+        "Add them to webserver/config/config.json."
     )
 
 
@@ -83,7 +83,7 @@ def test_example_config_no_unknown_fields():
     structural_extras = {"image_config_default", "image_config_bw"}
     unknown = set(data.keys()) - cfg_fields - structural_extras
     assert not unknown, (
-        f"Unknown keys in config.example.json (possible typos): {sorted(unknown)}. "
+        f"Unknown keys in config.json (possible typos): {sorted(unknown)}. "
         "Fix the key names or remove them."
     )
 

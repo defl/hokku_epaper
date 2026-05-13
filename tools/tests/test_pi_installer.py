@@ -328,33 +328,36 @@ class TestRenderFirstboot:
 
 # ---------- .deb pre-flight ----------
 
-class TestFindDebPackage:
-    def test_finds_deb_in_cache(self, tmp_path, monkeypatch):
+class TestLocalDebs:
+    def _patch(self, tmp_path, monkeypatch):
+        build = tmp_path / "build"
+        build.mkdir()
         cache = tmp_path / ".cache"
         cache.mkdir()
-        (cache / "hokku-server_2.1.20_all.deb").write_bytes(b"fake")
-
+        monkeypatch.setattr(pi, "BUILD_DIR", build)
         monkeypatch.setattr(pi, "CACHE_DIR", cache)
-        monkeypatch.setattr(pi, "REPO_ROOT", tmp_path)
-        result = pi.find_deb_package()
-        assert result is not None
-        assert result.name == "hokku-server_2.1.20_all.deb"
+        return build, cache
 
-    def test_picks_latest_when_multiple(self, tmp_path, monkeypatch):
-        cache = tmp_path / ".cache"
-        cache.mkdir()
-        (cache / "hokku-server_2.1.19_all.deb").write_bytes(b"v1")
+    def test_finds_deb_in_build(self, tmp_path, monkeypatch):
+        build, _ = self._patch(tmp_path, monkeypatch)
+        (build / "hokku-server_2.1.20_all.deb").write_bytes(b"fake")
+        result = pi._local_debs()
+        assert len(result) == 1
+        assert result[0].name == "hokku-server_2.1.20_all.deb"
+
+    def test_deduplicates_across_dirs(self, tmp_path, monkeypatch):
+        build, cache = self._patch(tmp_path, monkeypatch)
+        (build / "hokku-server_2.1.20_all.deb").write_bytes(b"v2")
         (cache / "hokku-server_2.1.20_all.deb").write_bytes(b"v2")
-        monkeypatch.setattr(pi, "CACHE_DIR", cache)
-        monkeypatch.setattr(pi, "REPO_ROOT", tmp_path)
-        result = pi.find_deb_package()
-        # sorted() is lexicographic but version sort works for these
-        assert result.name == "hokku-server_2.1.20_all.deb"
+        (cache / "hokku-server_2.1.19_all.deb").write_bytes(b"v1")
+        result = pi._local_debs()
+        names = [p.name for p in result]
+        assert names.count("hokku-server_2.1.20_all.deb") == 1
+        assert "hokku-server_2.1.19_all.deb" in names
 
-    def test_returns_none_when_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(pi, "CACHE_DIR", tmp_path / ".cache")
-        monkeypatch.setattr(pi, "REPO_ROOT", tmp_path)
-        assert pi.find_deb_package() is None
+    def test_returns_empty_when_missing(self, tmp_path, monkeypatch):
+        self._patch(tmp_path, monkeypatch)
+        assert pi._local_debs() == []
 
 
 # ---------- .deb asset predicate (matching hokku-server_*.deb) ----------
