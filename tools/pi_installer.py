@@ -1645,20 +1645,22 @@ def run():
         print("\n  Cancelled by user.")
         return None
 
-    pi_ip = None
-    try:
-        pi_ip = socket.gethostbyname("hokku.local")
-    except socket.gaierror:
-        pass
-
-    # Apply the requested Bonjour config if it differs from the server default.
+    # Apply Bonjour config first — this switches what hostname the server advertises.
     if webserver_ok and cfg["mdns_hostname"] != "hokku":
         _apply_mdns_config(cfg["mdns_hostname"])
+
+    # Resolve IP from whichever hostname the server is now advertising.
+    final_hostname = cfg["mdns_hostname"] or cfg["hostname"]
+    pi_ip = None
+    try:
+        pi_ip = socket.gethostbyname(f"{final_hostname}.local")
+    except socket.gaierror:
+        pass
 
     return {
         "wifi_ssid": cfg["wifi_ssid"],
         "wifi_pass": cfg["wifi_pass"],
         "server_ip": pi_ip,
-        "hostname": cfg["hostname"],
+        "hostname": final_hostname,
         "webserver_ok": webserver_ok,
     }
