@@ -91,4 +91,4 @@ Claude Opus 4.6-4.7 was used throughout. Unfortunately, one cannot simply tell A
 
 ---
 
-[![CI](https://github.com/defl/hokku_epaper/actions/workflows/ci.yml/badge.svg)](https://github.com/defl/hokku_epaper/actions/workflows/ci.yml)
+[![CI](https://github.com/defl/hokku_epaper/actions/workflows/ci.yml/badge.svg)](https://github.com/defl/hokku_epaper/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-GPL--3.0%20%2B%20Commons%20Clause-blue)](LICENSE.txt)
