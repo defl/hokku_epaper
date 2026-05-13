@@ -194,8 +194,9 @@ def test_memory_guard_raises_memory_error_when_exceeded() -> None:
     Validates the hard-guarantee semantics on platforms that support it.
     """
 
-    cur = int(psutil.Process().memory_info().rss)
-    # Cap 1 MB above current RSS — any meaningful new allocation should fail.
+    cur = int(psutil.Process().memory_info().vms)
+    # Cap 1 MB above current VMS — any meaningful new allocation should fail.
+    # RLIMIT_AS limits virtual address space (vms), not resident set size (rss).
     cap = cur + 1 * 1024 * 1024
     with pytest.raises(MemoryError):
         with memory_limit(cap):
