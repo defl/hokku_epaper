@@ -23,6 +23,25 @@ jobs:
       - name: Run tests
         run: pytest -m "not time_intensive"
 
+  build-firmware:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.3
+          target: esp32s3
+          path: firmware
+          command: bash ci-build.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hokku-firmware
+          path: firmware/release/hokku-firmware_*.bin
+
   build-deb:
     needs: test
     runs-on: ubuntu-latest
