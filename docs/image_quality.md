@@ -11,6 +11,49 @@ match**. `AGENTS.md` carries the same reminder.
 
 ---
 
+## ⚠ The fundamental limit: metrics measure colour fidelity, not perceptual quality
+
+**These metrics will lie to you. Your eyes are the ultimate judge.**
+
+The comparator measures how closely the derived image reproduces each source
+pixel's Lab colour. That is useful for catching regressions in specific failure
+modes (blue speckle in neutral areas, saturation collapse) but it is the *wrong
+scoring function* for evaluating pipeline stages that trade pixel-level colour
+accuracy for structural legibility.
+
+The clearest example: enabling CLAHE (local contrast enhancement) on a
+dark, low-contrast portrait caused `hue_error` to jump +33 % and `sat_hit`
+to drop −6 % in aggregate across the test suite. By the numbers that looks
+like a regression. Visually the portrait went from a flat, near-featureless
+mask to an image with visible eye-socket depth, wrinkle texture, stubble, and
+collar detail. The improvement is unambiguous to any observer. The metrics
+flagged it as a failure because CLAHE pushed dark shadow pixels across palette
+hue boundaries — those pixels got assigned to slightly different ink colours,
+which the comparator counts as a hue error, even though the structural
+information they now carry is far more valuable than their exact hue match.
+
+**When to trust the metrics:**
+- Detecting specific known failure modes: blue speckle (`neutral_blue_fraction`),
+  saturation collapse (`sat_hit`), global colour shift (`overall_dE`).
+- Regression testing: confirming that a refactor didn't change output.
+- Comparing algorithm variants on the *same* image *without* changing
+  pre-processing stages.
+
+**When not to trust the metrics:**
+- Evaluating changes to CLAHE, unsharp mask, midtone lift, or pre-dither noise.
+  These stages deliberately shift pixel values to improve local contrast and
+  spatial structure; the pixel-level colour error they introduce is the mechanism
+  by which they work, not a bug.
+- Any situation where the image looks better to a trained eye but the numbers
+  went up. In that case, trust your eyes.
+
+The pipeline targets a 6-colour reflective display. An e-ink panel that is
+missing structural depth — shadows, texture, wrinkles — reads as a poor
+reproduction regardless of how small the mean ΔE is. Colour fidelity without
+legibility is not quality.
+
+---
+
 ## 1. Why a dedicated comparator?
 
 Evaluating dither quality visually is slow and subjective. The same image
@@ -239,6 +282,15 @@ hue preservation" for greyscale inputs.
 A `hue_error` above ~15° on a colour photograph suggests the palette-assignment
 LUT is making hue-inaccurate choices. Values of 5–10° are typical for images
 whose dominant hues sit between palette colours.
+
+**Important caveat:** `hue_error` is particularly susceptible to false
+positives when CLAHE or other local-contrast stages are active. CLAHE
+redistributes pixel values within a local tile to stretch local contrast; in
+dark, low-chroma regions this can shift pixels across palette hue boundaries,
+producing a measurable hue error even though the structural improvement (visible
+depth, texture, shadow detail) is visually unambiguous. A rising `hue_error`
+after enabling CLAHE does not necessarily mean colour quality degraded — inspect
+the image directly before drawing conclusions.
 
 ---
 

@@ -113,16 +113,15 @@ def test_image_configs_roundtrip(tmp_path: Path):
     assert loaded.classifier_bw_detect_enabled is True
 
 
-def test_image_field_with_partial_blob_rejected(tmp_path: Path):
-    """A corrupt image_config_default blob (partial dither) must fail on parse."""
+def test_image_field_with_partial_blob_falls_back_to_default(tmp_path: Path):
+    """A corrupt image_config_default blob (partial dither) falls back to the default preset."""
     p = tmp_path / "c.json"
     p.write_text(json.dumps({
         "version": _CURRENT_VERSION,
         "image_config_default": {"dither": {}},
     }))
-    with contextlib.redirect_stderr(io.StringIO()):
-        with pytest.raises(SystemExit):
-            AppConfig.load(p)
+    cfg = AppConfig.load(p)
+    assert cfg.image_config_default == PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
 
 
 def test_v1_migrates_to_v2():

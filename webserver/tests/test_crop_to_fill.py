@@ -28,7 +28,7 @@ from hokku_server.app_config import AppConfig
 from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
-from hokku_server.image_config import ImageConfig
+from hokku_server.image_config import ImageConfig, Orientation
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
 from hokku_server.display import TOTAL_BYTES
 from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
@@ -51,11 +51,14 @@ def _noop_cfg() -> ImageConfig:
         prepare_gamma=1.0,
         prepare_brightness=1.0,
         prepare_contrast=1.0,
-        prepare_sharpness=1.0,
+        prepare_midtone=1.0,
+        clahe_clip_limit=0.0,
+        prepare_usm_amount=0,
         color_enhance=1.0,
         use_adaptive_saturate=False,
         adaptive_vivid=False,
         scale_chroma=False,
+        dither_noise=0.0,
         dither=DitherConfig(
             algorithm="noop",
             lut_name="euclidean",
@@ -228,7 +231,7 @@ _THRESHOLDS = [
     ("2pct",     0.02),
     ("50pct",    0.50),
 ]
-_ORIENTATIONS = ["portrait", "landscape"]
+_ORIENTATIONS: list[Orientation] = ["portrait", "landscape"]
 
 
 @pytest.fixture(scope="module", autouse=False)

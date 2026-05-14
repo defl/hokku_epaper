@@ -122,7 +122,6 @@ class ImageConfig:
     prepare_gamma: float
     prepare_brightness: float
     prepare_contrast: float
-    prepare_sharpness: float
     color_enhance: float          # used only when use_adaptive_saturate=False
     use_adaptive_saturate: bool
     saturate_max_enhance: float
@@ -132,6 +131,12 @@ class ImageConfig:
     adaptive_vivid: bool          # recommended: chroma-gated DRC (see §5b)
     vivid_chroma_low: float
     vivid_chroma_high: float
+    # ── post-release additions (lenient: old configs load with defaults) ──────
+    prepare_midtone: float = 1.0       # >1 lifts mid-tones independently of gamma
+    clahe_clip_limit: float = 0.0      # local contrast (CLAHE); 0 = off, 2–4 typical
+    prepare_usm_radius: float = 1.0    # unsharp mask radius (px)
+    prepare_usm_amount: int = 120      # unsharp mask strength (percent)
+    dither_noise: float = 0.0          # pre-dither Gaussian noise std (RGB units)
 ```
 
 `AppConfig` holds three `ImageConfig` objects: `image_config_default`,
@@ -526,21 +531,59 @@ test to go red and forces a budget-spec update.
 
 ## 11. Tonal preparation chain
 
-`_apply_prepare_enhancements()` runs before the rotate and before any
-float32 work:
+The preparation pipeline runs in two phases. The PIL phase operates on the
+full uint8 canvas; the stripe phase operates on 100-row float32 windows.
 
-1. `ImageOps.autocontrast(cutoff=prepare_autocontrast_cutoff)` — stretch the
-   histogram, ignoring the darkest/brightest `cutoff`% of pixels.
-2. Gamma correction: a 256-entry point LUT that applies `(i/255)^gamma × 255`
-   per channel (default gamma 0.85 — midtone lift).
-3. PIL `ImageEnhance.Brightness`, `Contrast`, `Sharpness` in order.
-4. If `use_adaptive_saturate=False`: PIL `ImageEnhance.Color(color_enhance)`.
-   If `use_adaptive_saturate=True`: the flat colour step is **skipped here**;
-   the chroma-gated saturation boost runs later inside `prep_stripe`.
+### PIL phase — `_apply_prepare_enhancements()` (`image_abc.py`)
 
-All PIL operations work on the uint8 canvas, so each one peaks at about one
-extra 15 MB image and recycles quickly. The float32 work doesn't start until
-`dither_with_prep` is called.
+Runs before the canvas is rotated or handed to the dither strategy.
+
+1. **Autocontrast** — `ImageOps.autocontrast(cutoff=prepare_autocontrast_cutoff)`:
+   stretch the histogram, ignoring the darkest/brightest `cutoff`% of pixels.
+2. **Gamma** — 256-entry uint8 LUT: `out[i] = (i/255)^gamma × 255`. Default
+   gamma 0.85 brightens mid-tones to compensate for e-ink's darker appearance
+   under typical ambient light.
+3. **Midtone lift** — a second 256-entry LUT: `out[i] = (i/255)^(1/midtone) × 255`.
+   Applied only when `prepare_midtone ≠ 1.0`. Independently lifts mid-tones
+   without affecting the gamma curve; useful for pulling shadow detail into the
+   panel's visible range without globally washing out highlights.
+4. **Brightness / Contrast** — `ImageEnhance.Brightness` then `ImageEnhance.Contrast`.
+5. **CLAHE** — if `clahe_clip_limit > 0.0` and `cv2` is available: convert
+   to Lab, run `cv2.createCLAHE(clipLimit, tileGridSize=(8,8))` on the L\*
+   channel only, convert back to RGB. CLAHE redistributes contrast locally
+   within 8×8-pixel tiles, pulling out shadow detail and highlight texture
+   simultaneously. **Note:** this stage trades pixel-level hue accuracy for
+   structural legibility — see `image_quality.md §3.8` for the implication on
+   metrics.
+6. **Unsharp mask** — `PIL.ImageFilter.UnsharpMask(radius=prepare_usm_radius,
+   percent=prepare_usm_amount, threshold=3)`. Replaces the old fixed PIL
+   `ImageEnhance.Sharpness` kernel. The `threshold=3` suppresses noise
+   amplification in flat areas. A `prepare_usm_amount` of 0 is a no-op.
+7. **Colour enhance** — `ImageEnhance.Color(color_enhance)`, only when
+   `use_adaptive_saturate=False`. The flat saturation boost is skipped when
+   the chroma-gated path is active (§5b).
+
+All PIL operations work on the uint8 canvas. Each one peaks at about one
+extra 15 MB image copy and recycles immediately. The float32 work doesn't
+start until `dither_with_prep` is called.
+
+### Stripe phase — `_prep_stripe()` closure in `ImageRenderer.render_indices()` (`image_renderer.py`)
+
+Called per 100-row batch, returning float32 data ready for the dither loop.
+
+1. **Adaptive saturation** (if `use_adaptive_saturate=True`) — Lab-space
+   chroma boost gated on source chroma (§5b).
+2. **Dynamic range compression** — `compress_dynamic_range()`: maps L\* from
+   [0, 100] into [panel_black_L, panel_white_L]; applies a tanh soft shoulder
+   for the top 15 % of the L\* range to prevent near-white regions from hard-
+   clipping. With `adaptive_vivid=True`, chroma is preserved for saturated
+   pixels (§5c).
+3. **Pre-dither noise** (if `dither_noise > 0.0`) — adds `N(0, dither_noise)`
+   Gaussian noise to the float32 RGB values (clipped to [0, 255]). Applied
+   immediately before quantisation so the error-diffusion kernel sees
+   independently perturbed inputs on each pixel. This breaks up the regular
+   "worm" patterns that error diffusion produces in smooth gradients, at the
+   cost of slightly higher pixel-level colour error.
 
 ---
 
@@ -564,6 +607,15 @@ defaults inside the serialised form.
 Three metrics are tracked. Full definitions — what they measure, how they are
 computed, and how to interpret the numbers — are in
 [docs/image_quality.md](image_quality.md). Short summary:
+
+> **Metrics caveat:** these numbers measure pixel-level colour fidelity. They
+> are reliable for comparing dither algorithms and LUT variants, but will
+> produce misleading results for pipeline stages that improve structural
+> legibility at the cost of per-pixel colour accuracy (CLAHE, pre-dither noise,
+> midtone lift). When those stages are active, a rising `hue_error` or falling
+> `sat_hit` does not necessarily indicate a quality regression. See
+> [image_quality.md §⚠](image_quality.md#-the-fundamental-limit-metrics-measure-colour-fidelity-not-perceptual-quality)
+> for a full discussion.
 
 | Metric        | Good direction | What it catches                                  |
 |---------------|:--------------:|--------------------------------------------------|

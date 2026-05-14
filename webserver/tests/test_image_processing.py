@@ -119,7 +119,7 @@ def _test_images() -> list[Path]:
 # ── fast: compress_dynamic_range ─────────────────────────────────────────────
 
 def test_drc_maps_white_below_display_white():
-    """A pure-white input should map to the panel's white L*, not stay at L*=100."""
+    """Pure white should map at or below the panel's white L* (rolloff may pull it lower)."""
     white = np.full((1, 1, 3), 255.0, dtype=np.float32)
     out = compress_dynamic_range(
         white, scale_chroma=False, adaptive_vivid=False,
@@ -127,8 +127,10 @@ def test_drc_maps_white_below_display_white():
     )
     out_lab = rgb_to_lab(out.astype(np.float64))
     L_out = float(out_lab[0, 0, 0])
-    assert abs(L_out - _DISPLAY_WHITE_L) < 2.0, (
-        f"DRC white L* {L_out:.1f} should be near display white {_DISPLAY_WHITE_L:.1f}"
+    # The rolloff shoulder intentionally maps pure white slightly below display
+    # white to avoid hard clipping. Allow up to 5 L* units below display white.
+    assert _DISPLAY_WHITE_L - 5.0 <= L_out <= _DISPLAY_WHITE_L + 2.0, (
+        f"DRC white L* {L_out:.1f} should be near (or slightly below) display white {_DISPLAY_WHITE_L:.1f}"
     )
 
 
@@ -221,10 +223,10 @@ def test_drc_adaptive_vivid_no_boost_for_neutral():
 def test_brightness_increase_brightens():
     img = _make_rgb(40, 30, (100, 100, 100))
     cfg_bright = _cfg(prepare_brightness=1.5, prepare_contrast=1.0,
-                      prepare_sharpness=1.0, prepare_gamma=1.0,
+                      prepare_usm_amount=0, prepare_gamma=1.0,
                       prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
     cfg_base = _cfg(prepare_brightness=1.0, prepare_contrast=1.0,
-                    prepare_sharpness=1.0, prepare_gamma=1.0,
+                    prepare_usm_amount=0, prepare_gamma=1.0,
                     prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
     out_bright = _apply_prepare_enhancements(img.copy(), cfg_bright)
     out_base = _apply_prepare_enhancements(img.copy(), cfg_base)
@@ -236,10 +238,10 @@ def test_brightness_increase_brightens():
 def test_brightness_decrease_darkens():
     img = _make_rgb(40, 30, (160, 160, 160))
     cfg_dark = _cfg(prepare_brightness=0.5, prepare_contrast=1.0,
-                    prepare_sharpness=1.0, prepare_gamma=1.0,
+                    prepare_usm_amount=0, prepare_gamma=1.0,
                     prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
     cfg_base = _cfg(prepare_brightness=1.0, prepare_contrast=1.0,
-                    prepare_sharpness=1.0, prepare_gamma=1.0,
+                    prepare_usm_amount=0, prepare_gamma=1.0,
                     prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
     out_dark = _apply_prepare_enhancements(img.copy(), cfg_dark)
     out_base = _apply_prepare_enhancements(img.copy(), cfg_base)
@@ -252,10 +254,10 @@ def test_gamma_below_one_brightens_midtones():
     """Gamma < 1 maps mid-grey upward (brightens)."""
     img = _make_rgb(40, 30, (128, 128, 128))
     cfg_gamma = _cfg(prepare_gamma=0.5, prepare_brightness=1.0,
-                     prepare_contrast=1.0, prepare_sharpness=1.0,
+                     prepare_contrast=1.0, prepare_usm_amount=0,
                      prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
     cfg_base = _cfg(prepare_gamma=1.0, prepare_brightness=1.0,
-                    prepare_contrast=1.0, prepare_sharpness=1.0,
+                    prepare_contrast=1.0, prepare_usm_amount=0,
                     prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
     out_gamma = _apply_prepare_enhancements(img.copy(), cfg_gamma)
     out_base = _apply_prepare_enhancements(img.copy(), cfg_base)
@@ -268,10 +270,10 @@ def test_gamma_above_one_darkens_midtones():
     """Gamma > 1 maps mid-grey downward (darkens)."""
     img = _make_rgb(40, 30, (128, 128, 128))
     cfg_gamma = _cfg(prepare_gamma=2.0, prepare_brightness=1.0,
-                     prepare_contrast=1.0, prepare_sharpness=1.0,
+                     prepare_contrast=1.0, prepare_usm_amount=0,
                      prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
     cfg_base = _cfg(prepare_gamma=1.0, prepare_brightness=1.0,
-                    prepare_contrast=1.0, prepare_sharpness=1.0,
+                    prepare_contrast=1.0, prepare_usm_amount=0,
                     prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
     out_gamma = _apply_prepare_enhancements(img.copy(), cfg_gamma)
     out_base = _apply_prepare_enhancements(img.copy(), cfg_base)
@@ -285,10 +287,10 @@ def test_color_enhance_boosts_saturation():
     img = _make_rgb(40, 30, (200, 80, 40))  # warm orange
     cfg_vivid = _cfg(color_enhance=2.0, use_adaptive_saturate=False,
                      prepare_autocontrast_cutoff=0.0, prepare_gamma=1.0,
-                     prepare_brightness=1.0, prepare_contrast=1.0, prepare_sharpness=1.0)
+                     prepare_brightness=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
     cfg_flat = _cfg(color_enhance=1.0, use_adaptive_saturate=False,
                     prepare_autocontrast_cutoff=0.0, prepare_gamma=1.0,
-                    prepare_brightness=1.0, prepare_contrast=1.0, prepare_sharpness=1.0)
+                    prepare_brightness=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
     out_vivid = _apply_prepare_enhancements(img.copy(), cfg_vivid)
     out_flat = _apply_prepare_enhancements(img.copy(), cfg_flat)
     rgb_vivid = _mean_rgb(out_vivid)
@@ -303,7 +305,7 @@ def test_color_enhance_below_one_desaturates():
     img = _make_rgb(40, 30, (200, 80, 40))
     cfg_grey = _cfg(color_enhance=0.0, use_adaptive_saturate=False,
                     prepare_autocontrast_cutoff=0.0, prepare_gamma=1.0,
-                    prepare_brightness=1.0, prepare_contrast=1.0, prepare_sharpness=1.0)
+                    prepare_brightness=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
     out = _apply_prepare_enhancements(img.copy(), cfg_grey)
     rgb = _mean_rgb(out)
     # At color_enhance=0 the image becomes fully greyscale.
@@ -318,10 +320,10 @@ def test_adaptive_saturate_changes_output_vs_color_enhance():
     cfg_adapt = _cfg(use_adaptive_saturate=True, saturate_max_enhance=1.5,
                      saturate_low_chroma_thresh=5.0, saturate_high_chroma_thresh=20.0,
                      prepare_autocontrast_cutoff=0.0, prepare_gamma=1.0,
-                     prepare_brightness=1.0, prepare_contrast=1.0, prepare_sharpness=1.0)
+                     prepare_brightness=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
     cfg_enhance = _cfg(use_adaptive_saturate=False, color_enhance=1.5,
                        prepare_autocontrast_cutoff=0.0, prepare_gamma=1.0,
-                       prepare_brightness=1.0, prepare_contrast=1.0, prepare_sharpness=1.0)
+                       prepare_brightness=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
     out_adapt = np.asarray(_apply_prepare_enhancements(img.copy(), cfg_adapt))
     out_enhance = np.asarray(_apply_prepare_enhancements(img.copy(), cfg_enhance))
     assert not np.array_equal(out_adapt, out_enhance), (
@@ -482,9 +484,9 @@ def test_different_configs_produce_different_preview():
     """Pipeline knobs must actually affect the output pixels."""
     img = _make_gradient(120, 90)
     cfg_bright = _cfg(prepare_brightness=1.8, prepare_autocontrast_cutoff=0.0,
-                      prepare_gamma=1.0, prepare_contrast=1.0, prepare_sharpness=1.0)
+                      prepare_gamma=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
     cfg_dark = _cfg(prepare_brightness=0.4, prepare_autocontrast_cutoff=0.0,
-                    prepare_gamma=1.0, prepare_contrast=1.0, prepare_sharpness=1.0)
+                    prepare_gamma=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
     p_bright = render_preview_png(img.copy(), cfg_bright, "landscape", max_side_px=100)
     p_dark = render_preview_png(img.copy(), cfg_dark, "landscape", max_side_px=100)
     assert p_bright != p_dark, "brightness 1.8 vs 0.4 must produce different output"
@@ -572,8 +574,11 @@ _SLOW_CONFIGS: dict[str, ImageConfig] = {
     "contrast_0.6": _cfg(prepare_contrast=0.6),
     "autocontrast_0": _cfg(prepare_autocontrast_cutoff=0.0),
     "autocontrast_2": _cfg(prepare_autocontrast_cutoff=2.0),
-    "sharpness_2.0": _cfg(prepare_sharpness=2.0),
-    "sharpness_0.5": _cfg(prepare_sharpness=0.5),
+    "usm_strong": _cfg(prepare_usm_amount=200, prepare_usm_radius=2.0),
+    "usm_off": _cfg(prepare_usm_amount=0),
+    "midtone_lift": _cfg(prepare_midtone=1.5),
+    "midtone_darken": _cfg(prepare_midtone=0.7),
+    "noise_light": _cfg(dither_noise=3.0),
 
     # ── color enhancement ──
     "color_enhance_1.8": _cfg(color_enhance=1.8, use_adaptive_saturate=False),
@@ -622,7 +627,7 @@ _SLOW_CONFIGS: dict[str, ImageConfig] = {
         prepare_gamma=0.7,
         prepare_brightness=1.2,
         prepare_contrast=1.4,
-        prepare_sharpness=1.8,
+        prepare_usm_amount=320,
         color_enhance=1.8,
         use_adaptive_saturate=False,
         adaptive_vivid=True,
@@ -634,7 +639,7 @@ _SLOW_CONFIGS: dict[str, ImageConfig] = {
         prepare_gamma=1.0,
         prepare_brightness=1.0,
         prepare_contrast=1.0,
-        prepare_sharpness=1.0,
+        prepare_usm_amount=0,
         color_enhance=1.0,
         use_adaptive_saturate=False,
         scale_chroma=False,

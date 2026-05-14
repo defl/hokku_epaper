@@ -21,10 +21,9 @@ def _plain(algorithm: str, serpentine: bool = False) -> ImageConfig:
             neutral_chroma=8.0,
         ),
         prepare_autocontrast_cutoff=0.5,
-        prepare_gamma=0.85,
+        prepare_gamma=0.88,
         prepare_brightness=1.0,
         prepare_contrast=1.1,
-        prepare_sharpness=1.3,
         color_enhance=1.2,
         use_adaptive_saturate=False,
         saturate_max_enhance=1.0,
@@ -34,6 +33,11 @@ def _plain(algorithm: str, serpentine: bool = False) -> ImageConfig:
         adaptive_vivid=False,
         vivid_chroma_low=5.0,
         vivid_chroma_high=15.0,
+        prepare_midtone=1.02,
+        clahe_clip_limit=1.75,
+        prepare_usm_radius=1.0,
+        prepare_usm_amount=120,
+        dither_noise=2.0,
     )
 
 
@@ -47,10 +51,9 @@ def _hue_aware(algorithm: str, serpentine: bool = False) -> ImageConfig:
             neutral_chroma=8.0,
         ),
         prepare_autocontrast_cutoff=0.5,
-        prepare_gamma=0.85,
+        prepare_gamma=0.88,
         prepare_brightness=1.0,
         prepare_contrast=1.1,
-        prepare_sharpness=1.3,
         color_enhance=1.25,
         use_adaptive_saturate=True,
         saturate_max_enhance=1.25,
@@ -60,6 +63,11 @@ def _hue_aware(algorithm: str, serpentine: bool = False) -> ImageConfig:
         adaptive_vivid=True,
         vivid_chroma_low=5.0,
         vivid_chroma_high=15.0,
+        prepare_midtone=1.02,
+        clahe_clip_limit=1.75,
+        prepare_usm_radius=1.0,
+        prepare_usm_amount=120,
+        dither_noise=2.0,
     )
 
 

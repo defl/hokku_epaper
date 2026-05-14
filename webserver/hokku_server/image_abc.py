@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
-from PIL import Image, ImageEnhance, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 from hokku_server.display import (
     FULL_W,
@@ -59,14 +59,51 @@ def preview_png_from_panel_bytes(panel_bytes: bytes, orientation: "Orientation")
 
 
 def _apply_prepare_enhancements(canvas: Image.Image, cfg: ImageConfig) -> Image.Image:
+    # 1. Global autocontrast
     canvas = ImageOps.autocontrast(canvas, cutoff=cfg.prepare_autocontrast_cutoff)
+
+    # 2. Gamma correction (power curve via uint8 LUT)
     gamma_lut = [int(((i / 255.0) ** cfg.prepare_gamma) * 255) for i in range(256)] * 3
     canvas = canvas.point(gamma_lut)
+
+    # 3. Midtone lift (separate power curve; 1.0 = identity, skipped for speed)
+    if cfg.prepare_midtone != 1.0:
+        exp = 1.0 / cfg.prepare_midtone
+        midtone_lut = [round(255 * (i / 255.0) ** exp) if i > 0 else 0 for i in range(256)] * 3
+        canvas = canvas.point(midtone_lut)
+
+    # 4. Brightness / contrast
     canvas = ImageEnhance.Brightness(canvas).enhance(cfg.prepare_brightness)
     canvas = ImageEnhance.Contrast(canvas).enhance(cfg.prepare_contrast)
-    canvas = ImageEnhance.Sharpness(canvas).enhance(cfg.prepare_sharpness)
+
+    # 5. CLAHE local contrast on Lab L* channel (skipped when clip_limit == 0)
+    if cfg.clahe_clip_limit > 0.0:
+        try:
+            import cv2
+            arr = np.asarray(canvas, dtype=np.uint8)
+            lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
+            clahe = cv2.createCLAHE(
+                clipLimit=cfg.clahe_clip_limit,
+                tileGridSize=(8, 8),
+            )
+            lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+            canvas = Image.fromarray(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB))
+        except ImportError:
+            pass  # cv2 not installed — skip gracefully
+
+    # 6. Unsharp mask sharpening (replaces fixed PIL Sharpness kernel)
+    canvas = canvas.filter(
+        ImageFilter.UnsharpMask(
+            radius=cfg.prepare_usm_radius,
+            percent=cfg.prepare_usm_amount,
+            threshold=3,  # ignore diffs < 3 to avoid sharpening noise
+        )
+    )
+
+    # 7. Colour enhance (only when adaptive_saturate is off — both boost chroma)
     if not cfg.use_adaptive_saturate:
         canvas = ImageEnhance.Color(canvas).enhance(cfg.color_enhance)
+
     return canvas
 
 
@@ -111,7 +148,7 @@ class AbstractImageRenderer(ABC):
         if use_cover:
             scaled_w = max(visible_w, math.ceil(src_w * scale_cover))
             scaled_h = max(visible_h, math.ceil(src_h * scale_cover))
-            img_scaled = img.resize((scaled_w, scaled_h), Image.LANCZOS)
+            img_scaled = img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
             if release_input:
                 img.close()
             x_off = (scaled_w - visible_w) // 2
@@ -122,7 +159,7 @@ class AbstractImageRenderer(ABC):
         else:
             scale = scale_fit
             new_w, new_h = int(src_w * scale), int(src_h * scale)
-            img_resized = img.resize((new_w, new_h), Image.LANCZOS)
+            img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
             if release_input:
                 img.close()
             composed = Image.new("RGB", (visible_w, visible_h), (255, 255, 255))

@@ -36,7 +36,7 @@ def _noop_image_config() -> ImageConfig:
         prepare_gamma=1.0,
         prepare_brightness=1.0,
         prepare_contrast=1.0,
-        prepare_sharpness=1.0,
+        prepare_usm_amount=0,
         color_enhance=1.0,
         use_adaptive_saturate=False,
         adaptive_vivid=False,

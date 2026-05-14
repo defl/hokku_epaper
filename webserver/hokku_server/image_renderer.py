@@ -30,7 +30,7 @@ from hokku_server.image_abc import (
     _encode_panel_rgb_to_png,
     _preview_canvas_dims,
 )
-from hokku_server.image_config import ImageConfig
+from hokku_server.image_config import ImageConfig, Orientation
 
 
 IMAGE_EXTENSIONS = {
@@ -104,6 +104,17 @@ def compress_dynamic_range(
     c_ratio = f32((float(white_L) - float(black_L)) / 100.0)
     np.multiply(L, f32((float(white_L) - float(black_L)) / 100.0), out=L)
     np.add(L, black_L, out=L)
+
+    # Soft highlight rolloff: tanh shoulder for the top 15% of the L* range.
+    # Prevents near-white regions from hard-clipping to the panel's white ink;
+    # always on — no config flag needed (monotone, transparent when not clipping).
+    threshold = black_L + f32(0.85) * (white_L - black_L)
+    headroom = white_L - threshold
+    above = L > threshold
+    if np.any(above):
+        delta = L[above] - threshold
+        L[above] = (threshold + headroom * np.tanh(delta / headroom)).astype(f32)
+
     if adaptive_vivid:
         chroma = np.sqrt(a * a + b_ch * b_ch)
         t = np.clip((chroma - f32(vivid_chroma_low)) / f32(vivid_chroma_high - vivid_chroma_low), f32(0.0), f32(1.0))
@@ -177,9 +188,9 @@ def open_image_for_render(path: Path) -> Image.Image:
             if img.size[0] >= img.size[1]
             else (MAX_SOURCE_SHORT, MAX_SOURCE_LONG)
         )
-        img.thumbnail((w_cap, h_cap), Image.LANCZOS)
+        img.thumbnail((w_cap, h_cap), Image.Resampling.LANCZOS)
     elif max(img.size) > _MAX_SOURCE_LONG_SIDE:
-        img.thumbnail((_MAX_SOURCE_LONG_SIDE, _MAX_SOURCE_LONG_SIDE), Image.LANCZOS)
+        img.thumbnail((_MAX_SOURCE_LONG_SIDE, _MAX_SOURCE_LONG_SIDE), Image.Resampling.LANCZOS)
     return img
 
 
@@ -237,23 +248,28 @@ class ImageRenderer(AbstractImageRenderer):
             crop_to_fill_threshold, release_input=release_input,
         )
 
-        drc_kwargs = dict(
-            scale_chroma=cfg.scale_chroma,
-            adaptive_vivid=cfg.adaptive_vivid,
-            vivid_chroma_low=cfg.vivid_chroma_low,
-            vivid_chroma_high=cfg.vivid_chroma_high,
-        )
         use_sat = cfg.use_adaptive_saturate
         sat_max = cfg.saturate_max_enhance
         sat_lo = cfg.saturate_low_chroma_thresh
         sat_hi = cfg.saturate_high_chroma_thresh
+        noise_std = cfg.dither_noise
 
         def _prep_stripe(stripe_uint8):
             if use_sat:
                 f32 = adaptive_saturate(stripe_uint8, sat_max, sat_lo, sat_hi)
             else:
                 f32 = stripe_uint8.astype(np.float32)
-            return compress_dynamic_range(f32, **drc_kwargs)
+            f32 = compress_dynamic_range(
+                f32,
+                scale_chroma=cfg.scale_chroma,
+                adaptive_vivid=cfg.adaptive_vivid,
+                vivid_chroma_low=cfg.vivid_chroma_low,
+                vivid_chroma_high=cfg.vivid_chroma_high,
+            )
+            if noise_std > 0.0:
+                noise = np.random.normal(0.0, noise_std, f32.shape).astype(np.float32)
+                f32 = np.clip(f32 + noise, 0.0, 255.0)
+            return f32
 
         result_idx = self._dither.dither_with_prep(arr, cfg.dither, _prep_stripe)
         del arr

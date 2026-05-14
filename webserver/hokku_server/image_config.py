@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, fields
-from typing import Any, Literal
+from dataclasses import asdict, dataclass, field, fields
+from typing import Any, Literal, TypeAlias
 
 from hokku_server.dither_config import DitherConfig
 
 
-Orientation = Literal["landscape", "portrait"]
+Orientation: TypeAlias = Literal["landscape", "portrait"]
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,6 @@ class ImageConfig:
     prepare_gamma: float
     prepare_brightness: float
     prepare_contrast: float
-    prepare_sharpness: float
     color_enhance: float
     use_adaptive_saturate: bool
     saturate_max_enhance: float
@@ -35,6 +34,11 @@ class ImageConfig:
     adaptive_vivid: bool
     vivid_chroma_low: float
     vivid_chroma_high: float
+    prepare_midtone: float
+    clahe_clip_limit: float
+    prepare_usm_radius: float
+    prepare_usm_amount: int
+    dither_noise: float
 
     def cache_slug(self) -> str:
         raw = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
@@ -56,6 +60,9 @@ def _bw_safe_image_config(cfg: "ImageConfig") -> "ImageConfig":
 def _image_config_from_dict(blob: Any, *, field_path: str = "image_config") -> ImageConfig:
     """Build an ImageConfig from a nested JSON object (or default if absent).
 
+    All fields are required. If blob is None or any field is missing the
+    default preset is returned, resetting the config rather than patching it.
+
     Args:
         blob:       The dict (or None) to parse.
         field_path: Used in error messages to identify which config field is bad.
@@ -69,11 +76,11 @@ def _image_config_from_dict(blob: Any, *, field_path: str = "image_config") -> I
 
     dither_blob = blob.get("dither")
     if not isinstance(dither_blob, dict):
-        raise ValueError(f"config['{field_path}']['dither'] must be an object")
+        return PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
     dither_kwargs = {f.name: dither_blob[f.name] for f in fields(DitherConfig) if f.name in dither_blob}
-    missing = {f.name for f in fields(DitherConfig)} - dither_kwargs.keys()
-    if missing:
-        raise ValueError(f"config['{field_path}']['dither'] missing fields: {sorted(missing)}")
+    missing_dither = {f.name for f in fields(DitherConfig)} - dither_kwargs.keys()
+    if missing_dither:
+        return PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
     dither = DitherConfig(**dither_kwargs)
 
     image_kwargs: dict[str, Any] = {"dither": dither}
@@ -81,6 +88,7 @@ def _image_config_from_dict(blob: Any, *, field_path: str = "image_config") -> I
         if f.name == "dither":
             continue
         if f.name not in blob:
-            raise ValueError(f"config['{field_path}'] missing field: {f.name}")
+            return PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
         image_kwargs[f.name] = blob[f.name]
+
     return ImageConfig(**image_kwargs)
