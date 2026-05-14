@@ -100,7 +100,13 @@ Flashing procedure
 
 Dithering
 =========
-- The image dithering pipeline (webserver/webserver.py) is explained in detail for humans in docs/dithering.md. If you change anything that affects dither output — algorithms, palette, saturation/vividness knobs, B&W detection, cache versioning — update docs/dithering.md to match. It is the one document that's meant to stay in sync with the code for non-AI readers.
+- The image dithering pipeline is explained in detail for humans in docs/dithering.md. If you change anything that affects dither output — algorithms, palette, saturation/vividness knobs, B&W detection, cache versioning — update docs/dithering.md to match. It is the one document that's meant to stay in sync with the code for non-AI readers.
+- docs/dithering.md section 13 holds the benchmark reference numbers (neutral_leak, sat_hit, overall_dE across the production presets). Re-run test_dither_quality_metrics when the pipeline changes and update that table with the new numbers.
+- Metric definitions (what neutral_leak means, how dE2000 is computed, etc.) live in docs/image_quality.md — do not duplicate them in dithering.md, just cross-reference.
+
+Image quality metrics
+=====================
+- The image comparator (webserver/hokku_server/image_quality.py) is explained in detail for humans in docs/image_quality.md. If you add or remove a metric, change a metric's formula or thresholds, or add a new quality goal, update docs/image_quality.md to match — including the reference numbers table if the numbers shift. The unit tests live in webserver/tests/test_image_quality.py.
 
 Reverse-engineering notes on the stock firmware
 ===============================================

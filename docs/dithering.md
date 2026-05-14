@@ -561,31 +561,51 @@ defaults inside the serialised form.
 
 ## 13. Benchmark results
 
-We benchmarked 16 test images across 12 candidate pipeline variants.
-Three metrics per image:
+Three metrics are tracked. Full definitions — what they measure, how they are
+computed, and how to interpret the numbers — are in
+[docs/image_quality.md](image_quality.md). Short summary:
 
-1. **`neutral_leak`** — mean output Lab chroma for source pixels where source
-   chroma < 10. Measures how badly the dither amplifies near-neutral regions
-   into visible colour. Lower is better.
-2. **`saturated_hit`** — fraction of source pixels with chroma > 25 whose
-   output has chroma > 15. Measures whether saturated features survive as
-   saturated output. Higher is better.
-3. **`overall_dE`** — mean CIE76 ΔE between source and output. Classic
-   full-image colour accuracy. Lower is better.
+| Metric        | Good direction | What it catches                                  |
+|---------------|:--------------:|--------------------------------------------------|
+| `neutral_leak`| lower          | colour bleed into grey/neutral areas (blue tint) |
+| `sat_hit`     | higher         | saturation preservation in colourful areas       |
+| `overall_dE`  | lower          | mean CIE76 ΔE — overall colour accuracy          |
 
-Final aggregate across 16 images (lower neutral_leak and dE is better;
-higher sat_hit is better):
+### Current production presets
+
+Aggregate across 10 test images, `NumbaStreamingDither`, landscape,
+`crop_to_fill_threshold=0.0`. Re-run `test_dither_quality_metrics` and update
+this table whenever the pipeline changes.
+
+| Preset                    | neutral_leak | sat_hit | overall_dE |
+|---------------------------|:------------:|:-------:|:----------:|
+| **atkinson_hue_aware**    |   **6.67**   | **0.683** | **29.64** |
+| atkinson                  |     7.95     |  0.679  |   29.76    |
+| stucki_hue_aware          |    10.48     |  0.658  |   32.07    |
+| stucki                    |    11.77     |  0.653  |   32.26    |
+| floyd_steinberg_hue_aware |    10.80     |  0.650  |   32.42    |
+| floyd_steinberg           |    12.10     |  0.646  |   32.62    |
+
+`atkinson_hue_aware` is the current default because it is the only preset that
+wins on both `neutral_leak` and `sat_hit` simultaneously.
+
+### Historical development comparison
+
+These numbers were recorded during the V10 design exploration against 16 test
+images. The image set and pipeline version differ from the current table above,
+so the absolute values are not directly comparable — this table exists to
+document *why* V10 was chosen over the alternatives.
 
 | Variant                                              | neutral_leak | sat_hit | dE    |
-|------------------------------------------------------|--------------|---------|-------|
-| pre-V10 atk_hue_aware (1.05 enhance)                | 6.05         | 0.721   | 35.24 |
-| fs_hue_aware (now retired default)                  | 10.85        | 0.672   | 38.86 |
-| V5 FS + luma/chroma-split diffusion                  | 6.35         | 0.661   | 37.33 |
-| V6 atk + adaptive_sat 1.30                           | 6.55         | 0.758   | 35.45 |
-| V7 atk + vivid + adaptive_sat 1.25                   | 4.84         | 0.703   | 34.90 |
-| V8 atk + vivid + uniform 1.10                        | 4.68         | 0.673   | 34.91 |
-| **V10 atk + adaptive_vivid + adaptive_sat 1.25**    | **5.74**     | **0.752** | **35.27** |
-| V11 same as V10, enhance 1.35                        | 6.02         | 0.764   | 35.38 |
+|------------------------------------------------------|:------------:|:-------:|:-----:|
+| pre-V10 atk_hue_aware (1.05 enhance)                |     6.05     |  0.721  | 35.24 |
+| fs_hue_aware (now retired default)                  |    10.85     |  0.672  | 38.86 |
+| V5 FS + luma/chroma-split diffusion                  |     6.35     |  0.661  | 37.33 |
+| V6 atk + adaptive_sat 1.30                           |     6.55     |  0.758  | 35.45 |
+| V7 atk + vivid + adaptive_sat 1.25                   |     4.84     |  0.703  | 34.90 |
+| V8 atk + vivid + uniform 1.10                        |     4.68     |  0.673  | 34.91 |
+| **V10 atk + adaptive_vivid + adaptive_sat 1.25**    |   **5.74**   | **0.752** | **35.27** |
+| V11 same as V10, enhance 1.35                        |     6.02     |  0.764  | 35.38 |
 
 V10 is the only variant that improves on the pre-V10 baseline on **both**
 neutral_leak and sat_hit simultaneously. V7 beats V10 on neutral_leak but

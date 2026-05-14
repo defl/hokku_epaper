@@ -38,6 +38,7 @@ from PIL import Image
 from hokku_server.display import (
     FULL_W,
     PANEL_H,
+    PALETTE_MEASURED_RGB,
     TOTAL_BYTES,
     VISUAL_H,
     VISUAL_W,
@@ -47,6 +48,7 @@ from hokku_server.display import (
 import numba  # hard dep — must be installed
 from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming import StreamingDither
+from hokku_server.image_quality import image_compare
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.dither_unconstrained import UnconstrainedDither
 from hokku_server.dither_unconstrained_numba import NumbaUnconstrainedDither
@@ -73,6 +75,7 @@ def render_preview_png(img, cfg, orientation, max_side_px=800, crop_to_fill_thre
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_IMAGES_DIR = _REPO_ROOT / "images" / "test"
 _BUILD_FULL_DIR = _REPO_ROOT / "build" / "test_dither_full"
+_BUILD_METRICS_DIR = _REPO_ROOT / "build" / "test_dither_metrics"
 _BUILD_PREVIEW_DIR = _REPO_ROOT / "build" / "test_dither_preview"
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff", ".heic", ".heif"}
@@ -366,6 +369,13 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
         f"{src.name}/{preset_name}/{mode}: expected {VISUAL_W}x{VISUAL_H}, got {w}x{h}"
     )
 
+    src_arr, padding_mask = _fit_source_to_panel_rgb(src)
+    m = image_compare(src_arr, PALETTE_MEASURED_RGB[idx], padding_mask=padding_mask)
+    (_BUILD_FULL_DIR / f"{src.stem}__{preset_name}__{mode}.metrics.txt").write_text(
+        "\n".join(f"{k}={v:.4f}" for k, v in m.items()) + "\n",
+        encoding="utf-8",
+    )
+
 
 @pytest.mark.time_intensive
 @pytest.mark.parametrize("src,preset_name", _preview_params(), ids=_preview_ids())
@@ -435,4 +445,116 @@ def test_numba_unconstrained_matches_unconstrained() -> None:
     np.testing.assert_array_equal(
         ref, got,
         err_msg="NumbaUnconstrainedDither diverged from UnconstrainedDither on identical input",
+    )
+
+
+# ── Quality metrics ───────────────────────────────────────────────────────────
+
+
+def _fit_source_to_panel_rgb(src: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Open source, letterbox-fit to panel dims (landscape), no enhancements.
+
+    Returns (uint8 (PANEL_H, FULL_W, 3), bool (PANEL_H, FULL_W) padding_mask).
+    Mirrors _prepare_canvas geometry so source and output are spatially aligned.
+    """
+    visible_w, visible_h = PANEL_H, FULL_W  # landscape: 1600 wide × 1200 tall
+    with open_image_for_render(src) as img:
+        src_w, src_h = img.size
+        scale = min(visible_w / src_w, visible_h / src_h)
+        new_w, new_h = int(src_w * scale), int(src_h * scale)
+        img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    composed = Image.new("RGB", (visible_w, visible_h), (255, 255, 255))
+    x_off = (visible_w - new_w) // 2
+    y_off = (visible_h - new_h) // 2
+    composed.paste(img_resized, (x_off, y_off))
+    img_resized = None
+
+    padding_mask = np.ones((visible_h, visible_w), dtype=bool)
+    padding_mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
+
+    composed = composed.rotate(-90, expand=True)
+    padding_mask = np.rot90(padding_mask, k=3)
+
+    arr = np.asarray(composed, dtype=np.uint8).copy()
+    composed = None
+    return arr, padding_mask
+
+
+@pytest.mark.time_intensive
+def test_dither_quality_metrics():
+    """All image_compare metrics for every image × preset.
+
+    Run with: pytest -m time_intensive -s -k test_dither_quality_metrics
+    Writes: build/test_dither_metrics/metrics.txt and metrics.tsv
+    """
+    images = _test_images()
+    if not images:
+        pytest.skip("no test images found")
+
+    _BUILD_METRICS_DIR.mkdir(parents=True, exist_ok=True)
+    presets = list(PRESET_IMAGE_CONFIGS)
+
+    all_results: dict[str, dict[str, dict[str, float]]] = {p: {} for p in presets}
+
+    for src in images:
+        src_arr, padding_mask = _fit_source_to_panel_rgb(src)
+
+        for preset_name in presets:
+            cfg = PRESET_IMAGE_CONFIGS[preset_name]
+            with open_image_for_render(src) as img:
+                raw = ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
+                    img, cfg, "landscape"
+                )
+            idx = panel_bytes_to_indices(raw)
+            all_results[preset_name][src.stem] = image_compare(
+                src_arr, PALETTE_MEASURED_RGB[idx], padding_mask=padding_mask
+            )
+
+    col_w = 30
+    hdr = f"{'preset':<{col_w}}  {'neutral_leak':>12}  {'sat_hit':>8}  {'overall_dE':>10}"
+    sep = "-" * len(hdr)
+
+    lines: list[str] = []
+    for src in images:
+        lines.append(f"\n=== {src.stem} ===")
+        lines.append(hdr)
+        lines.append(sep)
+        for preset_name in presets:
+            m = all_results[preset_name][src.stem]
+            lines.append(
+                f"{preset_name:<{col_w}}  {m['neutral_leak']:>12.2f}"
+                f"  {m['sat_hit']:>8.3f}  {m['overall_dE']:>10.2f}"
+            )
+
+    lines.append(f"\n{'=' * len(sep)}")
+    lines.append("AGGREGATE (mean across all images)")
+    lines.append("=" * len(sep))
+    lines.append(hdr)
+    lines.append(sep)
+    for preset_name in presets:
+        ms = list(all_results[preset_name].values())
+        nl = sum(m["neutral_leak"] for m in ms) / len(ms)
+        sh = sum(m["sat_hit"] for m in ms) / len(ms)
+        de = sum(m["overall_dE"] for m in ms) / len(ms)
+        lines.append(
+            f"{preset_name:<{col_w}}  {nl:>12.2f}  {sh:>8.3f}  {de:>10.2f}"
+        )
+    lines.append(sep)
+
+    output = "\n".join(lines)
+    print(output)
+    (_BUILD_METRICS_DIR / "metrics.txt").write_text(output + "\n", encoding="utf-8")
+
+    metric_keys = list(next(iter(next(iter(all_results.values())).values())))
+    tsv_rows = ["\t".join(["image", "preset"] + metric_keys)]
+    for src in images:
+        for preset_name in presets:
+            m = all_results[preset_name][src.stem]
+            tsv_rows.append(
+                f"{src.stem}\t{preset_name}\t"
+                + "\t".join(f"{m[k]:.4f}" for k in metric_keys)
+            )
+    (_BUILD_METRICS_DIR / "metrics.tsv").write_text(
+        "\n".join(tsv_rows) + "\n", encoding="utf-8"
     )
