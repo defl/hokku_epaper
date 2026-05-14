@@ -42,6 +42,7 @@ def test_register_and_convert(app_config: AppConfig, image_manager_factory, make
     expected_slug = ScreenImageConfig(
         image_config=app_config.image_config_default,
         orientation=app_config.orientation,
+        crop_to_fill_threshold=app_config.crop_to_fill_threshold,
     ).cache_slug()
     assert all(r.screen_image_config_slug == expected_slug for r in records)
 
