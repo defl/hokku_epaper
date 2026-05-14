@@ -11,12 +11,12 @@ from hokku_server.dither_config import DitherConfig
 from hokku_server.image_config import ImageConfig
 
 
-def _plain(algorithm: str) -> ImageConfig:
+def _plain(algorithm: str, serpentine: bool = False) -> ImageConfig:
     return ImageConfig(
         dither=DitherConfig(
             algorithm=algorithm,  # type: ignore[arg-type]
             lut_name="euclidean",
-            serpentine=False,
+            serpentine=serpentine,
             hue_cutoff_deg=95.0,
             neutral_chroma=8.0,
         ),
@@ -37,12 +37,12 @@ def _plain(algorithm: str) -> ImageConfig:
     )
 
 
-def _hue_aware(algorithm: str) -> ImageConfig:
+def _hue_aware(algorithm: str, serpentine: bool = False) -> ImageConfig:
     return ImageConfig(
         dither=DitherConfig(
             algorithm=algorithm,  # type: ignore[arg-type]
             lut_name="hue_aware",
-            serpentine=False,
+            serpentine=serpentine,
             hue_cutoff_deg=95.0,
             neutral_chroma=8.0,
         ),
@@ -64,8 +64,8 @@ def _hue_aware(algorithm: str) -> ImageConfig:
 
 
 PRESET_IMAGE_CONFIGS: dict[str, ImageConfig] = {
-    "floyd_steinberg":           _plain("floyd_steinberg"),
-    "floyd_steinberg_hue_aware": _hue_aware("floyd_steinberg"),
+    "floyd_steinberg":           _plain("floyd_steinberg", serpentine=True),
+    "floyd_steinberg_hue_aware": _hue_aware("floyd_steinberg", serpentine=True),
     "atkinson":                  _plain("atkinson"),
     "atkinson_hue_aware":        _hue_aware("atkinson"),
     "stucki":                    _plain("stucki"),
