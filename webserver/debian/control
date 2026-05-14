@@ -2,7 +2,7 @@ Source: hokku-server
 Section: net
 Priority: optional
 Maintainer: Dennis Fleurbaaij <mail@dennisfleurbaaij.com>
-Build-Depends: debhelper-compat (= 13), python3, dh-python, python3-setuptools
+Build-Depends: debhelper-compat (= 13), python3, dh-python, python3-setuptools, pybuild-plugin-pyproject
 Standards-Version: 4.6.0
 
 Package: hokku-server

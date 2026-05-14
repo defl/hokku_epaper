@@ -34,7 +34,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            build-essential debhelper dh-python python3-setuptools
+            build-essential debhelper dh-python python3-setuptools pybuild-plugin-pyproject
 
       - name: Build .deb
         working-directory: webserver
