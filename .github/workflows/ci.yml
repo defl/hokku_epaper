@@ -45,7 +45,7 @@ jobs:
           mkdir -p build
           mv hokku-server_*.deb hokku-server_*.buildinfo hokku-server_*.changes build/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: hokku-server-deb
           path: build/hokku-server_*.deb
