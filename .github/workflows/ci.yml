@@ -34,7 +34,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            debhelper dh-python python3-setuptools
+            build-essential debhelper dh-python python3-setuptools
 
       - name: Build .deb
         working-directory: webserver

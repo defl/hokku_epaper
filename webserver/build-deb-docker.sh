@@ -17,7 +17,7 @@ docker run --rm \
         set -e
         apt-get update -qq
         apt-get install -y --no-install-recommends \
-            debhelper dh-python python3 python3-setuptools
+            build-essential debhelper dh-python python3 python3-setuptools
         dpkg-buildpackage -us -uc -b
     "
 
