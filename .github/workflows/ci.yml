@@ -22,3 +22,21 @@ jobs:
 
       - name: Run tests
         run: pytest -m "not time_intensive"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            fakeroot \
+            dpkg-dev \
+            debhelper
+            
+      - name: Build Debian packages
+        run: |
+          chmod +x webserver/build-deb.sh
+          ./webserver/build-deb.sh
+
+      - name: Show generated packages
+        run: |
+          find . -name "*.deb" -print
