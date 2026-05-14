@@ -18,8 +18,11 @@ docker run --rm \
         apt-get update -qq
         apt-get install -y --no-install-recommends \
             build-essential debhelper dh-python python3 python3-setuptools pybuild-plugin-pyproject
+        cp -a /workspace /build
+        cd /build/webserver
         chmod a-x debian/install debian/control debian/changelog debian/hokku-server.service
         dpkg-buildpackage -us -uc -b
+        cp /build/hokku-server_*.deb /build/hokku-server_*.buildinfo /build/hokku-server_*.changes /workspace/ 2>/dev/null || true
     "
 
 # dpkg-buildpackage drops artifacts one level above webserver/ (= /workspace = repo root).
