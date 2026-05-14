@@ -11,7 +11,7 @@ docker run --rm ^
     --volume "%REPO_ROOT%:/workspace" ^
     --workdir /workspace/webserver ^
     debian:bookworm ^
-    bash -c "set -e && apt-get update -qq && apt-get install -y --no-install-recommends build-essential debhelper dh-python python3 python3-setuptools pybuild-plugin-pyproject && dpkg-buildpackage -us -uc -b"
+    bash -c "set -e && apt-get update -qq && apt-get install -y --no-install-recommends build-essential debhelper dh-python python3 python3-setuptools pybuild-plugin-pyproject && chmod a-x debian/install debian/control debian/changelog debian/hokku-server.service && dpkg-buildpackage -us -uc -b"
 
 if errorlevel 1 (
     echo Error: Docker build failed.

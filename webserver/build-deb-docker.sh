@@ -18,6 +18,7 @@ docker run --rm \
         apt-get update -qq
         apt-get install -y --no-install-recommends \
             build-essential debhelper dh-python python3 python3-setuptools pybuild-plugin-pyproject
+        chmod a-x debian/install debian/control debian/changelog debian/hokku-server.service
         dpkg-buildpackage -us -uc -b
     "
 
