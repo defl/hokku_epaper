@@ -7,9 +7,11 @@ numba                # JIT-compiled dither inner loop (NumbaDither)
 Pillow
 pillow-heif          # HEIC/HEIF support
 pillow-avif-plugin   # AVIF support
+pillow-jxl-plugin    # JPEG XL support
 
 # Web server
 Flask
+zeroconf
 
 # Firmware tools
 esptool
@@ -19,6 +21,8 @@ rich-click
 
 # Runtime utilities
 psutil               # auto worker-count (resolve_worker_count) + memory-budget tests
+opencv-python-headless
 
 # Tests
 pytest
+pytest-xdist

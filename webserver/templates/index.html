@@ -1000,9 +1000,9 @@
     <div class="config-row">
       <label>Letterbox fill limit:</label>
       <span class="ctrl-tip" data-tip="How much the image may be zoomed in to eliminate thin letterbox bars.&#10;0% = always letterbox (never crop). 20% = zoom up to 20% to fill the frame.&#10;Useful for images with thin black borders from scanning or aspect-ratio mismatch.&#10;Above ~30% you may lose meaningful content at the edges.">
-        <input type="range" id="crop-to-fill-threshold" min="0" max="100" step="1" value="20"
+        <input type="range" id="crop-to-fill-threshold" min="0" max="100" step="1" value="10"
                oninput="document.getElementById('fill-threshold-val').textContent=this.value+'%'">
-        <span class="slider-value" id="fill-threshold-val">20%</span>
+        <span class="slider-value" id="fill-threshold-val">10%</span>
       </span>
     </div>
 
@@ -2278,7 +2278,7 @@ async function loadConfig() {
     document.getElementById('mdns-hostname').value = mdnsHostname;
     document.getElementById('mdns-hostname-wrap').style.opacity = mdnsOn ? '' : '0.4';
     document.getElementById('mdns-hostname').disabled = !mdnsOn;
-    const fillPct = Math.round(((cfg.crop_to_fill_threshold ?? 0.20)) * 100);
+    const fillPct = Math.round(((cfg.crop_to_fill_threshold ?? 0.10)) * 100);
     document.getElementById('crop-to-fill-threshold').value = fillPct;
     document.getElementById('fill-threshold-val').textContent = fillPct + '%';
     (function() {

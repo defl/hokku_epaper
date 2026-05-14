@@ -91,7 +91,7 @@ class AppConfig:
     auto_clear_cache: bool = False
     #: Zoom up to this fraction (e.g. 0.02 = 2 %) to eliminate letterbox bands.
     #: 0.0 = always letterbox (default, safe).
-    crop_to_fill_threshold: float = 0.0
+    crop_to_fill_threshold: float = 0.10
     #: Number of worker processes for parallel image rendering.
     #: 0 = auto (cpu_count − 1, capped by available RAM at ~50 MB/worker).
     #: 1 = serial (legacy default).

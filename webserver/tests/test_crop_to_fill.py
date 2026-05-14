@@ -201,7 +201,7 @@ def test_screen_cfg_slug_stable():
 # ── AppConfig round-trip ──────────────────────────────────────────────────────
 
 def test_app_config_crop_threshold_default():
-    assert AppConfig().crop_to_fill_threshold == 0.0
+    assert AppConfig().crop_to_fill_threshold == pytest.approx(0.10)
 
 
 def test_app_config_crop_threshold_roundtrip():
