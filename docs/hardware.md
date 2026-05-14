@@ -35,12 +35,12 @@ If you want to buy something new, the cheapest route is AliExpress — ARM board
 
 | Item | Link | Price |
 |------|------|------:|
-| Raspberry Pi Zero 2 W (board + essentials kit) | [Amazon](https://www.amazon.com/gp/product/B0DRRRZBMP/) | $42 |
-| Aluminium case with passive cooling and 4-port USB hub | [Amazon](https://www.amazon.com/gp/product/B0FSYKVNBV/) | $9 |
-| Official Pi power supply (5.1 V / 2.5 A) | [Amazon](https://www.amazon.com/gp/product/B09XN7H9M8/) | $22 |
-| USB-C cable (data-capable, for flashing the frame) | [Amazon](https://www.amazon.com/gp/product/B0BDLYW7CN/) | $10 |
-| SanDisk 64 GB microSD card | [Amazon](https://www.amazon.com/SANDISK-Ultra-microSD-UHS-I-SDSQUJQ-064G-GZ6MA/dp/B0G8KLQ64L/) | $24 |
-| USB SD card reader | [Amazon](https://www.amazon.com/eTECH-Collection-Memory-Reader-Writer/dp/B07GHT8SY3/) | $4 |
+| Raspberry Pi Zero 2 W (board + essentials kit) | [Amazon](https://amzn.to/4wz5jtY) | $42 |
+| Aluminium case with passive cooling and 4-port USB hub | [Amazon](https://amzn.to/4eLkzxk) | $9 |
+| Official Pi power supply (5.1 V / 2.5 A) | [Amazon](https://amzn.to/4uhEbhy) | $22 |
+| USB-C cable (data-capable, for flashing the frame) | [Amazon](https://amzn.to/4wAjkrh) | $10 |
+| SanDisk 64 GB microSD card | [Amazon](https://amzn.to/4dpocGI) | $24 |
+| USB SD card reader | [Amazon](https://amzn.to/49K7pwY) | $4 |
 | **Total** | | **$111** |
 
 A few notes:
@@ -48,6 +48,9 @@ A few notes:
 - The kit (row 1) includes the Pi Zero 2 W board, header, heatsink, USB cable, and HDMI adapter.
 - The case (row 2) does **not** include the board — it pairs with the kit above.
 - The USB-C cable must be data-capable (not charge-only). The linked cable supports 10 Gbps / 3 A and works reliably for flashing.
+
+> The Amazon links above are affiliate links. Clicking them costs you absolutely nothing extra — the price is identical either way. I get a few percent from Amazon, and if enough people do this, maybe one day there'll be enough in the jar to add the next screen to the lineup.
+
 
 ---
 
