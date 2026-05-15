@@ -1,3 +1,15 @@
+hokku-server (3.0.0~beta2-1) unstable; urgency=low
+
+  * UI: add Reset to Default button for image pipeline.
+  * Refactor: clarify three separate pipeline defaults (default, B&W, face).
+  * Refactor: rename DEFAULT_PRESET to FALLBACK_PRESET for clarity.
+  * Feature: add Floyd-Steinberg (neutral) preset for B&W images.
+  * Change: set Floyd-Steinberg (hue-aware) as default ditherer for general
+    images (smooth gradients, faithful colours). Atkinson (hue-aware) remains
+    the face-detection default (crisp edges for skin tones).
+
+ -- Hokku <hokku@hokku>  Wed, 14 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~beta1-1) unstable; urgency=low
 
   * 3.0.0-beta1 release.
