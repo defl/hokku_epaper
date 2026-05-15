@@ -49,12 +49,12 @@ if ! python3 -c "import pillow_avif" 2>/dev/null; then
     echo "Warning: Could not install pillow-avif-plugin. AVIF support will be unavailable."
 fi
 
-# Install pillow-jxl via pip for JPEG-XL image support
+# Install pillow-jxl-plugin via pip for JPEG-XL image support
 if ! python3 -c "import pillow_jxl" 2>/dev/null; then
-    echo "Installing pillow-jxl via pip..."
-    pip3 install --break-system-packages pillow-jxl 2>/dev/null || \
-    pip3 install pillow-jxl 2>/dev/null || \
-    echo "Warning: Could not install pillow-jxl. JPEG-XL support will be unavailable."
+    echo "Installing pillow-jxl-plugin via pip..."
+    pip3 install --break-system-packages pillow-jxl-plugin 2>/dev/null || \
+    pip3 install pillow-jxl-plugin 2>/dev/null || \
+    echo "Warning: Could not install pillow-jxl-plugin. JPEG-XL support will be unavailable."
 fi
 
 # Install opencv-python-headless via pip — required for YuNet face detection.
