@@ -1798,7 +1798,7 @@ async function clearCache(silent = false) {
 async function clearClassifierCache() {
   try {
     await fetch('/hokku/api/classifier/clear', {method: 'POST'});
-    showToast('Classifier cache cleared — detections will re-run on next sync');
+    showToast('Classifier cache cleared — re-detecting and re-rendering...');
     refreshStatus();
   } catch (e) {
     showToast('Error clearing classifier cache: ' + e.message);

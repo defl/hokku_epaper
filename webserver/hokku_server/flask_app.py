@@ -342,14 +342,14 @@ def create_app(
 
     @app.route("/hokku/api/classifier/clear", methods=["POST"])
     def api_classifier_clear():
-        """Wipe all cached classifier observations (is_bw / has_face).
+        """Wipe all cached classifier observations (is_bw / has_face) and trigger re-sync.
 
-        Deletes image_classifier.json. The next sync will re-run detection
-        on every image. Already-rendered panel .bin files are NOT touched —
-        they are keyed by ScreenImageConfig slug and remain valid unless the
-        classification result changes.
+        Deletes image_classifier.json and kicks off immediate re-classification.
+        Already-rendered panel .bin files are NOT touched — they are keyed by
+        ScreenImageConfig slug and remain valid unless the classification result changes.
         """
         state.classifier.clear_cache()
+        state.manager.sync()
         return jsonify({"ok": True})
 
     # ── API: status + config ───────────────────────────────────
