@@ -41,6 +41,22 @@ if ! python3 -c "import pillow_heif" 2>/dev/null; then
     echo "Warning: Could not install pillow-heif. HEIC/HEIF support will be unavailable."
 fi
 
+# Install pillow-avif-plugin via pip for AVIF image support
+if ! python3 -c "import pillow_avif" 2>/dev/null; then
+    echo "Installing pillow-avif-plugin via pip..."
+    pip3 install --break-system-packages pillow-avif-plugin 2>/dev/null || \
+    pip3 install pillow-avif-plugin 2>/dev/null || \
+    echo "Warning: Could not install pillow-avif-plugin. AVIF support will be unavailable."
+fi
+
+# Install pillow-jxl via pip for JPEG-XL image support
+if ! python3 -c "import pillow_jxl" 2>/dev/null; then
+    echo "Installing pillow-jxl via pip..."
+    pip3 install --break-system-packages pillow-jxl 2>/dev/null || \
+    pip3 install pillow-jxl 2>/dev/null || \
+    echo "Warning: Could not install pillow-jxl. JPEG-XL support will be unavailable."
+fi
+
 # Install opencv-python-headless via pip — required for YuNet face detection.
 # The Debian package (python3-opencv) lacks the DNN module on many platforms.
 if ! python3 -c "import cv2" 2>/dev/null; then
