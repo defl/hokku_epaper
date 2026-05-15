@@ -148,6 +148,25 @@ def _build_rgb_lut_hue_aware(
     return lut, scale
 
 
+def _build_rgb_lut_bw() -> tuple[UInt8Array, float]:
+    """32³ RGB grid → palette index using ONLY black (0) and white (1) entries.
+
+    Prevents B&W dithering from using colored palette entries.
+    """
+    steps = 32
+    scale = 256 / steps
+    vals = np.arange(steps) * scale + scale / 2
+    rr, gg, bb = np.meshgrid(vals, vals, vals, indexing="ij")
+    rgb_grid = np.stack([rr, gg, bb], axis=-1).reshape(-1, 3)
+    lab_grid = _rgb_to_lab(rgb_grid)
+
+    bw_palette = _PALETTE_LAB[[0, 1]]
+    dists = np.sum((lab_grid[:, None, :] - bw_palette[None, :, :]) ** 2, axis=2)
+    lut_indices = np.argmin(dists, axis=1).astype(np.uint8)
+    lut = lut_indices.reshape(steps, steps, steps)
+    return lut, scale
+
+
 @lru_cache(maxsize=1)
 def _cached_euclidean_lut() -> tuple[UInt8Array, float]:
     return _build_rgb_lut()
@@ -160,9 +179,16 @@ def _cached_hue_aware_lut(
     return _build_rgb_lut_hue_aware(hue_cutoff_deg, neutral_chroma)
 
 
+@lru_cache(maxsize=1)
+def _cached_bw_lut() -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_bw()
+
+
 def _lut_and_scale(cfg: DitherConfig) -> tuple[NDArray[np.uint8], float]:
     if cfg.lut_name == "euclidean":
         return _cached_euclidean_lut()
+    if cfg.lut_name == "bw":
+        return _cached_bw_lut()
     return _cached_hue_aware_lut(cfg.hue_cutoff_deg, cfg.neutral_chroma)
 
 
@@ -323,7 +349,7 @@ class UnconstrainedDither(AbstractDither):
     def dither(self, canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
         if cfg.algorithm not in self._KERNELS and cfg.algorithm != "noop":
             raise ValueError(f"Unknown algorithm: {cfg.algorithm!r}")
-        if cfg.lut_name not in ("euclidean", "hue_aware"):
+        if cfg.lut_name not in ("euclidean", "hue_aware", "bw"):
             raise ValueError(f"Unknown lut_name: {cfg.lut_name!r}")
         lut, lut_scale = _lut_and_scale(cfg)
         if cfg.algorithm == "noop":

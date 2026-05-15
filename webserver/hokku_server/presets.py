@@ -75,7 +75,9 @@ def _hue_aware(algorithm: str, serpentine: bool = False) -> ImageConfig:
 
 
 def _bw(algorithm: str, serpentine: bool = False) -> ImageConfig:
-    return replace(_plain(algorithm, serpentine), color_enhance=1.05)
+    plain_cfg = _plain(algorithm, serpentine)
+    bw_dither = replace(plain_cfg.dither, lut_name="bw")
+    return replace(plain_cfg, dither=bw_dither, color_enhance=1.05)
 
 
 PRESET_IMAGE_CONFIGS: dict[str, ImageConfig] = {
