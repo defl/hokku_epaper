@@ -8,6 +8,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 # Maximum side length for detection input — resizing keeps detection fast and
@@ -45,10 +46,6 @@ def load_image_resized(
     the detection backend itself, not differences in how each variant
     reads the source file.
     """
-    try:
-        import cv2
-    except ImportError:
-        return None
     img = cv2.imread(str(path))
     if img is None:
         return None

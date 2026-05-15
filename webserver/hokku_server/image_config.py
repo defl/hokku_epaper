@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any, Literal, TypeAlias
 
 from hokku_server.dither_config import DitherConfig
@@ -47,7 +47,6 @@ class ImageConfig:
 
 def _bw_safe_image_config(cfg: "ImageConfig") -> "ImageConfig":
     """Return *cfg* with saturation boosters disabled (safe for B&W images)."""
-    from dataclasses import replace
     return replace(
         cfg,
         color_enhance=1.05,

@@ -45,13 +45,12 @@ def render_one(
         ``panel_bytes``   — full-resolution packed panel buffer (TOTAL_BYTES long).
         ``preview_bytes`` — PNG bytes of the preview image.
     """
-    # Register HEIF support in this worker process (idempotent; PIL ignores
+    # Register format plugins in this worker process (idempotent; PIL ignores
     # duplicate registrations so it's safe to call on every task).
-    try:
-        from pillow_heif import register_heif_opener
-        register_heif_opener()
-    except ImportError:
-        pass  # HEIF not installed; non-HEIF images still work
+    import pillow_avif  # noqa: F401
+    import pillow_jxl  # noqa: F401
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
 
     from pathlib import Path
     from hokku_server.dither_streaming_numba import NumbaStreamingDither

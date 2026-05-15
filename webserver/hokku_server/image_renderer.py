@@ -23,7 +23,8 @@ from numpy.typing import NDArray
 from PIL import Image, ImageOps
 
 from hokku_server.dither_abc import AbstractDither
-from hokku_server.dither_streaming import adaptive_saturate
+from hokku_server.dither_streaming import PALETTE_LAB, adaptive_saturate, rgb_to_lab
+from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import (
     AbstractImageRenderer,
     Orientation,
@@ -92,7 +93,6 @@ def compress_dynamic_range(
     vivid_chroma_high: float,
 ) -> NDArray[np.float32]:
     """Map source Lab range into the panel's reachable L* range."""
-    from hokku_server.dither_streaming import rgb_to_lab, PALETTE_LAB
     f32 = np.float32
     rgb = np.asarray(img_array, dtype=f32)
     lab = rgb_to_lab(rgb, dtype=f32)
@@ -201,7 +201,6 @@ def render_panel_bytes_from_path(
     dither=None,
 ) -> bytes:
     """Full convert: open file → render full panel bytes.  Logs progress."""
-    from hokku_server.dither_streaming_numba import NumbaStreamingDither
     print(f"Converting: {path.name}")
     t0 = time.time()
     img = open_image_for_render(path)

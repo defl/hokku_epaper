@@ -12,10 +12,12 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 from hokku_server.app_config import AppConfig
 from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
 from hokku_server.image_config import ImageConfig
+from hokku_server.dither_streaming import rgb_to_lab
 from hokku_server.screen_image_config import ScreenImageConfig
 
 _DB_NAME = "image_classifier.json"
@@ -25,7 +27,6 @@ GRAYSCALE_CHROMA_THRESHOLD = 8.0
 
 def _is_near_grayscale(img) -> bool:
     """True iff a PIL Image is essentially monochrome."""
-    from hokku_server.dither_streaming import rgb_to_lab
     thumb = img.copy()
     thumb.thumbnail((200, 200))
     arr = np.asarray(thumb.convert("RGB"), dtype=np.float64)
@@ -36,7 +37,6 @@ def _is_near_grayscale(img) -> bool:
 
 def _check_grayscale(path: Path) -> bool:
     """True iff the image at *path* is essentially monochrome."""
-    from PIL import Image
     with Image.open(path) as img:
         return _is_near_grayscale(img)
 

@@ -28,6 +28,7 @@ from PIL import Image, ImageOps
 
 from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES
+from hokku_server.image_classifier import ImageClassifier
 from hokku_server.image_renderer import IMAGE_EXTENSIONS
 from hokku_server.screen_image_config import ScreenImageConfig
 
@@ -157,7 +158,6 @@ class AbstractImageManager(ABC):
         self._inflight: set[str] = set()
 
         if classifier is None:
-            from hokku_server.image_classifier import ImageClassifier
             classifier = ImageClassifier(config)
         self._classifier = classifier
 

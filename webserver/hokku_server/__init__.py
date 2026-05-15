@@ -7,6 +7,8 @@ import os
 import sys
 from pathlib import Path
 
+import psutil as _psutil
+
 from hokku_server.app_config import AppConfig
 from hokku_server.app_state import AppState, build_manager
 from hokku_server.flask_app import create_app
@@ -43,7 +45,6 @@ def main() -> None:
         print(f"Error: cache_dir is not writable: {cache_dir}", file=sys.stderr)
         sys.exit(1)
 
-    import psutil as _psutil
     classifier = ImageClassifier(config)
     manager = build_manager(config, classifier)
     print(

@@ -41,7 +41,9 @@ except ImportError:  # py<3.8 — not expected
 from hokku_server.app_state import AppState
 from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES, VISUAL_H, VISUAL_W
-from hokku_server.image_renderer import IMAGE_EXTENSIONS, MAX_UPLOAD_BYTES, MAX_UPLOAD_PIXELS
+from hokku_server.dither_streaming_numba import NumbaStreamingDither
+from hokku_server.image_config import _image_config_from_dict
+from hokku_server.image_renderer import IMAGE_EXTENSIONS, ImageRenderer, MAX_UPLOAD_BYTES, MAX_UPLOAD_PIXELS, open_image_for_render
 from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS, PRESET_META
 from hokku_server.screen_headers import parse_battery_header, parse_frame_state
 from hokku_server.time_utils import calculate_sleep_seconds, format_duration_human
@@ -507,12 +509,9 @@ def create_app(
         except FileNotFoundError:
             return jsonify({"error": f"image {name!r} not found"}), 404
         try:
-            from hokku_server.image_config import _image_config_from_dict
             cfg = _image_config_from_dict(image_blob)
         except (TypeError, ValueError) as e:
             return jsonify({"error": f"invalid image config: {e}"}), 400
-        from hokku_server.image_renderer import ImageRenderer, open_image_for_render
-        from hokku_server.dither_streaming_numba import NumbaStreamingDither
         print(f"  Preview: {name!r}")
         with open_image_for_render(path) as img:
             png = ImageRenderer(NumbaStreamingDither()).render_preview_png(img, cfg, state.config.orientation)

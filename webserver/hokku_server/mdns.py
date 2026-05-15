@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import socket
 import sys
+import time
 from typing import Any
 
 from zeroconf import ServiceInfo, Zeroconf
@@ -74,7 +75,6 @@ def start_mdns(port: int, hostname: str) -> Any:
                     f" — retrying in 3 s",
                     file=sys.stderr,
                 )
-                import time
                 time.sleep(3)
 
     print(f"  mDNS: registration failed — {type(last_exc).__name__}: {last_exc}", file=sys.stderr)

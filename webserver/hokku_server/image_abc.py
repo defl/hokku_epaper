@@ -16,6 +16,7 @@ from abc import ABC, abstractmethod
 from io import BytesIO
 from typing import TYPE_CHECKING
 
+import cv2
 import numpy as np
 from numpy.typing import NDArray
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
@@ -25,6 +26,7 @@ from hokku_server.display import (
     PANEL_H,
     indices_to_panel_bytes,
     indices_to_preview_rgb,
+    panel_bytes_to_indices,
 )
 from hokku_server.image_config import ImageConfig, Orientation  # noqa: F401 (re-exported)
 
@@ -52,7 +54,6 @@ def _encode_panel_rgb_to_png(panel_rgb: NDArray[np.uint8], orientation: Orientat
 
 def preview_png_from_panel_bytes(panel_bytes: bytes, orientation: "Orientation") -> bytes:
     """Decode an already-rendered panel binary back to a PNG preview."""
-    from hokku_server.display import panel_bytes_to_indices, indices_to_preview_rgb
     idx = panel_bytes_to_indices(panel_bytes)
     rgb = indices_to_preview_rgb(idx)
     return _encode_panel_rgb_to_png(rgb, orientation)
@@ -78,18 +79,14 @@ def _apply_prepare_enhancements(canvas: Image.Image, cfg: ImageConfig) -> Image.
 
     # 5. CLAHE local contrast on Lab L* channel (skipped when clip_limit == 0)
     if cfg.clahe_clip_limit > 0.0:
-        try:
-            import cv2
-            arr = np.asarray(canvas, dtype=np.uint8)
-            lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
-            clahe = cv2.createCLAHE(
-                clipLimit=cfg.clahe_clip_limit,
-                tileGridSize=(8, 8),
-            )
-            lab[:, :, 0] = clahe.apply(lab[:, :, 0])
-            canvas = Image.fromarray(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB))
-        except ImportError:
-            pass  # cv2 not installed — skip gracefully
+        arr = np.asarray(canvas, dtype=np.uint8)
+        lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
+        clahe = cv2.createCLAHE(
+            clipLimit=cfg.clahe_clip_limit,
+            tileGridSize=(8, 8),
+        )
+        lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+        canvas = Image.fromarray(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB))
 
     # 6. Unsharp mask sharpening (replaces fixed PIL Sharpness kernel)
     canvas = canvas.filter(
