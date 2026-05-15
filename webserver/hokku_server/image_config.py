@@ -66,20 +66,20 @@ def _image_config_from_dict(blob: Any, *, field_path: str = "image_config") -> I
         blob:       The dict (or None) to parse.
         field_path: Used in error messages to identify which config field is bad.
     """
-    from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS  # avoid circular at import time
+    from hokku_server.presets import FALLBACK_PRESET, PRESET_IMAGE_CONFIGS  # avoid circular at import time
 
     if blob is None:
-        return PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+        return PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
     if not isinstance(blob, dict):
         raise ValueError(f"config['{field_path}'] must be an object")
 
     dither_blob = blob.get("dither")
     if not isinstance(dither_blob, dict):
-        return PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+        return PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
     dither_kwargs = {f.name: dither_blob[f.name] for f in fields(DitherConfig) if f.name in dither_blob}
     missing_dither = {f.name for f in fields(DitherConfig)} - dither_kwargs.keys()
     if missing_dither:
-        return PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+        return PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
     dither = DitherConfig(**dither_kwargs)
 
     image_kwargs: dict[str, Any] = {"dither": dither}
@@ -87,7 +87,7 @@ def _image_config_from_dict(blob: Any, *, field_path: str = "image_config") -> I
         if f.name == "dither":
             continue
         if f.name not in blob:
-            return PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+            return PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
         image_kwargs[f.name] = blob[f.name]
 
     return ImageConfig(**image_kwargs)

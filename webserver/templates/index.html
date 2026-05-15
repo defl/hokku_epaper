@@ -1006,6 +1006,11 @@
       </span>
     </div>
 
+    <div class="config-row">
+      <button type="button" class="btn btn-secondary" onclick="resetPipelineToDefault()"
+              title="Reset all image rendering pipeline settings to software defaults">Reset to Default</button>
+    </div>
+
     <p class="config-section-label">Server behaviour</p>
     <div class="config-row">
       <label>Poll interval:</label>
@@ -1149,6 +1154,7 @@ function toggleConfigAdvanced() {
 // the backend's preset definitions in JS.
 let ditherState = null;
 let ditherPresets = {};
+let configDefaults = null;
 
 // Classifier secondary config states — full ImageConfig dicts for B&W / face.
 let bwDitherState = null;
@@ -1335,6 +1341,36 @@ function resetToPreset(panelId) {
     if (panelId === 'default') updatePresetDescription();
     showToast('Reset to preset: ' + ditherPresets[key].label);
   }
+}
+
+function resetPipelineToDefault() {
+  if (!configDefaults) return;
+  ditherState     = JSON.parse(JSON.stringify(configDefaults.image_config_default || {}));
+  bwDitherState   = JSON.parse(JSON.stringify(configDefaults.image_config_bw   || {}));
+  faceDitherState = JSON.parse(JSON.stringify(configDefaults.image_config_face  || {}));
+  selectPresetMatching(ditherState,     'default');
+  selectPresetMatching(bwDitherState,   'bw');
+  selectPresetMatching(faceDitherState, 'face');
+  renderDitherPanel('default');
+  renderDitherPanel('bw');
+  renderDitherPanel('face');
+  updatePresetDescription();
+
+  const bwOn = !!configDefaults.classifier_bw_detect_enabled;
+  document.getElementById('bw-detect-enabled').checked = bwOn;
+  document.getElementById('bw-detect-enabled-label').textContent = bwOn ? 'On' : 'Off';
+  document.getElementById('bw-config-panel').hidden = !bwOn;
+
+  const faceOn = !!configDefaults.classifier_face_detect_enabled;
+  document.getElementById('face-detect-enabled').checked = faceOn;
+  document.getElementById('face-detect-enabled-label').textContent = faceOn ? 'On' : 'Off';
+  document.getElementById('face-config-panel').hidden = !faceOn;
+
+  const fillPct = Math.round((configDefaults.crop_to_fill_threshold ?? 0.10) * 100);
+  document.getElementById('crop-to-fill-threshold').value = fillPct;
+  document.getElementById('fill-threshold-val').textContent = fillPct + '%';
+
+  showToast('Image pipeline reset to defaults');
 }
 
 function markCustom(panelId) {
@@ -2329,6 +2365,7 @@ async function loadConfig() {
     document.getElementById('debug-secs').textContent = debugSecs;
 
     // Dither presets + current state for all three panels.
+    configDefaults = data.config_defaults || null;
     ditherPresets = data.dither_presets || {};
     ditherState     = JSON.parse(JSON.stringify(cfg.image_config_default || {}));
     bwDitherState   = JSON.parse(JSON.stringify(cfg.image_config_bw   || {}));

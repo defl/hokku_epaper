@@ -1,11 +1,14 @@
 """Named ImageConfig presets — UI selects one, fields populate, user tweaks.
 
 No magic; these are just canned field values. Each algorithm has a plain
-(Euclidean LUT) variant and a `_hue_aware` variant. Hue-aware variants enable
-adaptive saturation + adaptive vivid by default since they pair well with the
-hue-constrained palette mapping.
+(Euclidean LUT) variant, a `_hue_aware` variant, and a `_bw` variant.
+Hue-aware variants enable adaptive saturation + adaptive vivid by default
+since they pair well with the hue-constrained palette mapping. BW variants
+disable colour boosting to avoid tinting near-neutral greys.
 """
 from __future__ import annotations
+
+from dataclasses import replace
 
 from hokku_server.dither_config import DitherConfig
 from hokku_server.image_config import ImageConfig
@@ -71,16 +74,21 @@ def _hue_aware(algorithm: str, serpentine: bool = False) -> ImageConfig:
     )
 
 
+def _bw(algorithm: str, serpentine: bool = False) -> ImageConfig:
+    return replace(_plain(algorithm, serpentine), color_enhance=1.05)
+
+
 PRESET_IMAGE_CONFIGS: dict[str, ImageConfig] = {
     "floyd_steinberg":           _plain("floyd_steinberg", serpentine=True),
     "floyd_steinberg_hue_aware": _hue_aware("floyd_steinberg", serpentine=True),
+    "floyd_steinberg_bw":        _bw("floyd_steinberg", serpentine=True),
     "atkinson":                  _plain("atkinson"),
     "atkinson_hue_aware":        _hue_aware("atkinson"),
     "stucki":                    _plain("stucki"),
     "stucki_hue_aware":          _hue_aware("stucki"),
 }
 
-DEFAULT_PRESET = "atkinson_hue_aware"
+FALLBACK_PRESET = "floyd_steinberg_hue_aware"
 
 
 # UI-only metadata. Kept out of the dataclass so cache_slug() stays stable
@@ -89,6 +97,10 @@ PRESET_META: dict[str, dict[str, str]] = {
     "floyd_steinberg": {
         "label": "Floyd-Steinberg",
         "description": "Classic error diffusion. Smooth gradients, faithful colours; can show diagonal artefacts on flat areas.",
+    },
+    "floyd_steinberg_bw": {
+        "label": "Floyd-Steinberg (neutral)",
+        "description": "Floyd-Steinberg with colour boosting disabled. For B&W photos and near-monochrome images — avoids tinting near-neutral greys pink or yellow.",
     },
     "floyd_steinberg_hue_aware": {
         "label": "Floyd-Steinberg (hue-aware)",

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from hokku_server.app_config import AppConfig, _CURRENT_VERSION, _MIGRATIONS, _migrate
-from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
+from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 
 def test_defaults():
@@ -18,7 +18,9 @@ def test_defaults():
     assert cfg.orientation == "landscape"
     assert cfg.port == 8080
     assert cfg.version == _CURRENT_VERSION
-    assert cfg.image_config_default == PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+    assert cfg.image_config_default == PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
+    assert cfg.image_config_bw == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+    assert cfg.image_config_face == PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
     assert cfg.classifier_bw_detect_enabled is True
 
 
@@ -102,7 +104,7 @@ def test_unversioned_config_load_writes_back(tmp_path: Path):
 
 def test_image_configs_roundtrip(tmp_path: Path):
     cfg = AppConfig(
-        image_config_default=PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
+        image_config_default=PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"],
         image_config_bw=PRESET_IMAGE_CONFIGS["floyd_steinberg"],
         classifier_bw_detect_enabled=True,
     )
@@ -121,7 +123,7 @@ def test_image_field_with_partial_blob_falls_back_to_default(tmp_path: Path):
         "image_config_default": {"dither": {}},
     }))
     cfg = AppConfig.load(p)
-    assert cfg.image_config_default == PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+    assert cfg.image_config_default == PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
 
 
 def test_v1_migrates_to_v2():

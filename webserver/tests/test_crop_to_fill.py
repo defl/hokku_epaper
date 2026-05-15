@@ -31,7 +31,7 @@ from hokku_server.image_abc import preview_png_from_panel_bytes
 from hokku_server.image_config import ImageConfig, Orientation
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
 from hokku_server.display import TOTAL_BYTES
-from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
+from hokku_server.presets import FALLBACK_PRESET, PRESET_IMAGE_CONFIGS
 from hokku_server.screen_image_config import ScreenImageConfig
 
 from tests._helpers import is_oversize_fixture
@@ -44,7 +44,7 @@ def _render_indices(img, cfg, orientation, canvas_w, canvas_h, crop_to_fill_thre
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _noop_cfg() -> ImageConfig:
-    base = PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+    base = PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
     return replace(
         base,
         prepare_autocontrast_cutoff=0.0,

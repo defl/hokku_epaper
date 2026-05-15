@@ -19,7 +19,7 @@ from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
 from hokku_server.image_config import ImageConfig, _image_config_from_dict
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
-from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
+from hokku_server.presets import FALLBACK_PRESET, PRESET_IMAGE_CONFIGS
 from hokku_server.screen_image_config import ScreenImageConfig, _screen_image_config_from_dict
 
 from tests._helpers import is_oversize_fixture
@@ -29,7 +29,7 @@ from tests._helpers import is_oversize_fixture
 
 def _noop_image_config() -> ImageConfig:
     """Identity-ish ImageConfig with the noop ditherer — fast for rendering tests."""
-    base = PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+    base = PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
     return replace(
         base,
         prepare_autocontrast_cutoff=0.0,

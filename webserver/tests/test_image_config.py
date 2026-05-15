@@ -6,7 +6,7 @@ from dataclasses import asdict, replace
 
 from hokku_server.dither_config import DitherConfig
 from hokku_server.image_config import ImageConfig, _image_config_from_dict
-from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
+from hokku_server.presets import FALLBACK_PRESET, PRESET_IMAGE_CONFIGS
 
 
 def _default_dither() -> DitherConfig:
@@ -92,19 +92,19 @@ def test_cache_slug_length():
 
 def test_image_config_from_dict_none_returns_default():
     result = _image_config_from_dict(None)
-    assert result == PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+    assert result == PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
 
 
 def test_image_config_from_dict_missing_dither_returns_default():
     d = asdict(_default_image_config())
     d.pop("dither")
-    assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+    assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
 
 
 def test_image_config_from_dict_missing_field_returns_default():
     d = asdict(_default_image_config())
     d.pop("prepare_brightness")
-    assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+    assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
 
 
 def test_image_config_from_dict_not_dict_raises():
@@ -120,7 +120,7 @@ def test_new_fields_use_defaults_when_absent():
     for key in ("prepare_midtone", "clahe_clip_limit", "prepare_usm_radius",
                 "prepare_usm_amount", "dither_noise"):
         d.pop(key, None)
-    assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+    assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
 
 
 # ── legacy prepare_sharpness backward compat ──────────────────────────────────
@@ -143,7 +143,7 @@ def test_legacy_sharpness_identity_resets_to_default():
     d.pop("prepare_usm_amount")
     d.pop("prepare_usm_radius")
     d["prepare_sharpness"] = 1.0
-    assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+    assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
 
 
 def test_explicit_usm_wins_over_legacy_sharpness():

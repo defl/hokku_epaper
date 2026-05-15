@@ -44,7 +44,7 @@ from hokku_server.display import TOTAL_BYTES, VISUAL_H, VISUAL_W
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_config import _image_config_from_dict
 from hokku_server.image_renderer import IMAGE_EXTENSIONS, ImageRenderer, MAX_UPLOAD_BYTES, MAX_UPLOAD_PIXELS, open_image_for_render
-from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS, PRESET_META
+from hokku_server.presets import PRESET_IMAGE_CONFIGS, PRESET_META
 from hokku_server.screen_headers import parse_battery_header, parse_frame_state
 from hokku_server.time_utils import calculate_sleep_seconds, format_duration_human
 
@@ -459,8 +459,8 @@ def create_app(
             }
         return jsonify({
             "config": state.config.to_dict(),
+            "config_defaults": AppConfig().to_dict(),
             "dither_presets": presets,
-            "default_preset": DEFAULT_PRESET,
             "server_time": datetime.now().isoformat(timespec="seconds"),
             "panel": {"visual_w": VISUAL_W, "visual_h": VISUAL_H, "total_bytes": TOTAL_BYTES},
             "version": app_version,

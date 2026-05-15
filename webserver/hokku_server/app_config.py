@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from hokku_server.image_config import ImageConfig, _image_config_from_dict  # noqa: F401 (re-exported)
-from hokku_server.presets import DEFAULT_PRESET, PRESET_IMAGE_CONFIGS
+from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 
 Orientation = Literal["landscape", "portrait"]
@@ -70,12 +70,6 @@ def _migrate(data: dict) -> dict:
     return data
 
 
-def _default_bw_image_config() -> ImageConfig:
-    """B&W-safe ImageConfig: saturation boosters disabled to avoid colour confetti."""
-    from hokku_server.image_config import _bw_safe_image_config  # avoid circular at module level
-    return _bw_safe_image_config(PRESET_IMAGE_CONFIGS["floyd_steinberg"])
-
-
 @dataclass(frozen=True)
 class AppConfig:
     """Persisted server settings."""
@@ -100,10 +94,10 @@ class AppConfig:
 
     # Image pipeline: default, B&W, and face presets.
     image_config_default: ImageConfig = field(
-        default_factory=lambda: PRESET_IMAGE_CONFIGS[DEFAULT_PRESET]
+        default_factory=lambda: PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
     )
     classifier_bw_detect_enabled: bool = True
-    image_config_bw: ImageConfig = field(default_factory=_default_bw_image_config)
+    image_config_bw: ImageConfig = field(default_factory=lambda: PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"])
     classifier_face_detect_enabled: bool = True
     image_config_face: ImageConfig = field(
         default_factory=lambda: PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
