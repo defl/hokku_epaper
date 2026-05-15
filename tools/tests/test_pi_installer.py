@@ -205,12 +205,9 @@ class TestValidators:
         ok, _ = pi.validate_timezone(s)
         assert not ok, f"expected {s!r} invalid ({why})"
 
-    def test_invalid_timezone_unknown_zone_when_tzdata_available(self):
-        """Strict-only: 'Not/A_Real_Zone' is format-valid but not a real zone.
-        When tzdata is present (Linux, or Windows with the tzdata PyPI pkg),
-        we expect rejection; when absent, we accept and let the Pi reject it."""
-        if pi._available_timezones() is None:
-            pytest.skip("tzdata not available on this host")
+    def test_invalid_timezone_unknown_zone(self):
+        """'Not/A_Real_Zone' is format-valid but not a real IANA zone — must be rejected.
+        Requires the tzdata package (listed in requirements.txt)."""
         ok, _ = pi.validate_timezone("Not/A_Real_Zone")
         assert not ok
 
