@@ -26,3 +26,4 @@ opencv-python-headless
 # Tests
 pytest
 pytest-xdist
+tzdata               # IANA timezone data for zoneinfo on Windows (validate_timezone test)
