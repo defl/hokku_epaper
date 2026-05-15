@@ -57,7 +57,7 @@ def test_multi_threaded_runs_in_parallel(app_config: AppConfig, monkeypatch):
         barrier.wait()
         return (b"\x00" * TOTAL_BYTES, b"\x89PNG\r\n\x1a\n")
 
-    monkeypatch.setattr("hokku_server.render_worker.render_one", fake_render_one)
+    monkeypatch.setattr("hokku_server.image_manager_multi.render_one", fake_render_one)
 
     mgr = MultiThreadedImageManager(app_config, worker_count=2)
     try:
