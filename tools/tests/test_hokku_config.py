@@ -41,41 +41,65 @@ class TestFindPort:
 class TestNvsBinaryGeneration:
     def test_build_produces_correct_size(self):
         """Generated binary is exactly NVS_SIZE bytes."""
-        binary = hokku_config._build_nvs_binary({"wifi_ssid": "test"})
+        binary = hokku_config._build_nvs_binary({"wifi_ssid1": "test"})
         assert len(binary) == hokku_config.NVS_SIZE
 
     def test_roundtrip_single_key(self):
         """Write and read back a single key."""
-        config = {"wifi_ssid": "MyNetwork"}
+        config = {"wifi_ssid1": "MyNetwork"}
         binary = hokku_config._build_nvs_binary(config)
         result = hokku_config._read_nvs(binary)
-        assert result.get("wifi_ssid") == "MyNetwork"
+        assert result.get("wifi_ssid1") == "MyNetwork"
 
     def test_roundtrip_with_screen_name(self):
         """screen_name survives roundtrip."""
-        config = {"wifi_ssid": "Test", "screen_name": "Living Room"}
+        config = {"wifi_ssid1": "Test", "screen_name": "Living Room"}
         binary = hokku_config._build_nvs_binary(config)
         result = hokku_config._read_nvs(binary)
         assert result["screen_name"] == "Living Room"
 
-    def test_roundtrip_multiple_keys(self):
-        """Write and read back multiple keys."""
+    def test_roundtrip_primary_network(self):
+        """Primary wifi credentials survive roundtrip."""
         config = {
-            "wifi_ssid": "TestNet",
-            "wifi_pass": "secret123",
-            "image_url": "http://192.168.1.100:8080/hokku/screen/",
+            "wifi_ssid1": "PrimaryNet",
+            "wifi_pass1": "secret123",
+            "image_url":  "http://192.168.1.100:8080/hokku/screen/",
         }
         binary = hokku_config._build_nvs_binary(config)
         result = hokku_config._read_nvs(binary)
-        assert result["wifi_ssid"] == "TestNet"
-        assert result["wifi_pass"] == "secret123"
+        assert result["wifi_ssid1"] == "PrimaryNet"
+        assert result["wifi_pass1"] == "secret123"
         assert result["image_url"] == "http://192.168.1.100:8080/hokku/screen/"
 
+    def test_roundtrip_both_networks(self):
+        """Primary and secondary wifi credentials both survive roundtrip."""
+        config = {
+            "wifi_ssid1": "PrimaryNet",
+            "wifi_pass1": "primary_pw",
+            "wifi_ssid2": "BackupNet",
+            "wifi_pass2": "backup_pw",
+            "image_url":  "http://192.168.1.100:8080/hokku/screen/",
+        }
+        binary = hokku_config._build_nvs_binary(config)
+        result = hokku_config._read_nvs(binary)
+        assert result["wifi_ssid1"] == "PrimaryNet"
+        assert result["wifi_pass1"] == "primary_pw"
+        assert result["wifi_ssid2"] == "BackupNet"
+        assert result["wifi_pass2"] == "backup_pw"
+
+    def test_roundtrip_secondary_absent(self):
+        """Config with only primary network has no secondary keys."""
+        config = {"wifi_ssid1": "PrimaryNet", "image_url": "http://h:8080/hokku/screen/"}
+        binary = hokku_config._build_nvs_binary(config)
+        result = hokku_config._read_nvs(binary)
+        assert "wifi_ssid2" not in result
+        assert "wifi_pass2" not in result
+
     def test_empty_config(self):
-        """Empty config still has cfg_ver."""
+        """Empty config still has cfg_ver and wifi_order."""
         binary = hokku_config._build_nvs_binary({})
         result = hokku_config._read_nvs(binary)
-        assert result == {"cfg_ver": hokku_config.CONFIG_VERSION}
+        assert result == {"cfg_ver": hokku_config.CONFIG_VERSION, "wifi_order": 0}
 
     def test_config_version_written(self):
         """cfg_ver is always written as uint8."""
@@ -94,7 +118,7 @@ class TestNvsBinaryGeneration:
 
     def test_page_header_valid(self):
         """Page header has correct state and version."""
-        binary = hokku_config._build_nvs_binary({"wifi_ssid": "x"})
+        binary = hokku_config._build_nvs_binary({"wifi_ssid1": "x"})
         state = struct.unpack_from("<I", binary, 0)[0]
         assert state == hokku_config.PAGE_ACTIVE
         assert binary[8] == 0xFE  # NVS version 2
@@ -114,7 +138,7 @@ class TestNvsBinaryGeneration:
 class TestBackupRestore:
     def test_backup_file_format(self):
         """Backup creates valid JSON."""
-        config = {"wifi_ssid": "TestNet", "wifi_pass": "secret", "image_url": "http://test:8080/hokku/"}
+        config = {"wifi_ssid1": "TestNet", "wifi_pass1": "secret", "image_url": "http://test:8080/hokku/"}
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(config, f, indent=2)
             temp_path = f.name
@@ -127,15 +151,15 @@ class TestBackupRestore:
 
     def test_restore_reads_json(self):
         """Restore parses JSON correctly."""
-        config = {"wifi_ssid": "RestoreNet", "wifi_pass": "secret123", "image_url": "http://restore:8080/hokku/"}
+        config = {"wifi_ssid1": "RestoreNet", "wifi_pass1": "secret123", "image_url": "http://restore:8080/hokku/"}
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(config, f, indent=2)
             temp_path = f.name
         try:
             with open(temp_path) as f:
                 loaded = json.load(f)
-            assert loaded["wifi_ssid"] == "RestoreNet"
-            assert loaded["wifi_pass"] == "secret123"
+            assert loaded["wifi_ssid1"] == "RestoreNet"
+            assert loaded["wifi_pass1"] == "secret123"
         finally:
             os.unlink(temp_path)
 

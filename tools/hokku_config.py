@@ -62,7 +62,7 @@ STR_TYPE = 0x21      # String
 
 # Config version — increment every time NVS config fields change.
 # Must match firmware's CONFIG_VERSION. Source of truth is CLAUDE.md.
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 
 # Page states
 PAGE_ACTIVE = 0xFFFFFFFE  # Active page
@@ -121,9 +121,11 @@ def _build_nvs_binary(config_dict):
     csv_lines = ["key,type,encoding,value"]
     csv_lines.append(f"{NVS_NAMESPACE},namespace,,")
     csv_lines.append(f"cfg_ver,data,u8,{CONFIG_VERSION}")
+    wifi_order = int(config_dict.get("wifi_order", 0))
+    csv_lines.append(f"wifi_order,data,u8,{wifi_order}")
     for key, value in config_dict.items():
         if not isinstance(value, str):
-            continue  # cfg_ver and any other non-string fields are handled separately
+            continue  # u8 fields (cfg_ver, wifi_order) are handled above
         escaped = value.replace('"', '""')
         csv_lines.append(f'{key},data,string,"{escaped}"')
 
@@ -277,7 +279,7 @@ def auto_backup(port):
     """Read current NVS config and save a timestamped backup."""
     try:
         nvs_data = _read_nvs_from_device(port)
-        config = _read_nvs_strings(nvs_data)
+        config = _read_nvs(nvs_data)
         if not config:
             print("  No existing config on device (empty NVS)")
             return
@@ -310,7 +312,7 @@ def cmd_set(args):
     print("Reading current configuration...")
     try:
         nvs_data = _read_nvs_from_device(port)
-        existing = _read_nvs_strings(nvs_data)
+        existing = _read_nvs(nvs_data)
     except Exception:
         existing = {}
 
@@ -325,9 +327,18 @@ def cmd_set(args):
     # Merge new values
     config = dict(existing)
     if args.ssid is not None:
-        config["wifi_ssid"] = args.ssid
+        config["wifi_ssid1"] = args.ssid
     if args.password is not None:
-        config["wifi_pass"] = args.password
+        config["wifi_pass1"] = args.password
+    if args.ssid2 is not None:
+        config["wifi_ssid2"] = args.ssid2
+    if args.password2 is not None:
+        config["wifi_pass2"] = args.password2
+    if args.order is not None:
+        if args.order not in ("primary", "last"):
+            print("Error: --order must be 'primary' or 'last'.")
+            sys.exit(1)
+        config["wifi_order"] = 1 if args.order == "last" else 0
     if args.url is not None:
         config["image_url"] = args.url
     if args.name is not None:
@@ -337,8 +348,8 @@ def cmd_set(args):
             sys.exit(1)
         config["screen_name"] = args.name
 
-    if "wifi_ssid" not in config or "image_url" not in config:
-        print("Error: wifi_ssid and image_url are required.")
+    if "wifi_ssid1" not in config or "image_url" not in config:
+        print("Error: wifi_ssid1 and image_url are required.")
         print("Use --ssid and --url to set them.")
         sys.exit(1)
 
@@ -347,30 +358,32 @@ def cmd_set(args):
     _flash_nvs(port, nvs_binary)
 
     print("\nConfiguration written:")
+    pass_keys = {"wifi_pass1", "wifi_pass2"}
     for k, v in config.items():
-        print(f"  {k}: {'****' if k == 'wifi_pass' else v}")
+        print(f"  {k}: {'****' if k in pass_keys else v}")
 
 
 def cmd_get(args):
     """Read and display current configuration from device."""
     port = _get_port(args.port)
     nvs_data = _read_nvs_from_device(port)
-    config = _read_nvs_strings(nvs_data)
+    config = _read_nvs(nvs_data)
 
     if not config:
         print("No configuration found on device.")
         return
 
+    pass_keys = {"wifi_pass1", "wifi_pass2"}
     print("Current configuration:")
     for key, value in config.items():
-        print(f"  {key}: {'****' if key == 'wifi_pass' else value}")
+        print(f"  {key}: {'****' if key in pass_keys else value}")
 
 
 def cmd_backup(args):
     """Backup current config to a JSON file."""
     port = _get_port(args.port)
     nvs_data = _read_nvs_from_device(port)
-    config = _read_nvs_strings(nvs_data)
+    config = _read_nvs(nvs_data)
 
     if not config:
         print("No configuration found on device.")
@@ -426,8 +439,11 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     set_parser = subparsers.add_parser("set", help="Set configuration values")
-    set_parser.add_argument("--ssid", help="WiFi network name")
-    set_parser.add_argument("--password", help="WiFi password")
+    set_parser.add_argument("--ssid",      help="Primary WiFi network name (required)")
+    set_parser.add_argument("--password",  help="Primary WiFi password")
+    set_parser.add_argument("--ssid2",     help="Secondary WiFi network name (optional)")
+    set_parser.add_argument("--password2", help="Secondary WiFi password")
+    set_parser.add_argument("--order",     help="WiFi order: 'primary' (always try primary first) or 'last' (try last-used first)")
     set_parser.add_argument("--url", help="Image server URL (e.g. http://server:8080/hokku/screen/)")
     set_parser.add_argument("--name", help="Screen name for identification (max 64 bytes)")
     set_parser.set_defaults(func=cmd_set)

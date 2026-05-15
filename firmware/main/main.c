@@ -95,7 +95,7 @@ static const char *TAG = "hokku";
 #define COLOR_WHITE_BYTE   0x11
 
 /* ── Network / timeouts ──────────────────────────────────────────── */
-#define WIFI_CONNECT_TIMEOUT_MS  15000
+#define WIFI_CONNECT_TIMEOUT_MS  8000   /* per-network attempt; two networks = 16 s worst case */
 #define HTTP_TIMEOUT_MS          30000
 
 /* ── Battery ─────────────────────────────────────────────────────── */
@@ -152,6 +152,7 @@ RTC_NOINIT_ATTR static uint32_t boot_count;
 RTC_NOINIT_ATTR static uint8_t  wifi_channel;
 RTC_NOINIT_ATTR static uint8_t  wifi_bssid[6];
 RTC_NOINIT_ATTR static bool     has_wifi_cache;
+RTC_NOINIT_ATTR static uint8_t  last_wifi_index;  /* 0 or 1 — which network last succeeded */
 
 /* Most-recent battery reading, passed to the server in X-Frame-State. */
 RTC_NOINIT_ATTR static uint16_t last_battery_mv;
@@ -762,70 +763,44 @@ static bool wifi_connect(void)
     }
     wifi_init_once();
 
-    /* WIFI_AUTH_OPEN as the threshold accepts any auth level the AP
-     * advertises (OPEN / WEP / WPA / WPA2 / WPA3). Previously we hard-
-     * coded WPA2_PSK which worked on our WPA3-SAE AP only because
-     * ESP-IDF negotiates leniently; if the AP flips to WPA3-only it
-     * would reject our association silently. OPEN means "I'll accept
-     * whatever you offer." */
-    wifi_config_t wifi_cfg = {
-        .sta = {
-            .threshold.authmode = WIFI_AUTH_OPEN,
-        },
-    };
-    /* strncpy with n == sizeof(dst) leaves the buffer non-terminated for a
-     * source of exactly that length. Force a NUL so the WiFi stack never
-     * reads past the buffer. */
-    strncpy((char *)wifi_cfg.sta.ssid, config.wifi_ssid, sizeof(wifi_cfg.sta.ssid) - 1);
-    wifi_cfg.sta.ssid[sizeof(wifi_cfg.sta.ssid) - 1] = '\0';
-    strncpy((char *)wifi_cfg.sta.password, config.wifi_pass, sizeof(wifi_cfg.sta.password) - 1);
-    wifi_cfg.sta.password[sizeof(wifi_cfg.sta.password) - 1] = '\0';
-
-    /* Use cached channel/BSSID for fast reconnect */
-    if (has_wifi_cache && wifi_channel > 0) {
-        wifi_cfg.sta.channel = wifi_channel;
-        memcpy(wifi_cfg.sta.bssid, wifi_bssid, 6);
-        wifi_cfg.sta.bssid_set = true;
-        ESP_LOGI(TAG, "WiFi fast reconnect ch=%d", wifi_channel);
-    }
-
     WIFI_TRY(esp_wifi_set_mode(WIFI_MODE_STA));
-    WIFI_TRY(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     WIFI_TRY(esp_wifi_start());
-    WIFI_TRY(esp_wifi_connect());
 
-    EventBits_t bits = xEventGroupWaitBits(wifi_events,
-        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-        pdFALSE, pdFALSE, pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_MS));
+    /* Determine which network to try first based on the configured strategy.
+     * WIFI_ORDER_LAST_FIRST: start with whichever network last succeeded.
+     * WIFI_ORDER_PRIMARY_FIRST (default): always start with slot 0.
+     * The BSSID cache is applied only when idx == last_wifi_index. */
+    int first = (config.wifi_order == WIFI_ORDER_LAST_FIRST) ? (int)last_wifi_index : 0;
+    for (int step = 0; step < 2; step++) {
+        int idx = (first + step) % 2;
+        if (config.wifi_ssid[idx][0] == '\0') continue;
 
-    if (bits & WIFI_CONNECTED_BIT) {
-        /* Cache AP info for fast reconnect next time */
-        wifi_ap_record_t ap;
-        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-            wifi_channel = ap.primary;
-            memcpy(wifi_bssid, ap.bssid, 6);
-            has_wifi_cache = true;
+        /* WIFI_AUTH_OPEN accepts any auth level the AP advertises. Previously
+         * hard-coded WPA2_PSK which silently failed on WPA3-only APs. */
+        wifi_config_t wifi_cfg = {
+            .sta = { .threshold.authmode = WIFI_AUTH_OPEN },
+        };
+        /* strncpy with n == sizeof(dst) leaves the last byte unwritten for a
+         * source of exactly that length — force NUL so the WiFi stack never
+         * reads past the buffer. */
+        strncpy((char *)wifi_cfg.sta.ssid, config.wifi_ssid[idx], sizeof(wifi_cfg.sta.ssid) - 1);
+        wifi_cfg.sta.ssid[sizeof(wifi_cfg.sta.ssid) - 1] = '\0';
+        strncpy((char *)wifi_cfg.sta.password, config.wifi_pass[idx], sizeof(wifi_cfg.sta.password) - 1);
+        wifi_cfg.sta.password[sizeof(wifi_cfg.sta.password) - 1] = '\0';
+
+        /* Use cached channel/BSSID only for the network that last succeeded */
+        if (has_wifi_cache && wifi_channel > 0 && idx == last_wifi_index) {
+            wifi_cfg.sta.channel = wifi_channel;
+            memcpy(wifi_cfg.sta.bssid, wifi_bssid, 6);
+            wifi_cfg.sta.bssid_set = true;
+            ESP_LOGI(TAG, "WiFi fast reconnect ch=%d (net %d)", wifi_channel, idx);
         }
-        /* Explicit: cache path worked if we were ATTEMPTING the cache.
-         * Matches wifi_cfg.sta.bssid_set, which was only set in the
-         * cache-attempt branch above. */
-        last_wifi_used_cache = wifi_cfg.sta.bssid_set;
-        return true;
-    }
 
-    /* Fast reconnect failed, retry without cache */
-    if (has_wifi_cache) {
-        ESP_LOGW(TAG, "Fast reconnect failed, trying full scan...");
-        has_wifi_cache = false;
-        esp_wifi_disconnect();
-
-        wifi_cfg.sta.channel = 0;
-        wifi_cfg.sta.bssid_set = false;
-        esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
-        esp_wifi_connect();
-
+        WIFI_TRY(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
         xEventGroupClearBits(wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
-        bits = xEventGroupWaitBits(wifi_events,
+        WIFI_TRY(esp_wifi_connect());
+
+        EventBits_t bits = xEventGroupWaitBits(wifi_events,
             WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
             pdFALSE, pdFALSE, pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_MS));
 
@@ -836,9 +811,45 @@ static bool wifi_connect(void)
                 memcpy(wifi_bssid, ap.bssid, 6);
                 has_wifi_cache = true;
             }
-            /* Explicit: full-scan branch, cache was NOT used. */
-            last_wifi_used_cache = false;
+            last_wifi_used_cache = wifi_cfg.sta.bssid_set;
+            last_wifi_index = (uint8_t)idx;
             return true;
+        }
+
+        /* Cache miss: retry this network with a full scan before moving on */
+        if (wifi_cfg.sta.bssid_set) {
+            ESP_LOGW(TAG, "Fast reconnect failed for net %d, retrying with full scan...", idx);
+            has_wifi_cache = false;
+            esp_wifi_disconnect();
+
+            wifi_cfg.sta.channel = 0;
+            wifi_cfg.sta.bssid_set = false;
+            esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+            xEventGroupClearBits(wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
+            esp_wifi_connect();
+
+            bits = xEventGroupWaitBits(wifi_events,
+                WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                pdFALSE, pdFALSE, pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_MS));
+
+            if (bits & WIFI_CONNECTED_BIT) {
+                wifi_ap_record_t ap;
+                if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+                    wifi_channel = ap.primary;
+                    memcpy(wifi_bssid, ap.bssid, 6);
+                    has_wifi_cache = true;
+                }
+                last_wifi_used_cache = false;
+                last_wifi_index = (uint8_t)idx;
+                return true;
+            }
+        }
+
+        /* If there's another network to try, disconnect cleanly before it */
+        int next_idx = (first + step + 1) % 2;
+        if (step < 1 && config.wifi_ssid[next_idx][0] != '\0') {
+            ESP_LOGW(TAG, "WiFi net %d failed, trying net %d...", idx, next_idx);
+            esp_wifi_disconnect();
         }
     }
 
@@ -1630,6 +1641,7 @@ void app_main(void)
         wifi_channel = 0;
         memset(wifi_bssid, 0, sizeof(wifi_bssid));
         has_wifi_cache = false;
+        last_wifi_index = 0;
         last_battery_mv = 0;
         last_sleep_seconds = 0;
         next_refresh_epoch = 0;
@@ -1751,7 +1763,7 @@ void app_main(void)
 
     if (action == ACTION_NONE || action == ACTION_REFRESH) {
         /* Config must be valid before we can download anything. */
-        if (config.cfg_ver != CONFIG_VERSION) {
+        if (!config_version_ok()) {
             char msg[256];
             snprintf(msg, sizeof(msg),
                      "Config version\nmismatch.\n\n"

@@ -222,8 +222,8 @@ def format_device_line(idx, device):
             detail = "Hokku firmware"
             if cfg.get("screen_name"):
                 detail += f", name={cfg['screen_name']}"
-            if cfg.get("wifi_ssid"):
-                detail += f", ssid={cfg['wifi_ssid']}"
+            if cfg.get("wifi_ssid1"):
+                detail += f", ssid={cfg['wifi_ssid1']}"
             if device["firmware_current"] is False:
                 detail += ", firmware update available"
             parts.append(f"ESP32-S3 ({detail})")
@@ -312,11 +312,16 @@ def show_current_config(config):
         print("  No configuration found on device.")
         return
     host, port = _parse_server_url(config.get("image_url", ""))
+    order_label = "last-used first" if config.get("wifi_order") == 1 else "primary first"
     print("  Current configuration:")
-    print(f"    WiFi SSID:     {config.get('wifi_ssid', '(not set)')}")
-    print(f"    WiFi Password: {'****' if config.get('wifi_pass') else '(not set)'}")
-    print(f"    Server:        {host or '(not set)'}:{port or 8080}")
-    print(f"    Screen Name:   {config.get('screen_name', '(not set)')}")
+    print(f"    WiFi SSID:       {config.get('wifi_ssid1', '(not set)')}")
+    print(f"    WiFi Password:   {'****' if config.get('wifi_pass1') else '(not set)'}")
+    if config.get("wifi_ssid2"):
+        print(f"    WiFi SSID 2:     {config['wifi_ssid2']}")
+        print(f"    WiFi Password 2: {'****' if config.get('wifi_pass2') else '(not set)'}")
+        print(f"    WiFi Order:      {order_label}")
+    print(f"    Server:          {host or '(not set)'}:{port or 8080}")
+    print(f"    Screen Name:     {config.get('screen_name', '(not set)')}")
     print()
 
 
@@ -434,21 +439,21 @@ def prompt_config(existing_config=None, pi_credentials=None):
     print("  Enter new values (press Enter to keep shown default):")
     print()
 
-    # --- WiFi SSID ---
-    default = pi.get("wifi_ssid") or cfg.get("wifi_ssid", "")
+    # --- Primary WiFi SSID (required) ---
+    default = pi.get("wifi_ssid1") or cfg.get("wifi_ssid1", "")
     prompt = f"  WiFi SSID [{default}]: " if default else "  WiFi SSID: "
     val = input(prompt).strip()
     if val:
-        cfg["wifi_ssid"] = val
+        cfg["wifi_ssid1"] = val
     elif default:
-        cfg["wifi_ssid"] = default
+        cfg["wifi_ssid1"] = default
     else:
         print("  WiFi SSID is required.")
         return None
 
-    # --- WiFi password ---
-    pi_pass = pi.get("wifi_pass")
-    existing_pass = cfg.get("wifi_pass", "")
+    # --- Primary WiFi password ---
+    pi_pass = pi.get("wifi_pass1")
+    existing_pass = cfg.get("wifi_pass1", "")
     if pi_pass:
         prompt = "  WiFi Password [use Pi install value]: "
     elif existing_pass:
@@ -457,10 +462,47 @@ def prompt_config(existing_config=None, pi_credentials=None):
         prompt = "  WiFi Password: "
     val = input(prompt).strip()
     if val:
-        cfg["wifi_pass"] = val
+        cfg["wifi_pass1"] = val
     elif pi_pass:
-        cfg["wifi_pass"] = pi_pass
+        cfg["wifi_pass1"] = pi_pass
     # else keep existing
+
+    # --- Secondary WiFi (optional) ---
+    existing_ssid2 = cfg.get("wifi_ssid2", "")
+    default2 = existing_ssid2
+    prompt2 = f"  Secondary WiFi SSID [{default2}] (Enter to skip): " if default2 \
+              else "  Secondary WiFi SSID (optional, Enter to skip): "
+    val = input(prompt2).strip()
+    if val:
+        cfg["wifi_ssid2"] = val
+        existing_pass2 = cfg.get("wifi_pass2", "")
+        prompt = "  Secondary WiFi Password [****]: " if existing_pass2 \
+                 else "  Secondary WiFi Password: "
+        val = input(prompt).strip()
+        if val:
+            cfg["wifi_pass2"] = val
+        # else keep existing
+    elif default2:
+        cfg["wifi_ssid2"] = default2
+        # keep existing wifi_pass2 unchanged
+    else:
+        # clear any previously stored secondary
+        cfg.pop("wifi_ssid2", None)
+        cfg.pop("wifi_pass2", None)
+
+    # --- WiFi order (only relevant when secondary is configured) ---
+    if cfg.get("wifi_ssid2"):
+        current_order = cfg.get("wifi_order", 0)
+        current_label = "last-used first" if current_order == 1 else "primary first"
+        print(f"  WiFi order [{current_label}]:")
+        print("    1) Primary first — always try the primary network first")
+        print("    2) Last-used first — try whichever network last worked")
+        val = input("  Choice [Enter to keep]: ").strip()
+        if val == "1":
+            cfg["wifi_order"] = 0
+        elif val == "2":
+            cfg["wifi_order"] = 1
+        # else keep existing
 
     # --- server IP/port ---
     current_host, current_port = _parse_server_url(cfg.get("image_url", ""))
@@ -520,10 +562,10 @@ def _pi_config_mismatch(existing_config, pi_credentials):
     if not existing_config or not pi_credentials:
         return []
     diffs = []
-    if pi_credentials.get("wifi_ssid") and existing_config.get("wifi_ssid") != pi_credentials["wifi_ssid"]:
-        diffs.append("wifi_ssid")
-    if pi_credentials.get("wifi_pass") and existing_config.get("wifi_pass") != pi_credentials["wifi_pass"]:
-        diffs.append("wifi_pass")
+    if pi_credentials.get("wifi_ssid1") and existing_config.get("wifi_ssid1") != pi_credentials["wifi_ssid1"]:
+        diffs.append("wifi_ssid1")
+    if pi_credentials.get("wifi_pass1") and existing_config.get("wifi_pass1") != pi_credentials["wifi_pass1"]:
+        diffs.append("wifi_pass1")
     if pi_credentials.get("server_ip"):
         host, _ = _parse_server_url(existing_config.get("image_url", ""))
         if host != pi_credentials["server_ip"]:
@@ -857,8 +899,8 @@ def run_configure_only(pi_credentials=None):
     host, port_num = _parse_server_url(new_config.get("image_url", ""))
     if host:
         print(f"  Server:      {host}:{port_num or 8080}")
-    if new_config.get("wifi_ssid"):
-        print(f"  WiFi SSID:   {new_config['wifi_ssid']}")
+    if new_config.get("wifi_ssid1"):
+        print(f"  WiFi SSID:   {new_config['wifi_ssid1']}")
     if new_config.get("screen_name"):
         print(f"  Screen name: {new_config['screen_name']}")
     print()
