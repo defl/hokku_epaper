@@ -53,9 +53,9 @@ static void test_space_does_not_modify_framebuffer(void)
 
 static void test_out_of_range_char_falls_back_to_question_mark(void)
 {
-    /* draw_char renders ch < 32 as '?'. */
-    uint8_t fb_ctrl[50] = {0};
-    uint8_t fb_q[50]    = {0};
+    /* draw_char renders ch < 32 as '?'. fb_w=20, fb_h=10 → 20*10/2=100 bytes. */
+    uint8_t fb_ctrl[100] = {0};
+    uint8_t fb_q[100]    = {0};
     draw_char(fb_ctrl, 20, 10, 0, 0, 0x01, 0xF, 1);
     draw_char(fb_q,    20, 10, 0, 0, '?',  0xF, 1);
     CHECK(memcmp(fb_ctrl, fb_q, sizeof(fb_ctrl)) == 0,
@@ -65,8 +65,8 @@ static void test_out_of_range_char_falls_back_to_question_mark(void)
 static void test_even_pixel_writes_high_nibble(void)
 {
     /* 'I' glyph: col[2]=0x7F, bit[0]=1 → pixel(2,0) in a 10-wide fb.
-     * idx = 2, even → high nibble of fb[1]. */
-    uint8_t fb[10] = {0};
+     * idx = 2, even → high nibble of fb[1]. fb_w=10, fb_h=10 → 50 bytes. */
+    uint8_t fb[50] = {0};
     draw_char(fb, 10, 10, 0, 0, 'I', 0xA, 1);
     CHECK(((fb[1] >> 4) & 0xF) == 0xA,
           "draw_char: even-indexed pixel written to high nibble");
@@ -75,8 +75,8 @@ static void test_even_pixel_writes_high_nibble(void)
 static void test_odd_pixel_writes_low_nibble(void)
 {
     /* 'I' glyph: col[3]=0x41, bit[0]=1 → pixel(3,0) in a 10-wide fb.
-     * idx = 3, odd → low nibble of fb[1]. */
-    uint8_t fb[10] = {0};
+     * idx = 3, odd → low nibble of fb[1]. fb_w=10, fb_h=10 → 50 bytes. */
+    uint8_t fb[50] = {0};
     draw_char(fb, 10, 10, 0, 0, 'I', 0xB, 1);
     CHECK((fb[1] & 0xF) == 0xB,
           "draw_char: odd-indexed pixel written to low nibble");
@@ -85,8 +85,8 @@ static void test_odd_pixel_writes_low_nibble(void)
 static void test_adjacent_nibbles_are_independent(void)
 {
     /* Writing color 0xA to pixel(2,0) and 0xB to pixel(3,0) share byte fb[1].
-     * Both nibbles should coexist: high=0xA, low=0xB. */
-    uint8_t fb[10] = {0};
+     * Both nibbles should coexist: high=0xA, low=0xB. fb_w=10, fb_h=10 → 50 bytes. */
+    uint8_t fb[50] = {0};
     /* 'I' col[2] bit[0]=1 → pixel(2,0) high nibble
        'I' col[3] bit[0]=1 → pixel(3,0) low nibble
        Same glyph, same color — just verify byte encodes both. */
@@ -99,8 +99,8 @@ static void test_adjacent_nibbles_are_independent(void)
 
 static void test_clip_past_right_edge_does_not_crash(void)
 {
-    /* Draw at x = fb_w - 1 = 9; cols 1..4 are clipped. Should not crash. */
-    uint8_t fb[10] = {0};
+    /* Draw at x = fb_w - 1 = 9; cols 1..4 are clipped. fb_w=10, fb_h=10 → 50 bytes. */
+    uint8_t fb[50] = {0};
     draw_char(fb, 10, 10, 9, 0, 'H', 0xF, 1);
     CHECK(1, "draw_char: drawing near right edge does not crash");
     /* col[0]=0x7F, all rows — pixel(9,0): idx=9, odd → low nibble of fb[4]. */
@@ -110,8 +110,8 @@ static void test_clip_past_right_edge_does_not_crash(void)
 
 static void test_clip_past_bottom_edge_does_not_crash(void)
 {
-    /* Draw at y = fb_h - 1; rows 1..6 of the glyph are clipped. */
-    uint8_t fb[10] = {0};
+    /* Draw at y = fb_h - 1; rows 1..6 of the glyph are clipped. fb_w=10, fb_h=10 → 50 bytes. */
+    uint8_t fb[50] = {0};
     draw_char(fb, 10, 10, 0, 9, 'A', 0xC, 1);
     CHECK(1, "draw_char: drawing near bottom edge does not crash");
 }
@@ -133,8 +133,9 @@ static void test_scale2_block_is_2x2(void)
      * pixel(4,0): idx=4, even, byte=2, high nibble
      * pixel(5,0): idx=5, odd,  byte=2, low  nibble
      * pixel(4,1): idx=24, even, byte=12, high nibble
-     * pixel(5,1): idx=25, odd,  byte=12, low  nibble */
-    uint8_t fb[50] = {0};
+     * pixel(5,1): idx=25, odd,  byte=12, low  nibble
+     * fb_w=20, fb_h=20 → 20*20/2=200 bytes. */
+    uint8_t fb[200] = {0};
     draw_char(fb, 20, 20, 0, 0, 'I', 0xD, 2);
     CHECK(((fb[2]  >> 4) & 0xF) == 0xD, "draw_char scale=2: top-left pixel of 2×2 block");
     CHECK((fb[2]  & 0xF)        == 0xD, "draw_char scale=2: top-right pixel of 2×2 block");
