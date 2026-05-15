@@ -197,38 +197,6 @@ RTC_NOINIT_ATTR static uint8_t  last_sleep_mode;
 #define ACTION_ENTER_REGIME  2  /* skip refresh, enter regime based on USB state */
 RTC_NOINIT_ATTR static uint8_t  pending_action;
 
-/* ── NVS config (persisted across flashes via hokku-setup) ────────── */
-#define CONFIG_VERSION  1
-
-typedef struct {
-    uint8_t cfg_ver;
-    char wifi_ssid[33];
-    char wifi_pass[65];
-    char image_url[257];
-    char screen_name[65];
-} config_t;
-
-static config_t config = {0};
-
-static bool config_load(void)
-{
-    nvs_handle_t nvs;
-    if (nvs_open("hokku", NVS_READONLY, &nvs) != ESP_OK) return false;
-    nvs_get_u8(nvs, "cfg_ver", &config.cfg_ver);
-    size_t len;
-    len = sizeof(config.wifi_ssid);  nvs_get_str(nvs, "wifi_ssid",   config.wifi_ssid,   &len);
-    len = sizeof(config.wifi_pass);  nvs_get_str(nvs, "wifi_pass",   config.wifi_pass,   &len);
-    len = sizeof(config.image_url);  nvs_get_str(nvs, "image_url",   config.image_url,   &len);
-    len = sizeof(config.screen_name);nvs_get_str(nvs, "screen_name", config.screen_name, &len);
-    nvs_close(nvs);
-    return true;
-}
-
-static bool config_is_valid(void)
-{
-    return config.wifi_ssid[0] != '\0' && config.image_url[0] != '\0';
-}
-
 /* ── Forward declarations ────────────────────────────────────────── */
 static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_data);
 static void split_and_display(const uint8_t *img);
@@ -252,6 +220,7 @@ static bool last_wifi_used_cache = false;
  * "boot" during early init before regime dispatch. */
 static const char *current_regime = "boot";
 
+#include "config.h"
 #include "text_render.h"
 
 /* Display a text message on the e-ink screen.

@@ -50,6 +50,7 @@
 #define static
 
 #include "../../main/text_render.c"  /* font table + draw_char + draw_string */
+#include "../../main/config.c"       /* NVS config struct + load/validate    */
 #include "../../main/main.c"         /* all firmware logic                   */
 
 /* ── Minimal test framework ──────────────────────────────────────────── */
@@ -79,38 +80,6 @@ static void reset_btn_debounce(void)
 
 /* Drive GPIO pin to the given level for the next mock read. */
 static void gpio_set_mock(int pin, int level) { _mock_gpio[pin] = level; }
-
-/* ═══════════════════════════════════════════════════════════════════════
- *  config_is_valid tests
- * ═══════════════════════════════════════════════════════════════════════ */
-
-static void test_config_invalid_when_both_empty(void)
-{
-    memset(&config, 0, sizeof(config));
-    CHECK(!config_is_valid(), "config_is_valid: returns false when ssid and url are empty");
-}
-
-static void test_config_invalid_when_only_ssid_set(void)
-{
-    memset(&config, 0, sizeof(config));
-    strncpy(config.wifi_ssid, "MySSID", sizeof(config.wifi_ssid) - 1);
-    CHECK(!config_is_valid(), "config_is_valid: returns false when url is empty");
-}
-
-static void test_config_invalid_when_only_url_set(void)
-{
-    memset(&config, 0, sizeof(config));
-    strncpy(config.image_url, "http://example.com/img", sizeof(config.image_url) - 1);
-    CHECK(!config_is_valid(), "config_is_valid: returns false when ssid is empty");
-}
-
-static void test_config_valid_when_both_set(void)
-{
-    memset(&config, 0, sizeof(config));
-    strncpy(config.wifi_ssid, "MySSID",               sizeof(config.wifi_ssid)   - 1);
-    strncpy(config.image_url, "http://example.com/img", sizeof(config.image_url) - 1);
-    CHECK(config_is_valid(), "config_is_valid: returns true when ssid and url are both set");
-}
 
 /* ═══════════════════════════════════════════════════════════════════════
  *  now_epoch tests
@@ -319,12 +288,6 @@ int main(void)
     _mock_gpio[PIN_EPAPER_BUSY]= 1;  /* display not busy */
 
     printf("=== test_logic ===\n\n");
-
-    /* config */
-    test_config_invalid_when_both_empty();
-    test_config_invalid_when_only_ssid_set();
-    test_config_invalid_when_only_url_set();
-    test_config_valid_when_both_set();
 
     /* clock */
     test_now_epoch_returns_post_2020_value();

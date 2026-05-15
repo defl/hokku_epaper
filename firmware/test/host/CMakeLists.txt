@@ -38,7 +38,21 @@ if (WIN32)
     target_include_directories(test_logic PRIVATE win_compat)
 endif()
 
+# ── test_config ───────────────────────────────────────────────────────────
+# Tests config_load() and config_is_valid() in isolation; only needs the NVS mock.
+add_executable(test_config
+    test_config.c
+)
+target_include_directories(test_config PRIVATE
+    mocks
+    ../../main
+)
+if (WIN32)
+    target_include_directories(test_config PRIVATE win_compat)
+endif()
+
 # ── CTest integration ────────────────────────────────────────────────────
 enable_testing()
 add_test(NAME text_render COMMAND test_text_render)
 add_test(NAME logic       COMMAND test_logic)
+add_test(NAME config      COMMAND test_config)
