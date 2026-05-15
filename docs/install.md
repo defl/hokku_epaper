@@ -154,6 +154,9 @@ The frame reads its configuration from NVS (non-volatile storage), written over 
 |---|---|
 | WiFi SSID | 1–32 bytes, no quotes, backslashes, or newlines |
 | WiFi Password | 8–63 characters, or empty for an open network |
+| Secondary WiFi SSID | Optional. A fallback network the frame tries when the primary fails |
+| Secondary WiFi Password | Required if a secondary SSID is set |
+| WiFi Connection Order | Optional. `primary first` (default) or `last-used first` — try whichever network last worked. Only shown when a secondary SSID is configured |
 | Server IP or hostname | The LAN IP or mDNS hostname of the machine running the image server (e.g. `192.168.1.10` or `hokku.local`) |
 | Server Port | `8080` (default) |
 | Screen Name | Optional, up to 64 bytes UTF-8, e.g. `Living Room` |
@@ -303,7 +306,7 @@ It then presents a menu and pre-selects the most sensible option for the detecte
 
 1. **Device detection** — the wizard scans USB serial ports for an ESP32-S3. If multiple devices are found you'll be asked to pick one. The device's current firmware version and config are displayed.
 
-2. **Configuration prompts** (options 3 and 4) — you're asked for WiFi SSID, WiFi password, server IP, server port (default `8080`), and an optional screen name. The wizard checks the server is reachable before writing; if it isn't you'll see a warning and can continue anyway.
+2. **Configuration prompts** (options 3 and 4) — you're asked for WiFi SSID, WiFi password, server IP, server port (default `8080`), and an optional screen name. You can also configure an optional secondary WiFi network; if you do, a connection-order prompt follows (`primary first` or `last-used first`). The wizard checks the server is reachable before writing; if it isn't you'll see a warning and can continue anyway.
 
 3. **Firmware download and flash** (options 3 and 5) — the wizard fetches the latest `hokku-firmware_*.bin` from GitHub releases (or imports a local build if one exists) and flashes it over USB. Takes about 30 seconds. A boot check follows: the wizard reads serial output for 10 seconds and reports whether the firmware started cleanly.
 

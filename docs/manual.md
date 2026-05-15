@@ -115,7 +115,7 @@ If something goes wrong the frame doesn't go blank or silently stop working — 
 Common error messages and what to do:
 
 - **Config missing or invalid** — the frame was flashed without being configured, or the configuration version doesn't match the firmware. Run `python tools/hokku_setup.py` and use option [3] or [4] to write a fresh config.
-- **WiFi connection failed** — the SSID or password is wrong, or the network isn't available at the frame's location. Check your WiFi credentials and run configure again.
+- **WiFi connection failed** — the SSID or password is wrong, or the network isn't available at the frame's location. If a secondary network is configured the frame tries both before giving up. Check your WiFi credentials and run configure again.
 - **Server unreachable** — the frame connected to WiFi but couldn't reach the server. Check that the server is running, that the IP address in the frame's config is correct, and that nothing on your network is blocking port 8080.
 - **No images available** — the server is running and reachable but the image pool is empty. Upload some photos via the web app.
 
