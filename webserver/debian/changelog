@@ -1,3 +1,15 @@
+hokku-server (3.0.0~beta3-1) unstable; urgency=high
+
+  * Fix: B&W dithering now uses black+white-only palette LUT, eliminating
+    red/pink color artifacts that appeared when Floyd-Steinberg rendered
+    grayscale images with the full 6-color palette.
+  * Fix: "Clear Classifier Cache" button now triggers immediate re-sync so
+    re-detection and re-rendering happen right away instead of on the next
+    automatic sync cycle.
+  * Debug: add chroma logging to B&W detection for troubleshooting color issues.
+
+ -- Hokku <hokku@hokku>  Wed, 14 May 2026 00:00:01 +0000
+
 hokku-server (3.0.0~beta2-1) unstable; urgency=low
 
   * UI: add Reset to Default button for image pipeline.
