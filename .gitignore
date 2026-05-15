@@ -28,3 +28,4 @@ webserver/debian/*.substvars
 
 # Releases
 firmware/release/
+firmware/test/host/Testing/Temporary/CTestCostData.txt
