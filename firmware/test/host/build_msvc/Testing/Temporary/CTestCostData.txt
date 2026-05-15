@@ -1,5 +1,0 @@
-text_render 0 0
-logic 0 0
----
-text_render
-logic

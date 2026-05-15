@@ -1,5 +1,0 @@
-C:/Users/defl/workspace/hokku_epaper/firmware/test/host/build_verify/CMakeFiles/test_text_render.dir
-C:/Users/defl/workspace/hokku_epaper/firmware/test/host/build_verify/CMakeFiles/test_logic.dir
-C:/Users/defl/workspace/hokku_epaper/firmware/test/host/build_verify/CMakeFiles/test.dir
-C:/Users/defl/workspace/hokku_epaper/firmware/test/host/build_verify/CMakeFiles/edit_cache.dir
-C:/Users/defl/workspace/hokku_epaper/firmware/test/host/build_verify/CMakeFiles/rebuild_cache.dir
