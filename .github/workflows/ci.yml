@@ -6,6 +6,21 @@ on:
   pull_request:
 
 jobs:
+  test-firmware:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -B firmware/test/host/build firmware/test/host
+
+      - name: Build
+        run: cmake --build firmware/test/host/build
+
+      - name: Run tests
+        run: ctest --test-dir firmware/test/host/build --output-on-failure
+
   test:
     runs-on: ubuntu-latest
 
