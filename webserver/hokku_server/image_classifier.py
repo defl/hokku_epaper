@@ -32,7 +32,13 @@ def _is_near_grayscale(img) -> bool:
     arr = np.asarray(thumb.convert("RGB"), dtype=np.float64)
     lab = rgb_to_lab(arr)
     chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
-    return float(np.percentile(chroma, 95)) < GRAYSCALE_CHROMA_THRESHOLD
+    p95_chroma = float(np.percentile(chroma, 95))
+    is_bw = p95_chroma < GRAYSCALE_CHROMA_THRESHOLD
+    # Debug: log the actual chroma values for investigation of color artifacts
+    import sys
+    status = "B&W" if is_bw else "NOT B&W"
+    print(f"  [B&W check] 95th %ile chroma = {p95_chroma:.2f} (threshold {GRAYSCALE_CHROMA_THRESHOLD}): {status}", file=sys.stderr)
+    return is_bw
 
 
 def _check_grayscale(path: Path) -> bool:
