@@ -47,16 +47,32 @@ def _is_merged_firmware_asset(name):
     return name.startswith("hokku-firmware_") and name.endswith(".bin")
 
 
-def resolve_firmware_dir():
+def resolve_firmware_dir(interactive=False):
     """Return a directory containing a merged hokku-firmware_<version>.bin.
     Prefers the local firmware/release/ dir; falls back to downloading the
     merged release asset from GitHub into .cache/firmware/<tag>/. Returns None
-    if nothing is available (no local file and no network)."""
+    if nothing is available (no local file and no network).
+
+    If interactive=True and a local build exists, the user is asked whether to
+    use it or download the latest release from GitHub instead."""
     global FIRMWARE_DIR
 
-    if _merged_firmware_file(LOCAL_FIRMWARE_DIR):
-        FIRMWARE_DIR = LOCAL_FIRMWARE_DIR
-        return FIRMWARE_DIR
+    local = _merged_firmware_file(LOCAL_FIRMWARE_DIR)
+    if local:
+        if not interactive:
+            FIRMWARE_DIR = LOCAL_FIRMWARE_DIR
+            return FIRMWARE_DIR
+        print(f"  Local firmware build: {local.name}")
+        print("    [L]  use local build  (default)")
+        print("    [D]  download latest release from GitHub instead")
+        while True:
+            choice = input("    [L]> ").strip().lower() or "l"
+            if choice in ("l", "local"):
+                FIRMWARE_DIR = LOCAL_FIRMWARE_DIR
+                return FIRMWARE_DIR
+            if choice in ("d", "download"):
+                break
+            print(f"    Unknown choice {choice!r}; pick L or D.")
 
     print(f"  No hokku-firmware_*.bin in {LOCAL_FIRMWARE_DIR}. Fetching latest GitHub release...")
     try:
@@ -525,14 +541,15 @@ def prompt_config(existing_config=None, pi_credentials=None):
 
     cfg["image_url"] = f"http://{current_host}:{current_port}/hokku/screen/"
 
-    print(f"  Checking server at {current_host}:{current_port}...", end=" ", flush=True)
-    reachable, resolved_ip = _check_server_reachable(current_host, current_port)
-    if reachable:
-        if resolved_ip and resolved_ip != current_host:
-            print(f"OK  ({resolved_ip})")
-        else:
-            print("OK")
-    else:
+    while True:
+        print(f"  Checking server at {current_host}:{current_port}...", end=" ", flush=True)
+        reachable, resolved_ip = _check_server_reachable(current_host, current_port)
+        if reachable:
+            if resolved_ip and resolved_ip != current_host:
+                print(f"OK  ({resolved_ip})")
+            else:
+                print("OK")
+            break
         if resolved_ip is None and current_host.endswith('.local'):
             print("NOT FOUND")
             print(f"  WARNING: Could not resolve {current_host} via mDNS.")
@@ -541,8 +558,15 @@ def prompt_config(existing_config=None, pi_credentials=None):
             print("NOT REACHABLE")
             print(f"  WARNING: Resolved {current_host} to {resolved_ip} but could not connect.")
             print("  Make sure the webserver is running before the frame tries to connect.")
-        if input("  Continue anyway? [Y/n]: ").strip().lower() == "n":
+        print("    [R] Retry")
+        print("    [C] Continue anyway")
+        print("    [A] Abort")
+        ans = input("    [R]> ").strip().lower() or "r"
+        if ans in ("r", "retry"):
+            continue
+        if ans in ("a", "abort"):
             return None
+        break  # [C] or anything else → continue
 
     # --- screen name ---
     current = cfg.get("screen_name", "")
@@ -824,7 +848,7 @@ def _prepare(require_firmware):
         print("  Run: pip install esptool pyserial")
         return None
 
-    if require_firmware and resolve_firmware_dir() is None:
+    if require_firmware and resolve_firmware_dir(interactive=True) is None:
         print("  ERROR: no firmware available locally or from GitHub. Aborting.")
         return None
     if not require_firmware:
