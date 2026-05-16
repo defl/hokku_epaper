@@ -1304,6 +1304,7 @@ function populatePresetDropdown() {
     sel.onchange = ((pid) => () => {
       const v = sel.value;
       if (v !== '__custom__' && ditherPresets[v]) {
+        sel.dataset.lastPreset = v;
         const {label, description, ...presetFields} = ditherPresets[v];
         _setState(pid, deepCopy(presetFields));
         renderDitherPanel(pid);
@@ -1328,6 +1329,7 @@ function selectPresetMatching(state, panelId) {
     if (JSON.stringify(presetFields) === stateJson) { matched = key; break; }
   }
   sel.value = matched;
+  if (matched !== '__custom__') sel.dataset.lastPreset = matched;
   if (panelId === 'default') updatePresetDescription();
 }
 
@@ -1369,7 +1371,12 @@ function resetToPreset(panelId) {
   if (!sel) return;
   let key = sel.value;
   if (key === '__custom__') {
-    key = Object.keys(ditherPresets)[0];
+    // Return to the last real preset that was active before edits diverged.
+    // sel.dataset.lastPreset is set by selectPresetMatching() whenever a
+    // named preset is matched.  It is always the correct pipeline-specific
+    // preset, never a cross-pipeline fallback like Object.keys()[0].
+    key = sel.dataset.lastPreset;
+    if (!key || !ditherPresets[key]) return;   // no saved preset — nothing to reset to
     sel.value = key;
   }
   if (ditherPresets[key]) {
