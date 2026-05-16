@@ -25,6 +25,7 @@ from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 from PIL import Image
@@ -341,6 +342,175 @@ def test_enhancements_preserves_image_size():
     img = _make_rgb(120, 90)
     out = _apply_prepare_enhancements(img, _BASE_CFG)
     assert out.size == (120, 90)
+
+
+# ── fast: CLAHE keepout (face protection) ─────────────────────────────────────
+#
+# The keepout mechanism (in _apply_prepare_enhancements):
+#   1. Convert canvas to Lab after autocontrast / gamma / brightness / contrast.
+#   2. Save face region L* values (byte-for-byte copy of the uint8 Lab slice).
+#   3. Apply CLAHE to the *entire* L* channel (including the face area).
+#   4. Restore the saved L* into the face region, overwriting the CLAHE result.
+#   5. Convert back to RGB.
+#
+# Key insight for testing: many pipeline steps (autocontrast, gamma, …) run
+# *before* CLAHE and change L* independently of keepout.  Comparing L* on the
+# *input* image vs the *output* is therefore meaningless.  All assertions must
+# compare two outputs that went through *identical* pipeline steps and only
+# differ in whether keepout was active.
+
+def _low_contrast_grey(w: int = 120, h: int = 100) -> Image.Image:
+    """Low-contrast grey gradient — every 8×8 CLAHE tile has a real but small
+    histogram, guaranteeing a measurable contrast expansion."""
+    arr = np.zeros((h, w, 3), dtype=np.uint8)
+    for y in range(h):
+        v = 85 + int(25 * y / h)   # luminance 85–110
+        arr[y, :] = [v, v, v]
+    return Image.fromarray(arr)
+
+
+def _extract_L(img_rgb: Image.Image, x: int, y: int, w: int, h: int) -> np.ndarray:
+    """Return the uint8 L* sub-region from an RGB PIL image."""
+    arr = np.asarray(img_rgb, dtype=np.uint8)
+    lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
+    return lab[y:y + h, x:x + w, 0].copy()
+
+
+# Strong CLAHE; all other pipeline steps at identity so L* changes are
+# solely attributable to CLAHE.  Note: autocontrast is OFF (cutoff=0 DOES
+# run but on a near-flat image it is a no-op; the critical thing is that
+# both test branches call _apply_prepare_enhancements with the same cfg).
+_CLAHE_CFG = _cfg(
+    clahe_clip_limit=8.0,
+    prepare_autocontrast_cutoff=0.0,
+    prepare_gamma=1.0,
+    prepare_midtone=1.0,
+    prepare_brightness=1.0,
+    prepare_contrast=1.0,
+    prepare_usm_amount=0,
+    color_enhance=1.0,
+    use_adaptive_saturate=False,
+)
+
+
+def test_clahe_changes_face_l_when_no_keepout():
+    """Sanity check: CLAHE actually changes L* in the face region.
+
+    Compares the face region in output-WITH-keepout vs output-WITHOUT-keepout.
+    If CLAHE never changes L* at all, the keepout tests below are vacuous.
+    """
+    img = _low_contrast_grey()
+    fx, fy, fw, fh = 30, 25, 60, 50
+
+    out_with = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=[(fx, fy, fw, fh)])
+    out_without = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=None)
+
+    L_with = _extract_L(out_with, fx, fy, fw, fh)
+    L_without = _extract_L(out_without, fx, fy, fw, fh)
+
+    max_delta = int(np.abs(L_with.astype(int) - L_without.astype(int)).max())
+    assert max_delta > 5, (
+        f"CLAHE must change face-region L* by >5 units (keepout vs no-keepout delta={max_delta}). "
+        "If delta is tiny CLAHE is not working and keepout tests are meaningless."
+    )
+
+
+def test_clahe_keepout_face_l_differs_from_no_keepout():
+    """Core test: keepout prevents CLAHE from changing the face region's L*.
+
+    Both branches go through *identical* pipeline steps; the only difference is
+    whether the face L* slice is restored after CLAHE.  If keepout is working:
+      - face L* with-keepout  ≠  face L* without-keepout   (CLAHE was undone)
+      - face L* with-keepout  =  face L* no-clahe           (same as skipping CLAHE)
+    """
+    img = _low_contrast_grey()
+    fx, fy, fw, fh = 30, 25, 60, 50
+    face_box = [(fx, fy, fw, fh)]
+
+    out_keepout   = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=face_box)
+    out_no_keepout = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=None)
+    out_no_clahe  = _apply_prepare_enhancements(img.copy(), replace(_CLAHE_CFG, clahe_clip_limit=0.0))
+
+    L_keepout    = _extract_L(out_keepout,    fx, fy, fw, fh)
+    L_no_keepout = _extract_L(out_no_keepout, fx, fy, fw, fh)
+    L_no_clahe   = _extract_L(out_no_clahe,   fx, fy, fw, fh)
+
+    # keepout should differ from no-keepout — CLAHE changed L* in the no-keepout branch
+    delta_vs_no_keepout = int(np.abs(L_keepout.astype(int) - L_no_keepout.astype(int)).max())
+    assert delta_vs_no_keepout > 5, (
+        f"Face L* with-keepout should differ from without-keepout by >5 "
+        f"(got max delta={delta_vs_no_keepout}); keepout does not appear to be working."
+    )
+
+    # keepout should match no-CLAHE — the face was protected from CLAHE.
+    # Small tolerance (≤2) for uint8 Lab round-trip rounding (RGB→Lab→RGB).
+    delta_vs_no_clahe = int(np.abs(L_keepout.astype(int) - L_no_clahe.astype(int)).max())
+    assert delta_vs_no_clahe <= 2, (
+        f"Face L* with-keepout should equal no-CLAHE result (±2 for round-trip rounding); "
+        f"got max delta={delta_vs_no_clahe}.  The keepout restore is not working correctly."
+    )
+
+
+def test_clahe_keepout_background_identical_to_no_keepout():
+    """Pixels *outside* the keepout bbox get the same CLAHE treatment in both branches.
+
+    The keepout implementation runs CLAHE on the full image first, then patches
+    only the face slice.  The background pixels must therefore be byte-identical
+    between keepout and no-keepout.
+    """
+    img = _low_contrast_grey()
+    fx, fy, fw, fh = 30, 25, 60, 50
+
+    out_keepout    = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=[(fx, fy, fw, fh)])
+    out_no_keepout = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=None)
+
+    # Background pixel clearly outside the face region.
+    bg_y, bg_x = 5, 5
+    L_bg_keepout    = int(_extract_L(out_keepout,    bg_x, bg_y, 1, 1)[0, 0])
+    L_bg_no_keepout = int(_extract_L(out_no_keepout, bg_x, bg_y, 1, 1)[0, 0])
+
+    assert L_bg_keepout == L_bg_no_keepout, (
+        f"Background L* must be identical with and without keepout "
+        f"(keepout={L_bg_keepout}, no-keepout={L_bg_no_keepout}).  "
+        "If keepout incorrectly skips CLAHE entirely, background would also differ."
+    )
+
+
+def test_clahe_keepout_multiple_bboxes():
+    """Multiple non-overlapping keepout boxes must each be preserved."""
+    img = _low_contrast_grey(w=200, h=100)
+
+    box1 = (10, 10, 40, 40)
+    box2 = (130, 10, 40, 40)
+
+    out_keepout    = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=[box1, box2])
+    out_no_keepout = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=None)
+    out_no_clahe   = _apply_prepare_enhancements(img.copy(), replace(_CLAHE_CFG, clahe_clip_limit=0.0))
+
+    for label, (bx, by, bw, bh) in [("box1", box1), ("box2", box2)]:
+        L_keepout    = _extract_L(out_keepout,    bx, by, bw, bh)
+        L_no_keepout = _extract_L(out_no_keepout, bx, by, bw, bh)
+        L_no_clahe   = _extract_L(out_no_clahe,   bx, by, bw, bh)
+
+        assert int(np.abs(L_keepout.astype(int) - L_no_keepout.astype(int)).max()) > 5, (
+            f"{label}: keepout should differ from no-keepout (CLAHE not undone)"
+        )
+        assert int(np.abs(L_keepout.astype(int) - L_no_clahe.astype(int)).max()) <= 2, (
+            f"{label}: keepout should match no-CLAHE result (±2 round-trip tolerance)"
+        )
+
+
+def test_clahe_keepout_no_crash_when_clip_limit_zero():
+    """With clahe_clip_limit=0, CLAHE is disabled; keepout boxes must not crash."""
+    cfg_no_clahe = replace(_CLAHE_CFG, clahe_clip_limit=0.0)
+    img = _low_contrast_grey()
+    # Must not raise.
+    out_with_boxes    = _apply_prepare_enhancements(img.copy(), cfg_no_clahe, keepout_bboxes_canvas=[(30, 25, 60, 50)])
+    out_without_boxes = _apply_prepare_enhancements(img.copy(), cfg_no_clahe, keepout_bboxes_canvas=None)
+    # Both should produce the same result — CLAHE path was never entered.
+    assert np.array_equal(np.asarray(out_with_boxes), np.asarray(out_without_boxes)), (
+        "clahe_clip_limit=0 should produce identical output regardless of keepout boxes"
+    )
 
 
 # ── fast: _is_near_grayscale ──────────────────────────────────────────────────
