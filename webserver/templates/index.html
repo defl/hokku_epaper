@@ -873,14 +873,6 @@
     </span>
   </div>
 
-  <div class="config-row">
-    <label>Detect faces:</label>
-    <label class="toggle" data-tip="When enabled, photos with at least one detected face use a dedicated dither pipeline.&#10;The pipeline is tuned to preserve natural skin tones, which can otherwise shift orange or grey.&#10;Uses YuNet face detection (score threshold 0.5).">
-      <input type="checkbox" id="face-detect-enabled" onchange="document.getElementById('face-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('face-config-panel').hidden=!this.checked;">
-      <span id="face-detect-enabled-label">Off</span>
-    </label>
-  </div>
-
   <!-- Advanced toggle -->
   <div class="config-advanced-toggle" id="cfg-advanced-toggle" onclick="toggleConfigAdvanced()">
     <span class="toggle-arrow">▶</span>
@@ -977,6 +969,14 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <div class="config-row">
+      <label>Detect faces:</label>
+      <label class="toggle" data-tip="When enabled, photos with at least one detected face use a dedicated dither pipeline.&#10;The pipeline is tuned to preserve natural skin tones, which can otherwise shift orange or grey.&#10;Uses YuNet face detection (score threshold 0.5).">
+        <input type="checkbox" id="face-detect-enabled" onchange="document.getElementById('face-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('face-config-panel').hidden=!this.checked;">
+        <span id="face-detect-enabled-label">Off</span>
+      </label>
     </div>
 
     <div id="face-config-panel" class="dither-advanced" hidden>
