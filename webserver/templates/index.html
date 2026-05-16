@@ -742,10 +742,20 @@
 
   /* Per-image details modal */
   .img-detail-modal { max-width: 460px; }
+  .detail-thumb-wrap {
+    position: relative; width: 100%; max-height: 220px;
+    background: var(--bamboo-soft); border-radius: 8px;
+    margin-bottom: 14px; overflow: hidden;
+  }
   .img-detail-modal .detail-thumb {
     width: 100%; max-height: 220px; object-fit: contain;
-    background: var(--bamboo-soft); border-radius: 8px;
-    margin-bottom: 14px; cursor: pointer;
+    display: block; cursor: pointer;
+  }
+  .face-bbox-overlay {
+    display: none; position: absolute;
+    border: 2px solid #ef4444; border-radius: 3px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+    pointer-events: none; box-sizing: border-box;
   }
   .img-detail-modal table { width: 100%; border-collapse: collapse; font-size: 0.88em; }
   .img-detail-modal td { padding: 6px 8px; border-bottom: 1px solid var(--bamboo-soft); }
@@ -1106,7 +1116,10 @@
 <div class="modal-backdrop" id="img-detail-modal">
   <div class="modal img-detail-modal">
     <h3 id="img-detail-title" style="word-break:break-all;"></h3>
-    <img id="img-detail-thumb" class="detail-thumb" alt="">
+    <div class="detail-thumb-wrap" id="img-detail-thumb-wrap">
+      <img id="img-detail-thumb" class="detail-thumb" alt="">
+      <div id="img-detail-face-boxes"></div>
+    </div>
     <table id="img-detail-table"></table>
     <div class="detail-actions" id="img-detail-actions"></div>
     <div class="modal-actions" style="margin-top:14px;">
@@ -2240,9 +2253,33 @@ function showImageDetails(fname) {
   const modal   = document.getElementById('img-detail-modal');
   document.getElementById('img-detail-title').textContent = fname;
 
-  const thumb = document.getElementById('img-detail-thumb');
+  const thumb   = document.getElementById('img-detail-thumb');
+  const boxContainer = document.getElementById('img-detail-face-boxes');
+  boxContainer.innerHTML = '';
   thumb.src = '/hokku/api/thumbnail/' + encodeURIComponent(fname);
   thumb.onclick = () => window.open('/hokku/api/original/' + encodeURIComponent(fname));
+
+  if (entry.face_bboxes && entry.face_bboxes.length) {
+    thumb.addEventListener('load', function() {
+      const cw = thumb.clientWidth;
+      const ch = thumb.clientHeight;
+      const scale = Math.min(cw / thumb.naturalWidth, ch / thumb.naturalHeight);
+      const rendW = thumb.naturalWidth  * scale;
+      const rendH = thumb.naturalHeight * scale;
+      const offX  = (cw - rendW) / 2;
+      const offY  = (ch - rendH) / 2;
+      for (const [nx, ny, nw, nh] of entry.face_bboxes) {
+        const div = document.createElement('div');
+        div.className = 'face-bbox-overlay';
+        div.style.left   = (offX + nx * rendW) + 'px';
+        div.style.top    = (offY + ny * rendH) + 'px';
+        div.style.width  = (nw * rendW) + 'px';
+        div.style.height = (nh * rendH) + 'px';
+        div.style.display = 'block';
+        boxContainer.appendChild(div);
+      }
+    }, { once: true });
+  }
 
   const fmt = (v, fallback) => (v != null ? v : fallback);
   const yesno = v => v === true ? '✓ Yes' : v === false ? '✗ No' : '–';
@@ -2260,7 +2297,7 @@ function showImageDetails(fname) {
     ['Last displayed', formatLastDisplayed(sd.last_request)],
     ['Display time', sd.total_show_formatted || '0m'],
     ['B&amp;W detected', yesno(entry.is_bw)],
-    ['Face detected',  yesno(entry.has_face)],
+    ['Face detected',  yesno(entry.face_bboxes ? entry.face_bboxes.length > 0 : null)],
   ];
   document.getElementById('img-detail-table').innerHTML =
     rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
@@ -2522,7 +2559,7 @@ async function deleteImage(fname) {
 }
 
 // ── Upload + drag-and-drop ────────────────────────────────────────
-const ALLOWED_EXTS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp', '.gif', '.heic', '.heif', '.avif'];
+const ALLOWED_EXTS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp', '.gif', '.heic', '.heif', '.avif', '.jxl'];
 
 function renderUploadProgress(rows) {
   const el = document.getElementById('upload-progress');

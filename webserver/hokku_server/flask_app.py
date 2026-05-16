@@ -27,6 +27,7 @@ from flask import (
     send_from_directory,
 )
 from pillow_heif import register_heif_opener
+import pillow_jxl
 from werkzeug.utils import secure_filename
 
 import os
@@ -377,7 +378,7 @@ def create_app(
                 "image_height": r.image_height,
                 "last_conversion_seconds": r.last_conversion_seconds,
                 "is_bw": obs.is_bw if obs else None,
-                "has_face": obs.has_face if obs else None,
+                "face_bboxes": [[b.x, b.y, b.w, b.h] for b in obs.face_bboxes] if (obs and obs.face_bboxes) else [],
             }
             upload_files.append(entry)
             if r.convert_status == "failed":
