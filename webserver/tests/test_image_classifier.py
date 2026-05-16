@@ -20,7 +20,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_IMAGES = _REPO_ROOT / "images" / "test"
 
 _BW_IMAGE = _TEST_IMAGES / "Forest_road_Slavne_2017_BW_G9.jpg"
-_COLOUR_LANDSCAPE = _TEST_IMAGES / "Fitz_Roy_1.jpg"
+_COLOUR_LANDSCAPE = _TEST_IMAGES / "Fitz_Roy_1.avif"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

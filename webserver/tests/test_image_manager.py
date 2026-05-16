@@ -250,7 +250,7 @@ def _tiny_png_bytes() -> bytes:
 # ── Conversion-progress correctness ──────────────────────────────────────────
 
 def test_progress_total_not_doubled_by_concurrent_sync(
-    app_config: AppConfig, image_manager_factory, make_test_image
+    request, app_config: AppConfig, image_manager_factory, make_test_image
 ):
     """Two back-to-back sync() calls must not double-count the total.
 
@@ -258,7 +258,15 @@ def test_progress_total_not_doubled_by_concurrent_sync(
     classify phase and saw all images still pending (not yet inflight), adding
     them to the total a second time.  Pre-reserving inflight in the first
     sync() lock prevents this.
+
+    Only meaningful for the multi-threaded variant: SingleThreadedImageManager
+    renders inline and synchronously, so the first sync() always completes
+    before the second starts — progress resets correctly to (0,0) and there
+    is no double-count risk.
     """
+    if request.node.callspec.params.get("image_manager_factory") == "single":
+        pytest.skip("Race condition only applies to the multi-threaded pool")
+
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
     make_test_image(upload / "b.png")

@@ -43,6 +43,7 @@
   },
   "classifier_bw_detect_enabled": true,
   "classifier_face_detect_enabled": true,
+  "classifier_face_detect_clahe_keepout": true,
   "mdns_hostname": "hokku",
   "image_config_bw": {
     "dither": {
