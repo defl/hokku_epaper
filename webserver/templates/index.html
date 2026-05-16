@@ -911,7 +911,16 @@
           <span class="info" id="dither-preview-status"></span>
         </div>
         <div id="dither-preview-result" class="dither-preview-result" hidden>
-          <img id="dither-preview-img" alt="Dither preview">
+          <div style="position: relative; display: inline-block;">
+            <img id="dither-preview-img" alt="Dither preview">
+            <canvas id="dither-preview-faces" style="position: absolute; inset: 0; display: none; border-radius: 4px;"></canvas>
+          </div>
+          <div id="dither-preview-face-controls" hidden style="margin-top: 8px; font-size: 0.9em;">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" id="dither-preview-show-faces" onchange="updateDitherPreviewFaces()">
+              <span>Show face CLAHE keep-out zones</span>
+            </label>
+          </div>
           <div class="dither-preview-mask" id="dither-preview-mask" hidden>Dithering…</div>
         </div>
       </div>
@@ -1647,6 +1656,9 @@ async function runDitherPreview(panelId) {
   const status   = document.getElementById(pfx + '-preview-status');
   const resultDiv = document.getElementById(pfx + '-preview-result');
   const mask     = document.getElementById(pfx + '-preview-mask');
+  const faceCtrl = document.getElementById(pfx + '-preview-face-controls');
+  const canvas   = document.getElementById(pfx + '-preview-faces');
+  const checkbox = document.getElementById(pfx + '-preview-show-faces');
 
   btn.disabled = true;
   status.textContent = '';
@@ -1654,8 +1666,12 @@ async function runDitherPreview(panelId) {
   // Show the result area immediately with "Dithering…" mask over any existing image.
   resultDiv.hidden = false;
   mask.hidden = false;
+  faceCtrl.hidden = true;
+  if (checkbox) checkbox.checked = false;
+  if (canvas) canvas.style.display = 'none';
 
   try {
+    // Fetch preview image
     const resp = await fetch('/hokku/api/dither/preview', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -1673,6 +1689,19 @@ async function runDitherPreview(panelId) {
     if (resultImg.dataset.url) URL.revokeObjectURL(resultImg.dataset.url);
     resultImg.dataset.url = url;
     resultImg.src = url;
+
+    // Fetch face bboxes from status API
+    const statusResp = await fetch('/hokku/api/status');
+    const statusData = await statusResp.json();
+    const imgEntry = statusData.upload_files.find(f => f.name === filename);
+    const faceBboxes = (imgEntry && imgEntry.face_bboxes) || [];
+
+    // Store face data and show controls if faces detected
+    if (canvas) canvas.dataset.bboxes = JSON.stringify(faceBboxes);
+    if (faceBboxes.length > 0) {
+      faceCtrl.hidden = false;
+    }
+
     status.textContent = 'Preview — saved config applies at full 1200×1600.';
   } catch (e) {
     status.textContent = 'Preview failed: ' + e.message;
@@ -1680,6 +1709,68 @@ async function runDitherPreview(panelId) {
     mask.hidden = true;
     btn.disabled = false;
   }
+}
+
+function updateDitherPreviewFaces(panelId) {
+  panelId = panelId || 'dither';
+  const pfx = _pfx(panelId);
+  const checkbox = document.getElementById(pfx + '-preview-show-faces');
+  const canvas = document.getElementById(pfx + '-preview-faces');
+  const img = document.getElementById(pfx + '-preview-img');
+
+  if (!checkbox || !canvas || !img) return;
+
+  if (!checkbox.checked) {
+    canvas.style.display = 'none';
+    return;
+  }
+
+  // Get face bounding boxes from stored data
+  let bboxes = [];
+  try {
+    const stored = canvas.dataset.bboxes;
+    if (stored) bboxes = JSON.parse(stored);
+  } catch (_) {}
+
+  if (bboxes.length === 0) {
+    canvas.style.display = 'none';
+    return;
+  }
+
+  // Wait for image to load before drawing
+  if (!img.complete) {
+    img.addEventListener('load', () => updateDitherPreviewFaces(panelId), {once: true});
+    return;
+  }
+
+  // Set canvas size to match image display size
+  const rect = img.getBoundingClientRect();
+  const dispW = img.offsetWidth;
+  const dispH = img.offsetHeight;
+  const natW = img.naturalWidth;
+  const natH = img.naturalHeight;
+
+  canvas.width = dispW;
+  canvas.height = dispH;
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, dispW, dispH);
+
+  // Draw red rectangles for each face
+  ctx.strokeStyle = '#ff0000';
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.8;
+
+  for (const [nx, ny, nw, nh] of bboxes) {
+    // Scale normalized coords to display coords
+    const x = nx * dispW;
+    const y = ny * dispH;
+    const w = nw * dispW;
+    const h = nh * dispH;
+    ctx.strokeRect(x, y, w, h);
+  }
+
+  canvas.style.display = 'block';
 }
 
 function showToast(msg) {
