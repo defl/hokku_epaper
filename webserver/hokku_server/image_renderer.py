@@ -22,6 +22,7 @@ import numpy as np
 from numpy.typing import NDArray
 from PIL import Image, ImageOps
 
+from hokku_server.bounding_box import BoundingBox
 from hokku_server.dither_abc import AbstractDither
 from hokku_server.dither_streaming import PALETTE_LAB, adaptive_saturate, rgb_to_lab
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
@@ -36,7 +37,7 @@ from hokku_server.image_config import ImageConfig, Orientation
 
 IMAGE_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif",
-    ".heic", ".heif", ".avif",
+    ".heic", ".heif", ".avif", ".jxl",
 }
 
 # Hard cap on decoded pixel count. Anything above raises
@@ -241,10 +242,12 @@ class ImageRenderer(AbstractImageRenderer):
         crop_to_fill_threshold: float = 0.0,
         *,
         release_input: bool = False,
+        clahe_keepout_bboxes_norm: "tuple[BoundingBox, ...] | None" = None,
     ) -> np.ndarray:
         arr, padding_mask = self._prepare_canvas(
             img, cfg, orientation, canvas_w, canvas_h,
             crop_to_fill_threshold, release_input=release_input,
+            clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
         )
 
         use_sat = cfg.use_adaptive_saturate
