@@ -910,16 +910,16 @@
           <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview()" id="dither-preview-btn">Preview</button>
           <span class="info" id="dither-preview-status"></span>
         </div>
+        <div id="dither-preview-face-controls" hidden style="margin-top: 8px; font-size: 0.9em;">
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="checkbox" id="dither-preview-show-faces" onchange="updateDitherPreviewFaces()">
+            <span>Show face CLAHE keep-out zones</span>
+          </label>
+        </div>
         <div id="dither-preview-result" class="dither-preview-result" hidden>
           <div style="position: relative; display: inline-block;">
             <img id="dither-preview-img" alt="Dither preview">
             <canvas id="dither-preview-faces" style="position: absolute; inset: 0; display: none; border-radius: 4px;"></canvas>
-          </div>
-          <div id="dither-preview-face-controls" hidden style="margin-top: 8px; font-size: 0.9em;">
-            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-              <input type="checkbox" id="dither-preview-show-faces" onchange="updateDitherPreviewFaces()">
-              <span>Show face CLAHE keep-out zones</span>
-            </label>
           </div>
           <div class="dither-preview-mask" id="dither-preview-mask" hidden>Dithering…</div>
         </div>
@@ -984,6 +984,13 @@
         <h3>Face photo pipeline</h3>
       </div>
       <p class="dither-advanced-intro">Used for photos with people in them. The server detects faces automatically and switches to a pipeline tuned to preserve natural skin tones, which can otherwise shift towards orange or grey on an e-ink display.</p>
+      <div class="config-row">
+        <label>Apply CLAHE to faces:</label>
+        <label class="toggle" data-tip="When enabled, contrast enhancement (CLAHE) is applied to face regions.&#10;When disabled, faces are protected from CLAHE to prevent skin texture amplification.">
+          <input type="checkbox" id="face-clahe-keepout-enabled" checked onchange="document.getElementById('face-clahe-keepout-label').textContent=this.checked?'Yes':'No';">
+          <span id="face-clahe-keepout-label">Yes</span>
+        </label>
+      </div>
       <div class="config-row" style="position: relative;">
         <label>Preset:</label>
         <select id="face-preset"></select>
@@ -1388,6 +1395,10 @@ function resetPipelineToDefault() {
   document.getElementById('face-detect-enabled-label').textContent = faceOn ? 'On' : 'Off';
   document.getElementById('face-config-panel').hidden = !faceOn;
 
+  const faceClaheKeeout = configDefaults.classifier_face_detect_clahe_keepout !== false;
+  document.getElementById('face-clahe-keepout-enabled').checked = faceClaheKeeout;
+  document.getElementById('face-clahe-keepout-label').textContent = faceClaheKeeout ? 'Yes' : 'No';
+
   const fillPct = Math.round((configDefaults.crop_to_fill_threshold ?? 0.10) * 100);
   document.getElementById('crop-to-fill-threshold').value = fillPct;
   document.getElementById('fill-threshold-val').textContent = fillPct + '%';
@@ -1530,7 +1541,7 @@ function renderDitherPanel(panelId) {
 
   // 4. Palette LUT — hue-aware specific fields conditional on lut_name
   let lutBody = fs('LUT', ['dither', 'lut_name'], [
-    ['euclidean', 'Euclidean'], ['hue_aware', 'Hue-aware'],
+    ['euclidean', 'Euclidean'], ['bw', 'B&W'], ['hue_aware', 'Hue-aware'],
   ], 'palette_mode');
   if (d.dither && d.dither.lut_name === 'hue_aware') {
     lutBody += fn('Hue cutoff °', ['dither', 'hue_cutoff_deg'], {min: 10, max: 180, step: 1, help: 'palette_hue_cutoff'});
@@ -1852,6 +1863,7 @@ async function saveConfig() {
     classifier_bw_detect_enabled: document.getElementById('bw-detect-enabled').checked,
     image_config_bw: bwDitherState,
     classifier_face_detect_enabled: document.getElementById('face-detect-enabled').checked,
+    classifier_face_detect_clahe_keepout: document.getElementById('face-clahe-keepout-enabled').checked,
     image_config_face: faceDitherState,
   };
   try {
@@ -2443,6 +2455,9 @@ async function loadConfig() {
     document.getElementById('face-detect-enabled').checked = faceOn;
     document.getElementById('face-detect-enabled-label').textContent = faceOn ? 'On' : 'Off';
     document.getElementById('face-config-panel').hidden = !faceOn;
+    const faceClaheKeeout = cfg.classifier_face_detect_clahe_keepout !== false;
+    document.getElementById('face-clahe-keepout-enabled').checked = faceClaheKeeout;
+    document.getElementById('face-clahe-keepout-label').textContent = faceClaheKeeout ? 'Yes' : 'No';
 
     const autoClear = !!cfg.auto_clear_cache;
     document.getElementById('auto-clear-cache').checked = autoClear;
