@@ -83,6 +83,23 @@ ShareAlike obligations of the source license where applicable.
   photographed at a press/festival event where being photographed is the
   expected norm; reuse here is non-commercial illustrative.
 
+## Violin_player_tuxedo_Getty.jpg
+
+- **Category:** person / musical performance — face detection + skin-tone dithering test
+- **Source:** https://unsplash.com/photos/a-man-in-a-tuxedo-playing-the-violin-yx1NoVP0llA
+- **Unsplash photo ID:** yx1NoVP0llA
+- **Author:** Getty Images ([@gettyimages](https://unsplash.com/@gettyimages))
+- **License:** [Unsplash+ License](https://unsplash.com/license) — royalty-free for
+  use in commercial and non-commercial projects; redistribution or resale of the
+  asset as a standalone file or as part of a collection is not permitted.
+  See full terms at https://unsplash.com/plus/license
+- **Description:** A man in a tuxedo playing the violin, taken 2022-09-27.
+  Tags: music, inspiration, adult, concert, performance.
+- **Personality rights:** No explicit consent statement on the Unsplash page.
+  Subject is photographed in a public performance context. Reuse here is
+  strictly internal testing of the image-processing pipeline — not publication,
+  endorsement, or commercial use.
+
 ## Wayuu_woman_with_sad_face_in_the_market_buying.jpg
 
 - **Category:** person in busy background

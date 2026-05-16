@@ -37,7 +37,7 @@ from hokku_server.serve_scheduler import ServeScheduler
 # Path to a real source image (small enough to be fast with noop dither).
 _TEST_IMAGE = (
     Path(__file__).resolve().parent.parent.parent
-    / "images" / "test" / "Fitz_Roy_1.jpg"
+    / "images" / "test" / "Fitz_Roy_1.avif"
 )
 
 
@@ -228,7 +228,7 @@ def test_api_status_200_and_shape(live_client):
         assert "name" in entry
         assert "dithered" in entry
         assert "is_bw" in entry          # classifier observation — must exist
-        assert "has_face" in entry       # face detection observation — must exist
+        assert "face_bboxes" in entry    # face detection — list (was removed has_face bool)
 
 
 def test_serve_binary_no_images_returns_404_or_503(app_config: AppConfig, tmp_path: Path):
