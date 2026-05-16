@@ -272,7 +272,9 @@ def create_app(
                 })
                 continue
             except (UnidentifiedImageError, OSError) as e:
+                import traceback
                 print(f"  Upload error for {name!r}: {type(e).__name__}: {e}")
+                traceback.print_exc()
                 skipped.append({"name": name, "reason": "unreadable image"})
                 continue
             if w * h > MAX_UPLOAD_PIXELS:
@@ -287,6 +289,9 @@ def create_app(
             except FileExistsError:
                 skipped.append({"name": name, "reason": "already exists; remove to replace"})
             except (OSError, ValueError) as e:
+                import traceback
+                print(f"  Error adding {name!r}: {type(e).__name__}: {e}")
+                traceback.print_exc()
                 skipped.append({"name": name, "reason": str(e)})
         return jsonify({"saved": saved, "skipped": skipped})
 
