@@ -49,7 +49,7 @@ def main() -> None:
     manager = build_manager(config, classifier)
     print(
         f"  Image workers: configured={config.image_worker_thread_count}"
-        f" → resolved={manager.resolved_worker_count}"
+        f" -> resolved={manager.resolved_worker_count}"
         f" ({type(manager).__name__},"
         f" cores={os.cpu_count()},"
         f" free RAM={_psutil.virtual_memory().available / 1e9:.1f} GB)"
