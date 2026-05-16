@@ -99,6 +99,7 @@ class AppConfig:
     classifier_bw_detect_enabled: bool = True
     image_config_bw: ImageConfig = field(default_factory=lambda: PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"])
     classifier_face_detect_enabled: bool = True
+    classifier_face_detect_clahe_keepout: bool = True
     image_config_face: ImageConfig = field(
         default_factory=lambda: PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
     )
@@ -116,6 +117,7 @@ class AppConfig:
             "image_config_face": self.image_config_face.cache_slug(),
             "classifier_bw_detect_enabled": self.classifier_bw_detect_enabled,
             "classifier_face_detect_enabled": self.classifier_face_detect_enabled,
+            "classifier_face_detect_clahe_keepout": self.classifier_face_detect_clahe_keepout,
             "orientation": self.orientation,
             "crop_to_fill_threshold": self.crop_to_fill_threshold,
         }

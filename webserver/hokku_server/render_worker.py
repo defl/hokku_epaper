@@ -6,7 +6,8 @@ at import time — this avoids pickling large objects across the IPC boundary.
 
 Public interface
 ----------------
-render_one(image_path, image_config_dict, orientation, crop_to_fill_threshold)
+render_one(image_path, image_config_dict, orientation, crop_to_fill_threshold,
+           face_bbox)
     → (panel_bytes: bytes, preview_bytes: bytes)
 
 Why dicts, not dataclasses?
@@ -23,6 +24,7 @@ def render_one(
     image_config_dict: dict,
     orientation: str,
     crop_to_fill_threshold: float = 0.0,
+    clahe_keepout_bboxes: tuple[dict, ...] | None = None,
 ) -> tuple[bytes, bytes]:
     """Render one image inside a worker process.
 
@@ -38,6 +40,9 @@ def render_one(
     crop_to_fill_threshold:
         Passed through to ``render_panel_bytes``; controls when the image is
         cropped to fill the panel (0.0 = never crop, always letterbox).
+    clahe_keepout_bboxes:
+        BoundingBox instances as dicts (asdict result) of detected faces,
+        or None.  Passed to the renderer to scope CLAHE away from the faces.
 
     Returns
     -------
@@ -53,6 +58,7 @@ def render_one(
     register_heif_opener()
 
     from pathlib import Path
+    from hokku_server.bounding_box import BoundingBox
     from hokku_server.dither_streaming_numba import NumbaStreamingDither
     from hokku_server.image_abc import preview_png_from_panel_bytes
     from hokku_server.image_renderer import ImageRenderer, open_image_for_render
@@ -60,10 +66,23 @@ def render_one(
 
     cfg = _image_config_from_dict(image_config_dict)
     renderer = ImageRenderer(NumbaStreamingDither())
+
+    # Convert bbox dicts back to BoundingBox instances
+    bboxes_norm = None
+    if clahe_keepout_bboxes:
+        try:
+            bboxes_norm = tuple(
+                BoundingBox(x=b['x'], y=b['y'], w=b['w'], h=b['h'])
+                for b in clahe_keepout_bboxes
+            )
+        except (KeyError, TypeError, ValueError):
+            bboxes_norm = None
+
     with open_image_for_render(Path(image_path)) as img:
         panel_bytes = renderer.render_panel_bytes(
             img, cfg, orientation,  # type: ignore[arg-type]
             crop_to_fill_threshold,
+            clahe_keepout_bboxes_norm=bboxes_norm,
         )
     preview_bytes = preview_png_from_panel_bytes(panel_bytes, orientation)  # type: ignore[arg-type]
     return panel_bytes, preview_bytes

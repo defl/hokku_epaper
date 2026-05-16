@@ -21,6 +21,7 @@ import numpy as np
 from numpy.typing import NDArray
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
+from hokku_server.bounding_box import BoundingBox
 from hokku_server.display import (
     FULL_W,
     PANEL_H,
@@ -59,7 +60,11 @@ def preview_png_from_panel_bytes(panel_bytes: bytes, orientation: "Orientation")
     return _encode_panel_rgb_to_png(rgb, orientation)
 
 
-def _apply_prepare_enhancements(canvas: Image.Image, cfg: ImageConfig) -> Image.Image:
+def _apply_prepare_enhancements(
+    canvas: Image.Image,
+    cfg: ImageConfig,
+    keepout_bboxes_canvas: list[tuple[int, int, int, int]] | None = None,
+) -> Image.Image:
     # 1. Global autocontrast
     canvas = ImageOps.autocontrast(canvas, cutoff=cfg.prepare_autocontrast_cutoff)
 
@@ -77,7 +82,9 @@ def _apply_prepare_enhancements(canvas: Image.Image, cfg: ImageConfig) -> Image.
     canvas = ImageEnhance.Brightness(canvas).enhance(cfg.prepare_brightness)
     canvas = ImageEnhance.Contrast(canvas).enhance(cfg.prepare_contrast)
 
-    # 5. CLAHE local contrast on Lab L* channel (skipped when clip_limit == 0)
+    # 5. CLAHE local contrast on Lab L* channel (skipped when clip_limit == 0).
+    #    When face bboxes are provided, the face region's L* is restored after
+    #    CLAHE so the local contrast expansion doesn't blow out skin highlights.
     if cfg.clahe_clip_limit > 0.0:
         arr = np.asarray(canvas, dtype=np.uint8)
         lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
@@ -85,7 +92,14 @@ def _apply_prepare_enhancements(canvas: Image.Image, cfg: ImageConfig) -> Image.
             clipLimit=cfg.clahe_clip_limit,
             tileGridSize=(8, 8),
         )
-        lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+        if keepout_bboxes_canvas:
+            saved = [(fx, fy, fw, fh, lab[fy:fy + fh, fx:fx + fw, 0].copy())
+                     for fx, fy, fw, fh in keepout_bboxes_canvas]
+            lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+            for fx, fy, fw, fh, face_L in saved:
+                lab[fy:fy + fh, fx:fx + fw, 0] = face_L
+        else:
+            lab[:, :, 0] = clahe.apply(lab[:, :, 0])
         canvas = Image.fromarray(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB))
 
     # 6. Unsharp mask sharpening (replaces fixed PIL Sharpness kernel)
@@ -125,12 +139,17 @@ class AbstractImageRenderer(ABC):
         crop_to_fill_threshold: float = 0.0,
         *,
         release_input: bool = False,
+        clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
     ) -> tuple[NDArray[np.uint8], NDArray[np.bool_]]:
         """Fit-or-crop → PIL enhancements → rotate.
 
         Returns ``(uint8_array, padding_mask)`` where ``padding_mask`` is
         True for pixels that are white letterbox padding and should be forced
         to palette index 1 (white ink) after dithering.
+
+        clahe_keepout_bboxes_norm: [(x, y, w, h), ...] in [0, 1] relative to the original image.
+        Converted to canvas pixel coordinates and passed to
+        _apply_prepare_enhancements to scope CLAHE away from the face regions.
         """
         portrait = orientation == "portrait"
         visible_w, visible_h = (canvas_w, canvas_h) if portrait else (canvas_h, canvas_w)
@@ -141,6 +160,8 @@ class AbstractImageRenderer(ABC):
         zoom_ratio = scale_cover / scale_fit - 1.0
 
         use_cover = crop_to_fill_threshold > 0.0 and zoom_ratio <= crop_to_fill_threshold
+
+        keepout_canvas: list[tuple[int, int, int, int]] = []
 
         if use_cover:
             scaled_w = max(visible_w, math.ceil(src_w * scale_cover))
@@ -153,6 +174,18 @@ class AbstractImageRenderer(ABC):
             composed = img_scaled.crop((x_off, y_off, x_off + visible_w, y_off + visible_h))
             img_scaled.close()
             padding_mask = np.zeros((visible_h, visible_w), dtype=bool)
+            # Bbox in canvas coords for cover: scale by cover scale, subtract crop offset
+            if clahe_keepout_bboxes_norm:
+                for bbox in clahe_keepout_bboxes_norm:
+                    fx = int(bbox.x * scaled_w) - x_off
+                    fy = int(bbox.y * scaled_h) - y_off
+                    fw = int(bbox.w * scaled_w)
+                    fh = int(bbox.h * scaled_h)
+                    keepout_canvas.append((
+                        max(0, fx), max(0, fy),
+                        min(fw, visible_w - max(0, fx)),
+                        min(fh, visible_h - max(0, fy)),
+                    ))
         else:
             scale = scale_fit
             new_w, new_h = int(src_w * scale), int(src_h * scale)
@@ -166,8 +199,20 @@ class AbstractImageRenderer(ABC):
             img_resized.close()
             padding_mask = np.ones((visible_h, visible_w), dtype=bool)
             padding_mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
+            # Bbox in canvas coords for fit: scale by fit scale, add letterbox offset
+            if clahe_keepout_bboxes_norm:
+                for bbox in clahe_keepout_bboxes_norm:
+                    fx = int(bbox.x * new_w) + x_off
+                    fy = int(bbox.y * new_h) + y_off
+                    fw = int(bbox.w * new_w)
+                    fh = int(bbox.h * new_h)
+                    keepout_canvas.append((
+                        max(0, fx), max(0, fy),
+                        min(fw, visible_w - max(0, fx)),
+                        min(fh, visible_h - max(0, fy)),
+                    ))
 
-        composed = _apply_prepare_enhancements(composed, cfg)
+        composed = _apply_prepare_enhancements(composed, cfg, keepout_canvas or None)
 
         if not portrait:
             composed = composed.rotate(-90, expand=True)
@@ -190,6 +235,7 @@ class AbstractImageRenderer(ABC):
         crop_to_fill_threshold: float = 0.0,
         *,
         release_input: bool = False,
+        clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
     ) -> NDArray[np.uint8]:
         """Render to palette indices.
 
@@ -205,11 +251,13 @@ class AbstractImageRenderer(ABC):
         cfg: ImageConfig,
         orientation: Orientation,
         crop_to_fill_threshold: float = 0.0,
+        clahe_keepout_bboxes_norm: tuple["BoundingBox", ...] | None = None,
     ) -> bytes:
         """Full-resolution panel → wire bytes."""
         idx = self.render_indices(
             img, cfg, orientation, FULL_W, PANEL_H,
             crop_to_fill_threshold, release_input=True,
+            clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
         )
         return indices_to_panel_bytes(idx)
 
@@ -220,9 +268,13 @@ class AbstractImageRenderer(ABC):
         orientation: Orientation,
         max_side_px: int = 800,
         crop_to_fill_threshold: float = 0.0,
+        clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
     ) -> bytes:
         """Smaller panel → PNG preview bytes."""
         cw, ch = _preview_canvas_dims(orientation, max_side_px)
-        idx = self.render_indices(img, cfg, orientation, cw, ch, crop_to_fill_threshold)
+        idx = self.render_indices(
+            img, cfg, orientation, cw, ch, crop_to_fill_threshold,
+            clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
+        )
         preview_rgb = indices_to_preview_rgb(idx)
         return _encode_panel_rgb_to_png(preview_rgb, orientation)

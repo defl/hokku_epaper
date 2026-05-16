@@ -11,6 +11,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from hokku_server.bounding_box import BoundingBox
+
 # Maximum side length for detection input — resizing keeps detection fast and
 # ensures consistent sensitivity across images of varying resolution.
 DEFAULT_MAX_SIDE = 640
@@ -21,15 +23,20 @@ DEFAULT_SCORE_THRESHOLD = 0.5
 
 
 class AbstractFaceDetector(ABC):
-    """One method, one job: decide whether a file contains a face."""
+    """Detect whether a file contains a face and, if so, where."""
+
+    def has_face(self, path: Path) -> bool:
+        """Return True iff ≥1 face is detected.  Convenience wrapper around detect()."""
+        return bool(self.detect(path))
 
     @abstractmethod
-    def has_face(self, path: Path) -> bool:
-        """Return True iff ≥1 face is detected in the image at *path*.
+    def detect(self, path: Path) -> list[BoundingBox]:
+        """Return bboxes for all detected faces.
 
-        Returns False (does not raise) on missing files, unreadable files,
-        or detection errors — face presence is a hint, not a hard requirement,
-        and image processing must continue on failure.
+        Each bbox is (x, y, w, h) expressed as fractions of the image dimensions
+        so it is resolution-independent and survives the resizing that happens
+        before rendering. Returns an empty list on missing/unreadable files or
+        detection errors.
         """
 
 

@@ -48,6 +48,8 @@ class Watcher:
             try:
                 manager.sync()
             except Exception as e:
+                import traceback
                 print(f"  Watcher error: {e}")
+                traceback.print_exc()
             self._wake.wait(timeout=manager.config.poll_interval_seconds)
             self._wake.clear()

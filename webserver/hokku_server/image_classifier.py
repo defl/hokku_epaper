@@ -1,4 +1,4 @@
-﻿"""Per-image config dispatch policy.
+"""Per-image config dispatch policy.
 
 Wired with AppConfig at construction so ImageManager doesn't need to know
 about face / B&W detection. Caches raw observations keyed by sha1 of the
@@ -15,6 +15,7 @@ import numpy as np
 from PIL import Image
 
 from hokku_server.app_config import AppConfig
+from hokku_server.bounding_box import BoundingBox
 from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
 from hokku_server.image_config import ImageConfig
 from hokku_server.dither_streaming import rgb_to_lab
@@ -34,7 +35,6 @@ def _is_near_grayscale(img) -> bool:
     chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
     p95_chroma = float(np.percentile(chroma, 95))
     is_bw = p95_chroma < GRAYSCALE_CHROMA_THRESHOLD
-    # Debug: log the actual chroma values for investigation of color artifacts
     import sys
     status = "B&W" if is_bw else "NOT B&W"
     print(f"  [B&W check] 95th %ile chroma = {p95_chroma:.2f} (threshold {GRAYSCALE_CHROMA_THRESHOLD}): {status}", file=sys.stderr)
@@ -51,7 +51,7 @@ def _check_grayscale(path: Path) -> bool:
 class Observations:
     """Raw per-image detection results.  None = not yet observed."""
     is_bw: bool | None = None
-    has_face: bool | None = None
+    face_bboxes: tuple[BoundingBox, ...] | None = None  # None = not yet detected
 
 
 class ImageClassifier:
@@ -62,14 +62,14 @@ class ImageClassifier:
       2. Face detection (if ``classifier_face_detect_enabled``).
       3. Default.
 
-    Raw observations (``is_bw``, ``has_face``) are persisted in
+    Raw observations (``is_bw``, ``has_face``, ``face_bbox``) are persisted in
     ``<cache_dir>/image_classifier.json`` keyed by sha1 of the original file
     so re-instantiation after restart doesn't require re-detection.
 
     Wiping the JSON (``clear_cache()``) forces re-detection on the next sync
     but does NOT invalidate already-rendered panel .bin files — those are
     keyed by ``ScreenImageConfig.cache_slug()``, which is deterministic from
-    the effective ImageConfig + orientation.
+    the effective ImageConfig + orientation + face_bbox.
     """
 
     def __init__(self, config: AppConfig) -> None:
@@ -77,21 +77,20 @@ class ImageClassifier:
         self._lock = threading.RLock()
         self._db_path = Path(config.cache_dir) / _DB_NAME
         self._cache: dict[str, Observations] = self._load()
-        # Built lazily on first face-detection request so a config that
-        # disables face detection doesn't pay the import cost of the
-        # selected backend.
         self._face_detector = None
 
     # ── Public API ───────────────────────────────────────────────────────────
 
     def screen_config_for(self, path: Path, sha1: str) -> ScreenImageConfig:
-        """Return the ScreenImageConfig (image_config + orientation + crop threshold) to render with."""
+        """Return the ScreenImageConfig to render with, including CLAHE keep-out bboxes if detected."""
         cfg = self._config
-        chosen = self._image_config_for(path, sha1)
+        chosen, face_bboxes = self._classify(path, sha1)
+        keepout = face_bboxes if cfg.classifier_face_detect_clahe_keepout else None
         return ScreenImageConfig(
             image_config=chosen,
             orientation=cfg.orientation,
             crop_to_fill_threshold=cfg.crop_to_fill_threshold,
+            clahe_keepout_bboxes=keepout,
         )
 
     def observations_for(self, sha1: str) -> Observations:
@@ -109,40 +108,31 @@ class ImageClassifier:
                 pass
 
     def release_detector(self) -> None:
-        """Free the face detector so the ~57 MB DNN graph is returned to the OS.
-
-        Called by the manager after the classification phase of each sync batch.
-        The detector is rebuilt lazily on the next batch that needs it.
-        """
+        """Free the face detector so the ~57 MB DNN graph is returned to the OS."""
         with self._lock:
             self._face_detector = None
 
     # ── Internals ────────────────────────────────────────────────────────────
 
-    def _image_config_for(self, path: Path, sha1: str) -> ImageConfig:
+    def _classify(self, path: Path, sha1: str) -> tuple[ImageConfig, tuple[BoundingBox, ...]]:
+        """Return (image_config, face_bboxes) for this image."""
         cfg = self._config
         if not (cfg.classifier_bw_detect_enabled or cfg.classifier_face_detect_enabled):
-            return cfg.image_config_default
+            return cfg.image_config_default, ()
 
         with self._lock:
             obs = self._cache.get(sha1, Observations())
             dirty = False
 
-            # Always run both detectors when their flag is on, regardless of
-            # the other result.  This means both is_bw and has_face are always
-            # populated for images that go through the enabled detectors, so
-            # the UI can show both observations.
             if cfg.classifier_bw_detect_enabled and obs.is_bw is None:
                 obs = replace(obs, is_bw=_check_grayscale(path))
                 dirty = True
 
-            if cfg.classifier_face_detect_enabled and obs.has_face is None:
+            if cfg.classifier_face_detect_enabled and obs.face_bboxes is None:
                 if self._face_detector is None:
                     self._face_detector = OpenCVYuNetFaceDetector()
-                obs = replace(
-                    obs,
-                    has_face=self._face_detector.has_face(path),
-                )
+                bboxes = self._face_detector.detect(path)
+                obs = replace(obs, face_bboxes=tuple(bboxes))
                 dirty = True
 
             if dirty:
@@ -151,10 +141,10 @@ class ImageClassifier:
 
             # Dispatch order: B&W wins over face wins over default.
             if cfg.classifier_bw_detect_enabled and obs.is_bw:
-                return cfg.image_config_bw
-            if cfg.classifier_face_detect_enabled and obs.has_face:
-                return cfg.image_config_face
-            return cfg.image_config_default
+                return cfg.image_config_bw, ()
+            if cfg.classifier_face_detect_enabled and obs.face_bboxes:
+                return cfg.image_config_face, obs.face_bboxes
+            return cfg.image_config_default, ()
 
     def _load(self) -> dict[str, Observations]:
         try:
@@ -163,18 +153,35 @@ class ImageClassifier:
             return {}
         out: dict[str, Observations] = {}
         for sha1, d in data.get("observations", {}).items():
+            raw_bboxes = d.get("face_bboxes")
+            if raw_bboxes is not None:
+                try:
+                    face_bboxes = tuple(BoundingBox(x=b['x'], y=b['y'], w=b['w'], h=b['h']) for b in raw_bboxes)
+                except (ValueError, KeyError, TypeError):
+                    # Invalid bbox data, treat as not yet detected
+                    face_bboxes = None
+            else:
+                face_bboxes = None
             out[sha1] = Observations(
                 is_bw=d.get("is_bw"),
-                has_face=d.get("has_face"),
-                # face_detector key in old DB files is intentionally ignored
+                face_bboxes=face_bboxes,
             )
         return out
 
     def _persist(self) -> None:
+        observations_dict = {}
+        for sha1, o in self._cache.items():
+            obs_dict = asdict(o)
+            # Convert nested BoundingBox objects to dicts for JSON serialization
+            if o.face_bboxes:
+                obs_dict["face_bboxes"] = [asdict(b) for b in o.face_bboxes]
+            observations_dict[sha1] = obs_dict
+
         payload = {
             "version": 1,
-            "observations": {sha1: asdict(o) for sha1, o in self._cache.items()},
+            "observations": observations_dict,
         }
         tmp = self._db_path.with_suffix(self._db_path.suffix + ".tmp")
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps(payload, indent=2), "utf-8")
         tmp.replace(self._db_path)

@@ -12,12 +12,14 @@ serve_scheduler.json
 # Debian build artifacts (land in builds/, never the repo root)
 /builds/
 build/
+test_server/
 *.deb
 *.buildinfo
 *.changes
 *.log
 webserver/.pybuild/
 webserver/build/
+webserver/dist/
 webserver/hokku_server.egg-info/
 webserver/debian/hokku-server/
 webserver/debian/.debhelper/
