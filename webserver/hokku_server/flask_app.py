@@ -8,6 +8,7 @@ each request so they automatically pick up a hot-reloaded config.
 from __future__ import annotations
 
 import io
+import json
 import time as _time
 from dataclasses import asdict
 from datetime import datetime
@@ -41,8 +42,9 @@ except ImportError:  # py<3.8 — not expected
 
 from hokku_server.app_state import AppState
 from hokku_server.app_config import AppConfig
-from hokku_server.display import TOTAL_BYTES, VISUAL_H, VISUAL_W
+from hokku_server.display import FULL_W, PANEL_H, TOTAL_BYTES, VISUAL_H, VISUAL_W
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
+from hokku_server.image_abc import transform_bboxes_to_canvas_norm
 from hokku_server.image_config import _image_config_from_dict
 from hokku_server.image_renderer import IMAGE_EXTENSIONS, ImageRenderer, MAX_UPLOAD_BYTES, MAX_UPLOAD_PIXELS, open_image_for_render
 from hokku_server.presets import PRESET_IMAGE_CONFIGS, PRESET_META
@@ -503,6 +505,10 @@ def create_app(
         """Render a one-off dithered preview for a given image + image_config.
 
         Body: {name: str, image: ImageConfig dict}. Returns PNG bytes.
+        The ``X-Face-Bboxes`` response header carries face bboxes already
+        transformed into the rendered preview's coordinate space (JSON list
+        of [x, y, w, h] tuples, each normalised 0..1 against the preview
+        image).
         """
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
@@ -519,11 +525,36 @@ def create_app(
             cfg = _image_config_from_dict(image_blob)
         except (TypeError, ValueError) as e:
             return jsonify({"error": f"invalid image config: {e}"}), 400
+
+        # Look up cached face bboxes (original-image normalised) so we can map
+        # them onto the rendered preview's coordinate space below.
+        records = {r.name: r for r in state.manager.list()}
+        record = records.get(name)
+        face_bboxes_orig: tuple = ()
+        if record and record.original_sha1:
+            obs = state.classifier.observations_for(record.original_sha1)
+            if obs and obs.face_bboxes:
+                face_bboxes_orig = obs.face_bboxes
+
         print(f"  Preview: {name!r}")
         with open_image_for_render(path) as img:
+            orig_w, orig_h = img.size
             png = ImageRenderer(NumbaStreamingDither()).render_preview_png(img, cfg, state.config.orientation)
         print(f"  Preview done: {name!r}")
-        return _png_response(png)
+
+        canvas_bboxes = transform_bboxes_to_canvas_norm(
+            face_bboxes_orig,
+            orig_w,
+            orig_h,
+            state.config.orientation,
+            FULL_W,
+            PANEL_H,
+            state.config.crop_to_fill_threshold,
+        )
+
+        resp = _png_response(png)
+        resp.headers["X-Face-Bboxes"] = json.dumps([list(b) for b in canvas_bboxes])
+        return resp
 
     return app
 

@@ -1702,6 +1702,16 @@ async function runDitherPreview(panelId) {
       try { const j = await resp.json(); if (j && j.error) err = j.error; } catch (_) {}
       throw new Error(err);
     }
+    // Face bboxes already transformed into the preview's coordinate space
+    // by the server (X-Face-Bboxes header). These are normalised against
+    // the rendered preview image, so the overlay maths is a plain multiply
+    // by the displayed image dimensions.
+    let faceBboxes = [];
+    try {
+      const hdr = resp.headers.get('X-Face-Bboxes');
+      if (hdr) faceBboxes = JSON.parse(hdr);
+    } catch (_) {}
+
     const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
     const resultImg = document.getElementById(pfx + '-preview-img');
@@ -1709,12 +1719,6 @@ async function runDitherPreview(panelId) {
     if (resultImg.dataset.url) URL.revokeObjectURL(resultImg.dataset.url);
     resultImg.dataset.url = url;
     resultImg.src = url;
-
-    // Fetch face bboxes from status API
-    const statusResp = await fetch('/hokku/api/status');
-    const statusData = await statusResp.json();
-    const imgEntry = statusData.upload_files.find(f => f.name === filename);
-    const faceBboxes = (imgEntry && imgEntry.face_bboxes) || [];
 
     // Store face data and show controls if faces detected
     if (canvas) canvas.dataset.bboxes = JSON.stringify(faceBboxes);

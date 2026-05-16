@@ -43,6 +43,68 @@ def _preview_canvas_dims(orientation: Orientation, max_side_px: int) -> tuple[in
     return cw, ch
 
 
+def transform_bboxes_to_canvas_norm(
+    bboxes_norm: tuple[BoundingBox, ...] | None,
+    orig_w: int,
+    orig_h: int,
+    orientation: Orientation,
+    canvas_w: int,
+    canvas_h: int,
+    crop_to_fill_threshold: float = 0.0,
+) -> list[tuple[float, float, float, float]]:
+    """Convert face bboxes from original-image normalised coords to coords
+    normalised against the rendered **preview PNG** (the PNG returned by
+    ``render_preview_png``, which is already in visible orientation —
+    ``_encode_panel_rgb_to_png`` rotates landscape back +90° to undo
+    ``_prepare_canvas``'s -90°).
+
+    Mirrors the fit/cover scaling in ``_prepare_canvas``. Result is normalised
+    against the *visible* dimensions so it lines up with the PNG the browser
+    actually displays.
+    """
+    if not bboxes_norm:
+        return []
+
+    portrait = orientation == "portrait"
+    visible_w, visible_h = (canvas_w, canvas_h) if portrait else (canvas_h, canvas_w)
+
+    scale_fit = min(visible_w / orig_w, visible_h / orig_h)
+    scale_cover = max(visible_w / orig_w, visible_h / orig_h)
+    zoom_ratio = scale_cover / scale_fit - 1.0
+    use_cover = crop_to_fill_threshold > 0.0 and zoom_ratio <= crop_to_fill_threshold
+
+    if use_cover:
+        scaled_w = max(visible_w, math.ceil(orig_w * scale_cover))
+        scaled_h = max(visible_h, math.ceil(orig_h * scale_cover))
+        x_off = (scaled_w - visible_w) // 2
+        y_off = (scaled_h - visible_h) // 2
+    else:
+        scaled_w = orig_w * scale_fit
+        scaled_h = orig_h * scale_fit
+        x_off = (visible_w - scaled_w) / 2
+        y_off = (visible_h - scaled_h) / 2
+
+    out: list[tuple[float, float, float, float]] = []
+    for bbox in bboxes_norm:
+        if use_cover:
+            fx = bbox.x * scaled_w - x_off
+            fy = bbox.y * scaled_h - y_off
+        else:
+            fx = bbox.x * scaled_w + x_off
+            fy = bbox.y * scaled_h + y_off
+        fw = bbox.w * scaled_w
+        fh = bbox.h * scaled_h
+
+        # Clamp to visible bounds
+        fx = max(0.0, fx)
+        fy = max(0.0, fy)
+        fw = max(0.0, min(fw, visible_w - fx))
+        fh = max(0.0, min(fh, visible_h - fy))
+
+        out.append((fx / visible_w, fy / visible_h, fw / visible_w, fh / visible_h))
+    return out
+
+
 def _encode_panel_rgb_to_png(panel_rgb: NDArray[np.uint8], orientation: Orientation) -> bytes:
     """Panel-memory RGB → PNG bytes in the visible (browser) orientation."""
     img = Image.fromarray(np.asarray(panel_rgb, dtype=np.uint8))

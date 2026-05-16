@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -82,6 +83,22 @@ def main() -> None:
             return not any(p in msg for p in _SILENT_PATHS)
 
     logging.getLogger("werkzeug").addFilter(_SilentFilter())
+
+    # Fail fast if port is taken — Werkzeug's own error can be missed and
+    # leaves you debugging a stale process serving stale content.
+    _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        _probe.bind(("0.0.0.0", config.port))
+    except OSError as exc:
+        print(
+            f"Error: port {config.port} is already in use ({exc}).\n"
+            f"  Run: netstat -ano | findstr :{config.port}\n"
+            f"  Then: taskkill /F /PID <pid>",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    finally:
+        _probe.close()
 
     print(f"  Starting server on port {config.port}...")
     _zc = start_mdns(config.port, config.mdns_hostname) if config.mdns_hostname else None
