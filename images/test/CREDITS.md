@@ -83,7 +83,7 @@ ShareAlike obligations of the source license where applicable.
   photographed at a press/festival event where being photographed is the
   expected norm; reuse here is non-commercial illustrative.
 
-## Violin_player_tuxedo_Getty.jpg
+## violin_player_tuxedo.jpg
 
 - **Category:** person / musical performance — face detection + skin-tone dithering test
 - **Source:** https://unsplash.com/photos/a-man-in-a-tuxedo-playing-the-violin-yx1NoVP0llA
