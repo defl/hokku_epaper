@@ -962,8 +962,17 @@
           <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview('face')" id="face-preview-btn">Preview</button>
           <span class="info" id="face-preview-status"></span>
         </div>
+        <div id="face-preview-face-controls" hidden style="margin-top: 8px; font-size: 0.9em;">
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="checkbox" id="face-preview-show-faces" onchange="updateDitherPreviewFaces('face')">
+            <span>Show face CLAHE keep-out zones</span>
+          </label>
+        </div>
         <div id="face-preview-result" class="dither-preview-result" hidden>
-          <img id="face-preview-img" alt="Dither preview">
+          <div style="position: relative; display: inline-block;">
+            <img id="face-preview-img" alt="Dither preview">
+            <canvas id="face-preview-faces" style="position: absolute; inset: 0; display: none; border-radius: 4px;"></canvas>
+          </div>
           <div class="dither-preview-mask" id="face-preview-mask" hidden>Dithering…</div>
         </div>
       </div>
@@ -1677,7 +1686,7 @@ async function runDitherPreview(panelId) {
   // Show the result area immediately with "Dithering…" mask over any existing image.
   resultDiv.hidden = false;
   mask.hidden = false;
-  faceCtrl.hidden = true;
+  if (faceCtrl) faceCtrl.hidden = true;
   if (checkbox) checkbox.checked = false;
   if (canvas) canvas.style.display = 'none';
 
@@ -1709,7 +1718,7 @@ async function runDitherPreview(panelId) {
 
     // Store face data and show controls if faces detected
     if (canvas) canvas.dataset.bboxes = JSON.stringify(faceBboxes);
-    if (faceBboxes.length > 0) {
+    if (faceBboxes.length > 0 && faceCtrl) {
       faceCtrl.hidden = false;
     }
 
