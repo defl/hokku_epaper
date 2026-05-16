@@ -873,112 +873,6 @@
     </span>
   </div>
 
-  <div class="config-row">
-    <label>Detect B&amp;W photos:</label>
-    <label class="toggle" data-tip="When enabled, photos detected as near-monochrome (B&W film, black-and-white scans) use a dedicated dither pipeline.&#10;This prevents tiny colour tints from being amplified into a visible pink or yellow cast.&#10;Detection: 95th-percentile Lab chroma below 8.">
-      <input type="checkbox" id="bw-detect-enabled" onchange="document.getElementById('bw-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('bw-config-panel').hidden=!this.checked;">
-      <span id="bw-detect-enabled-label">Off</span>
-    </label>
-  </div>
-
-  <div id="bw-config-panel" class="dither-advanced" hidden>
-    <div class="dither-advanced-header">
-      <h3>B&amp;W photo pipeline</h3>
-    </div>
-    <p class="dither-advanced-intro">Used for black-and-white photos — film scans, old family photos, monochrome art. The server detects these automatically and uses a separate pipeline that avoids the colour-boosting steps which would otherwise add an unwanted pink or yellow tint to the grays.</p>
-    <div class="config-row" style="position: relative;">
-      <label>Preset:</label>
-      <select id="bw-preset"></select>
-      <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset('bw')"
-              title="Reset all knobs to the preset's default values">Reset to preset</button>
-      <button type="button" class="btn btn-secondary btn-small" id="bw-custom-btn"
-              onclick="toggleAdvancedPanel('bw')"
-              title="Open the advanced pipeline editor">Custom…</button>
-    </div>
-    <div class="dither-advanced" id="bw-advanced" hidden>
-      <div class="dither-advanced-header">
-        <h3>Advanced B&amp;W pipeline</h3>
-        <button type="button" class="close-btn" onclick="toggleAdvancedPanel('bw')"
-                aria-label="Close">×</button>
-      </div>
-      <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Hover any knob label to see what it does.</p>
-      <div id="bw-advanced-panel"></div>
-      <div class="dither-preview-block">
-        <div class="config-row">
-          <label>Preview on:</label>
-          <select id="bw-preview-image"></select>
-          <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview('bw')" id="bw-preview-btn">Preview</button>
-          <span class="info" id="bw-preview-status"></span>
-        </div>
-        <div id="bw-preview-result" class="dither-preview-result" hidden>
-          <img id="bw-preview-img" alt="Dither preview">
-          <div class="dither-preview-mask" id="bw-preview-mask" hidden>Dithering…</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="config-row">
-    <label>Detect faces:</label>
-    <label class="toggle" data-tip="When enabled, photos with at least one detected face use a dedicated dither pipeline.&#10;The pipeline is tuned to preserve natural skin tones, which can otherwise shift orange or grey.&#10;Uses YuNet face detection (score threshold 0.5).">
-      <input type="checkbox" id="face-detect-enabled" onchange="document.getElementById('face-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('face-config-panel').hidden=!this.checked;">
-      <span id="face-detect-enabled-label">Off</span>
-    </label>
-  </div>
-
-  <div id="face-config-panel" class="dither-advanced" hidden>
-    <div class="dither-advanced-header">
-      <h3>Face photo pipeline</h3>
-    </div>
-    <p class="dither-advanced-intro">Used for photos with people in them. The server detects faces automatically and switches to a pipeline tuned to preserve natural skin tones, which can otherwise shift towards orange or grey on an e-ink display.</p>
-    <div class="config-row">
-      <label>Protect faces from CLAHE:</label>
-      <label class="toggle" data-tip="When enabled, face regions are excluded from CLAHE contrast enhancement to preserve natural skin tones.&#10;When disabled, CLAHE is applied to the full image including face regions.">
-        <input type="checkbox" id="face-clahe-keepout-enabled" checked onchange="document.getElementById('face-clahe-keepout-label').textContent=this.checked?'Yes':'No';">
-        <span id="face-clahe-keepout-label">Yes</span>
-      </label>
-    </div>
-    <div class="config-row" style="position: relative;">
-      <label>Preset:</label>
-      <select id="face-preset"></select>
-      <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset('face')"
-              title="Reset all knobs to the preset's default values">Reset to preset</button>
-      <button type="button" class="btn btn-secondary btn-small" id="face-custom-btn"
-              onclick="toggleAdvancedPanel('face')"
-              title="Open the advanced pipeline editor">Custom…</button>
-    </div>
-    <div class="dither-advanced" id="face-advanced" hidden>
-      <div class="dither-advanced-header">
-        <h3>Advanced face pipeline</h3>
-        <button type="button" class="close-btn" onclick="toggleAdvancedPanel('face')"
-                aria-label="Close">×</button>
-      </div>
-      <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Hover any knob label to see what it does.</p>
-      <div id="face-advanced-panel"></div>
-      <div class="dither-preview-block">
-        <div class="config-row">
-          <label>Preview on:</label>
-          <select id="face-preview-image"></select>
-          <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview('face')" id="face-preview-btn">Preview</button>
-          <span class="info" id="face-preview-status"></span>
-        </div>
-        <div id="face-preview-face-controls" hidden style="margin-top: 8px; font-size: 0.9em;">
-          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-            <input type="checkbox" id="face-preview-show-faces" onchange="updateDitherPreviewFaces('face')">
-            <span>Show face CLAHE keep-out zones</span>
-          </label>
-        </div>
-        <div id="face-preview-result" class="dither-preview-result" hidden>
-          <div style="position: relative; display: inline-block;">
-            <img id="face-preview-img" alt="Dither preview">
-            <canvas id="face-preview-faces" style="position: absolute; inset: 0; display: none; border-radius: 4px;"></canvas>
-          </div>
-          <div class="dither-preview-mask" id="face-preview-mask" hidden>Dithering…</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- Advanced toggle -->
   <div class="config-advanced-toggle" id="cfg-advanced-toggle" onclick="toggleConfigAdvanced()">
     <span class="toggle-arrow">▶</span>
@@ -1028,6 +922,112 @@
             <canvas id="dither-preview-faces" style="position: absolute; inset: 0; display: none; border-radius: 4px;"></canvas>
           </div>
           <div class="dither-preview-mask" id="dither-preview-mask" hidden>Dithering…</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="config-row">
+      <label>Detect B&amp;W photos:</label>
+      <label class="toggle" data-tip="When enabled, photos detected as near-monochrome (B&W film, black-and-white scans) use a dedicated dither pipeline.&#10;This prevents tiny colour tints from being amplified into a visible pink or yellow cast.&#10;Detection: 95th-percentile Lab chroma below 8.">
+        <input type="checkbox" id="bw-detect-enabled" onchange="document.getElementById('bw-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('bw-config-panel').hidden=!this.checked;">
+        <span id="bw-detect-enabled-label">Off</span>
+      </label>
+    </div>
+
+    <div id="bw-config-panel" class="dither-advanced" hidden>
+      <div class="dither-advanced-header">
+        <h3>B&amp;W photo pipeline</h3>
+      </div>
+      <p class="dither-advanced-intro">Used for black-and-white photos — film scans, old family photos, monochrome art. The server detects these automatically and uses a separate pipeline that avoids the colour-boosting steps which would otherwise add an unwanted pink or yellow tint to the grays.</p>
+      <div class="config-row" style="position: relative;">
+        <label>Preset:</label>
+        <select id="bw-preset"></select>
+        <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset('bw')"
+                title="Reset all knobs to the preset's default values">Reset to preset</button>
+        <button type="button" class="btn btn-secondary btn-small" id="bw-custom-btn"
+                onclick="toggleAdvancedPanel('bw')"
+                title="Open the advanced pipeline editor">Custom…</button>
+      </div>
+      <div class="dither-advanced" id="bw-advanced" hidden>
+        <div class="dither-advanced-header">
+          <h3>Advanced B&amp;W pipeline</h3>
+          <button type="button" class="close-btn" onclick="toggleAdvancedPanel('bw')"
+                  aria-label="Close">×</button>
+        </div>
+        <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Hover any knob label to see what it does.</p>
+        <div id="bw-advanced-panel"></div>
+        <div class="dither-preview-block">
+          <div class="config-row">
+            <label>Preview on:</label>
+            <select id="bw-preview-image"></select>
+            <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview('bw')" id="bw-preview-btn">Preview</button>
+            <span class="info" id="bw-preview-status"></span>
+          </div>
+          <div id="bw-preview-result" class="dither-preview-result" hidden>
+            <img id="bw-preview-img" alt="Dither preview">
+            <div class="dither-preview-mask" id="bw-preview-mask" hidden>Dithering…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="config-row">
+      <label>Detect faces:</label>
+      <label class="toggle" data-tip="When enabled, photos with at least one detected face use a dedicated dither pipeline.&#10;The pipeline is tuned to preserve natural skin tones, which can otherwise shift orange or grey.&#10;Uses YuNet face detection (score threshold 0.5).">
+        <input type="checkbox" id="face-detect-enabled" onchange="document.getElementById('face-detect-enabled-label').textContent=this.checked?'On':'Off';document.getElementById('face-config-panel').hidden=!this.checked;">
+        <span id="face-detect-enabled-label">Off</span>
+      </label>
+    </div>
+
+    <div id="face-config-panel" class="dither-advanced" hidden>
+      <div class="dither-advanced-header">
+        <h3>Face photo pipeline</h3>
+      </div>
+      <p class="dither-advanced-intro">Used for photos with people in them. The server detects faces automatically and switches to a pipeline tuned to preserve natural skin tones, which can otherwise shift towards orange or grey on an e-ink display.</p>
+      <div class="config-row">
+        <label>Protect faces from CLAHE:</label>
+        <label class="toggle" data-tip="When enabled, face regions are excluded from CLAHE contrast enhancement to preserve natural skin tones.&#10;When disabled, CLAHE is applied to the full image including face regions.">
+          <input type="checkbox" id="face-clahe-keepout-enabled" checked onchange="document.getElementById('face-clahe-keepout-label').textContent=this.checked?'Yes':'No';">
+          <span id="face-clahe-keepout-label">Yes</span>
+        </label>
+      </div>
+      <div class="config-row" style="position: relative;">
+        <label>Preset:</label>
+        <select id="face-preset"></select>
+        <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset('face')"
+                title="Reset all knobs to the preset's default values">Reset to preset</button>
+        <button type="button" class="btn btn-secondary btn-small" id="face-custom-btn"
+                onclick="toggleAdvancedPanel('face')"
+                title="Open the advanced pipeline editor">Custom…</button>
+      </div>
+      <div class="dither-advanced" id="face-advanced" hidden>
+        <div class="dither-advanced-header">
+          <h3>Advanced face pipeline</h3>
+          <button type="button" class="close-btn" onclick="toggleAdvancedPanel('face')"
+                  aria-label="Close">×</button>
+        </div>
+        <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Hover any knob label to see what it does.</p>
+        <div id="face-advanced-panel"></div>
+        <div class="dither-preview-block">
+          <div class="config-row">
+            <label>Preview on:</label>
+            <select id="face-preview-image"></select>
+            <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview('face')" id="face-preview-btn">Preview</button>
+            <span class="info" id="face-preview-status"></span>
+          </div>
+          <div id="face-preview-face-controls" hidden style="margin-top: 8px; font-size: 0.9em;">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" id="face-preview-show-faces" onchange="updateDitherPreviewFaces('face')">
+              <span>Show face CLAHE keep-out zones</span>
+            </label>
+          </div>
+          <div id="face-preview-result" class="dither-preview-result" hidden>
+            <div style="position: relative; display: inline-block;">
+              <img id="face-preview-img" alt="Dither preview">
+              <canvas id="face-preview-faces" style="position: absolute; inset: 0; display: none; border-radius: 4px;"></canvas>
+            </div>
+            <div class="dither-preview-mask" id="face-preview-mask" hidden>Dithering…</div>
+          </div>
         </div>
       </div>
     </div>
