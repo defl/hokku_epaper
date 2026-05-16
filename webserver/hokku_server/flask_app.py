@@ -271,7 +271,8 @@ def create_app(
                     "reason": f"image too large; cap {MAX_UPLOAD_PIXELS:,} px",
                 })
                 continue
-            except (UnidentifiedImageError, OSError):
+            except (UnidentifiedImageError, OSError) as e:
+                print(f"  Upload error for {name!r}: {type(e).__name__}: {e}")
                 skipped.append({"name": name, "reason": "unreadable image"})
                 continue
             if w * h > MAX_UPLOAD_PIXELS:
