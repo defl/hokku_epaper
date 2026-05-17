@@ -1,5 +1,5 @@
 ---
-description: Full release workflow — tests, CI check, doc/changelog updates, version bump, tag, push, and GitHub release with approval gates.
+description: Full release workflow — CI check, doc/changelog updates, version bump, tag, push, and GitHub release with approval gates.
 ---
 
 # /release — hokku_epaper release workflow
@@ -24,44 +24,15 @@ git rev-parse HEAD
 gh run list --commit <SHA> --workflow CI --json databaseId,status,conclusion --limit 10
 ```
 
-Find a run where `status == "completed"` and `conclusion == "success"`. If no such run exists (commit not pushed, CI still running, or CI failed), **abort immediately** — tell the user to push the commit and wait for CI to pass, then re-run `/release`.
+Evaluate the result:
+
+- `status == "completed"` and `conclusion == "success"` → continue.
+- `status == "in_progress"` or `status == "queued"` → **wait**. Poll every ~2 minutes until the run completes, reporting progress at each poll. Continue if it passes; abort if it fails.
+- No run found (commit not pushed) or `conclusion != "success"` → **abort immediately**. Tell the user to push the commit and ensure CI passes, then re-run `/release`.
 
 ---
 
-## Step 2 — Run webserver tests
-
-Run from the repo root:
-```
-.venv\Scripts\python -m pytest -m "not time_intensive"
-```
-
-The `pytest.ini` at repo root sets `testpaths = webserver/tests`, so no extra path argument is needed.
-
-If any test fails, **abort**. Show the failing test names and output.
-
----
-
-## Step 3 — Run firmware host tests
-
-Run via Docker (same pattern as the .deb build, to avoid Windows NTFS/compiler issues):
-
-```bash
-MSYS_NO_PATHCONV=1 docker run --rm \
-  -v "/c/Users/defl/workspace/hokku_epaper":/src \
-  ubuntu bash -c '
-    apt-get update -qq
-    apt-get install -y -qq cmake build-essential >/dev/null 2>&1
-    cmake -B /tmp/fw-test-build /src/firmware/test/host -DCMAKE_BUILD_TYPE=Release
-    cmake --build /tmp/fw-test-build
-    ctest --test-dir /tmp/fw-test-build --output-on-failure
-  '
-```
-
-If any test fails, **abort**. Show the CTest output.
-
----
-
-## Step 4 — Update README.md and docs/
+## Step 2 — Update README.md and docs/
 
 Read `README.md` and every file in `docs/`. Compare their content against the current state of the codebase (code, tests, config). Identify anything that is stale, inaccurate, or missing.
 
@@ -76,7 +47,7 @@ For each proposed change, show the user the before/after diff and wait for confi
 
 ---
 
-## Step 5 — Show existing tags; ask user for the new version
+## Step 3 — Show existing tags; ask user for the new version
 
 Run:
 ```
@@ -118,7 +89,7 @@ Note whether it has changed since the last release tag (compare `firmware/VERSIO
 
 ---
 
-## Step 6 — Update CHANGELOG.md
+## Step 4 — Update CHANGELOG.md
 
 Get the git log since the last tag:
 ```
@@ -130,11 +101,11 @@ Read the existing `CHANGELOG.md`. Prepend a new section for the new version usin
 
 Present the draft CHANGELOG section to the user for review and editing before saving. Apply their edits.
 
-**Note:** This section covers only changes since the previous tag. The GitHub release text (Step 12) may span a wider range.
+**Note:** This section covers only changes since the previous tag. The GitHub release text (Step 10) may span a wider range.
 
 ---
 
-## Step 7 — Update version files
+## Step 5 — Update version files
 
 Edit **`webserver/pyproject.toml`**: change the `version = "..."` line to the PEP 440 form.
 
@@ -150,19 +121,19 @@ hokku-server (<debian-version>) unstable; urgency=medium
 
 The Debian version is always `MAJOR.MINOR.PATCH-1` — the `-1` suffix is fixed for every release.
 
-RFC 2822 date format example: `Sun, 17 May 2026 00:00:00 +0000` — use the actual current date and time UTC.
+RFC 2822 date format: `Sun, 17 May 2026 14:32:00 +0000` — use the actual current UTC date **and time** (not midnight).
 
 If the firmware version changed since the last release, note it in the changelog entry as well.
 
 ---
 
-## Step 8 — Commit the release changes
+## Step 6 — Commit the release changes
 
 Stage exactly these files (and only these):
 - `webserver/pyproject.toml`
 - `webserver/debian/changelog`
 - `CHANGELOG.md`
-- Any `README.md` or `docs/*.md` files that were modified in Step 4
+- Any `README.md` or `docs/*.md` files that were modified in Step 2
 
 Run:
 ```
@@ -176,7 +147,7 @@ git rev-parse HEAD
 
 ---
 
-## Step 9 — Tag and push (REQUIRES explicit user approval)
+## Step 7 — Tag and push (REQUIRES explicit user approval)
 
 State the exact three commands that will run:
 
@@ -192,9 +163,9 @@ Once approved, run those three commands in sequence.
 
 ---
 
-## Step 10 — Wait for GitHub Actions CI to complete
+## Step 8 — Wait for GitHub Actions CI to complete
 
-After push, get the new commit SHA and poll until the CI run completes. Check every ~60 seconds:
+After push, get the new commit SHA and poll until the CI run completes. Check every ~2 minutes:
 
 ```
 gh run list --commit <new-SHA> --workflow CI --json databaseId,status,conclusion,name --limit 10
@@ -218,7 +189,7 @@ gh run view <run-id> --json jobs --jq '.jobs[] | {name, status, conclusion}'
 
 ---
 
-## Step 11 — Download CI artifacts
+## Step 9 — Download CI artifacts
 
 Download both build artifacts from the successful CI run:
 
@@ -234,7 +205,7 @@ The firmware filename embeds the `firmware/VERSION` string (e.g., `hokku-firmwar
 
 ---
 
-## Step 12 — Create GitHub release (REQUIRES explicit user approval)
+## Step 10 — Create GitHub release (REQUIRES explicit user approval)
 
 **Determine the release notes scope:**
 
@@ -277,6 +248,13 @@ gh release create <git-tag> `
   --notes-file "$env:TEMP\hokku-release-notes.md"
 ```
 
-Use the actual filenames discovered in Step 11.
+Use the actual filenames discovered in Step 9.
 
 **Do not execute yet.** Per AGENTS.md, ask explicitly: "Shall I create the GitHub release with the above assets and notes?" Wait for explicit approval before running `gh release create`.
+
+After the release is created, verify it:
+```
+gh release view <git-tag>
+```
+
+Confirm the release title, tag, and that both assets (`.bin` and `.deb`) are listed with non-zero sizes. Report the release URL to the user.
