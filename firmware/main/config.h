@@ -3,7 +3,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define CONFIG_VERSION  2
+#include "version.h"
+#define CONFIG_VERSION  FW_CONFIG_VERSION
 
 /* WiFi connection order strategy, stored as wifi_order in NVS */
 #define WIFI_ORDER_PRIMARY_FIRST  0  /* always try slot 0 first */

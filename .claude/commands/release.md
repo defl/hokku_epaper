@@ -85,24 +85,36 @@ git tag --sort=-version:refname | head -15
 
 Display the list, then ask the user:
 
-> What version tag should this release use? (e.g. `v3.0.0` or `v3.0.0-beta6`)
+> What version tag should this release use? (e.g. `v3.0.0` or `v3.0.0-beta.1`)
+
+**Version rules (validate before continuing):**
+- PATCH must be **even** (0, 2, 4, …). Odd PATCH is the development track — reject it and ask again.
+- The new tag must sort strictly greater than the last tag.
 
 From the user's answer, derive all format variants and display them for confirmation:
 
 | Format | Example |
 |--------|---------|
-| Git tag (as entered) | `v3.0.0-beta6` |
-| PEP 440 — `webserver/pyproject.toml` | `3.0.0b6` |
-| Debian — `webserver/debian/changelog` | `3.0.0~beta6-1` |
-| CHANGELOG.md heading | `3.0 beta6` |
+| Git tag (as entered) | `v3.0.2` |
+| PEP 440 — `webserver/pyproject.toml` | `3.0.2` |
+| Debian — `webserver/debian/changelog` | `3.0.2-1` |
+| CHANGELOG.md heading | `3.0.2` |
 
 Conversion rules:
-- `v3.0.0` → PEP 440 `3.0.0`, Debian `3.0.0-1`, heading `3.0.0`
-- `v3.0.0-beta6` → PEP 440 `3.0.0b6`, Debian `3.0.0~beta6-1`, heading `3.0 beta6`
-- `v3.0.0-alpha2` → PEP 440 `3.0.0a2`, Debian `3.0.0~alpha2-1`, heading `3.0 alpha2`
-- `v3.0.0-rc1` → PEP 440 `3.0.0rc1`, Debian `3.0.0~rc1-1`, heading `3.0 rc1`
+- `v3.0.2` → PEP 440 `3.0.2`, Debian `3.0.2-1`, heading `3.0.2`
+- `v3.1.0` → PEP 440 `3.1.0`, Debian `3.1.0-1`, heading `3.1.0`
+- `v4.0.0-beta.1` → PEP 440 `4.0.0b1`, Debian `4.0.0~beta.1-1`, heading `4.0.0 beta 1`
+- `v4.0.0-rc.1` → PEP 440 `4.0.0rc1`, Debian `4.0.0~rc.1-1`, heading `4.0.0 rc 1`
+
+The Debian revision suffix is **always `-1`** — there is no build number concept for releases.
 
 Wait for the user to confirm the derived versions before continuing.
+
+Also show the current firmware version:
+```
+cat firmware/VERSION
+```
+Note whether it has changed since the last release tag (compare `firmware/VERSION` content at HEAD vs at the last tag using `git show <last-tag>:firmware/VERSION`).
 
 ---
 
@@ -114,7 +126,7 @@ git tag --sort=-version:refname | head -1   # last tag
 git log <last-tag>..HEAD --oneline
 ```
 
-Read the existing `CHANGELOG.md`. Prepend a new section for the new version using the format already established in the file (e.g. `## 3.0 beta6`). Write this section in user-friendly "what, not how" language: user-visible features and fixes, not implementation or refactoring details. Group related items under descriptive sub-headings if there are more than a few changes.
+Read the existing `CHANGELOG.md`. Prepend a new section for the new version using the format already established in the file. Write this section in user-friendly "what, not how" language: user-visible features and fixes, not implementation or refactoring details. Group related items under descriptive sub-headings if there are more than a few changes.
 
 Present the draft CHANGELOG section to the user for review and editing before saving. Apply their edits.
 
@@ -136,9 +148,11 @@ hokku-server (<debian-version>) unstable; urgency=medium
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  <current date in RFC 2822 format>
 ```
 
-The build number starts at `-1` for any new upstream version.
+The Debian version is always `MAJOR.MINOR.PATCH-1` — the `-1` suffix is fixed for every release.
 
 RFC 2822 date format example: `Sun, 17 May 2026 00:00:00 +0000` — use the actual current date and time UTC.
+
+If the firmware version changed since the last release, note it in the changelog entry as well.
 
 ---
 
@@ -216,6 +230,8 @@ gh run download <run-id> --name hokku-server-deb --dir "$env:TEMP\hokku-release"
 
 List the downloaded files and their sizes. Verify that exactly one `.bin` file (firmware) and one `.deb` file (webserver) are present. If anything is missing, report and stop.
 
+The firmware filename embeds the `firmware/VERSION` string (e.g., `hokku-firmware_1.2.0.bin`). Note whether this is a new firmware version compared to the previous release.
+
 ---
 
 ## Step 12 — Create GitHub release (REQUIRES explicit user approval)
@@ -237,6 +253,9 @@ Read the CHANGELOG.md sections that span this same range (may cover multiple int
 - Are organised by feature area or theme, not by commit
 - Include notable fixes and improvements
 - Omit internal refactors, test changes, and build-system tweaks unless user-visible
+- Include a **Versions** section listing:
+  - App: `<git-tag>` (e.g., `v3.0.2`)
+  - Firmware: `<firmware/VERSION>` (e.g., `1.2.0`) — add "(unchanged)" if firmware version matches the previous release
 
 Present the draft release notes to the user for review and editing. Apply any edits.
 

@@ -14,12 +14,23 @@
 - GitHub release must attach the merged file as the single firmware asset
 - Setup tool aborts if no `hokku-firmware_*.bin` asset is found
 
-## NVS config version
-- Current version: `1`
-- Stored as `uint8 cfg_ver` in NVS namespace `hokku`
-- Defined in `main/main.c` as `CONFIG_VERSION` and `tools/hokku_config.py` as `CONFIG_VERSION`
-- INCREMENT when NVS fields are added, removed, or changed
-- Firmware refuses to boot on mismatch; hokku-setup treats mismatch as unconfigured
+## Firmware versioning — `firmware/VERSION`
+
+Format: `PROTOCOL.CONFIG.N`
+
+- **`PROTOCOL`** — server↔client wire protocol (HTTP API between device and server). Bump **only** on backwards-incompatible changes to the wire protocol. If a change requires a `PROTOCOL` bump, WARN the human and wait for their explicit decision — do not bump unilaterally.
+- **`CONFIG`** — NVS configuration schema version. Bump when NVS fields are added, removed, or incompatibly changed. When bumping `CONFIG`, also update `CONFIG_VERSION` in `tools/hokku_config.py` to the same integer value. NVS changes do NOT affect `PROTOCOL`.
+- **`N`** — monotonic counter for all other firmware changes. **Never resets**, even when `PROTOCOL` or `CONFIG` bumps. Increment `N` for every firmware code commit; include the updated `firmware/VERSION` in the same commit.
+
+`CONFIG_VERSION` in `firmware/main/config.h` and `firmware/main/config.c` is derived from `firmware/VERSION` via CMake-generated `version.h` — do not edit it directly.
+
+Examples:
+| `firmware/VERSION` | Meaning |
+|---|---|
+| `1.2.5` | protocol 1, NVS config v2, 5th change |
+| `1.2.6` | bug fix — only N incremented |
+| `1.3.7` | NVS schema changed — CONFIG and N incremented, `tools/hokku_config.py` updated |
+| `2.3.8` | wire protocol break (human approved) — PROTOCOL and N incremented |
 
 ## Display driver (DO NOT MODIFY)
 - Do not touch: SPI init, CS management, BUSY polling, GPIO init, `epaper_reset`, `epaper_init_panel`, `epaper_send_panel`, `epaper_display_dual`, `epaper_wait_busy`

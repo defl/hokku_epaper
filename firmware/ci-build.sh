@@ -5,14 +5,10 @@ set -e
 
 idf.py reconfigure build
 
-VERSION=$(python3 -c "
-with open('build/hokku_epaper.bin', 'rb') as f:
-    f.seek(0x30)
-    print(f.read(32).split(b'\x00')[0].decode())
-")
+VERSION=$(cat VERSION)
 
 if [ -z "$VERSION" ]; then
-    echo "ERROR: could not read version from build/hokku_epaper.bin"
+    echo "ERROR: firmware/VERSION is empty"
     exit 1
 fi
 echo "Version: $VERSION"
