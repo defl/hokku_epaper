@@ -162,10 +162,17 @@ class AppConfig:
             kwargs["refresh_image_at_time"] = tuple(rat)
 
         if "orientation" in kwargs:
+            raw = kwargs["orientation"]
             try:
-                kwargs["orientation"] = Orientation(kwargs["orientation"])
+                kwargs["orientation"] = Orientation(raw)
             except ValueError:
-                kwargs["orientation"] = Orientation.LANDSCAPE
+                valid = [o.value for o in Orientation]
+                print(
+                    f"Error: config 'orientation' has invalid value {raw!r}; "
+                    f"must be one of {valid}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
 
         return cls(**kwargs)
 
