@@ -17,6 +17,15 @@ git status --porcelain
 
 If the output is non-empty, **abort immediately**. List the dirty files and tell the user to commit or stash all changes before starting a release.
 
+Also check that the current commit has been pushed to GitHub and has a passing CI run:
+
+```
+git rev-parse HEAD
+gh run list --commit <SHA> --workflow CI --json databaseId,status,conclusion --limit 10
+```
+
+Find a run where `status == "completed"` and `conclusion == "success"`. If no such run exists (commit not pushed, CI still running, or CI failed), **abort immediately** — tell the user to push the commit and wait for CI to pass, then re-run `/release`.
+
 ---
 
 ## Step 2 — Run webserver tests
@@ -52,25 +61,7 @@ If any test fails, **abort**. Show the CTest output.
 
 ---
 
-## Step 4 — Verify CI passes for the current commit on GitHub
-
-Get the current commit SHA:
-```
-git rev-parse HEAD
-```
-
-Then check GitHub Actions:
-```
-gh run list --commit <SHA> --workflow CI --json databaseId,status,conclusion --limit 10
-```
-
-Parse the JSON. Find a run where `status == "completed"` and `conclusion == "success"`. If found, note its `databaseId` (you will need it in Step 12). If no such run exists (run is still in progress, failed, or doesn't exist yet), **abort** — tell the user to push the commit, wait for CI to pass on GitHub, then re-run `/release`.
-
-If there are multiple completed runs for the same SHA (e.g. re-runs), use the most recent one with `conclusion == "success"`.
-
----
-
-## Step 5 — Update README.md and docs/
+## Step 4 — Update README.md and docs/
 
 Read `README.md` and every file in `docs/`. Compare their content against the current state of the codebase (code, tests, config). Identify anything that is stale, inaccurate, or missing.
 
@@ -85,23 +76,7 @@ For each proposed change, show the user the before/after diff and wait for confi
 
 ---
 
-## Step 6 — Update CHANGELOG.md
-
-Get the git log since the last tag:
-```
-git tag --sort=-version:refname | head -1   # last tag
-git log <last-tag>..HEAD --oneline
-```
-
-Read the existing `CHANGELOG.md`. Prepend a new section for the new version using the format already established in the file (e.g. `## 3.0 beta6`). Write this section in user-friendly "what, not how" language: user-visible features and fixes, not implementation or refactoring details. Group related items under descriptive sub-headings if there are more than a few changes.
-
-Present the draft CHANGELOG section to the user for review and editing before saving. Apply their edits.
-
-**Note:** This section covers only changes since the previous tag. The GitHub release text (Step 13) may span a wider range.
-
----
-
-## Step 7 — Show existing tags; ask user for the new version
+## Step 5 — Show existing tags; ask user for the new version
 
 Run:
 ```
@@ -131,7 +106,23 @@ Wait for the user to confirm the derived versions before continuing.
 
 ---
 
-## Step 8 — Update version files
+## Step 6 — Update CHANGELOG.md
+
+Get the git log since the last tag:
+```
+git tag --sort=-version:refname | head -1   # last tag
+git log <last-tag>..HEAD --oneline
+```
+
+Read the existing `CHANGELOG.md`. Prepend a new section for the new version using the format already established in the file (e.g. `## 3.0 beta6`). Write this section in user-friendly "what, not how" language: user-visible features and fixes, not implementation or refactoring details. Group related items under descriptive sub-headings if there are more than a few changes.
+
+Present the draft CHANGELOG section to the user for review and editing before saving. Apply their edits.
+
+**Note:** This section covers only changes since the previous tag. The GitHub release text (Step 12) may span a wider range.
+
+---
+
+## Step 7 — Update version files
 
 Edit **`webserver/pyproject.toml`**: change the `version = "..."` line to the PEP 440 form.
 
@@ -151,13 +142,13 @@ RFC 2822 date format example: `Sun, 17 May 2026 00:00:00 +0000` — use the actu
 
 ---
 
-## Step 9 — Commit the release changes
+## Step 8 — Commit the release changes
 
 Stage exactly these files (and only these):
 - `webserver/pyproject.toml`
 - `webserver/debian/changelog`
 - `CHANGELOG.md`
-- Any `README.md` or `docs/*.md` files that were modified in Step 5
+- Any `README.md` or `docs/*.md` files that were modified in Step 4
 
 Run:
 ```
@@ -171,7 +162,7 @@ git rev-parse HEAD
 
 ---
 
-## Step 10 — Tag and push (REQUIRES explicit user approval)
+## Step 9 — Tag and push (REQUIRES explicit user approval)
 
 State the exact three commands that will run:
 
@@ -187,7 +178,7 @@ Once approved, run those three commands in sequence.
 
 ---
 
-## Step 11 — Wait for GitHub Actions CI to complete
+## Step 10 — Wait for GitHub Actions CI to complete
 
 After push, get the new commit SHA and poll until the CI run completes. Check every ~60 seconds:
 
@@ -213,21 +204,21 @@ gh run view <run-id> --json jobs --jq '.jobs[] | {name, status, conclusion}'
 
 ---
 
-## Step 12 — Download CI artifacts
+## Step 11 — Download CI artifacts
 
 Download both build artifacts from the successful CI run:
 
-```bash
-mkdir -p /tmp/hokku-release
-gh run download <run-id> --name hokku-firmware --dir /tmp/hokku-release
-gh run download <run-id> --name hokku-server-deb --dir /tmp/hokku-release
+```powershell
+New-Item -ItemType Directory -Force "$env:TEMP\hokku-release"
+gh run download <run-id> --name hokku-firmware --dir "$env:TEMP\hokku-release"
+gh run download <run-id> --name hokku-server-deb --dir "$env:TEMP\hokku-release"
 ```
 
 List the downloaded files and their sizes. Verify that exactly one `.bin` file (firmware) and one `.deb` file (webserver) are present. If anything is missing, report and stop.
 
 ---
 
-## Step 13 — Create GitHub release (REQUIRES explicit user approval)
+## Step 12 — Create GitHub release (REQUIRES explicit user approval)
 
 **Determine the release notes scope:**
 
@@ -249,16 +240,24 @@ Read the CHANGELOG.md sections that span this same range (may cover multiple int
 
 Present the draft release notes to the user for review and editing. Apply any edits.
 
-**Then state the exact command that will run:**
+**Then state the exact commands that will run:**
 
-```
-gh release create <git-tag> \
-  /tmp/hokku-release/<firmware-filename>.bin \
-  /tmp/hokku-release/<webserver-filename>.deb \
-  --title "Hokku e-paper server <git-tag>" \
-  --notes "<release notes>"
+Write the release notes to a temp file to avoid quoting issues:
+```powershell
+Set-Content -Path "$env:TEMP\hokku-release-notes.md" -Value @'
+<release notes>
+'@
 ```
 
-Use the actual filenames discovered in Step 12.
+Then create the release:
+```powershell
+gh release create <git-tag> `
+  "$env:TEMP\hokku-release\<firmware-filename>.bin" `
+  "$env:TEMP\hokku-release\<webserver-filename>.deb" `
+  --title "Hokku e-paper server <git-tag>" `
+  --notes-file "$env:TEMP\hokku-release-notes.md"
+```
+
+Use the actual filenames discovered in Step 11.
 
 **Do not execute yet.** Per AGENTS.md, ask explicitly: "Shall I create the GitHub release with the above assets and notes?" Wait for explicit approval before running `gh release create`.
