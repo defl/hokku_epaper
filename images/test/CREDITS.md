@@ -142,6 +142,17 @@ ShareAlike obligations of the source license where applicable.
 - **Description:** The Wikipedia logo in WebP format (1024×935 px, RGBA).
   Included to exercise PIL's WebP decoder; no modifications made to the file.
 
+## NewTux.svg
+
+- **Category:** vector graphic — SVG format fixture
+- **Source:** https://commons.wikimedia.org/wiki/File:NewTux.svg
+- **Author:** Larry Ewing (`lewing@isc.tamu.edu`) and gg3po (SVG version via Sodipodi)
+- **Attribution required:** "lewing@isc.tamu.edu Larry Ewing and The GIMP"
+- **License:** GNU General Public License v2 or later (GPL-2.0+)
+  — https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+- **Description:** Tux, the Linux mascot penguin, as a glossy SVG (625×750 px,
+  21 KB). Included as an SVG format test fixture.
+
 ## Wayuu_woman_with_sad_face_in_the_market_buying.jpg
 
 - **Category:** person in busy background
