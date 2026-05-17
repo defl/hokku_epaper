@@ -41,11 +41,13 @@ class OpenCVYuNetFaceDetector(AbstractFaceDetector):
         bboxes: list[BoundingBox] = []
         for row in faces:
             x, y, w, h = (float(v) for v in row[:4])
+            nx = max(0.0, min(x / det_w, 1.0))
+            ny = max(0.0, min(y / det_h, 1.0))
             bbox = BoundingBox(
-                x=max(0.0, x / det_w),
-                y=max(0.0, y / det_h),
-                w=min(1.0, w / det_w),
-                h=min(1.0, h / det_h),
+                x=nx,
+                y=ny,
+                w=max(0.0, min(w / det_w, 1.0 - nx)),
+                h=max(0.0, min(h / det_h, 1.0 - ny)),
             )
             bboxes.append(bbox)
         return bboxes
