@@ -1,3 +1,7 @@
+---
+description: Full release workflow — tests, CI check, doc/changelog updates, version bump, tag, push, and GitHub release with approval gates.
+---
+
 # /release — hokku_epaper release workflow
 
 Run the full release workflow for hokku_epaper, step by step. Stop and report clearly on any failure. Require explicit approval before any push, tag, or GitHub release action (per AGENTS.md).
