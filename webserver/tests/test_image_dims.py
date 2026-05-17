@@ -17,7 +17,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_DIR = _REPO_ROOT / "images" / "test"
 _BAD_DIR  = _REPO_ROOT / "images" / "bad"
 
-_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff", ".heic", ".heif", ".gif"}
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff", ".heic", ".heif", ".gif", ".avif", ".jxl"}
 
 
 _test_images = sorted(

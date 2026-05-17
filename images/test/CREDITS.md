@@ -83,7 +83,7 @@ ShareAlike obligations of the source license where applicable.
   photographed at a press/festival event where being photographed is the
   expected norm; reuse here is non-commercial illustrative.
 
-## string_ensemble_concert.jpg
+## string_ensemble_concert.jpeg
 
 - **Category:** persons / musical performance — multi-face detection + skin-tone dithering test
 - **Source:** https://www.pexels.com/photo/man-playing-violin-on-stage-7097461/
@@ -98,6 +98,35 @@ ShareAlike obligations of the source license where applicable.
   Subjects are photographed in a performance context. Reuse here is strictly
   internal testing of the image-processing pipeline — not publication,
   endorsement, or commercial use.
+
+## magna_carta_1215.tiff
+
+- **Category:** historical document / aged parchment texture
+- **Source image URL:** https://www.nationalarchives.gov.uk/wp-content/uploads/2015/01/magna-carta-1215-salisbury-cathedral1.jpg
+- **Source page:** https://www.nationalarchives.gov.uk/education/resources/magna-carta/british-library-magna-carta-1215-runnymede/
+- **Work:** Magna Carta, 1215 — ink on parchment. One of the surviving original
+  copies, held by Salisbury Cathedral.
+- **Publisher:** The National Archives (UK)
+- **License:** Open Government Licence v3.0
+  — https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/
+- **Attribution required:** "Contains public sector information licensed under
+  the Open Government Licence v3.0 — The National Archives"
+- **Description:** Photograph of the 1215 Magna Carta held at Salisbury Cathedral.
+  Resized to 778×1024 px for test purposes; original was 1500×1974 px.
+
+## Berlin_Wall_at_the_Reagan_Library.gif
+
+- **Category:** outdoor scene / architecture — GIF format exercise
+- **Source:** https://commons.wikimedia.org/wiki/File:Berlin_Wall_at_the_Reagan_Library.jpg
+- **Author:** Happyme22
+- **License:** Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)
+  — https://creativecommons.org/licenses/by-sa/3.0/
+  (also available under GFDL 1.2 or later)
+- **Description:** A section of the Berlin Wall on display at the Ronald Reagan
+  Presidential Library, Simi Valley, California. Photographed 2007.
+- **Note:** Stored here as GIF (converted from the original JPEG) for the sole
+  purpose of exercising PIL's GIF decoder in the image-processing test suite.
+  This derivative work inherits the CC BY-SA 3.0 license.
 
 ## Wayuu_woman_with_sad_face_in_the_market_buying.jpg
 
