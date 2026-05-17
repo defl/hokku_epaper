@@ -61,8 +61,9 @@ def test_multi_threaded_runs_in_parallel(app_config: AppConfig, monkeypatch):
 
     mgr = MultiThreadedImageManager(app_config, worker_count=2)
     try:
-        mgr._dispatch_render("a.png", "slug", (), 0.0)
-        mgr._dispatch_render("b.png", "slug", (), 0.0)
+        from hokku_server.orientation import Orientation
+        mgr._dispatch_render("a.png", "slug", Orientation.LANDSCAPE, (), 0.0)
+        mgr._dispatch_render("b.png", "slug", Orientation.LANDSCAPE, (), 0.0)
         # Joining the barrier proves both workers entered fake_render_one
         # concurrently. Raises BrokenBarrierError if only one did.
         barrier.wait(timeout=5.0)

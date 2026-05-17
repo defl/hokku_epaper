@@ -43,6 +43,7 @@ except ImportError:  # py<3.8 — not expected
 from hokku_server.app_state import AppState
 from hokku_server.app_config import AppConfig
 from hokku_server.display import FULL_W, PANEL_H, TOTAL_BYTES, VISUAL_H, VISUAL_W
+from hokku_server.orientation import Orientation
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import transform_bboxes_to_canvas_norm
 from hokku_server.image_config import _image_config_from_dict
@@ -173,9 +174,10 @@ def create_app(
             print(f"  {label}: {screen_name} told to retry in {sleep_seconds}s")
             return resp
 
-        binary = manager.panel_bytes(chosen)
+        effective_orientation = scheduler.get_screen_orientation(screen_name)
+        binary = manager.panel_bytes_for_orientation(chosen, effective_orientation)
         if binary is None:
-            # Cache disappeared between pick and read — tell screen to retry.
+            # Cache missing (not yet rendered for this orientation) — tell screen to retry.
             sleep_seconds = _busy_retry_seconds(config)
             scheduler.record_screen_call(
                 screen_name, screen_ip, sleep_seconds, None, battery_mv, frame_state,
@@ -343,6 +345,18 @@ def create_app(
         state.scheduler.remove_screen(name)
         return jsonify({"ok": True})
 
+    @app.route("/hokku/api/screens/<string:name>/config", methods=["PATCH"])
+    def api_screen_config(name: str):
+        """Set or clear the per-screen orientation override."""
+        body = request.get_json(silent=True) or {}
+        raw = body.get("orientation")
+        if raw not in ("landscape", "portrait", None):
+            return jsonify({"error": "orientation must be 'landscape', 'portrait', or null"}), 400
+        orientation = Orientation(raw) if raw else None
+        state.scheduler.set_screen_orientation(name, orientation)
+        state.manager.sync()
+        return jsonify({"ok": True})
+
     @app.route("/hokku/api/scrub", methods=["POST"])
     def api_scrub():
         """Remove stale-slug panel/preview files immediately (preserves thumbs)."""
@@ -430,6 +444,7 @@ def create_app(
                 ),
                 "next_update_at": next_update_at,
                 "state": t.frame_state,
+                "orientation_override": scheduler.get_screen_orientation_override(sname),
             }
 
         disk = manager.cache_disk_info()

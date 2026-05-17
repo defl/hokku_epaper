@@ -10,6 +10,7 @@ from __future__ import annotations
 import concurrent.futures
 
 from hokku_server.image_manager_abstract import AbstractImageManager
+from hokku_server.orientation import Orientation
 from hokku_server.render_worker import render_one
 
 
@@ -24,12 +25,15 @@ class SingleThreadedImageManager(AbstractImageManager):
         self,
         name: str,
         expected_slug: str,
+        orientation: Orientation,
         render_args: tuple,
         t0: float,
+        *,
+        update_status: bool = True,
     ) -> None:
         future: concurrent.futures.Future = concurrent.futures.Future()
         try:
             future.set_result(render_one(*render_args))
         except BaseException as e:
             future.set_exception(e)
-        self._on_render_done(name, expected_slug, future, t0)
+        self._on_render_done(name, expected_slug, orientation, future, t0, update_status=update_status)

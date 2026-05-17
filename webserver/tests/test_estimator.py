@@ -43,7 +43,8 @@ def _rec(
         added_at=time.time(),
         convert_status=status,          # type: ignore[arg-type]
         convert_error=None,
-        screen_image_config_slug="slug" if status == "ok" else None,
+        landscape_image_config_slug="slug" if status == "ok" else None,
+        portrait_image_config_slug="slug2" if status == "ok" else None,
         last_conversion_seconds=conversion_seconds,
         image_width=width,
         image_height=height,

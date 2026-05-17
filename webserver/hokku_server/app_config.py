@@ -12,13 +12,11 @@ import os
 import sys
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable
 
 from hokku_server.image_config import ImageConfig, _image_config_from_dict  # noqa: F401 (re-exported)
+from hokku_server.orientation import Orientation  # noqa: F401 (re-exported)
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
-
-
-Orientation = Literal["landscape", "portrait"]
 
 _CURRENT_VERSION = 5
 
@@ -81,7 +79,7 @@ class AppConfig:
     port: int = 8080
     poll_interval_seconds: int = 10
     debug_fast_refresh: bool = False
-    orientation: Orientation = "landscape"
+    orientation: Orientation = Orientation.LANDSCAPE
     auto_clear_cache: bool = False
     #: Zoom up to this fraction (e.g. 0.02 = 2 %) to eliminate letterbox bands.
     #: 0.0 = always letterbox (default, safe).
@@ -162,6 +160,12 @@ class AppConfig:
         rat = kwargs.get("refresh_image_at_time")
         if isinstance(rat, list):
             kwargs["refresh_image_at_time"] = tuple(rat)
+
+        if "orientation" in kwargs:
+            try:
+                kwargs["orientation"] = Orientation(kwargs["orientation"])
+            except ValueError:
+                kwargs["orientation"] = Orientation.LANDSCAPE
 
         return cls(**kwargs)
 

@@ -20,20 +20,28 @@ import threading
 import time
 import traceback
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Literal
 
 from PIL import Image, ImageOps
 
 from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES
 from hokku_server.image_classifier import ImageClassifier
+from hokku_server.image_record import (
+    ConversionProgress,
+    ImageRecord,
+    record_from_dict,
+    record_to_dict,
+    slug_for,
+)
 from hokku_server.image_renderer import IMAGE_EXTENSIONS
+from hokku_server.orientation import Orientation
 from hokku_server.screen_image_config import ScreenImageConfig
 
 
 _DB_FILENAME = "image_manager.json"
+_DB_VERSION = 3          # bump whenever ImageRecord schema changes; old DB is nuked on mismatch
 _IMAGES_SUBDIR = "images"
 _PANEL_SUFFIX = "_panel.bin"
 _PREVIEW_SUFFIX = "_preview.png"
@@ -43,32 +51,6 @@ _THUMB_MAX_PX = 300
 _THUMB_QUALITY = 85
 
 _KNOWN_SUFFIXES = (_PANEL_SUFFIX, _PREVIEW_SUFFIX, _THUMB_SUFFIX)
-
-
-ConvertStatus = Literal["ok", "failed", "pending"]
-
-
-@dataclass(frozen=True)
-class ImageRecord:
-    name: str                               # outside-world identifier
-    name_hash: str                          # sha1(name) — on-disk identifier
-    original_sha1: str                      # sha1 of file contents
-    original_size_bytes: int
-    original_mtime: float
-    added_at: float
-    convert_status: ConvertStatus
-    convert_error: str | None
-    screen_image_config_slug: str | None    # ScreenImageConfig slug at last successful conversion
-    last_conversion_seconds: float | None = None  # wall-clock time of the last successful render
-    image_width: int | None = None          # pixel dimensions of the source image
-    image_height: int | None = None
-
-
-@dataclass(frozen=True)
-class ConversionProgress:
-    current_name: str | None  # being converted right now (None if idle)
-    done: int                 # completed this sync cycle
-    total: int                # scheduled this sync cycle
 
 
 def _hash_name(name: str) -> str:
@@ -105,31 +87,6 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
     with open(tmp, "w") as f:
         json.dump(payload, f, indent=2)
     os.replace(tmp, path)
-
-
-def _record_to_dict(rec: ImageRecord) -> dict:
-    return asdict(rec)
-
-
-def _record_from_dict(d: dict) -> ImageRecord:
-    # Support old DB files that used 'convert_pipeline_slug'.
-    slug = d.get("screen_image_config_slug") or d.get("convert_pipeline_slug")
-    raw_t = d.get("last_conversion_seconds")
-    raw_w, raw_h = d.get("image_width"), d.get("image_height")
-    return ImageRecord(
-        name=d["name"],
-        name_hash=d["name_hash"],
-        original_sha1=d["original_sha1"],
-        original_size_bytes=int(d["original_size_bytes"]),
-        original_mtime=float(d["original_mtime"]),
-        added_at=float(d["added_at"]),
-        convert_status=d["convert_status"],
-        convert_error=d.get("convert_error"),
-        screen_image_config_slug=slug,
-        last_conversion_seconds=float(raw_t) if raw_t is not None else None,
-        image_width=int(raw_w) if raw_w is not None else None,
-        image_height=int(raw_h) if raw_h is not None else None,
-    )
 
 
 class AbstractImageManager(ABC):
@@ -176,11 +133,19 @@ class AbstractImageManager(ABC):
         self,
         name: str,
         expected_slug: str,
+        orientation: Orientation,
         render_args: tuple,
         t0: float,
+        *,
+        update_status: bool = True,
     ) -> None:
         """Run ``render_one(*render_args)`` and arrange for ``_on_render_done``
         to be called with the future when it completes.
+
+        ``update_status=True`` (default): the primary lifecycle render — sets
+        convert_status to "ok"/"failed" and updates _progress.
+        ``update_status=False``: a secondary orientation render — only writes
+        the panel/preview files and updates the matching slug in the record.
         """
 
     # ── lifecycle ────────────────────────────────────────────────
@@ -293,9 +258,17 @@ class AbstractImageManager(ABC):
             except Exception as e:
                 print(f"  Classification failed for {rec.name!r}: {e}")
         # Phase 3: dispatch renders with the pre-computed ScreenImageConfigs.
+        # Both orientations are rendered for every pending image so every screen
+        # can be served in its preferred orientation without waiting for re-sync.
         for rec in pending:
             try:
-                self._submit_one(rec.name, screen_configs.get(rec.name))
+                base_cfg = screen_configs.get(rec.name)
+                self._submit_one(rec.name, base_cfg)
+
+                if base_cfg is not None:
+                    for orientation in Orientation:
+                        if orientation != base_cfg.orientation:
+                            self._render_orientation(rec.name, replace(base_cfg, orientation=orientation))
             except Exception as e:
                 # Defensive: _submit_one() should handle its own errors, but catch
                 # any unexpected exceptions to prevent entire sync() from crashing.
@@ -358,15 +331,41 @@ class AbstractImageManager(ABC):
     # ── Reads (lock-free) ───────────────────────────────────────
 
     def panel_bytes(self, name: str) -> bytes | None:
+        """Return the panel binary for *name* in the global orientation."""
+        return self.panel_bytes_for_orientation(name, self._config.orientation)
+
+    def panel_bytes_for_orientation(self, name: str, orientation: Orientation) -> bytes | None:
+        """Return the panel binary for *name* in a specific orientation, or None on miss."""
         rec = self._records.get(name)
         if rec is None or rec.convert_status != "ok":
             return None
-        path = self._panel_path(rec)
+        s = slug_for(rec, orientation)
+        if not s:
+            return None
+        path = self._panel_path(rec.name_hash, s)
+        if not path.exists():
+            return None
         try:
             data = path.read_bytes()
-        except OSError:
+        except OSError as e:
+            print(f"  Error reading panel file {path.name}: {e}")
             return None
         if len(data) != TOTAL_BYTES:
+            print(
+                f"  Corrupt panel file {path.name}: expected {TOTAL_BYTES} B, "
+                f"got {len(data)} B — deleting and re-queuing"
+            )
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            with self._db_lock:
+                cur = self._records.get(name)
+                if cur is not None:
+                    self._records[name] = replace(
+                        cur, convert_status="pending", convert_error=None
+                    )
+                    self._save_db()
             return None
         return data
 
@@ -374,7 +373,10 @@ class AbstractImageManager(ABC):
         rec = self._records.get(name)
         if rec is None or rec.convert_status != "ok":
             return None
-        path = self._preview_path(rec)
+        s = slug_for(rec, self._config.orientation)
+        if not s:
+            return None
+        path = self._preview_path(rec.name_hash, s)
         try:
             return path.read_bytes()
         except OSError:
@@ -487,7 +489,8 @@ class AbstractImageManager(ABC):
                     rec,
                     convert_status="pending",
                     convert_error=None,
-                    screen_image_config_slug=None,
+                    landscape_image_config_slug=None,
+                    portrait_image_config_slug=None,
                 )
             # Reset progress so the upcoming sync() starts a fresh batch
             # rather than accumulating on top of a stale done/total pair.
@@ -521,13 +524,11 @@ class AbstractImageManager(ABC):
 
     # ── Internals ────────────────────────────────────────────────
 
-    def _panel_path(self, rec: ImageRecord) -> Path:
-        slug = rec.screen_image_config_slug or "unknown"
-        return self._images_dir / f"{rec.name_hash}_{slug}{_PANEL_SUFFIX}"
+    def _panel_path(self, name_hash: str, slug: str) -> Path:
+        return self._images_dir / f"{name_hash}_{slug}{_PANEL_SUFFIX}"
 
-    def _preview_path(self, rec: ImageRecord) -> Path:
-        slug = rec.screen_image_config_slug or "unknown"
-        return self._images_dir / f"{rec.name_hash}_{slug}{_PREVIEW_SUFFIX}"
+    def _preview_path(self, name_hash: str, slug: str) -> Path:
+        return self._images_dir / f"{name_hash}_{slug}{_PREVIEW_SUFFIX}"
 
     def _thumb_path(self, rec: ImageRecord) -> Path:
         return self._images_dir / f"{rec.name_hash}{_THUMB_SUFFIX}"
@@ -541,16 +542,22 @@ class AbstractImageManager(ABC):
         except (json.JSONDecodeError, OSError) as e:
             print(f"  Warning: failed to load {_DB_FILENAME}: {e} (starting empty)")
             return
+        if data.get("version") != _DB_VERSION:
+            print(
+                f"  DB version mismatch (got {data.get('version')!r}, need {_DB_VERSION}) "
+                f"— wiping cache DB; images will be re-rendered on next sync"
+            )
+            return
         for name, rec_dict in data.get("images", {}).items():
             try:
-                self._records[name] = _record_from_dict(rec_dict)
+                self._records[name] = record_from_dict(rec_dict)
             except (KeyError, TypeError, ValueError) as e:
                 print(f"  Warning: skipping malformed db entry {name!r}: {e}")
 
     def _save_db(self) -> None:
         payload = {
-            "version": 2,
-            "images": {n: _record_to_dict(r) for n, r in self._records.items()},
+            "version": _DB_VERSION,
+            "images": {n: record_to_dict(r) for n, r in self._records.items()},
         }
         _atomic_write_json(self._db_path, payload)
 
@@ -566,7 +573,6 @@ class AbstractImageManager(ABC):
             added_at=time.time(),
             convert_status="failed" if dim_err else "pending",
             convert_error=dim_err,
-            screen_image_config_slug=None,
             image_width=w,
             image_height=h,
         )
@@ -624,7 +630,8 @@ class AbstractImageManager(ABC):
                         original_mtime=st.st_mtime,
                         convert_status="failed" if dim_err else "pending",
                         convert_error=dim_err,
-                        screen_image_config_slug=None,
+                        landscape_image_config_slug=None,
+                        portrait_image_config_slug=None,
                         image_width=w,
                         image_height=h,
                     )
@@ -634,12 +641,13 @@ class AbstractImageManager(ABC):
             if existing.convert_status == "ok":
                 screen_cfg = self._classifier.screen_config_for(src_path, existing.original_sha1)
                 predicted_slug = screen_cfg.cache_slug()
-                if existing.screen_image_config_slug != predicted_slug:
+                if slug_for(existing, self._config.orientation) != predicted_slug:
                     self._records[name] = replace(
                         existing,
                         convert_status="pending",
                         convert_error=None,
-                        screen_image_config_slug=None,
+                        landscape_image_config_slug=None,
+                        portrait_image_config_slug=None,
                     )
                     print(f"  ScreenImageConfig slug changed for {name!r}: re-converting")
 
@@ -668,7 +676,7 @@ class AbstractImageManager(ABC):
         if not self._images_dir.exists():
             return
 
-        # Map name_hash → current screen_image_config_slug for Rule 1.
+        # Map name_hash → record for Rule 1 (both orientation slugs checked).
         known_hashes: set[str] = {rec.name_hash for rec in self._records.values()}
         records_by_hash: dict[str, ImageRecord] = {
             rec.name_hash: rec for rec in self._records.values()
@@ -702,13 +710,17 @@ class AbstractImageManager(ABC):
             if f.name.endswith(_THUMB_SUFFIX):
                 continue
 
-            # Rule 1 (auto_clear only): embedded slug ≠ current slug.
+            # Rule 1 (auto_clear only): embedded slug not in either orientation's valid slug.
             if auto_clear:
                 rec = records_by_hash.get(name_hash)
-                if rec is not None and rec.screen_image_config_slug:
-                    expected_name_panel = f"{name_hash}_{rec.screen_image_config_slug}{_PANEL_SUFFIX}"
-                    expected_name_preview = f"{name_hash}_{rec.screen_image_config_slug}{_PREVIEW_SUFFIX}"
-                    if f.name not in (expected_name_panel, expected_name_preview):
+                if rec is not None:
+                    valid_names = {
+                        f"{name_hash}_{s}{suffix}"
+                        for s in (rec.landscape_image_config_slug, rec.portrait_image_config_slug)
+                        if s
+                        for suffix in (_PANEL_SUFFIX, _PREVIEW_SUFFIX)
+                    }
+                    if valid_names and f.name not in valid_names:
                         self._scrub_file(f, "stale slug")
 
     def _scrub_file(self, f: Path, reason: str) -> None:
@@ -727,7 +739,8 @@ class AbstractImageManager(ABC):
                     rec,
                     convert_status="failed",
                     convert_error=error,
-                    screen_image_config_slug=None,
+                    landscape_image_config_slug=None,
+                    portrait_image_config_slug=None,
                 )
                 self._progress = replace(
                     self._progress, done=self._progress.done + 1,
@@ -784,18 +797,66 @@ class AbstractImageManager(ABC):
                 tuple(asdict(b) for b in screen_cfg.clahe_keepout_bboxes) if screen_cfg.clahe_keepout_bboxes else None,
             )
             print(f"  Submitted {name!r} for dithering")
-            self._dispatch_render(name, expected_slug, render_args, time.monotonic())
+            self._dispatch_render(
+                name, expected_slug, screen_cfg.orientation, render_args, time.monotonic(),
+                update_status=True,
+            )
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             print(f"  Failed to submit {name!r}: {err}")
             self._mark_as_failed(name, err)
 
+    def _set_orientation_slug(self, name: str, orientation: Orientation, slug: str) -> None:
+        """Update landscape_image_config_slug or portrait_image_config_slug in the record."""
+        with self._db_lock:
+            cur = self._records.get(name)
+            if cur is None:
+                return
+            if orientation == Orientation.LANDSCAPE:
+                self._records[name] = replace(cur, landscape_image_config_slug=slug)
+            else:
+                self._records[name] = replace(cur, portrait_image_config_slug=slug)
+            self._save_db()
+
+    def _render_orientation(self, name: str, cfg: ScreenImageConfig) -> None:
+        """Dispatch a render for an alternate orientation without lifecycle side-effects.
+
+        Checks the cache first — if the panel file already exists the slug is
+        recorded and no render is dispatched.  The done callback writes files
+        and updates the orientation slug only; convert_status and _progress are
+        not touched.
+        """
+        with self._db_lock:
+            rec = self._records.get(name)
+        if rec is None:
+            return
+        slug = cfg.cache_slug()
+        panel_path = self._panel_path(rec.name_hash, slug)
+        if panel_path.exists():
+            self._set_orientation_slug(name, cfg.orientation, slug)
+            return
+        render_args = (
+            str(self._upload_dir / name),
+            asdict(cfg.image_config),
+            cfg.orientation,
+            cfg.crop_to_fill_threshold,
+            tuple(asdict(b) for b in cfg.clahe_keepout_bboxes) if cfg.clahe_keepout_bboxes else None,
+        )
+        print(f"  Submitted {name!r} for dithering ({cfg.orientation})")
+        self._dispatch_render(
+            name, slug, cfg.orientation, render_args, time.monotonic(),
+            update_status=False,
+        )
+
     def _on_render_done(
         self,
         name: str,
         expected_slug: str,
+        orientation: Orientation,
         future: concurrent.futures.Future,
         t0: float,
+        *,
+        update_status: bool = True,
     ) -> None:
         """Called when a render finishes.
 
@@ -808,47 +869,65 @@ class AbstractImageManager(ABC):
             conversion_seconds = time.monotonic() - t0
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
-            print(f"  Conversion failed for {name!r}: {err}")
-            traceback.print_exc()
-            with self._db_lock:
-                self._inflight.discard(name)
-                cur = self._records.get(name)
-                if cur is not None:
-                    self._records[name] = replace(
-                        cur, convert_status="failed", convert_error=err,
-                        screen_image_config_slug=None,
-                    )
-                done = self._progress.done + 1
-                total = self._progress.total
-                self._progress = replace(self._progress, done=done)
-                if done >= total:
-                    self._log_batch_complete()
-                self._save_db()
+            if update_status:
+                print(f"  Conversion failed for {name!r}: {err}")
+                traceback.print_exc()
+                with self._db_lock:
+                    self._inflight.discard(name)
+                    cur = self._records.get(name)
+                    if cur is not None:
+                        self._records[name] = replace(
+                            cur, convert_status="failed", convert_error=err,
+                            landscape_image_config_slug=None,
+                            portrait_image_config_slug=None,
+                        )
+                    done = self._progress.done + 1
+                    total = self._progress.total
+                    self._progress = replace(self._progress, done=done)
+                    if done >= total:
+                        self._log_batch_complete()
+                    self._save_db()
+            else:
+                print(f"  Alt-orientation render failed for {name!r} ({orientation}): {err}")
             return
 
         with self._db_lock:
-            self._inflight.discard(name)
             cur = self._records.get(name)
             if cur is None:
                 # Image was removed mid-conversion; discard the work.
+                if update_status:
+                    self._inflight.discard(name)
                 return
-            new_rec = replace(
-                cur,
-                convert_status="ok",
-                convert_error=None,
-                screen_image_config_slug=expected_slug,
-                last_conversion_seconds=conversion_seconds,
-            )
-            self._records[name] = new_rec
+            name_hash = cur.name_hash
+            # Write files to disk.
             self._images_dir.mkdir(parents=True, exist_ok=True)
-            self._panel_path(new_rec).write_bytes(panel_bytes)
-            self._preview_path(new_rec).write_bytes(preview_bytes)
-            done = self._progress.done + 1
-            total = self._progress.total
-            self._progress = replace(self._progress, done=done)
-            print(f"  Dithered {name!r} ({done}/{total})")
-            if done >= total:
-                self._log_batch_complete()
+            self._panel_path(name_hash, expected_slug).write_bytes(panel_bytes)
+            self._preview_path(name_hash, expected_slug).write_bytes(preview_bytes)
+            # Update the orientation slug in the record.
+            if orientation == Orientation.LANDSCAPE:
+                slug_update = {"landscape_image_config_slug": expected_slug}
+            else:
+                slug_update = {"portrait_image_config_slug": expected_slug}
+
+            if update_status:
+                self._inflight.discard(name)
+                new_rec = replace(
+                    cur,
+                    convert_status="ok",
+                    convert_error=None,
+                    last_conversion_seconds=conversion_seconds,
+                    **slug_update,
+                )
+                self._records[name] = new_rec
+                done = self._progress.done + 1
+                total = self._progress.total
+                self._progress = replace(self._progress, done=done)
+                print(f"  Dithered {name!r} ({done}/{total})")
+                if done >= total:
+                    self._log_batch_complete()
+            else:
+                self._records[name] = replace(cur, **slug_update)
+                print(f"  Dithered {name!r} ({orientation})")
             self._save_db()
 
     def _log_batch_complete(self) -> None:

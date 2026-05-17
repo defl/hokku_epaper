@@ -10,6 +10,7 @@ import concurrent.futures
 
 from hokku_server.app_config import AppConfig
 from hokku_server.image_manager_abstract import AbstractImageManager
+from hokku_server.orientation import Orientation
 from hokku_server.render_worker import render_one
 
 
@@ -39,13 +40,16 @@ class MultiThreadedImageManager(AbstractImageManager):
         self,
         name: str,
         expected_slug: str,
+        orientation: Orientation,
         render_args: tuple,
         t0: float,
+        *,
+        update_status: bool = True,
     ) -> None:
         future = self._executor.submit(render_one, *render_args)
         future.add_done_callback(
-            lambda f, _n=name, _s=expected_slug, _t=t0:
-                self._on_render_done(_n, _s, f, _t)
+            lambda f, _n=name, _s=expected_slug, _o=orientation, _t=t0, _us=update_status:
+                self._on_render_done(_n, _s, _o, f, _t, update_status=_us)
         )
 
     def shutdown(self) -> None:

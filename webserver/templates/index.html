@@ -2053,7 +2053,7 @@ function renderScreens(screens) {
     html += '</ul></div>';
   }
 
-  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Requests</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th></th></tr>';
+  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Requests</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th>Orientation</th><th></th></tr>';
   names.forEach(name => {
     const s = screens[name];
     const late = overdueMinutes(s);
@@ -2068,6 +2068,12 @@ function renderScreens(screens) {
     const lastImgThumb = s.last_served
       ? `<a href="/hokku/api/original/${encodeURIComponent(s.last_served)}" target="_blank" title="${escapeHtml(s.last_served)}" style="display:block;line-height:0;"><img src="/hokku/api/thumbnail/${encodeURIComponent(s.last_served)}" alt="${escapeHtml(s.last_served)}" style="height:32px;width:auto;border-radius:2px;border:1px solid var(--bamboo);" loading="lazy" onerror="this.style.display='none'"></a>`
       : '<span style="color:var(--bamboo)">—</span>';
+    const override = s.orientation_override;
+    const orientationCell = `<select class="orientation-select" onchange="setScreenOrientation('${safeName}', this.value)">
+      <option value=""          ${!override              ? 'selected' : ''}>Default</option>
+      <option value="landscape" ${override==='landscape' ? 'selected' : ''}>Landscape</option>
+      <option value="portrait"  ${override==='portrait'  ? 'selected' : ''}>Portrait</option>
+    </select>`;
     html += `<tr${rowClass}>
       <td>${name}</td>
       <td>${s.ip || '-'}</td>
@@ -2076,6 +2082,7 @@ function renderScreens(screens) {
       <td>${s.last_seen || '-'}</td>
       <td>${formatNextUpdate(s.next_update_at)}</td>
       <td>${lastImgThumb}</td>
+      <td>${orientationCell}</td>
       <td><div style="display:flex;gap:6px;align-items:center;">${detailsBtn}${removeBtn}</div></td>
     </tr>`;
   });
@@ -2102,6 +2109,23 @@ async function removeScreen(name) {
     renderScreens(lastScreens);
   } catch (e) {
     alert('Failed to remove screen: ' + e.message);
+  }
+}
+
+async function setScreenOrientation(name, value) {
+  const orientation = value === '' ? null : value;
+  try {
+    const r = await fetch(`/hokku/api/screens/${encodeURIComponent(name)}/config`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({orientation}),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    // Update local state so the dropdown stays correct on the next renderScreens().
+    if (lastScreens[name]) lastScreens[name].orientation_override = orientation;
+  } catch (e) {
+    alert('Failed to set orientation: ' + e.message);
+    renderScreens(lastScreens);
   }
 }
 

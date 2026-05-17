@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from hokku_server.image_manager_abstract import AbstractImageManager
+from hokku_server.orientation import Orientation
+from hokku_server.screen_config import ScreenConfig
 from hokku_server.screen_headers import battery_percent, parse_battery_header
 
 
@@ -89,6 +91,7 @@ class ServeScheduler:
         self._lock = threading.RLock()
         self._stats: dict[str, ServeStats] = {}
         self._screens: dict[str, ScreenTelemetryEntry] = {}
+        self._screen_configs: dict[str, ScreenConfig] = {}
         self._last_served: tuple[str, float] | None = None
         self._next_name: str | None = None
         self._load()
@@ -249,7 +252,7 @@ class ServeScheduler:
             return dict(self._screens)
 
     def remove_screen(self, name: str) -> None:
-        """Remove a screen's telemetry and serve-stats records.
+        """Remove a screen's telemetry, serve-stats, and config records.
 
         Idempotent — silently does nothing if the name is not known.
         The screen can re-register itself the next time it connects.
@@ -257,8 +260,37 @@ class ServeScheduler:
         with self._lock:
             self._screens.pop(name, None)
             self._stats.pop(name, None)
+            self._screen_configs.pop(name, None)
             if self._last_served and self._last_served[0] == name:
                 self._last_served = None
+            self._save()
+
+    # ── Per-screen orientation config ────────────────────────────
+
+    def get_screen_orientation_override(self, name: str) -> Orientation | None:
+        """Return this screen's orientation override, or None if following global."""
+        with self._lock:
+            cfg = self._screen_configs.get(name)
+            return cfg.orientation_override if cfg else None
+
+    def get_screen_orientation(self, name: str) -> Orientation:
+        """Always returns the effective orientation for a screen.
+
+        Returns the per-screen override if one is set; otherwise falls back
+        to the global server orientation from AppConfig.
+        """
+        with self._lock:
+            cfg = self._screen_configs.get(name)
+            override = cfg.orientation_override if cfg else None
+        return override if override is not None else self._manager.config.orientation
+
+    def set_screen_orientation(self, name: str, orientation: Orientation | None) -> None:
+        """Set or clear the orientation override for a screen."""
+        with self._lock:
+            if orientation is None:
+                self._screen_configs.pop(name, None)
+            else:
+                self._screen_configs[name] = ScreenConfig(orientation_override=orientation)
             self._save()
 
     # ── Internals ────────────────────────────────────────────────
@@ -337,6 +369,11 @@ class ServeScheduler:
                 self._screens[name] = _telemetry_from_dict(blob)
             except (KeyError, TypeError, ValueError) as e:
                 print(f"  Warning: skipping malformed telemetry entry {name!r}: {e}")
+        for name, blob in data.get("screen_configs", {}).items():
+            try:
+                self._screen_configs[name] = ScreenConfig.from_dict(blob)
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"  Warning: skipping malformed screen config for {name!r}: {e}")
         ls = data.get("last_served")
         if isinstance(ls, dict) and "name" in ls and "served_at" in ls:
             try:
@@ -357,5 +394,6 @@ class ServeScheduler:
             ),
             "by_name": {n: _stats_to_dict(s) for n, s in self._stats.items()},
             "screens": {n: _telemetry_to_dict(t) for n, t in self._screens.items()},
+            "screen_configs": {n: c.to_dict() for n, c in self._screen_configs.items()},
         }
         _atomic_write_json(self._db_path, payload)

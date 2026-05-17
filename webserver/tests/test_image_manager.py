@@ -39,12 +39,17 @@ def test_register_and_convert(app_config: AppConfig, image_manager_factory, make
     assert [r.name for r in records] == ["a.png", "b.png"]
     assert all(r.convert_status == "ok" for r in records)
     assert all(r.original_sha1 for r in records)
+    from hokku_server.orientation import Orientation
     expected_slug = ScreenImageConfig(
         image_config=app_config.image_config_default,
         orientation=app_config.orientation,
         crop_to_fill_threshold=app_config.crop_to_fill_threshold,
     ).cache_slug()
-    assert all(r.screen_image_config_slug == expected_slug for r in records)
+    orientation = app_config.orientation
+    if orientation == Orientation.LANDSCAPE:
+        assert all(r.landscape_image_config_slug == expected_slug for r in records)
+    else:
+        assert all(r.portrait_image_config_slug == expected_slug for r in records)
 
 
 def test_panel_bytes_after_sync(app_config: AppConfig, image_manager_factory, make_test_image):
@@ -98,7 +103,8 @@ def test_remove_clears_cache(app_config: AppConfig, image_manager_factory, make_
     mgr.wait_for_idle()
     rec = mgr.status("a.png")
     assert rec is not None
-    panel_path = Path(app_config.cache_dir) / "images" / f"{rec.name_hash}_{rec.screen_image_config_slug}_panel.bin"
+    from hokku_server.image_record import slug_for
+    panel_path = Path(app_config.cache_dir) / "images" / f"{rec.name_hash}_{slug_for(rec, app_config.orientation)}_panel.bin"
     assert panel_path.exists()
 
     mgr.remove("a.png")
@@ -199,9 +205,9 @@ def test_inflight_prevents_double_submission(
     submitted: list[str] = []
     original = mgr._dispatch_render
 
-    def counting(name, expected_slug, render_args, t0):
+    def counting(name, expected_slug, orientation, render_args, t0, *, update_status=True):
         submitted.append(name)
-        return original(name, expected_slug, render_args, t0)
+        return original(name, expected_slug, orientation, render_args, t0, update_status=update_status)
 
     monkeypatch.setattr(mgr, "_dispatch_render", counting)
 
@@ -210,7 +216,8 @@ def test_inflight_prevents_double_submission(
     mgr.sync()   # a.png is now 'ok'; should NOT resubmit
     mgr.wait_for_idle()
 
-    assert submitted == ["a.png"], f"a.png should be submitted exactly once, got {submitted}"
+    # Both orientations are dispatched per image; the second sync() must not re-submit.
+    assert submitted == ["a.png", "a.png"], f"a.png should be submitted exactly twice (both orientations), got {submitted}"
 
 
 def test_two_images_both_succeed(app_config: AppConfig, image_manager_factory, make_test_image):

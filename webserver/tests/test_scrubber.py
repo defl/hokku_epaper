@@ -34,8 +34,9 @@ def _images_dir(mgr: AbstractImageManager) -> Path:
 
 
 def _slug_for(mgr: AbstractImageManager, name: str) -> str:
-    """Return the current screen_image_config_slug for a registered image."""
-    return mgr._records[name].screen_image_config_slug
+    """Return the global-orientation slug for a registered image."""
+    from hokku_server.image_record import slug_for as _sf
+    return _sf(mgr._records[name], mgr._config.orientation)
 
 
 def _name_hash(mgr: AbstractImageManager, name: str) -> str:

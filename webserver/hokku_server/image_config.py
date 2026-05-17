@@ -4,12 +4,10 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field, fields, replace
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal
 
 from hokku_server.dither_config import DitherConfig
-
-
-Orientation: TypeAlias = Literal["landscape", "portrait"]
+from hokku_server.orientation import Orientation  # noqa: F401 (re-exported)
 
 
 @dataclass(frozen=True)
