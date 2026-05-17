@@ -421,7 +421,11 @@ def test_clahe_keepout_face_l_differs_from_no_keepout():
     Both branches go through *identical* pipeline steps; the only difference is
     whether the face L* slice is restored after CLAHE.  If keepout is working:
       - face L* with-keepout  ≠  face L* without-keepout   (CLAHE was undone)
-      - face L* with-keepout  =  face L* no-clahe           (same as skipping CLAHE)
+      - face interior L* with-keepout  ≈  face L* no-clahe  (same as skipping CLAHE)
+
+    The interior (inset by INNER px on each side) is used for the no-clahe
+    comparison because Gaussian feathering blends the outer edge pixels — only
+    the interior is guaranteed to be fully protected (mask ≈ 1.0).
     """
     img = _low_contrast_grey()
     fx, fy, fw, fh = 30, 25, 60, 50
@@ -433,7 +437,6 @@ def test_clahe_keepout_face_l_differs_from_no_keepout():
 
     L_keepout    = _extract_L(out_keepout,    fx, fy, fw, fh)
     L_no_keepout = _extract_L(out_no_keepout, fx, fy, fw, fh)
-    L_no_clahe   = _extract_L(out_no_clahe,   fx, fy, fw, fh)
 
     # keepout should differ from no-keepout — CLAHE changed L* in the no-keepout branch
     delta_vs_no_keepout = int(np.abs(L_keepout.astype(int) - L_no_keepout.astype(int)).max())
@@ -442,11 +445,16 @@ def test_clahe_keepout_face_l_differs_from_no_keepout():
         f"(got max delta={delta_vs_no_keepout}); keepout does not appear to be working."
     )
 
-    # keepout should match no-CLAHE — the face was protected from CLAHE.
+    # Interior of face should match no-CLAHE — protected from CLAHE even with feathering.
+    # Gaussian feathering blends the edge pixels; at INNER px inside the bbox the mask
+    # is ≈1.0 (erf(INNER/(√2·σ)) ≈ 1 for the small σ the 120×100 test canvas gives).
     # Small tolerance (≤2) for uint8 Lab round-trip rounding (RGB→Lab→RGB).
-    delta_vs_no_clahe = int(np.abs(L_keepout.astype(int) - L_no_clahe.astype(int)).max())
+    INNER = 5
+    L_keepout_inner = _extract_L(out_keepout,  fx + INNER, fy + INNER, fw - 2 * INNER, fh - 2 * INNER)
+    L_no_clahe_inner = _extract_L(out_no_clahe, fx + INNER, fy + INNER, fw - 2 * INNER, fh - 2 * INNER)
+    delta_vs_no_clahe = int(np.abs(L_keepout_inner.astype(int) - L_no_clahe_inner.astype(int)).max())
     assert delta_vs_no_clahe <= 2, (
-        f"Face L* with-keepout should equal no-CLAHE result (±2 for round-trip rounding); "
+        f"Face interior L* with-keepout should equal no-CLAHE result (±2 for round-trip rounding); "
         f"got max delta={delta_vs_no_clahe}.  The keepout restore is not working correctly."
     )
 
@@ -487,16 +495,19 @@ def test_clahe_keepout_multiple_bboxes():
     out_no_keepout = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=None)
     out_no_clahe   = _apply_prepare_enhancements(img.copy(), replace(_CLAHE_CFG, clahe_clip_limit=0.0))
 
+    INNER = 5
     for label, (bx, by, bw, bh) in [("box1", box1), ("box2", box2)]:
         L_keepout    = _extract_L(out_keepout,    bx, by, bw, bh)
         L_no_keepout = _extract_L(out_no_keepout, bx, by, bw, bh)
-        L_no_clahe   = _extract_L(out_no_clahe,   bx, by, bw, bh)
 
         assert int(np.abs(L_keepout.astype(int) - L_no_keepout.astype(int)).max()) > 5, (
             f"{label}: keepout should differ from no-keepout (CLAHE not undone)"
         )
-        assert int(np.abs(L_keepout.astype(int) - L_no_clahe.astype(int)).max()) <= 2, (
-            f"{label}: keepout should match no-CLAHE result (±2 round-trip tolerance)"
+        # Check interior only — feathered edges may be partially blended.
+        L_keepout_inner  = _extract_L(out_keepout,  bx + INNER, by + INNER, bw - 2 * INNER, bh - 2 * INNER)
+        L_no_clahe_inner = _extract_L(out_no_clahe, bx + INNER, by + INNER, bw - 2 * INNER, bh - 2 * INNER)
+        assert int(np.abs(L_keepout_inner.astype(int) - L_no_clahe_inner.astype(int)).max()) <= 2, (
+            f"{label}: keepout interior should match no-CLAHE result (±2 round-trip tolerance)"
         )
 
 

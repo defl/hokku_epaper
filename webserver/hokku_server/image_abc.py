@@ -155,11 +155,23 @@ def _apply_prepare_enhancements(
             tileGridSize=(8, 8),
         )
         if keepout_bboxes_canvas:
-            saved = [(fx, fy, fw, fh, lab[fy:fy + fh, fx:fx + fw, 0].copy())
-                     for fx, fy, fw, fh in keepout_bboxes_canvas]
-            lab[:, :, 0] = clahe.apply(lab[:, :, 0])
-            for fx, fy, fw, fh, face_L in saved:
-                lab[fy:fy + fh, fx:fx + fw, 0] = face_L
+            original_L = lab[:, :, 0].copy()
+            clahe_L = clahe.apply(lab[:, :, 0])
+            feather = cfg.clahe_keepout_feather
+            if feather > 0.0:
+                canvas_w, canvas_h = canvas.size
+                sigma = min(canvas_w, canvas_h) * feather
+                mask = np.zeros(lab.shape[:2], dtype=np.float32)
+                for fx, fy, fw, fh in keepout_bboxes_canvas:
+                    if fw > 0 and fh > 0:
+                        mask[fy:fy + fh, fx:fx + fw] = 1.0
+                mask = cv2.GaussianBlur(mask, (0, 0), sigma)
+                blended = original_L.astype(np.float32) * mask + clahe_L.astype(np.float32) * (1.0 - mask)
+                lab[:, :, 0] = np.clip(blended, 0, 255).astype(np.uint8)
+            else:
+                lab[:, :, 0] = clahe_L
+                for fx, fy, fw, fh in keepout_bboxes_canvas:
+                    lab[fy:fy + fh, fx:fx + fw, 0] = original_L[fy:fy + fh, fx:fx + fw]
         else:
             lab[:, :, 0] = clahe.apply(lab[:, :, 0])
         canvas = Image.fromarray(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB))

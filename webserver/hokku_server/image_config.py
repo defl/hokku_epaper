@@ -34,6 +34,7 @@ class ImageConfig:
     vivid_chroma_high: float
     prepare_midtone: float
     clahe_clip_limit: float
+    clahe_keepout_feather: float  # sigma = min(canvas_w, canvas_h) * this; 0 = hard edge
     prepare_usm_radius: float
     prepare_usm_amount: int
     dither_noise: float

@@ -37,6 +37,7 @@ def _default_image_config() -> ImageConfig:
         vivid_chroma_high=15.0,
         prepare_midtone=1.0,
         clahe_clip_limit=0.0,
+        clahe_keepout_feather=0.0,
         prepare_usm_radius=1.0,
         prepare_usm_amount=120,
         dither_noise=0.0,

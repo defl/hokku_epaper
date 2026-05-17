@@ -1214,6 +1214,8 @@ const DITHER_HELP = {
 
   clahe: `<p><strong>Local contrast (CLAHE)</strong> enhances contrast independently within small tiles across the image, rather than globally. This pulls out detail in both shadows and highlights at the same time — useful for e-ink where the limited palette means global contrast adjustments often sacrifice one end to fix the other.</p><p>0 disables it entirely. Values of 1.5–2.5 add visible depth to portraits and landscapes. Very high values (above 3) can produce a gritty, over-processed look.</p>`,
 
+  clahe_keepout_feather: `<p><strong>Keepout feather</strong> softens the boundary between the face-protected region and the CLAHE-enhanced surroundings. Without feathering (0) the transition is a sharp line; higher values blend the two zones with a Gaussian gradient.</p><p>The value is a fraction of the shorter canvas side used as the blur sigma — 0.015 gives a ~18 px sigma at full resolution. 0 = hard edge (original behaviour). 0.02–0.03 gives a wider, softer blend.</p>`,
+
   usm_amount: `<p><strong>Sharpening amount</strong> — how strongly edges are enhanced. 0 means no sharpening. 100 is moderate; 150–200 gives noticeably crisper edges.</p><p>Recovers detail softened when a photo is downscaled to the panel's resolution. Above 250 starts producing visible halos around hard edges.</p>`,
 
   usm_radius: `<p><strong>Sharpening radius</strong> — the size of the detail being sharpened, in pixels.</p><p>Small values (0.5–1.0) sharpen fine texture and grain. Larger values (1.5–3.0) sharpen broader edges and outlines. For most photos 1.0 is a good default; increase to 1.5–2.0 for portraits where facial feature definition matters.</p>`,
@@ -1531,6 +1533,7 @@ function renderDitherPanel(panelId) {
     fn('Brightness', ['prepare_brightness'], {min: 0.1, max: 3, step: 0.05, help: 'brightness'}) +
     fn('Contrast', ['prepare_contrast'], {min: 0.1, max: 3, step: 0.05, help: 'contrast'}) +
     fn('Local contrast (CLAHE)', ['clahe_clip_limit'], {min: 0, max: 5, step: 0.25, help: 'clahe'}) +
+    fn('Keepout feather', ['clahe_keepout_feather'], {min: 0, max: 0.05, step: 0.001, help: 'clahe_keepout_feather'}) +
     fn('Sharpening amount', ['prepare_usm_amount'], {min: 0, max: 400, step: 10, help: 'usm_amount'}) +
     fn('Sharpening radius', ['prepare_usm_radius'], {min: 0.3, max: 5, step: 0.1, help: 'usm_radius'}) +
     fn('Pre-dither noise', ['dither_noise'], {min: 0, max: 10, step: 0.5, help: 'dither_noise'})

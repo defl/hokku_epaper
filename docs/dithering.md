@@ -134,6 +134,7 @@ class ImageConfig:
     # ── post-release additions (lenient: old configs load with defaults) ──────
     prepare_midtone: float = 1.0       # >1 lifts mid-tones independently of gamma
     clahe_clip_limit: float = 0.0      # local contrast (CLAHE); 0 = off, 2–4 typical
+    clahe_keepout_feather: float = 0.015  # Gaussian feather at keepout boundary; 0 = hard edge
     prepare_usm_radius: float = 1.0    # unsharp mask radius (px)
     prepare_usm_amount: int = 120      # unsharp mask strength (percent)
     dither_noise: float = 0.0          # pre-dither Gaussian noise std (RGB units)
@@ -555,6 +556,14 @@ Runs before the canvas is rotated or handed to the dither strategy.
    simultaneously. **Note:** this stage trades pixel-level hue accuracy for
    structural legibility — see `image_quality.md §3.8` for the implication on
    metrics.
+
+   When face keepout bboxes are present (`clahe_keepout_bboxes_canvas` non-empty),
+   the face regions are protected from CLAHE. With `clahe_keepout_feather = 0` the
+   original L\* channel is hard-pasted back after CLAHE (sharp boundary). With
+   `clahe_keepout_feather > 0` a float32 mask (1 inside bboxes, 0 outside) is
+   Gaussian-blurred with `sigma = min(canvas_w, canvas_h) * clahe_keepout_feather`,
+   then used to linearly blend original and CLAHE L\* — eliminating the hard line
+   at the face boundary.
 6. **Unsharp mask** — `PIL.ImageFilter.UnsharpMask(radius=prepare_usm_radius,
    percent=prepare_usm_amount, threshold=3)`. Replaces the old fixed PIL
    `ImageEnhance.Sharpness` kernel. The `threshold=3` suppresses noise
