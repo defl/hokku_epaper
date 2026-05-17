@@ -16,7 +16,7 @@ from hokku_server.image_manager_single import SingleThreadedImageManager
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 # Suffixes as defined in image_manager
-_PANEL = "_panel.bin"
+_PANEL = "_panel.bin.zst"
 _PREVIEW = "_preview.png"
 _THUMB = "_thumb.jpg"
 
@@ -64,6 +64,27 @@ def test_scrub_always_removes_unknown_suffix(app_config, make_test_image):
     assert not junk.exists(), "Unknown-suffix file should be scrubbed"
 
 
+def test_scrub_old_panel_bin_requeues_image(app_config, make_test_image):
+    """Upgrade path: old uncompressed _panel.bin files are scrubbed and their
+    images are re-queued so the next sync re-renders them compressed."""
+    mgr = SingleThreadedImageManager(app_config)
+    _register_ok(mgr, "a.png", make_test_image)
+    assert mgr.status("a.png").convert_status == "ok"
+
+    # Plant an old-format uncompressed panel file for the registered image.
+    h = _name_hash(mgr, "a.png")
+    slug = _slug_for(mgr, "a.png")
+    old_panel = _images_dir(mgr) / f"{h}_{slug}_panel.bin"
+    _write(old_panel)
+
+    mgr.sync()
+
+    assert not old_panel.exists(), "Old _panel.bin file should be scrubbed"
+    assert mgr.status("a.png").convert_status == "pending", (
+        "Image should be re-queued after old panel file is scrubbed"
+    )
+
+
 # ── always: orphan (hash unknown) ────────────────────────────────────────────
 
 def test_scrub_always_removes_orphan_hash(app_config, make_test_image):
@@ -105,7 +126,7 @@ def test_scrub_always_keeps_current_slug_files(app_config, make_test_image):
 
     assert thumb.exists(), "Thumbnail should exist after thumbnail_jpg() call"
     mgr.sync()
-    assert panel.exists(),   "Current-slug panel.bin should be kept"
+    assert panel.exists(),   "Current-slug panel.bin.zst should be kept"
     assert preview.exists(), "Current-slug preview.png should be kept"
     assert thumb.exists(),   "Thumbnail should survive scrub"
 
@@ -263,7 +284,7 @@ def test_clear_caches_removes_panel_preview_thumb(app_config, make_test_image):
 
     mgr.clear_caches()
 
-    assert not panel.exists(),   "clear_caches should remove panel.bin"
+    assert not panel.exists(),   "clear_caches should remove panel.bin.zst"
     assert not preview.exists(), "clear_caches should remove preview.png"
     assert not thumb.exists(),   "clear_caches should remove thumbnail"
 

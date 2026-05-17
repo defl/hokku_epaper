@@ -104,7 +104,7 @@ def test_remove_clears_cache(app_config: AppConfig, image_manager_factory, make_
     rec = mgr.status("a.png")
     assert rec is not None
     from hokku_server.image_record import slug_for
-    panel_path = Path(app_config.cache_dir) / "images" / f"{rec.name_hash}_{slug_for(rec, app_config.orientation)}_panel.bin"
+    panel_path = Path(app_config.cache_dir) / "images" / f"{rec.name_hash}_{slug_for(rec, app_config.orientation)}_panel.bin.zst"
     assert panel_path.exists()
 
     mgr.remove("a.png")
@@ -151,7 +151,7 @@ def test_orphan_scrubbed(app_config: AppConfig, image_manager_factory, make_test
     mgr.wait_for_idle()
 
     # Plant an orphan file in cache
-    orphan = Path(app_config.cache_dir) / "images" / "deadbeefdeadbe_xx_panel.bin"
+    orphan = Path(app_config.cache_dir) / "images" / "deadbeefdeadbe_xx_panel.bin.zst"
     orphan.write_bytes(b"x" * TOTAL_BYTES)
 
     mgr.sync()

@@ -19,6 +19,7 @@ dependencies = [
     "pillow-jxl-plugin>=0.1",
     "psutil>=5.9",
     "opencv-python-headless>=4.7",
+    "zstd",
 ]
 
 [project.scripts]

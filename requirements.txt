@@ -12,6 +12,7 @@ pillow-jxl-plugin    # JPEG XL support
 # Web server
 Flask
 zeroconf
+zstd                 # panel cache compression
 
 # Firmware tools
 esptool

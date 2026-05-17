@@ -19,6 +19,7 @@ import shutil
 import threading
 import time
 import traceback
+import zstd
 from abc import ABC, abstractmethod
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -43,7 +44,7 @@ from hokku_server.screen_image_config import ScreenImageConfig
 _DB_FILENAME = "image_manager.json"
 _DB_VERSION = 3          # bump whenever ImageRecord schema changes; old DB is nuked on mismatch
 _IMAGES_SUBDIR = "images"
-_PANEL_SUFFIX = "_panel.bin"
+_PANEL_SUFFIX = "_panel.bin.zst"
 _PREVIEW_SUFFIX = "_preview.png"
 _THUMB_SUFFIX = "_thumb.jpg"
 _NAME_HASH_LEN = 14
@@ -340,8 +341,8 @@ class AbstractImageManager(ABC):
         if not path.exists():
             return None
         try:
-            data = path.read_bytes()
-        except OSError as e:
+            data = zstd.decompress(path.read_bytes())
+        except (OSError, Exception) as e:
             print(f"  Error reading panel file {path.name}: {e}")
             return None
         if len(data) != TOTAL_BYTES:
@@ -691,6 +692,13 @@ class AbstractImageManager(ABC):
 
             # Rule 3: unknown postfix.
             if not any(f.name.endswith(s) for s in _KNOWN_SUFFIXES):
+                if f.name.endswith("_panel.bin"):
+                    nh = f.name[:_NAME_HASH_LEN]
+                    rec = records_by_hash.get(nh)
+                    if rec is not None:
+                        self._records[rec.name] = replace(
+                            rec, convert_status="pending", convert_error=None,
+                        )
                 self._scrub_file(f, "unknown suffix")
                 continue
 
@@ -885,7 +893,7 @@ class AbstractImageManager(ABC):
             name_hash = cur.name_hash
             # Write files to disk.
             self._images_dir.mkdir(parents=True, exist_ok=True)
-            self._panel_path(name_hash, expected_slug).write_bytes(panel_bytes)
+            self._panel_path(name_hash, expected_slug).write_bytes(zstd.compress(panel_bytes, 1))
             self._preview_path(name_hash, expected_slug).write_bytes(preview_bytes)
             # Update the orientation slug in the record.
             if orientation == Orientation.LANDSCAPE:
