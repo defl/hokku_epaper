@@ -551,10 +551,16 @@ def create_app(
             if obs and obs.face_bboxes:
                 face_bboxes_orig = obs.face_bboxes
 
+        use_clahe_keepout = body.get("clahe_keepout", state.config.classifier_face_detect_clahe_keepout)
+        keepout = face_bboxes_orig if (face_bboxes_orig and use_clahe_keepout) else None
+
         print(f"  Preview: {name!r}")
         with open_image_for_render(path) as img:
             orig_w, orig_h = img.size
-            png = ImageRenderer(NumbaStreamingDither()).render_preview_png(img, cfg, state.config.orientation)
+            png = ImageRenderer(NumbaStreamingDither()).render_preview_png(
+                img, cfg, state.config.orientation,
+                clahe_keepout_bboxes_norm=keepout,
+            )
         print(f"  Preview done: {name!r}")
 
         canvas_bboxes = transform_bboxes_to_canvas_norm(

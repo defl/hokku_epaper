@@ -1702,7 +1702,7 @@ async function runDitherPreview(panelId) {
     const resp = await fetch('/hokku/api/dither/preview', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: filename, image: _getState(panelId)}),
+      body: JSON.stringify({name: filename, image: _getState(panelId), clahe_keepout: document.getElementById('face-clahe-keepout-enabled').checked}),
     });
     if (!resp.ok) {
       let err = `HTTP ${resp.status}`;
