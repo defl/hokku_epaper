@@ -51,6 +51,7 @@ _ALL_TEST_FILES: list[Path] = sorted(
 # Files expected to land in "skipped" rather than "saved".
 _EXPECTED_SKIP: dict[str, str] = {
     "CREDITS.md": "unsupported extension",
+    "NewTux.svg": "unsupported extension",
     "synth_black_10000x10000.png": "too large",
 }
 
