@@ -37,11 +37,6 @@ from werkzeug.utils import secure_filename
 import os
 import psutil
 import subprocess
-try:
-    from importlib.metadata import version as _pkg_version, PackageNotFoundError
-except ImportError:  # py<3.8 — not expected
-    _pkg_version = None
-    PackageNotFoundError = Exception
 
 from hokku_server.app_state import AppState
 from hokku_server.app_config import AppConfig
@@ -89,36 +84,25 @@ def _resolve_static_folder() -> Path:
     return candidates[0]
 
 
-def _read_version() -> str:
-    if _pkg_version is not None:
-        try:
-            return _pkg_version("hokku-server")
-        except PackageNotFoundError:
-            pass
-    # Fallback: read pyproject.toml
-    try:
-        pyproj = Path(__file__).resolve().parent.parent / "pyproject.toml"
-        for line in pyproj.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("version"):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except OSError:
-        pass
-    return "unknown"
-
-
-def _read_commit() -> str | None:
+def _read_git_describe() -> tuple[str, str | None]:
+    """Returns (git describe --tags output, full commit hash or None)."""
     try:
         repo_root = Path(__file__).resolve().parent.parent.parent
-        out = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
+        describe = subprocess.check_output(
+            ["git", "describe", "--tags", "--always"],
             cwd=str(repo_root),
             stderr=subprocess.DEVNULL,
             timeout=2,
-        )
-        return out.decode("ascii").strip() or None
+        ).decode("ascii").strip()
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_root),
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).decode("ascii").strip()
+        return describe or "unknown", commit or None
     except (OSError, subprocess.SubprocessError):
-        return None
+        return "unknown", None
 
 
 _REPO_URL = "https://github.com/defl/hokku_epaper"
@@ -141,8 +125,7 @@ def create_app(
     app = Flask(__name__, template_folder=_resolve_template_folder(template_folder))
 
     static_root = _resolve_static_folder()
-    app_version = _read_version()
-    app_commit = _read_commit()
+    git_describe, git_hash = _read_git_describe()
 
     # ── Firmware-facing ────────────────────────────────────────
 
@@ -486,8 +469,8 @@ def create_app(
             "dither_presets": presets,
             "server_time": datetime.now().isoformat(timespec="seconds"),
             "panel": {"visual_w": VISUAL_W, "visual_h": VISUAL_H, "total_bytes": TOTAL_BYTES},
-            "version": app_version,
-            "commit": app_commit,
+            "git_describe": git_describe,
+            "commit_url": f"{_REPO_URL}/commit/{git_hash}" if git_hash else None,
             "repo_url": _REPO_URL,
         })
 

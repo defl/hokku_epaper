@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import asyncio
 from playwright.async_api import async_playwright
-import json
 
 async def inspect_page():
     async with async_playwright() as p:

@@ -1128,7 +1128,7 @@
       </a>
     </div>
     <div class="right">
-      <span class="ver" id="footer-version">v—</span><span class="sep" id="footer-sep" hidden>·</span><span id="footer-commit"></span>
+      <a class="ver" id="footer-git-describe" href="#" target="_blank" rel="noopener" hidden>—</a>
     </div>
   </div>
 </footer>
@@ -2531,18 +2531,13 @@ async function loadConfig() {
 
     document.getElementById('server-time').textContent = data.server_time || '';
 
-    // Footer: version + short commit + repo link
-    const verEl = document.getElementById('footer-version');
-    const sepEl = document.getElementById('footer-sep');
-    const commitEl = document.getElementById('footer-commit');
+    // Footer: git describe hyperlink + repo link
+    const descEl = document.getElementById('footer-git-describe');
     const repoEl = document.getElementById('footer-repo');
-    if (data.version) verEl.textContent = 'v' + data.version;
-    if (data.commit) {
-      commitEl.textContent = data.commit;
-      sepEl.hidden = false;
-    } else {
-      commitEl.textContent = '';
-      sepEl.hidden = true;
+    if (data.git_describe) {
+      descEl.textContent = data.git_describe;
+      descEl.href = data.commit_url || (data.repo_url || '#');
+      descEl.hidden = false;
     }
     if (data.repo_url) repoEl.href = data.repo_url;
 
