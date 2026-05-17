@@ -298,7 +298,7 @@ def test_config_get_returns_200(bare_client):
 def test_config_get_top_level_keys(bare_client):
     client, _ = bare_client
     data = client.get("/hokku/api/config").get_json()
-    for key in ("config", "config_defaults", "dither_presets", "panel", "version"):
+    for key in ("config", "config_defaults", "dither_presets", "panel", "git_describe", "commit_url"):
         assert key in data, f"Missing key {key!r} in /api/config response"
 
 
