@@ -1,6 +1,12 @@
 #!/bin/sh
 set -e
 
+# Stop any running instance before pip operations and service restart.
+# systemctl stop is synchronous — it blocks until the process exits and the
+# port is free. Without this, the old process may still hold port 8080 when
+# debhelper starts the new one at the end of postinst.
+systemctl stop hokku-server 2>/dev/null || true
+
 # Create data directories. /var/lib/hokku is the systemd StateDirectory;
 # it gets chowned to the DynamicUser at service start. Subdirs we create
 # here end up owned by the dynamic user once they're inside that tree.
