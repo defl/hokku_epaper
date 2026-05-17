@@ -7,9 +7,12 @@ original file content in <cache_dir>/image_classifier.json.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 from PIL import Image
@@ -96,7 +99,6 @@ class ImageClassifier:
     @staticmethod
     def _is_near_grayscale(img) -> bool:
         """True iff a PIL Image is essentially monochrome."""
-        import sys
         thumb = img.copy()
         thumb.thumbnail((200, 200))
         arr = np.asarray(thumb.convert("RGB"), dtype=np.float64)
@@ -105,7 +107,7 @@ class ImageClassifier:
         p95_chroma = float(np.percentile(chroma, 95))
         is_bw = p95_chroma < GRAYSCALE_CHROMA_THRESHOLD
         status = "B&W" if is_bw else "NOT B&W"
-        print(f"  [B&W check] 95th %ile chroma = {p95_chroma:.2f} (threshold {GRAYSCALE_CHROMA_THRESHOLD}): {status}", file=sys.stderr)
+        logger.debug("[B&W check] 95th %%ile chroma = %.2f (threshold %s): %s", p95_chroma, GRAYSCALE_CHROMA_THRESHOLD, status)
         return is_bw
 
     @staticmethod

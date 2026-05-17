@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sys
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 from hokku_server.image_config import ImageConfig, _image_config_from_dict  # noqa: F401 (re-exported)
 from hokku_server.orientation import Orientation  # noqa: F401 (re-exported)
@@ -167,10 +170,9 @@ class AppConfig:
                 kwargs["orientation"] = Orientation(raw)
             except ValueError:
                 valid = [o.value for o in Orientation]
-                print(
-                    f"Error: config 'orientation' has invalid value {raw!r}; "
-                    f"must be one of {valid}",
-                    file=sys.stderr,
+                logger.error(
+                    "Config 'orientation' has invalid value %r; must be one of %s",
+                    raw, valid,
                 )
                 sys.exit(1)
 
@@ -189,27 +191,27 @@ class AppConfig:
         if not path.exists():
             cfg = cls()
             cfg.save(path)
-            print(f"  Config not found — created default v{_CURRENT_VERSION}: {path}")
+            logger.info("Config not found — created default v%s: %s", _CURRENT_VERSION, path)
             return cfg
         try:
             with open(path) as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
-            print(f"Error: failed to load config from {path}: {e}", file=sys.stderr)
+            logger.error("Failed to load config from %s: %s", path, e)
             sys.exit(1)
 
         try:
             cfg = cls.from_dict(data)
         except (TypeError, ValueError) as e:
-            print(f"Error: failed to parse config from {path}: {e}", file=sys.stderr)
+            logger.error("Failed to parse config from %s: %s", path, e)
             sys.exit(1)
 
         if "version" not in data:
             # Write the default back so the next load is clean.
             cfg.save(path)
-            print(f"  Unversioned config replaced with default v{_CURRENT_VERSION}: {path}")
+            logger.info("Unversioned config replaced with default v%s: %s", _CURRENT_VERSION, path)
         else:
-            print(f"  Config loaded from: {path}")
+            logger.info("Config loaded from: %s", path)
         return cfg
 
     def save(self, path: Path) -> None:
@@ -218,4 +220,4 @@ class AppConfig:
         with open(tmp, "w") as f:
             json.dump(self.to_dict(), f, indent=2)
         os.replace(tmp, path)
-        print(f"  Config saved to: {path}")
+        logger.info("Config saved to: %s", path)

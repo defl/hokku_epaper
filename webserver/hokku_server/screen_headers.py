@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 BATTERY_MV_EMPTY = 3400
 BATTERY_MV_FULL = 4100
@@ -32,9 +35,9 @@ def parse_frame_state(raw: str | None) -> dict | None:
     try:
         data = json.loads(raw)
     except (TypeError, ValueError) as e:
-        print(f"  Warning: X-Frame-State not valid JSON ({e}): {str(raw)[:120]}")
+        logger.warning("X-Frame-State not valid JSON (%s): %s", e, str(raw)[:120])
         return None
     if not isinstance(data, dict):
-        print(f"  Warning: X-Frame-State is not a JSON object: {str(raw)[:120]}")
+        logger.warning("X-Frame-State is not a JSON object: %s", str(raw)[:120])
         return None
     return data

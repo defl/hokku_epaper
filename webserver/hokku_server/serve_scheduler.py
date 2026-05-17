@@ -8,11 +8,14 @@ One DB file (``serve_scheduler.json``) carries all of:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from hokku_server.image_manager_abstract import AbstractImageManager
 from hokku_server.orientation import Orientation
@@ -354,23 +357,23 @@ class ServeScheduler:
             with open(self._db_path) as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
-            print(f"  Warning: failed to load {_DB_FILENAME}: {e} (starting empty)")
+            logger.warning("Failed to load %s: %s (starting empty)", _DB_FILENAME, e)
             return
         for name, blob in data.get("by_name", {}).items():
             try:
                 self._stats[name] = ServeStats.from_dict(blob)
             except (KeyError, TypeError, ValueError) as e:
-                print(f"  Warning: skipping malformed serve stats for {name!r}: {e}")
+                logger.warning("Skipping malformed serve stats for %r: %s", name, e)
         for name, blob in data.get("screens", {}).items():
             try:
                 self._screens[name] = ScreenTelemetryEntry.from_dict(blob)
             except (KeyError, TypeError, ValueError) as e:
-                print(f"  Warning: skipping malformed telemetry entry {name!r}: {e}")
+                logger.warning("Skipping malformed telemetry entry %r: %s", name, e)
         for name, blob in data.get("screen_configs", {}).items():
             try:
                 self._screen_configs[name] = ScreenConfig.from_dict(blob)
             except (KeyError, TypeError, ValueError) as e:
-                print(f"  Warning: skipping malformed screen config for {name!r}: {e}")
+                logger.warning("Skipping malformed screen config for %r: %s", name, e)
         ls = data.get("last_served")
         if isinstance(ls, dict) and "name" in ls and "served_at" in ls:
             try:

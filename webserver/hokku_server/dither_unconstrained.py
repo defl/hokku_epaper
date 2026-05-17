@@ -40,7 +40,10 @@ Intended uses:
 """
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
+
+logger = logging.getLogger(__name__)
 from typing import Any, TypeAlias
 
 import numpy as np
@@ -289,7 +292,7 @@ def _full_canvas_diffusion(
                     pixels[ny, nx, 2] += eb * wgt
 
         if y % 200 == 0:
-            print(f"  Dithering (unconstrained): {y}/{h}")
+            logger.debug("Dithering (unconstrained): %d/%d", y, h)
     return result_idx
 
 

@@ -12,7 +12,10 @@ can be re-exported by the dither_constrained.py backward-compatibility shim.
 """
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
+
+logger = logging.getLogger(__name__)
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -404,7 +407,7 @@ class StreamingDither(AbstractDither):
                 rolling[0] += _row_pixels(y + 1)
 
             if y % 200 == 0:
-                print(f"  Dithering (streaming): {y}/{H}")
+                logger.debug("Dithering (streaming): %d/%d", y, H)
 
         return result_idx
 

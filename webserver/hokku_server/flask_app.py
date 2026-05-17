@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import time as _time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from PIL import Image, UnidentifiedImageError
 
@@ -171,7 +174,7 @@ def create_app(
                 msg, status, label = "No images in upload directory", 404, "No images"
             resp = make_response(msg, status)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
-            print(f"  {label}: {screen_name} told to retry in {sleep_seconds}s")
+            logger.debug("%s: %s told to retry in %ss", label, screen_name, sleep_seconds)
             return resp
 
         effective_orientation = scheduler.get_screen_orientation(screen_name)
@@ -190,7 +193,7 @@ def create_app(
         scheduler.record_screen_call(
             screen_name, screen_ip, sleep_seconds, chosen, battery_mv, frame_state,
         )
-        print(f"  Serving: {chosen} to {screen_name} (sleep_seconds={sleep_seconds})")
+        logger.debug("Serving: %s to %s (sleep_seconds=%s)", chosen, screen_name, sleep_seconds)
 
         response = make_response(binary)
         response.headers["Content-Type"] = "application/octet-stream"
@@ -276,9 +279,7 @@ def create_app(
                 })
                 continue
             except (UnidentifiedImageError, OSError) as e:
-                import traceback
-                print(f"  Upload error for {name!r}: {type(e).__name__}: {e}")
-                traceback.print_exc()
+                logger.exception("Upload error for %r: %s: %s", name, type(e).__name__, e)
                 skipped.append({"name": name, "reason": "unreadable image"})
                 continue
             if w * h > MAX_UPLOAD_PIXELS:
@@ -293,9 +294,7 @@ def create_app(
             except FileExistsError:
                 skipped.append({"name": name, "reason": "already exists; remove to replace"})
             except (OSError, ValueError) as e:
-                import traceback
-                print(f"  Error adding {name!r}: {type(e).__name__}: {e}")
-                traceback.print_exc()
+                logger.exception("Error adding %r: %s: %s", name, type(e).__name__, e)
                 skipped.append({"name": name, "reason": str(e)})
         return jsonify({"saved": saved, "skipped": skipped})
 
@@ -512,7 +511,7 @@ def create_app(
             state.reload(new_cfg)
         except ValueError as e:
             return jsonify({"error": f"reload failed: {e}"}), 400
-        print("  Config saved and reloaded in-process")
+        logger.info("Config saved and reloaded in-process")
         return jsonify({"ok": True, "restarting": False})
 
     @app.route("/hokku/api/dither/preview", methods=["POST"])
@@ -554,14 +553,14 @@ def create_app(
         use_clahe_keepout = body.get("clahe_keepout", state.config.classifier_face_detect_clahe_keepout)
         keepout = face_bboxes_orig if (face_bboxes_orig and use_clahe_keepout) else None
 
-        print(f"  Preview: {name!r}")
+        logger.debug("Preview: %r", name)
         with open_image_for_render(path) as img:
             orig_w, orig_h = img.size
             png = ImageRenderer(NumbaStreamingDither()).render_preview_png(
                 img, cfg, state.config.orientation,
                 clahe_keepout_bboxes_norm=keepout,
             )
-        print(f"  Preview done: {name!r}")
+        logger.debug("Preview done: %r", name)
 
         canvas_bboxes = transform_bboxes_to_canvas_norm(
             face_bboxes_orig,

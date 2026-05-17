@@ -8,12 +8,14 @@ keeps multiple hokku servers on the same LAN from colliding during probing.
 """
 from __future__ import annotations
 
+import logging
 import socket
-import sys
 import time
 from typing import Any
 
 from zeroconf import ServiceInfo, Zeroconf
+
+logger = logging.getLogger(__name__)
 
 
 def _get_local_ip() -> str:
@@ -57,7 +59,7 @@ def start_mdns(port: int, hostname: str) -> Any:
         try:
             zc = Zeroconf()
             zc.register_service(info)
-            print(f"  mDNS: advertised as {hostname}.local ({local_ip}:{port})")
+            logger.info("Advertised as %s.local (%s:%s)", hostname, local_ip, port)
             return zc
         except Exception as exc:
             last_exc = exc
@@ -70,14 +72,13 @@ def start_mdns(port: int, hostname: str) -> Any:
                 except Exception:
                     pass
             if attempt < 3:
-                print(
-                    f"  mDNS: attempt {attempt} failed ({type(exc).__name__}: {exc})"
-                    f" — retrying in 3 s",
-                    file=sys.stderr,
+                logger.warning(
+                    "Attempt %d failed (%s: %s) — retrying in 3s",
+                    attempt, type(exc).__name__, exc,
                 )
                 time.sleep(3)
 
-    print(f"  mDNS: registration failed — {type(last_exc).__name__}: {last_exc}", file=sys.stderr)
+    logger.error("Registration failed — %s: %s", type(last_exc).__name__, last_exc)
     return None
 
 
@@ -91,6 +92,6 @@ def stop_mdns(zc: Any) -> None:
     try:
         zc.unregister_all_services()
         zc.close()
-        print("  mDNS: advertisement stopped")
+        logger.info("Advertisement stopped")
     except Exception as exc:
-        print(f"  mDNS: error while stopping — {exc}", file=sys.stderr)
+        logger.warning("Error while stopping — %s", exc)

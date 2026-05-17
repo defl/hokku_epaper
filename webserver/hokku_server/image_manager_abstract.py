@@ -14,15 +14,17 @@ from __future__ import annotations
 import concurrent.futures
 import hashlib
 import json
+import logging
 import os
 import shutil
 import threading
 import time
-import traceback
 import zstd
 from abc import ABC, abstractmethod
 from dataclasses import asdict, replace
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from PIL import Image, ImageOps
 
@@ -200,7 +202,7 @@ class AbstractImageManager(ABC):
             try:
                 self._materialize_thumbnail(src, thumb)
             except Exception as e:
-                print(f"  Thumbnail pre-generation failed for {rec.name!r}: {e}")
+                logger.warning("Thumbnail pre-generation failed for %r: %s", rec.name, e)
 
         # Phase 2: classify every pending image while the detector is loaded.
         # Images with unreadable dimensions are skipped here and failed in phase 3.
@@ -218,7 +220,7 @@ class AbstractImageManager(ABC):
                     src_path, rec_now.original_sha1
                 )
             except Exception as e:
-                print(f"  Classification failed for {rec.name!r}: {e}")
+                logger.warning("Classification failed for %r: %s", rec.name, e)
         # Phase 3: dispatch renders with the pre-computed ScreenImageConfigs.
         # Both orientations are rendered for every pending image so every screen
         # can be served in its preferred orientation without waiting for re-sync.
@@ -229,7 +231,7 @@ class AbstractImageManager(ABC):
                 # Defensive: _submit_one() should handle its own errors, but catch
                 # any unexpected exceptions to prevent entire sync() from crashing.
                 err = f"{type(e).__name__}: {e}"
-                print(f"  Unexpected error submitting {rec.name!r}: {err}")
+                logger.exception("Unexpected error submitting %r: %s", rec.name, err)
                 self._mark_as_failed(rec.name, err)
 
         with self._db_lock:
@@ -304,12 +306,12 @@ class AbstractImageManager(ABC):
         try:
             data = zstd.decompress(path.read_bytes())
         except (OSError, Exception) as e:
-            print(f"  Error reading panel file {path.name}: {e}")
+            logger.error("Error reading panel file %s: %s", path.name, e)
             return None
         if len(data) != TOTAL_BYTES:
-            print(
-                f"  Corrupt panel file {path.name}: expected {TOTAL_BYTES} B, "
-                f"got {len(data)} B — deleting and re-queuing"
+            logger.error(
+                "Corrupt panel file %s: expected %d B, got %d B — deleting and re-queuing",
+                path.name, TOTAL_BYTES, len(data),
             )
             try:
                 path.unlink()
@@ -361,7 +363,7 @@ class AbstractImageManager(ABC):
             self._materialize_thumbnail(src_path, thumb_path)
             return thumb_path.read_bytes()
         except (OSError, Exception) as e:  # PIL throws assorted exceptions
-            print(f"  Thumbnail error for {name}: {e}")
+            logger.warning("Thumbnail error for %s: %s", name, e)
             return None
 
     def original_path(self, name: str) -> Path:
@@ -439,7 +441,7 @@ class AbstractImageManager(ABC):
                         try:
                             f.unlink()
                         except OSError as e:
-                            print(f"  Cache: could not remove {f.name}: {e}")
+                            logger.warning("Could not remove cache file %s: %s", f.name, e)
             for name, rec in list(self._records.items()):
                 self._records[name] = replace(
                     rec,
@@ -453,7 +455,7 @@ class AbstractImageManager(ABC):
             self._progress = ConversionProgress(current_name=None, done=0, total=0)
             self._inflight.clear()
             self._save_db()
-            print("  Cache cleared")
+            logger.info("Cache cleared")
 
     def cache_disk_info(self) -> dict[str, int]:
         """Return cache directory size and partition free space in bytes."""
@@ -524,19 +526,19 @@ class AbstractImageManager(ABC):
             with open(self._db_path) as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
-            print(f"  Warning: failed to load {_DB_FILENAME}: {e} (starting empty)")
+            logger.warning("Failed to load %s: %s (starting empty)", _DB_FILENAME, e)
             return
         if data.get("version") != _DB_VERSION:
-            print(
-                f"  DB version mismatch (got {data.get('version')!r}, need {_DB_VERSION}) "
-                f"— wiping cache DB; images will be re-rendered on next sync"
+            logger.warning(
+                "DB version mismatch (got %r, need %d) — wiping cache DB; images will be re-rendered on next sync",
+                data.get("version"), _DB_VERSION,
             )
             return
         for name, rec_dict in data.get("images", {}).items():
             try:
                 self._records[name] = ImageRecord.from_dict(rec_dict)
             except (KeyError, TypeError, ValueError) as e:
-                print(f"  Warning: skipping malformed db entry {name!r}: {e}")
+                logger.warning("Skipping malformed db entry %r: %s", name, e)
 
     def _save_db(self) -> None:
         payload = {
@@ -570,7 +572,7 @@ class AbstractImageManager(ABC):
         - ScreenImageConfig slug predicted by classifier changed: mark pending.
         """
         if not self._upload_dir.exists():
-            print(f"  Warning: upload_dir missing: {self._upload_dir}")
+            logger.warning("upload_dir missing: %s", self._upload_dir)
             return
 
         on_disk: dict[str, Path] = {}
@@ -583,7 +585,7 @@ class AbstractImageManager(ABC):
             if name not in on_disk:
                 rec = self._records.pop(name)
                 self._delete_cache_files(rec.name_hash)
-                print(f"  Removed {name!r} (no longer on disk)")
+                logger.info("Removed %r (no longer on disk)", name)
 
         # Add new + detect changes.
         for name, src_path in on_disk.items():
@@ -594,7 +596,7 @@ class AbstractImageManager(ABC):
                 continue
             if existing is None:
                 self._register_new(name, src_path)
-                print(f"  Registered new image: {name!r}")
+                logger.info("Registered new image: %r", name)
                 continue
 
             content_changed = (
@@ -619,7 +621,7 @@ class AbstractImageManager(ABC):
                         image_width=w,
                         image_height=h,
                     )
-                    print(f"  Detected content change: {name!r}")
+                    logger.info("Detected content change: %r", name)
                     continue
 
             if existing.convert_status == "ok":
@@ -633,7 +635,7 @@ class AbstractImageManager(ABC):
                         landscape_image_config_slug=None,
                         portrait_image_config_slug=None,
                     )
-                    print(f"  ScreenImageConfig slug changed for {name!r}: re-converting")
+                    logger.info("ScreenImageConfig slug changed for %r: re-converting", name)
 
         self._save_db()
 
@@ -645,7 +647,7 @@ class AbstractImageManager(ABC):
                 try:
                     f.unlink()
                 except OSError as e:
-                    print(f"  Cache: could not remove {f.name}: {e}")
+                    logger.warning("Could not remove cache file %s: %s", f.name, e)
 
     def _scrub_orphan_cache_files(self, *, force_auto_clear: bool = False) -> None:
         """Remove cache files according to the three-rule policy.
@@ -717,9 +719,9 @@ class AbstractImageManager(ABC):
     def _scrub_file(self, f: Path, reason: str) -> None:
         try:
             f.unlink()
-            print(f"  Scrubbed {reason}: {f.name}")
+            logger.debug("Scrubbed %s: %s", reason, f.name)
         except OSError as e:
-            print(f"  Could not scrub {f.name}: {e}")
+            logger.warning("Could not scrub %s: %s", f.name, e)
 
     def _mark_as_failed(self, name: str, error: str) -> None:
         """Mark an image as failed and update the database."""
@@ -758,7 +760,7 @@ class AbstractImageManager(ABC):
                 # PIL couldn't open this file at registration; it won't open
                 # now either.  Fail immediately.
                 err = rec.convert_error or "Cannot open image (unreadable or unsupported format)"
-                print(f"  Skipping {name!r}: {err}")
+                logger.warning("Skipping %r: %s", name, err)
 
         # Release lock before calling helper (helper acquires its own lock)
         if rec is not None and rec.image_width is None:
@@ -787,7 +789,7 @@ class AbstractImageManager(ABC):
                     self._dispatch_cfg(name, replace(screen_cfg, orientation=orientation), update_status=False)
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
-            print(f"  Failed to submit {name!r}: {err}")
+            logger.exception("Failed to submit %r: %s", name, err)
             self._mark_as_failed(name, err)
 
     def _dispatch_cfg(self, name: str, cfg: ScreenImageConfig, *, update_status: bool) -> None:
@@ -814,7 +816,7 @@ class AbstractImageManager(ABC):
             cfg.crop_to_fill_threshold,
             tuple(asdict(b) for b in cfg.clahe_keepout_bboxes) if cfg.clahe_keepout_bboxes else None,
         )
-        print(f"  Submitted {name!r} for dithering ({cfg.orientation})")
+        logger.debug("Submitted %r for dithering (%s)", name, cfg.orientation)
         self._dispatch_render(name, slug, cfg.orientation, render_args, time.monotonic(), update_status=update_status)
 
     def _set_orientation_slug(self, name: str, orientation: Orientation, slug: str) -> None:
@@ -851,8 +853,7 @@ class AbstractImageManager(ABC):
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             if update_status:
-                print(f"  Conversion failed for {name!r}: {err}")
-                traceback.print_exc()
+                logger.exception("Conversion failed for %r: %s", name, err)
                 with self._db_lock:
                     self._inflight.discard(name)
                     cur = self._records.get(name)
@@ -869,7 +870,7 @@ class AbstractImageManager(ABC):
                         self._log_batch_complete()
                     self._save_db()
             else:
-                print(f"  Alt-orientation render failed for {name!r} ({orientation}): {err}")
+                logger.warning("Alt-orientation render failed for %r (%s): %s", name, orientation, err)
             return
 
         with self._db_lock:
@@ -903,12 +904,12 @@ class AbstractImageManager(ABC):
                 done = self._progress.done + 1
                 total = self._progress.total
                 self._progress = replace(self._progress, done=done)
-                print(f"  Dithered {name!r} ({done}/{total})")
+                logger.info("Dithered %r (%d/%d)", name, done, total)
                 if done >= total:
                     self._log_batch_complete()
             else:
                 self._records[name] = replace(cur, **slug_update)
-                print(f"  Dithered {name!r} ({orientation})")
+                logger.debug("Dithered %r (%s)", name, orientation)
             self._save_db()
 
     def _log_batch_complete(self) -> None:
@@ -919,9 +920,9 @@ class AbstractImageManager(ABC):
             if r.convert_status == "ok" and r.last_conversion_seconds is not None
         )
         if n_failed > 0:
-            print(f"  Dithering batch complete: some failed (check logs above)")
+            logger.warning("Dithering batch complete: some images failed")
         else:
-            print(f"  Dithering complete: all {total} image(s) done")
+            logger.info("Dithering complete: all %d image(s) done", total)
 
     def _materialize_thumbnail(self, src_path: Path, thumb_path: Path) -> None:
         thumb_path.parent.mkdir(parents=True, exist_ok=True)

@@ -6,9 +6,12 @@ AppConfig — no process restart required.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 from hokku_server.app_config import AppConfig
 from hokku_server.image_classifier import ImageClassifier
@@ -114,12 +117,13 @@ class AppState:
                 self._zc = start_mdns(new_config.port, new_config.mdns_hostname)
             else:
                 self._zc = None
-                print("  mDNS: disabled (mdns_hostname is empty)")
+                logger.info("mDNS disabled (mdns_hostname is empty)")
 
-        print(f"  Config reloaded in-process — pipeline slug: {new_config.cache_slug()}")
-        print(
-            f"  Image worker count: configured={new_config.image_worker_thread_count}"
-            f" → resolved={new_manager.resolved_worker_count}"
+        logger.info("Config reloaded in-process — pipeline slug: %s", new_config.cache_slug())
+        logger.info(
+            "Image worker count: configured=%s -> resolved=%s",
+            new_config.image_worker_thread_count,
+            new_manager.resolved_worker_count,
         )
         if self.watcher is not None:
             self.watcher.wake()  # skip remaining sleep, pick up new config immediately
