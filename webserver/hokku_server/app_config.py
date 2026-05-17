@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import sys
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
@@ -17,6 +16,7 @@ from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
+from hokku_server.filesystem import atomic_write_json
 from hokku_server.image_config import ImageConfig, _image_config_from_dict  # noqa: F401 (re-exported)
 from hokku_server.orientation import Orientation  # noqa: F401 (re-exported)
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
@@ -215,9 +215,5 @@ class AppConfig:
         return cfg
 
     def save(self, path: Path) -> None:
-        """Atomic JSON write (tmp + os.replace)."""
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with open(tmp, "w") as f:
-            json.dump(self.to_dict(), f, indent=2)
-        os.replace(tmp, path)
+        atomic_write_json(path, self.to_dict())
         logger.info("Config saved to: %s", path)

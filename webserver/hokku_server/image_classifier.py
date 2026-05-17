@@ -18,6 +18,7 @@ import numpy as np
 from PIL import Image
 
 from hokku_server.app_config import AppConfig
+from hokku_server.filesystem import atomic_write_json
 from hokku_server.bounding_box import BoundingBox
 from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
 from hokku_server.image_config import ImageConfig
@@ -183,7 +184,5 @@ class ImageClassifier:
             "version": 1,
             "observations": observations_dict,
         }
-        tmp = self._db_path.with_suffix(self._db_path.suffix + ".tmp")
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(payload, indent=2), "utf-8")
-        tmp.replace(self._db_path)
+        atomic_write_json(self._db_path, payload)

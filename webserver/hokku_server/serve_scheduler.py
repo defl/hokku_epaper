@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 import time
 from dataclasses import asdict, dataclass, replace
@@ -17,6 +16,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+from hokku_server.filesystem import atomic_write_json
 from hokku_server.image_manager_abstract import AbstractImageManager
 from hokku_server.orientation import Orientation
 from hokku_server.screen_config import ScreenConfig
@@ -290,10 +290,7 @@ class ServeScheduler:
     # ── Internals ────────────────────────────────────────────────
 
     def _atomic_write_json(self, payload: dict) -> None:
-        tmp = self._db_path.with_suffix(self._db_path.suffix + ".tmp")
-        with open(tmp, "w") as f:
-            json.dump(payload, f, indent=2)
-        os.replace(tmp, self._db_path)
+        atomic_write_json(self._db_path, payload)
 
     def _precompute_next_locked(self, ready_names: set[str]) -> None:
         """Pick and store the next image to serve. Must be called under self._lock.

@@ -7,7 +7,7 @@ Portraits (expect at least one face detected):
   - Actress_Anna_Unterberger-2.jpg
   - Robert_De_Niro_KVIFF_portrait.jpg
   - Wayuu_woman_with_sad_face_in_the_market_buying.jpg
-  - string_ensemble_concert.jpg  ← multi-face (multiple players in a string ensemble)
+  - string_ensemble_concert.jpeg  ← multi-face (multiple players in a string ensemble)
 
 Non-portraits (expect zero faces detected):
   - Albi_Panorama_Sunset_Panini_General.heif
@@ -33,7 +33,7 @@ _PORTRAITS = [
     "Actress_Anna_Unterberger-2.jpg",
     "Robert_De_Niro_KVIFF_portrait.jpg",
     "Wayuu_woman_with_sad_face_in_the_market_buying.jpg",
-    "string_ensemble_concert.jpg",
+    "string_ensemble_concert.jpeg",
 ]
 
 _NON_PORTRAITS = [
@@ -77,9 +77,9 @@ def test_missing_file_returns_false(face_detector, tmp_path: Path):
 # ── multi-face detection: violin player image ─────────────────────────────────
 
 def test_violin_image_detects_multiple_faces(face_detector):
-    """string_ensemble_concert.jpg contains several musicians in the background.
+    """string_ensemble_concert.jpeg contains several musicians in the background.
     YuNet should return more than one face bbox, exercising the multi-face path."""
-    path = _IMAGES / "string_ensemble_concert.jpg"
+    path = _IMAGES / "string_ensemble_concert.jpeg"
     assert path.exists(), f"Test image missing: {path}"
     bboxes = face_detector.detect(path)
     assert len(bboxes) >= 2, (
@@ -89,7 +89,7 @@ def test_violin_image_detects_multiple_faces(face_detector):
 
 def test_violin_image_bboxes_are_valid_bounding_boxes(face_detector):
     """Each returned BoundingBox must be normalised to [0, 1] with positive dims."""
-    path = _IMAGES / "string_ensemble_concert.jpg"
+    path = _IMAGES / "string_ensemble_concert.jpeg"
     bboxes = face_detector.detect(path)
     assert bboxes, "Expected at least one face in violin player image"
     for i, b in enumerate(bboxes):
@@ -104,7 +104,7 @@ def test_violin_image_bboxes_are_valid_bounding_boxes(face_detector):
 
 def test_violin_image_bboxes_do_not_overlap_excessively(face_detector):
     """Sanity check: no two bboxes should be nearly identical (dedup worked)."""
-    path = _IMAGES / "string_ensemble_concert.jpg"
+    path = _IMAGES / "string_ensemble_concert.jpeg"
     bboxes = face_detector.detect(path)
     for i, a in enumerate(bboxes):
         for j, b in enumerate(bboxes):

@@ -15,7 +15,6 @@ import concurrent.futures
 import hashlib
 import json
 import logging
-import os
 import shutil
 import threading
 import time
@@ -29,6 +28,7 @@ logger = logging.getLogger(__name__)
 from PIL import Image, ImageOps
 
 from hokku_server.app_config import AppConfig
+from hokku_server.filesystem import atomic_write_json
 from hokku_server.display import TOTAL_BYTES
 from hokku_server.image_classifier import ImageClassifier
 from hokku_server.image_record import (
@@ -505,10 +505,7 @@ class AbstractImageManager(ABC):
             return None, None, f"{type(e).__name__}: {e}"
 
     def _atomic_write_json(self, payload: dict) -> None:
-        tmp = self._db_path.with_suffix(self._db_path.suffix + ".tmp")
-        with open(tmp, "w") as f:
-            json.dump(payload, f, indent=2)
-        os.replace(tmp, self._db_path)
+        atomic_write_json(self._db_path, payload)
 
     def _panel_path(self, name_hash: str, slug: str) -> Path:
         return self._images_dir / f"{name_hash}_{slug}{_PANEL_SUFFIX}"
