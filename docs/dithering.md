@@ -46,40 +46,45 @@ The pipeline is split across several modules. Understanding the split helps
 locate the right file to change:
 
 ```
-webserver/webserver/
-├── dither_config.py       DitherConfig dataclass (algorithm, LUT, serpentine, …)
-├── image_config.py        ImageConfig dataclass (tonal chain + DitherConfig)
-├── presets.py             Named presets + PRESET_IMAGE_CONFIGS dict
-├── image_classifier.py    B&W / face detection → ImageConfig dispatch
-├── image.py               Top-level pipeline orchestration:
-│                            open_image_for_render(), render_panel_bytes(),
-│                            render_preview_png(), compress_dynamic_range()
-├── dither_constrained.py  Streaming error-diffusion (production, ≤ 50 MB):
-│                            adaptive_saturate(), build_rgb_lut*(),
-│                            dither(), dither_with_prep()
-├── dither_unconstrained.py Full-canvas reference dither (quality comparison only,
-│                            ~60 MB peak, NOT used in production)
-└── dither.py              Backward-compat re-export shim
+webserver/hokku_server/
+├── dither_config.py          DitherConfig dataclass (algorithm, LUT, serpentine, …)
+├── dither_abc.py             AbstractDither ABC
+├── dither_streaming.py       Streaming error-diffusion (production, ≤ 50 MB):
+│                               adaptive_saturate(), build_rgb_lut*(),
+│                               dither_with_prep(), _streaming_diffusion_dither()
+├── dither_streaming_numba.py JIT-compiled production dither (NumbaStreamingDither)
+├── dither_unconstrained.py   Full-canvas reference dither (quality comparison only,
+│                               ~60 MB peak, NOT used in production)
+├── image_config.py           ImageConfig dataclass (tonal chain + DitherConfig)
+├── presets.py                Named presets + PRESET_IMAGE_CONFIGS dict
+├── image_abc.py              AbstractImageRenderer + _apply_prepare_enhancements()
+├── image_renderer.py         ImageRenderer: fit/crop + DRC + compress_dynamic_range()
+│                               open_image_for_render(), render_indices(),
+│                               render_panel_bytes(), render_preview_png()
+├── image_classifier.py       B&W / face detection → ImageConfig dispatch
+├── image_manager_abstract.py Image lifecycle, cache, sync loop
+├── bounding_box.py           BoundingBox frozen dataclass (normalised 0–1)
+├── screen_image_config.py    ScreenImageConfig { image_config, orientation,
+│                               crop_threshold, clahe_keepout_bboxes }
+└── face_detect_yunet_opencv.py  YuNet DNN face detector (OpenCV)
 ```
-
-`dither.py` is a thin shim that re-exports everything from `dither_constrained`
-so older imports don't break. New code should import directly from the right
-module.
 
 ### Data flow for a full render
 
 ```
 ImageClassifier.screen_config_for(path, sha1)
-    └─ returns ScreenImageConfig { image_config, orientation, crop_threshold }
+    └─ returns ScreenImageConfig { image_config, orientation, crop_threshold,
+                                    clahe_keepout_bboxes }
 
-image.render_panel_bytes(img, cfg, orientation)
+ImageRenderer(NumbaStreamingDither()).render_panel_bytes(img, cfg, orientation)
     ↓
-_render_indices(img, cfg, orientation, FULL_W, PANEL_H)
+render_indices(img, cfg, orientation, FULL_W, PANEL_H,
+               clahe_keepout_bboxes_norm=keepout)
     1. Resize / crop-to-fill → PIL canvas (uint8 RGB, ≤ 15 MB)
-    2. _apply_prepare_enhancements()   # autocontrast → gamma → b/c/s
+    2. _apply_prepare_enhancements()   # autocontrast → gamma → CLAHE → USM
     3. Rotate canvas for landscape (−90°)
     4. np.asarray(canvas) → uint8 H×W×3 array
-    5. dither_constrained.dither_with_prep(arr, cfg.dither, prep_stripe)
+    5. dither_with_prep(arr, cfg.dither, prep_stripe)
            prep_stripe(100-row stripe) →
                adaptive_saturate() + compress_dynamic_range()
                → float32 stripe (3.8 MB)
@@ -276,21 +281,27 @@ alongside L so that the tiny warm tint doesn't get a relative boost.
 Saturated pixels (tongues, red shirts) keep their full chroma (`c_factor=1.0`)
 so Red/Blue/Green remain reachable.
 
-`compress_dynamic_range()` lives in `image.py` and is also called per-stripe.
+`compress_dynamic_range()` lives in `image_renderer.py` and is also called per-stripe.
 
 ### 5d. B&W photos developing a pink cast
 
 Any near-greyscale photo has residual chroma of ~1–3 Lab units from JPEG
 compression noise, film grain, or scanning artifacts. Flat saturation
-amplifies that noise into visible colour.
+amplifies that noise into visible colour. There are two complementary fixes.
 
-**Fix: detect near-grayscale images and route them to a conservative
+**Fix 1: detect near-grayscale images and route them to a conservative
 `ImageConfig`.** The `ImageClassifier` (see §6) runs B&W detection and, if
 enabled, selects `AppConfig.image_config_bw` instead of the default. The B&W
-config typically has `use_adaptive_saturate=False`, `color_enhance=1.05` (very
-mild), `adaptive_vivid=False`, and an Euclidean LUT instead of hue-aware —
-because there is no meaningful hue in a grey image to protect, and the
-hue-aware LUT's extra cost buys nothing.
+config uses `use_adaptive_saturate=False`, `color_enhance=1.05` (very mild),
+`adaptive_vivid=False`, and a Euclidean LUT — because there is no meaningful
+hue in a grey image to protect.
+
+**Fix 2: B&W-only palette LUT.** The B&W dither config can additionally set
+`lut_name = "bw"`, which builds a LUT that only ever picks the Black or White
+palette entries. This completely eliminates any possibility of a colour ink
+landing on a monochrome image, at the cost of pure two-tone rendering
+(no grey half-tones from colour ink mixing). The LUT is built by
+`build_rgb_lut_bw()` in `dither_streaming.py` and cached like the others.
 
 ---
 
@@ -302,28 +313,32 @@ ImageClassifier.screen_config_for(path, sha1)
   ├─ B&W detection enabled? → is_grayscale(path)?
   │      → yes → use AppConfig.image_config_bw
   │
-  ├─ Face detection enabled? → has_face(path)?
+  ├─ Face detection enabled? → has_faces(path)?
   │      → yes → use AppConfig.image_config_face
+  │               clahe_keepout_bboxes = all detected face bboxes
   │
   └─ otherwise → use AppConfig.image_config_default
 ```
 
-Detection results (is_bw, has_face) are cached by sha1 of the original file
-in `<cache_dir>/image_classifier.json`. A restart doesn't re-detect; clearing
-the classifier cache (via `/api/classifier/clear`) forces fresh detection on
-the next sync.
+Detection results (`is_bw`, `face_bboxes`) are cached by sha1 of the original
+file in `<cache_dir>/image_classifier.json`. A restart doesn't re-detect;
+clearing the classifier cache (via the web UI) forces fresh detection on the
+next sync.
 
-Detection fires **before** the render, not inside it. `image.py`'s render
-functions take an explicit `ImageConfig` with no hidden fallback — the right
-config is already chosen before `render_panel_bytes` is called.
+Detection fires **before** the render, not inside it. `ImageRenderer` takes an
+explicit `ScreenImageConfig` (which carries the chosen `ImageConfig` plus face
+bounding boxes) — no hidden dispatch inside the renderer.
 
-`is_grayscale()` samples a 200×200 thumbnail and checks whether the 95th-
-percentile Lab chroma is below `GRAYSCALE_CHROMA_THRESHOLD = 8.0`.
+`is_grayscale()` (`image_classifier.py`) samples a 200×200 thumbnail and
+checks whether the 95th-percentile Lab chroma is below
+`GRAYSCALE_CHROMA_THRESHOLD = 8.0`.
 
-Face detection (`face_detect.py`) uses OpenCV's Haar cascade. Presence of a
-face routes to `image_config_face`, which can be configured with settings tuned
-for skin tone accuracy (e.g. slightly tighter sharpness, no adaptive-vivid so
-skin highlights don't get overcooled).
+Face detection (`face_detect_yunet_opencv.py`) uses **OpenCV's YuNet DNN**
+model (`face_detection_yunet_2023mar.onnx`). All detected faces are returned as
+a tuple of `BoundingBox` objects (normalised 0–1 against the original image).
+When face detection is enabled, all detected bounding boxes are passed to the
+renderer as `clahe_keepout_bboxes` — the CLAHE preparation step (§11) protects
+every detected face region, not just the primary one.
 
 ---
 
@@ -678,35 +693,41 @@ skin tones start looking sunburnt on outdoor/skin-heavy photos.
 ## 14. File map
 
 ```
-webserver/
-  webserver/
-    dither_config.py        DitherConfig dataclass + cache_slug()
-    image_config.py         ImageConfig dataclass + _image_config_from_dict()
-    presets.py              PRESET_IMAGE_CONFIGS, DEFAULT_PRESET, PRESET_META
-    image_classifier.py     B&W + face detection, per-image config dispatch
-    image.py                Full pipeline: open_image_for_render, _render_indices,
-                             render_panel_bytes, render_preview_png,
-                             compress_dynamic_range, _apply_prepare_enhancements,
-                             _is_near_grayscale
-    dither_constrained.py   Production streaming dither (≤ 50 MB peak):
-                             adaptive_saturate, build_rgb_lut,
-                             build_rgb_lut_hue_aware, dither, dither_with_prep,
-                             _streaming_diffusion_dither, noop_dither
-    dither_unconstrained.py Reference full-canvas dither (~60 MB dither peak):
-                             dither() — quality comparison / regression baseline only
-    dither.py               Re-export shim → dither_constrained
-    memory_guard.py         RLIMIT_AS context manager (opt-in, not yet wired)
+webserver/hokku_server/
+  dither_config.py          DitherConfig dataclass + cache_slug()
+  dither_abc.py             AbstractDither ABC
+  dither_streaming.py       Production streaming dither (≤ 50 MB peak):
+                              adaptive_saturate, build_rgb_lut_euclidean,
+                              build_rgb_lut_hue_aware, build_rgb_lut_bw,
+                              dither_with_prep, _streaming_diffusion_dither
+  dither_streaming_numba.py JIT-compiled wrapper: NumbaStreamingDither (default)
+  dither_unconstrained.py   Reference full-canvas dither (~60 MB dither peak):
+                              dither() — quality comparison / regression baseline only
+  image_config.py           ImageConfig dataclass + _image_config_from_dict()
+  presets.py                PRESET_IMAGE_CONFIGS, DEFAULT_PRESET, PRESET_META
+  image_abc.py              AbstractImageRenderer + _apply_prepare_enhancements()
+  image_renderer.py         ImageRenderer: open_image_for_render(),
+                              render_indices(), render_panel_bytes(),
+                              render_preview_png(), compress_dynamic_range()
+  image_classifier.py       B&W + face detection, per-image config dispatch
+  bounding_box.py           BoundingBox frozen dataclass (normalised 0–1)
+  screen_image_config.py    ScreenImageConfig (image_config + orientation +
+                              crop_threshold + clahe_keepout_bboxes)
+  face_detect_abstract.py   AbstractFaceDetector
+  face_detect_yunet_opencv.py  OpenCV YuNet DNN detector
+  memory_guard.py           RLIMIT_AS context manager (opt-in)
 
-  tests/
-    test_dither_quality.py  Side-by-side streaming vs unconstrained PNGs
-    test_memory_budget.py   50 MB / render assertions (subprocess RSS sampling)
-    test_render_worker.py   render_one() smoke test in the pool worker context
-    _memory_helpers.py      Layer A (tracemalloc) / Layer C (subprocess + psutil)
+webserver/tests/
+  test_dither_quality.py      Side-by-side streaming vs unconstrained PNGs
+  test_dither_quality_metrics.py  neutral_leak / sat_hit / overall_dE table
+  test_memory_budget.py       50 MB / render assertions (subprocess RSS sampling)
+  test_render_worker.py       render_one() smoke test in the pool worker context
+  _memory_helpers.py          Layer A (tracemalloc) / Layer C (subprocess + psutil)
 
 docs/
   dithering.md                      ← this file
-  image_processing_memory_usage.md  ← full memory optimisation journey
-  image_processing_memory_usage.md  ← memory optimisation journey and measurements
+  image_processing_memory_usage.md  ← full memory optimisation journey and measurements
+  image_quality.md                  ← metric definitions (neutral_leak, dE2000, etc.)
 ```
 
 ---

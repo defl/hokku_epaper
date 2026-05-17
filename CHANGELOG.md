@@ -1,6 +1,65 @@
 # Changelog
 
-## 3.0
+## 3.0 beta5
+
+### Per-screen orientation override
+
+Each frame can now be locked to landscape or portrait independently of the global server setting. A frame mounted in portrait shows portrait-rendered images; another mounted in landscape shows landscape ones — both from the same library, without reconfiguring the server. Set and clear the override from the Screens tab in the web app. The server pre-renders both orientations for every image so serving the right one is instant.
+
+### JPEG XL support
+
+JPEG XL (`.jxl`) is now accepted at upload and converted like any other format. Requires `pillow-jxl-plugin`, which the `.deb` postinst installs automatically.
+
+### Multi-face CLAHE protection
+
+Face detection now returns all detected faces, not just the largest one. All detected bounding boxes are passed to the CLAHE preparation step as keepout regions. The boundary between each protected face region and the surrounding image is blended with a Gaussian feather (sigma proportional to the canvas size) so there is no hard edge at the face boundary. The feather width is controlled by `clahe_keepout_feather` in `ImageConfig` (default `0.015`, meaning 1.5% of the shorter canvas dimension).
+
+### Face bounding box overlay in dither preview
+
+The dither preview in the web UI now draws the face bounding boxes (as detected by YuNet) over the rendered preview image. The overlay updates live as you change the dither settings, making it easy to see whether a face region is being handled correctly.
+
+### B&W palette LUT
+
+A new LUT variant (`lut_name = "bw"`) restricts quantisation to Black and White only. This eliminates any possibility of a colour ink landing on a near-greyscale image — previously, compression noise in JPEG-encoded B&W photos could occasionally cause a pink or red speckle even when routed through the B&W pipeline. The B&W preset now uses this LUT by default.
+
+### Panel cache compression
+
+Rendered panel binaries (`.bin`) are now stored compressed with zstd level 1. Each 480 KB panel shrinks to roughly half that on disk with negligible CPU overhead. The decompression cost (microseconds) is absorbed in the HTTP response path. Old uncompressed `.bin` files in the cache are detected and re-queued for re-render automatically.
+
+### Graceful HTTP 503 handling
+
+When the server returns 503 (image pool empty, or all images still converting), the firmware now silently waits and retries at the server-specified interval rather than rendering a "no images" message on screen. The screen stays on its current image until new content is ready.
+
+---
+
+## 3.0 beta3–beta4
+
+### B&W dithering: two-tone palette + classifier cache
+
+- Added B&W detection pipeline and `image_config_bw` config slot.
+- B&W detector samples a 200×200 thumbnail and checks 95th-percentile Lab chroma against `GRAYSCALE_CHROMA_THRESHOLD = 8.0`.
+- Classifier results cached in `<cache_dir>/image_classifier.json` keyed by file sha1 — no re-detection on restart.
+- Clearing the classifier cache now triggers an immediate sync instead of waiting for the next poll interval.
+
+### JXL end-to-end fix
+
+Registration of the JXL PIL plugin moved to the Flask app factory so JXL decodes correctly in all code paths (upload, sync, preview).
+
+### Progress tracking fix
+
+`_progress` is now reset at the start of `sync()` when the previous batch has finished. Previously, a server restart mid-batch left the progress counter stuck at a stale done/total pair until a new batch started.
+
+### Upload error reporting
+
+Full tracebacks for upload and image processing failures now appear in the server log.
+
+---
+
+## 3.0 beta1–beta2
+
+---
+
+## 3.0 alpha
 
 ### ~250× faster image conversion
 

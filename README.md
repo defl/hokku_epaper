@@ -9,7 +9,7 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 - **Drag-and-drop upload** — single files or dozens at a time, straight into the web app, with a live progress list. Works on phones too.
 - **Browse in a grid** — preview exactly what the frame will show before it shows it, original and converted version side by side. Delete anything you don't want with one click.
 - **Click any photo** — see how it was processed and compare the original against what's going to the frame at full size.
-- **All the formats you actually have** — JPEG, PNG, HEIC/HEIF, AVIF, WebP, GIF, TIFF, BMP. Anything from 90's formats to modern iPhone and Android. Phone photos auto-rotate.
+- **All the formats you actually have** — JPEG, PNG, HEIC/HEIF, AVIF, WebP, GIF, TIFF, BMP, JPEG XL. Anything from 90s scanned prints to modern iPhone, Android, and JPEG XL. Phone photos auto-rotate.
 - **Landscape or portrait** — flip a switch and everything re-converts to match how the frame is mounted.
 - **Jump the queue** — pick any photo in the library to be the next one shown on the frame.
 
@@ -21,7 +21,7 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 - **Colour-accurate** — calibrated against the actual panel, not a theoretical colour profile.
 
 **Smart about frames**
-- **Multiple frames, one server** — each frame gets a name and shows up in a dashboard with battery level, WiFi signal, and when it'll next update.
+- **Multiple frames, one server** — each frame gets a name and shows up in a dashboard with battery level, WiFi signal, and when it'll next update. Each frame can be locked to its own orientation independently of the global setting.
 - **Fair rotation** — every photo gets its turn. Newly uploaded photos go to the front of the queue; after that, whichever image has been shown least goes next.
 - **Battery lasts months** — the frame uses almost no power between refreshes. The web app shows a battery level for each frame and flags it red when it's getting low.
 - **Problems show up on the screen** — if something goes wrong (wrong WiFi password, server unreachable) the frame displays a plain-English explanation on the e-paper itself instead of going blank. No plugging in a laptop to debug.
