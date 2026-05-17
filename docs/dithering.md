@@ -236,7 +236,7 @@ full 1.25× boost, pushing them firmly toward a coloured palette entry.
 Near-neutral pixels (skin highlights, white umbrellas) are left at 1.0× —
 no chroma amplification, no cascade into §5c.
 
-The math lives in `adaptive_saturate()` in `dither_constrained.py`, which
+The math lives in `adaptive_saturate()` in `dither_streaming.py`, which
 works in float32 Lab space: RGB → Lab, scale a\* and b\* by `factor`, back to
 RGB. This is applied per-stripe (100 rows at a time) to stay within the
 memory budget (see §7).
@@ -345,7 +345,7 @@ every detected face region, not just the primary one.
 ## 7. Diffusion algorithms
 
 All three algorithms share a single inner loop in
-`_streaming_diffusion_dither()` (`dither_constrained.py`). The kernel is
+`_streaming_diffusion_dither()` (`dither_streaming.py`). The kernel is
 the only thing that differs.
 
 ### Floyd-Steinberg

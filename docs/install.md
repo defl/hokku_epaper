@@ -39,7 +39,7 @@ You need two things: the **image server** running on a computer on your network,
 Download the `.deb` from the latest GitHub release, then:
 
 ```bash
-apt install ./hokku-server_2.1.20-1_all.deb
+apt install ./hokku-server_<version>_all.deb
 ```
 
 The package installs a systemd service that starts automatically on boot. The web GUI will be at `http://<your-server>:8080/`. Photos go into `/var/lib/hokku/images/` — use the web uploader, or install Samba so you can drop files in from any machine on your network.

@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.0 beta6
+
+### Upgrade fix
+
+Upgrading the `.deb` package on a running server no longer fails with a
+"port in use" error. The postinst script now stops the service before
+installing new dependencies.
+
+### Version shown in web app footer
+
+The web app footer now displays the running server version (e.g. `3.0.0b6`),
+making it easy to confirm which build is active without checking the command
+line.
+
+### AVIF and JPEG XL file extension fix
+
+`.avif` and `.jxl` were missing from the internal list of recognised image
+extensions. Files with these types now work correctly throughout the server,
+not just at the upload endpoint.
+
+---
+
 ## 3.0 beta5
 
 ### Per-screen orientation override
