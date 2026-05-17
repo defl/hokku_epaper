@@ -2037,7 +2037,7 @@ function renderScreens(screens) {
 
   // Collect overdue screens for a warning banner at the top.
   const overdue = names
-    .map(n => ({name: n, late: overdueMinutes(screens[n]), battery_mv: screens[n].battery_mv}))
+    .map(n => ({name: n, late: overdueMinutes(screens[n]), battery_mv: screens[n].battery_mv, battery_percent: screens[n].battery_percent}))
     .filter(s => s.late > 0);
 
   let html = '';
@@ -2049,7 +2049,9 @@ function renderScreens(screens) {
     overdue.forEach(s => {
       let line = `<strong>${s.name}</strong> — ${formatMinutesLate(s.late)}`;
       if (s.battery_mv != null) {
-        line += ` (last battery: ${(s.battery_mv/1000).toFixed(2)} V)`;
+        const volts = (s.battery_mv/1000).toFixed(2);
+        const pctStr = s.battery_percent != null ? ` / ${s.battery_percent}%` : '';
+        line += ` (last battery: ${volts} V${pctStr})`;
       }
       html += `<li>${line}</li>`;
     });
