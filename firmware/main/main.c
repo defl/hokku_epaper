@@ -124,7 +124,8 @@ static const char *TAG = "hokku";
 /* Retry delay when a refresh attempt fails (WiFi down, server unreachable,
  * server returned nonsense sleep_seconds). Applied as the next
  * next_refresh_epoch so the regime loops don't hot-retry at 100 ms. */
-#define REFRESH_RETRY_SECONDS  60
+#define REFRESH_RETRY_SECONDS           60
+#define SERVER_BUSY_DISPLAY_THRESHOLD_S 20
 
 /* Safety cap — prevent spurious wakes (USB host disconnect resetting the
  * chip, brownouts, silicon quirks) from burning through the battery via
@@ -1022,6 +1023,7 @@ static void build_frame_state_json(char *buf, size_t buflen,
  * wake_label feeds into the X-Frame-State JSON (regime is read from
  * current_regime global; see header comment on build_frame_state_json). */
 static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_epoch,
+                               int *out_http_status,
                                const char *wake_label,
                                int64_t boot_time_us)
 {
@@ -1104,6 +1106,7 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
 
     if (err != ESP_OK || status != 200) {
         ESP_LOGE(TAG, "HTTP download failed: err=%s status=%d", esp_err_to_name(err), status);
+        if (out_http_status) *out_http_status = status;
         heap_caps_free(buf);
         return NULL;
     }
@@ -1114,6 +1117,7 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
         return NULL;
     }
 
+    if (out_http_status) *out_http_status = status;
     ESP_LOGI(TAG, "Downloaded %d bytes", (int)ctx.received);
     return buf;
 }
@@ -1446,6 +1450,7 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 {
     int32_t sleep_seconds = 0;
     int64_t server_epoch = 0;
+    int      http_status = 0;
     int64_t local_time_at_download_us = 0;
     uint8_t *img = NULL;
 
@@ -1456,7 +1461,7 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
     }
     gpio_set_level(PIN_WIFI_LED, 1);
 
-    img = download_image(&sleep_seconds, &server_epoch, wake_label, boot_time_us);
+    img = download_image(&sleep_seconds, &server_epoch, &http_status, wake_label, boot_time_us);
     local_time_at_download_us = esp_timer_get_time();
 
     wifi_shutdown();
@@ -1484,19 +1489,38 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
     }
 
     if (!img) {
-        char msg[384];
-        snprintf(msg, sizeof(msg),
-                 "Image download failed.\n"
-                 "\n"
-                 "Tried to connect to:\n"
-                 "%s\n"
-                 "\n"
-                 "Will retry in %d s.\n"
-                 "Press reset to try\n"
-                 "again now.",
-                 config.image_url, REFRESH_RETRY_SECONDS);
-        display_message(msg);
-        schedule_retry_in(REFRESH_RETRY_SECONDS, "download failed");
+        if (http_status == 503 && sleep_seconds > 0) {
+            /* Server busy (converting images, cache warming, etc.) —
+             * use the server-suggested retry interval from X-Sleep-Seconds. */
+            if (sleep_seconds > SERVER_BUSY_DISPLAY_THRESHOLD_S) {
+                char msg[128];
+                snprintf(msg, sizeof(msg),
+                         "Server not ready.\n"
+                         "\n"
+                         "Retrying in %d s.\n"
+                         "Press reset to try\n"
+                         "again now.",
+                         (int)sleep_seconds);
+                display_message(msg);
+            }
+            /* ≤ threshold: silent — leave current display untouched. */
+            schedule_retry_in((int)sleep_seconds, "server busy (503)");
+        } else {
+            /* Real failure: network error, non-503, or 503 without header. */
+            char msg[384];
+            snprintf(msg, sizeof(msg),
+                     "Image download failed.\n"
+                     "\n"
+                     "Tried to connect to:\n"
+                     "%s\n"
+                     "\n"
+                     "Will retry in %d s.\n"
+                     "Press reset to try\n"
+                     "again now.",
+                     config.image_url, REFRESH_RETRY_SECONDS);
+            display_message(msg);
+            schedule_retry_in(REFRESH_RETRY_SECONDS, "download failed");
+        }
         return false;
     }
 
