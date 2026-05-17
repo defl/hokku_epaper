@@ -14,6 +14,12 @@
 *.heic      binary
 *.heif      binary
 *.jxl       binary
+*.svg       binary
+*.onnx      binary
+*.woff2     binary
+*.woff      binary
+*.ttf       binary
+*.eot       binary
 
 
 # Debian package control files must be LF — dpkg runs postinst et al.
