@@ -128,6 +128,20 @@ ShareAlike obligations of the source license where applicable.
   purpose of exercising PIL's GIF decoder in the image-processing test suite.
   This derivative work inherits the CC BY-SA 3.0 license.
 
+## Wikipedia-logo-v2-webp.webp
+
+- **Category:** logo / RGBA with transparency — WebP format exercise
+- **Source:** https://commons.wikimedia.org/wiki/File:Wikipedia-logo-v2-webp.webp
+- **Author:** Nohat (concept by Paullusmagnus); Wikimedia
+- **License:** Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)
+  — https://creativecommons.org/licenses/by-sa/3.0/
+- **Trademark:** The Wikipedia globe logo is a registered trademark of the
+  Wikimedia Foundation. Use here is strictly as a test fixture for the
+  image-processing pipeline — no endorsement by or affiliation with the
+  Wikimedia Foundation is implied.
+- **Description:** The Wikipedia logo in WebP format (1024×935 px, RGBA).
+  Included to exercise PIL's WebP decoder; no modifications made to the file.
+
 ## Wayuu_woman_with_sad_face_in_the_market_buying.jpg
 
 - **Category:** person in busy background
