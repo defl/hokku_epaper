@@ -1,11 +1,12 @@
 # TODO
 
 Items captured during development that aren't urgent enough to block current
-work but worth picking up later. Add new entries at the top.
+work but worth picking up later.
 
-v3.0.0-beta3
- - Support for SVG
- - screen log push to webserver in POST, UI in screen
+v3.0
+
+v3.1
+ - screen log push to webserver in POST, UI in screen (backwards compatible protocol)
  - white border optimizer
 
 v4.0 - The Appliance
@@ -17,7 +18,3 @@ v4.0 - The Appliance
  
  v4.1
  - Gift mode, installer choice multi wifi use
-
-
- Future
-  - Remove the entire image cache, ditherer fast enough for in-the-loop performance
