@@ -1,3 +1,32 @@
+hokku-server (3.0.0~beta5-1) unstable; urgency=medium
+
+  * Feat: per-screen orientation override — each screen can now be locked to
+    landscape or portrait independently of the global server setting.
+  * Feat: zstd level-1 compression for panel cache files — roughly 2× smaller
+    cache on disk with negligible CPU overhead.
+  * Feat: HTTP 503 during conversion now triggers a silent retry on the screen
+    instead of displaying a message.
+  * Feat: Gaussian feathering for CLAHE face-keepout boundary — smoother
+    transition between face-protected and surrounding regions.
+  * Feat: face bounding box overlay in dither preview UI.
+  * Feat: B&W palette LUT option and CLAHE face-protection toggle in Advanced UI.
+  * Fix: clamp face bounding box so x+w and y+h never exceed 1.0.
+  * Fix: dither preview now respects the CLAHE face-keepout toggle.
+  * Fix: die on invalid orientation value in config instead of silently
+    defaulting.
+  * Fix: fail fast with a clear error on port-in-use at startup; transform face
+    bboxes into preview coordinate space correctly.
+  * Fix: face bbox overlay in face pipeline preview; fix null crash when no
+    faces detected.
+  * Fix: Reset to preset now restores that pipeline's own preset config, not
+    the atkinson preset.
+  * Fix: detect toggles placed inside Advanced section above their pipeline
+    panels (UI layout).
+  * Refactor: replace all print() calls with stdlib logging — output is
+    journald-compatible (level + logger name + message, no timestamps).
+
+ -- Hokku <hokku@hokku>  Fri, 16 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0~beta4-1) unstable; urgency=high
 
   * Version bump to 3.0.0~beta4.
