@@ -5,6 +5,8 @@ work but worth picking up later. Add new entries at the top.
 
 v3.0.0-beta3
  - Support for SVG
+ - screen log push to webserver in POST, UI in screen
+ - white border optimizer
 
 v4.0 - The Appliance
  - This is a single Pi computer that can server images as well as flash
@@ -13,3 +15,9 @@ v4.0 - The Appliance
  - This must be able to flash the screen as well
  - Start a small shop that sells these as a kit, pre-flashed, such that it's very easy to get started
  
+ v4.1
+ - Gift mode, installer choice multi wifi use
+
+
+ Future
+  - Remove the entire image cache, ditherer fast enough for in-the-loop performance

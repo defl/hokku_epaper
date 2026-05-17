@@ -15,9 +15,11 @@ Usage::
 """
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import numpy as np
+import resvg_py
 from numpy.typing import NDArray
 from PIL import Image, ImageOps
 
@@ -34,7 +36,7 @@ from hokku_server.image_config import ImageConfig, Orientation
 
 IMAGE_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif",
-    ".heic", ".heif", ".avif", ".jxl",
+    ".heic", ".heif", ".avif", ".jxl", ".svg",
 }
 
 # Hard cap on decoded pixel count. Anything above raises
@@ -65,9 +67,35 @@ _SCREEN_SHORT = min(_SCREEN_W, _SCREEN_H)
 MAX_SOURCE_LONG = 2 * _SCREEN_LONG    # 3200
 MAX_SOURCE_SHORT = 2 * _SCREEN_SHORT  # 2400
 
+# Dimensions reported for SVG files in the image DB. SVGs are rasterised at
+# up to screen resolution so this is a conservative upper bound.
+SVG_PROBE_DIMS: tuple[int, int] = (_SCREEN_LONG, _SCREEN_SHORT)
+
+
+def _rasterize_svg(path: Path) -> Image.Image:
+    """Rasterise an SVG to a PIL RGB Image, bounded at screen resolution.
+
+    Uses resvg (bundled Rust binary) via resvg_py — no system library required.
+    Output is scaled to fit within _SCREEN_LONG × _SCREEN_SHORT so the internal
+    RGBA buffer stays within the 50 MB per-render budget.
+    """
+    try:
+        png_bytes = resvg_py.svg_to_bytes(
+            svg_path=str(path),
+            dpi=96,            # CSS-standard DPI; correctly converts pt/mm/cm/in to px
+            width=_SCREEN_LONG,
+            height=_SCREEN_SHORT,
+            background="white",  # composite transparency against white, not black
+        )
+    except Exception as exc:
+        raise ValueError(f"SVG rasterisation failed for {path.name}: {exc}") from exc
+    return Image.open(io.BytesIO(png_bytes)).convert("RGB")
+
 
 def open_image_for_render(path: Path) -> Image.Image:
     """PIL.open + EXIF transpose + RGB convert + size cap.  Caller closes.
+
+    SVG files are rasterised via resvg before entering the PIL pipeline.
 
     Raises ``ValueError`` if the source exceeds ``MAX_IMAGE_PIXELS`` — protects
     the Pi from decompression-bomb PNGs (small file, huge declared dimensions)
@@ -78,34 +106,40 @@ def open_image_for_render(path: Path) -> Image.Image:
     one direction (e.g. a tall thin portrait) so we don't throw away detail
     along the short axis.
     """
-    img = Image.open(path)
-    w0, h0 = img.size
-    if w0 * h0 > MAX_IMAGE_PIXELS:
-        img.close()
-        raise ValueError(
-            f"image {path.name} is too large: {w0}x{h0} "
-            f"({w0 * h0:,} px) exceeds cap of {MAX_IMAGE_PIXELS:,} px"
-        )
-    img_long = max(w0, h0)
-    img_short = min(w0, h0)
+    if path.suffix.lower() == ".svg":
+        img = _rasterize_svg(path)
+    else:
+        img = Image.open(path)
+        w0, h0 = img.size
+        if w0 * h0 > MAX_IMAGE_PIXELS:
+            img.close()
+            raise ValueError(
+                f"image {path.name} is too large: {w0}x{h0} "
+                f"({w0 * h0:,} px) exceeds cap of {MAX_IMAGE_PIXELS:,} px"
+            )
+        img_long = max(w0, h0)
+        # Cheap JPEG-only header-time downscale (no-op for PNG/HEIC/etc.) — keeps
+        # the decoded buffer small for huge JPEGs before we ever load pixels.
+        if img_long > _MAX_SOURCE_LONG_SIDE:
+            k = 1
+            while img_long / (k * 2) >= _MAX_SOURCE_LONG_SIDE / 2 and k < 8:
+                k *= 2
+            if k > 1:
+                try:
+                    img.draft("RGB", (w0 // k, h0 // k))
+                except (AttributeError, OSError):
+                    pass
+        img = ImageOps.exif_transpose(img)
+        try:
+            img = img.convert("RGB")
+        except Image.DecompressionBombError as exc:
+            raise ValueError(f"image {path.name} is too large to decode") from exc
+
+    # Common size-cap: pre-shrink if oversized in both dimensions (saves RAM on Pi).
+    # SVG path: already bounded at screen res by _rasterize_svg; still guarded here.
+    img_long = max(img.size)
+    img_short = min(img.size)
     oversize_both = img_long > MAX_SOURCE_LONG and img_short > MAX_SOURCE_SHORT
-    # Cheap JPEG-only header-time downscale (no-op for PNG/HEIC/etc.) — keeps
-    # the decoded buffer small for huge JPEGs before we ever load pixels.
-    long0 = img_long
-    if long0 > _MAX_SOURCE_LONG_SIDE:
-        k = 1
-        while long0 / (k * 2) >= _MAX_SOURCE_LONG_SIDE / 2 and k < 8:
-            k *= 2
-        if k > 1:
-            try:
-                img.draft("RGB", (w0 // k, h0 // k))
-            except (AttributeError, OSError):
-                pass
-    img = ImageOps.exif_transpose(img)
-    try:
-        img = img.convert("RGB")
-    except Image.DecompressionBombError as exc:
-        raise ValueError(f"image {path.name} is too large to decode") from exc
     if oversize_both:
         # Match orientation: thumbnail uses (w_cap, h_cap) so route long/short.
         w_cap, h_cap = (
@@ -114,7 +148,7 @@ def open_image_for_render(path: Path) -> Image.Image:
             else (MAX_SOURCE_SHORT, MAX_SOURCE_LONG)
         )
         img.thumbnail((w_cap, h_cap), Image.Resampling.LANCZOS)
-    elif max(img.size) > _MAX_SOURCE_LONG_SIDE:
+    elif img_long > _MAX_SOURCE_LONG_SIDE:
         img.thumbnail((_MAX_SOURCE_LONG_SIDE, _MAX_SOURCE_LONG_SIDE), Image.Resampling.LANCZOS)
     return img
 

@@ -18,6 +18,7 @@ import logging
 import shutil
 import threading
 import time
+import xml.etree.ElementTree as ET
 import zstd
 from abc import ABC, abstractmethod
 from dataclasses import asdict, replace
@@ -35,7 +36,7 @@ from hokku_server.image_record import (
     ConversionProgress,
     ImageRecord,
 )
-from hokku_server.image_renderer import IMAGE_EXTENSIONS
+from hokku_server.image_renderer import IMAGE_EXTENSIONS, SVG_PROBE_DIMS, open_image_for_render
 from hokku_server.orientation import Orientation
 from hokku_server.screen_image_config import ScreenImageConfig
 
@@ -497,6 +498,12 @@ class AbstractImageManager(ABC):
     @staticmethod
     def _try_read_image_dims(path: Path) -> tuple[int | None, int | None, str | None]:
         """Open *path* just far enough to read pixel dimensions."""
+        if path.suffix.lower() == ".svg":
+            try:
+                ET.parse(path)
+            except ET.ParseError as e:
+                return None, None, f"SVG parse error: {e}"
+            return *SVG_PROBE_DIMS, None
         try:
             with Image.open(path) as img:
                 w, h = img.size
@@ -923,6 +930,12 @@ class AbstractImageManager(ABC):
 
     def _materialize_thumbnail(self, src_path: Path, thumb_path: Path) -> None:
         thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        if src_path.suffix.lower() == ".svg":
+            img = open_image_for_render(src_path)  # already RGB
+            img.thumbnail((_THUMB_MAX_PX, _THUMB_MAX_PX), Image.LANCZOS)
+            img.save(thumb_path, format="JPEG", quality=_THUMB_QUALITY)
+            img.close()
+            return
         with Image.open(src_path) as img:
             # Ask the JPEG decoder to downsample at decode time so we never
             # materialise the full pixel buffer just to produce a 300 px

@@ -23,6 +23,7 @@ rich-click
 # Runtime utilities
 psutil               # auto worker-count (resolve_worker_count) + memory-budget tests
 opencv-python-headless
+resvg-py           # SVG rasterisation (bundles Rust binary; no system lib required)
 
 # Tests
 pytest

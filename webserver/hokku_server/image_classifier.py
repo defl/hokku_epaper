@@ -18,6 +18,7 @@ import numpy as np
 from PIL import Image
 
 from hokku_server.app_config import AppConfig
+from hokku_server.image_renderer import open_image_for_render
 from hokku_server.filesystem import atomic_write_json
 from hokku_server.bounding_box import BoundingBox
 from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
@@ -114,6 +115,11 @@ class ImageClassifier:
     @staticmethod
     def _check_grayscale(path: Path) -> bool:
         """True iff the image at *path* is essentially monochrome."""
+        if path.suffix.lower() == ".svg":
+            img = open_image_for_render(path)
+            result = ImageClassifier._is_near_grayscale(img)
+            img.close()
+            return result
         with Image.open(path) as img:
             return ImageClassifier._is_near_grayscale(img)
 

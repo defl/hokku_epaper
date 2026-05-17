@@ -45,7 +45,7 @@ from hokku_server.orientation import Orientation
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import transform_bboxes_to_canvas_norm
 from hokku_server.image_config import _image_config_from_dict
-from hokku_server.image_renderer import IMAGE_EXTENSIONS, ImageRenderer, MAX_UPLOAD_BYTES, MAX_UPLOAD_PIXELS, open_image_for_render
+from hokku_server.image_renderer import IMAGE_EXTENSIONS, ImageRenderer, MAX_UPLOAD_BYTES, MAX_UPLOAD_PIXELS, SVG_PROBE_DIMS, open_image_for_render
 from hokku_server.presets import PRESET_IMAGE_CONFIGS, PRESET_META
 from hokku_server.screen_headers import parse_battery_header, parse_frame_state
 from hokku_server.time_utils import calculate_sleep_seconds, format_duration_human
@@ -252,19 +252,24 @@ def create_app(
             data = f.read()
             # Header-only dimension probe — cheap and safe even for bomb PNGs.
             # Reject before writing to disk so we never decode a giant buffer.
-            try:
-                with Image.open(io.BytesIO(data)) as probe:
-                    w, h = probe.size
-            except Image.DecompressionBombError:
-                skipped.append({
-                    "name": name,
-                    "reason": f"image too large; cap {MAX_UPLOAD_PIXELS:,} px",
-                })
-                continue
-            except (UnidentifiedImageError, OSError) as e:
-                logger.exception("Upload error for %r: %s: %s", name, type(e).__name__, e)
-                skipped.append({"name": name, "reason": "unreadable image"})
-                continue
+            # SVG: skip PIL probe; resvg always renders within screen resolution
+            # so the pixel budget is never exceeded.
+            if ext == ".svg":
+                w, h = SVG_PROBE_DIMS
+            else:
+                try:
+                    with Image.open(io.BytesIO(data)) as probe:
+                        w, h = probe.size
+                except Image.DecompressionBombError:
+                    skipped.append({
+                        "name": name,
+                        "reason": f"image too large; cap {MAX_UPLOAD_PIXELS:,} px",
+                    })
+                    continue
+                except (UnidentifiedImageError, OSError) as e:
+                    logger.exception("Upload error for %r: %s: %s", name, type(e).__name__, e)
+                    skipped.append({"name": name, "reason": "unreadable image"})
+                    continue
             if w * h > MAX_UPLOAD_PIXELS:
                 skipped.append({
                     "name": name,

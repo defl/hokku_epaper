@@ -836,7 +836,7 @@
 <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()" style="margin-top:12px;">
   <div class="upload-hint">Drag &amp; drop images here, or click to choose files</div>
   <div class="upload-sub">JPG, PNG, HEIC, WebP, AVIF, TIFF, BMP, GIF</div>
-  <input type="file" id="file-input" multiple accept="image/*,.heic,.heif,.avif,.tiff">
+  <input type="file" id="file-input" multiple accept="image/*,.heic,.heif,.avif,.tiff,.svg">
 </div>
 
 </section><!-- /sec-images -->
@@ -2707,7 +2707,7 @@ async function deleteImage(fname) {
 }
 
 // ── Upload + drag-and-drop ────────────────────────────────────────
-const ALLOWED_EXTS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp', '.gif', '.heic', '.heif', '.avif', '.jxl'];
+const ALLOWED_EXTS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp', '.gif', '.heic', '.heif', '.avif', '.jxl', '.svg'];
 
 function renderUploadProgress(rows) {
   const el = document.getElementById('upload-progress');

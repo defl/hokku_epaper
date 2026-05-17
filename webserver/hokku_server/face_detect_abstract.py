@@ -53,6 +53,8 @@ def load_image_resized(
     the detection backend itself, not differences in how each variant
     reads the source file.
     """
+    if path.suffix.lower() == ".svg":
+        return None  # cv2 cannot read SVG; face detection skipped for vector graphics
     img = cv2.imread(str(path))
     if img is None:
         return None
