@@ -111,7 +111,7 @@ def test_cache_hit_no_redetection(tmp_path):
     clf.screen_config_for(_COLOUR_LANDSCAPE, sha)
 
     # Patch detector at its source — must NOT be called on the second call.
-    with patch("hokku_server.image_classifier._check_grayscale", side_effect=AssertionError("should not re-detect")):
+    with patch.object(ImageClassifier, "_check_grayscale", side_effect=AssertionError("should not re-detect")):
         sc = clf.screen_config_for(_COLOUR_LANDSCAPE, sha)
 
     assert sc.image_config == cfg.image_config_default

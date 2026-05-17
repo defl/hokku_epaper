@@ -21,7 +21,7 @@ from PIL import Image
 
 from hokku_server.dither_abc import _DEFAULT_STRIPE_H as DEFAULT_STRIPE_H
 from hokku_server.image_config import ImageConfig
-from hokku_server.image_renderer import compress_dynamic_range, open_image_for_render
+from hokku_server.image_renderer import ImageRenderer, open_image_for_render
 from hokku_server.memory_guard import memory_limit, supported as memguard_supported
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 from tests._memory_helpers import (
@@ -119,7 +119,7 @@ def test_full_render_huge_png_rejected_by_cap() -> None:
 def test_compress_dynamic_range_peak_under_1mb_per_row() -> None:
     """Per-row DRC (the actual production unit) must allocate < 1 MB Python heap.
 
-    Streaming dither calls ``compress_dynamic_range`` once per panel row via
+    Streaming dither calls ``ImageRenderer.compress_dynamic_range`` once per panel row via
     the ``prep_row`` callback, so the meaningful unit is a single 3200-pixel
     row. Float64 intermediates would blow this; float32 should keep us well
     under 1 MB even with the function's transient buffers.
@@ -129,7 +129,7 @@ def test_compress_dynamic_range_peak_under_1mb_per_row() -> None:
         0, 256, size=(1, 3200, 3), dtype=np.uint8
     ).astype(np.float32)
     peak = peak_python_heap(
-        compress_dynamic_range,
+        ImageRenderer.compress_dynamic_range,
         row,
         scale_chroma=False, adaptive_vivid=False,
         vivid_chroma_low=10.0, vivid_chroma_high=40.0,
@@ -148,7 +148,7 @@ def test_compress_dynamic_range_peak_under_30mb_per_stripe() -> None:
     well under 30 MB Python heap.  Float64 anywhere in DRC's intermediates
     would push this above the 50 MB end-to-end budget.
 
-    Note: ``compress_dynamic_range`` itself currently allocates several
+    Note: ``ImageRenderer.compress_dynamic_range`` itself currently allocates several
     transient ~3.8 MB float32 buffers (lab, chroma, t, factor, xyz_out, etc.)
     that bring the per-stripe peak to ~25-30 MB.  That's fine for the
     end-to-end budget — the streaming dither holds at most one cached
@@ -160,7 +160,7 @@ def test_compress_dynamic_range_peak_under_30mb_per_stripe() -> None:
         0, 256, size=(DEFAULT_STRIPE_H, 3200, 3), dtype=np.uint8
     )
     peak = peak_python_heap(
-        compress_dynamic_range,
+        ImageRenderer.compress_dynamic_range,
         stripe.astype(np.float32),
         scale_chroma=False, adaptive_vivid=False,
         vivid_chroma_low=10.0, vivid_chroma_high=40.0,

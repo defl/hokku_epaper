@@ -53,7 +53,7 @@ from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.dither_unconstrained import UnconstrainedDither
 from hokku_server.dither_unconstrained_numba import NumbaUnconstrainedDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
-from hokku_server.image_classifier import _is_near_grayscale
+from hokku_server.image_classifier import ImageClassifier
 from hokku_server.image_config import ImageConfig, Orientation
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
@@ -199,11 +199,11 @@ def test_preview_from_panel_bytes_landscape_dimensions():
 # ── fast: B&W detection ───────────────────────────────────────────────────────
 
 def test_bw_detection_neutral_grey():
-    assert _is_near_grayscale(_make_grey(200, 200, 128))
+    assert ImageClassifier._is_near_grayscale(_make_grey(200, 200, 128))
 
 
 def test_bw_detection_vivid_red():
-    assert not _is_near_grayscale(Image.new("RGB", (200, 200), (220, 30, 30)))
+    assert not ImageClassifier._is_near_grayscale(Image.new("RGB", (200, 200), (220, 30, 30)))
 
 
 def test_bw_image_renders_without_error():

@@ -30,6 +30,18 @@ class ServeStats:
     total_show_count: int
     total_show_minutes: float
 
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ServeStats":
+        return cls(
+            show_index=int(d.get("show_index", 0)),
+            last_served_at=d.get("last_served_at"),
+            total_show_count=int(d.get("total_show_count", 0)),
+            total_show_minutes=float(d.get("total_show_minutes", 0.0)),
+        )
+
 
 @dataclass(frozen=True)
 class ScreenTelemetryEntry:
@@ -43,43 +55,22 @@ class ScreenTelemetryEntry:
     battery_seen_at: float | None
     frame_state: dict | None
 
+    def to_dict(self) -> dict:
+        return asdict(self)
 
-def _stats_to_dict(s: ServeStats) -> dict:
-    return asdict(s)
-
-
-def _stats_from_dict(d: dict) -> ServeStats:
-    return ServeStats(
-        show_index=int(d.get("show_index", 0)),
-        last_served_at=d.get("last_served_at"),
-        total_show_count=int(d.get("total_show_count", 0)),
-        total_show_minutes=float(d.get("total_show_minutes", 0.0)),
-    )
-
-
-def _telemetry_to_dict(t: ScreenTelemetryEntry) -> dict:
-    return asdict(t)
-
-
-def _telemetry_from_dict(d: dict) -> ScreenTelemetryEntry:
-    return ScreenTelemetryEntry(
-        ip=d.get("ip", ""),
-        request_count=int(d.get("request_count", 0)),
-        last_seen_at=float(d.get("last_seen_at", 0.0)),
-        last_sleep_seconds=d.get("last_sleep_seconds"),
-        last_served=d.get("last_served"),
-        battery_mv=d.get("battery_mv"),
-        battery_percent=d.get("battery_percent"),
-        battery_seen_at=d.get("battery_seen_at"),
-        frame_state=d.get("frame_state"),
-    )
-
-
-def _atomic_write_json(path: Path, payload: dict) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w") as f:
-        json.dump(payload, f, indent=2)
-    os.replace(tmp, path)
+    @classmethod
+    def from_dict(cls, d: dict) -> "ScreenTelemetryEntry":
+        return cls(
+            ip=d.get("ip", ""),
+            request_count=int(d.get("request_count", 0)),
+            last_seen_at=float(d.get("last_seen_at", 0.0)),
+            last_sleep_seconds=d.get("last_sleep_seconds"),
+            last_served=d.get("last_served"),
+            battery_mv=d.get("battery_mv"),
+            battery_percent=d.get("battery_percent"),
+            battery_seen_at=d.get("battery_seen_at"),
+            frame_state=d.get("frame_state"),
+        )
 
 
 class ServeScheduler:
@@ -295,6 +286,12 @@ class ServeScheduler:
 
     # ── Internals ────────────────────────────────────────────────
 
+    def _atomic_write_json(self, payload: dict) -> None:
+        tmp = self._db_path.with_suffix(self._db_path.suffix + ".tmp")
+        with open(tmp, "w") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, self._db_path)
+
     def _precompute_next_locked(self, ready_names: set[str]) -> None:
         """Pick and store the next image to serve. Must be called under self._lock.
 
@@ -361,12 +358,12 @@ class ServeScheduler:
             return
         for name, blob in data.get("by_name", {}).items():
             try:
-                self._stats[name] = _stats_from_dict(blob)
+                self._stats[name] = ServeStats.from_dict(blob)
             except (KeyError, TypeError, ValueError) as e:
                 print(f"  Warning: skipping malformed serve stats for {name!r}: {e}")
         for name, blob in data.get("screens", {}).items():
             try:
-                self._screens[name] = _telemetry_from_dict(blob)
+                self._screens[name] = ScreenTelemetryEntry.from_dict(blob)
             except (KeyError, TypeError, ValueError) as e:
                 print(f"  Warning: skipping malformed telemetry entry {name!r}: {e}")
         for name, blob in data.get("screen_configs", {}).items():
@@ -392,8 +389,8 @@ class ServeScheduler:
                 {"name": self._last_served[0], "served_at": self._last_served[1]}
                 if self._last_served else None
             ),
-            "by_name": {n: _stats_to_dict(s) for n, s in self._stats.items()},
-            "screens": {n: _telemetry_to_dict(t) for n, t in self._screens.items()},
+            "by_name": {n: s.to_dict() for n, s in self._stats.items()},
+            "screens": {n: t.to_dict() for n, t in self._screens.items()},
             "screen_configs": {n: c.to_dict() for n, c in self._screen_configs.items()},
         }
-        _atomic_write_json(self._db_path, payload)
+        self._atomic_write_json(payload)

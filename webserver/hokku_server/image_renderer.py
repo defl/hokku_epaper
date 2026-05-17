@@ -15,7 +15,6 @@ Usage::
 """
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import numpy as np
@@ -29,8 +28,6 @@ from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import (
     AbstractImageRenderer,
     Orientation,
-    _encode_panel_rgb_to_png,
-    _preview_canvas_dims,
 )
 from hokku_server.image_config import ImageConfig, Orientation
 
@@ -53,79 +50,6 @@ MAX_UPLOAD_PIXELS = MAX_IMAGE_PIXELS
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 GRAYSCALE_CHROMA_THRESHOLD = 8.0
-
-
-def _lab_to_rgb(lab) -> NDArray[np.float32]:
-    """float32 Lab → float32 sRGB.  Avoids float64 intermediates."""
-    f32 = np.float32
-    lab = np.asarray(lab, dtype=f32)
-    ref = np.array([0.95047, 1.00000, 1.08883], dtype=f32)
-    L = lab[..., 0]
-    a = lab[..., 1]
-    b_ch = lab[..., 2]
-    fy = (L + f32(16)) / f32(116)
-    fx = a / f32(500) + fy
-    fz = fy - b_ch / f32(200)
-    eps = f32(0.008856)
-    kappa = f32(903.3)
-    xyz_out = np.empty_like(lab)
-    fx3 = fx ** 3
-    fz3 = fz ** 3
-    xyz_out[..., 0] = np.where(fx3 > eps, fx3, (f32(116) * fx - f32(16)) / kappa) * ref[0]
-    xyz_out[..., 1] = np.where(L > kappa * eps, ((L + f32(16)) / f32(116)) ** 3, L / kappa) * ref[1]
-    xyz_out[..., 2] = np.where(fz3 > eps, fz3, (f32(116) * fz - f32(16)) / kappa) * ref[2]
-    M_inv = np.array([
-        [3.2404542, -1.5371385, -0.4985314],
-        [-0.9692660, 1.8760108, 0.0415560],
-        [0.0556434, -0.2040259, 1.0572252],
-    ], dtype=f32)
-    linear = np.clip(xyz_out @ M_inv.T, f32(0), f32(1))
-    srgb = np.where(linear <= f32(0.0031308), linear * f32(12.92),
-                    f32(1.055) * (linear ** f32(1.0 / 2.4)) - f32(0.055))
-    return np.clip(srgb * f32(255), f32(0), f32(255))
-
-
-def compress_dynamic_range(
-    img_array,
-    *,
-    scale_chroma: bool,
-    adaptive_vivid: bool,
-    vivid_chroma_low: float,
-    vivid_chroma_high: float,
-) -> NDArray[np.float32]:
-    """Map source Lab range into the panel's reachable L* range."""
-    f32 = np.float32
-    rgb = np.asarray(img_array, dtype=f32)
-    lab = rgb_to_lab(rgb, dtype=f32)
-    L = lab[..., 0]
-    a = lab[..., 1]
-    b_ch = lab[..., 2]
-    black_L = f32(PALETTE_LAB[0, 0])
-    white_L = f32(PALETTE_LAB[1, 0])
-    c_ratio = f32((float(white_L) - float(black_L)) / 100.0)
-    np.multiply(L, f32((float(white_L) - float(black_L)) / 100.0), out=L)
-    np.add(L, black_L, out=L)
-
-    # Soft highlight rolloff: tanh shoulder for the top 15% of the L* range.
-    # Prevents near-white regions from hard-clipping to the panel's white ink;
-    # always on — no config flag needed (monotone, transparent when not clipping).
-    threshold = black_L + f32(0.85) * (white_L - black_L)
-    headroom = white_L - threshold
-    above = L > threshold
-    if np.any(above):
-        delta = L[above] - threshold
-        L[above] = (threshold + headroom * np.tanh(delta / headroom)).astype(f32)
-
-    if adaptive_vivid:
-        chroma = np.sqrt(a * a + b_ch * b_ch)
-        t = np.clip((chroma - f32(vivid_chroma_low)) / f32(vivid_chroma_high - vivid_chroma_low), f32(0.0), f32(1.0))
-        c_factor = c_ratio + (f32(1.0) - c_ratio) * t
-        np.multiply(a, c_factor, out=a)
-        np.multiply(b_ch, c_factor, out=b_ch)
-    elif scale_chroma:
-        np.multiply(a, c_ratio, out=a)
-        np.multiply(b_ch, c_ratio, out=b_ch)
-    return _lab_to_rgb(lab)
 
 
 _MAX_SOURCE_LONG_SIDE = max(3200, 1800)  # FULL_W, PANEL_H values
@@ -195,25 +119,6 @@ def open_image_for_render(path: Path) -> Image.Image:
     return img
 
 
-def render_panel_bytes_from_path(
-    path: Path,
-    cfg,
-    orientation: str,
-    dither=None,
-) -> bytes:
-    """Full convert: open file → render full panel bytes.  Logs progress."""
-    print(f"Converting: {path.name}")
-    t0 = time.time()
-    img = open_image_for_render(path)
-    print(f"  {path.name}: {img.size[0]}x{img.size[1]}")
-    if dither is None:
-        dither = NumbaStreamingDither()
-    renderer = ImageRenderer(dither)
-    raw = renderer.render_panel_bytes(img, cfg, orientation)
-    print(f"  {path.name}: done in {time.time() - t0:.1f}s")
-    return raw
-
-
 class ImageRenderer(AbstractImageRenderer):
     """Production renderer: fit/crop → enhancements → dither strategy.
 
@@ -227,6 +132,79 @@ class ImageRenderer(AbstractImageRenderer):
 
     def __init__(self, dither: AbstractDither) -> None:
         self._dither = dither
+
+    @staticmethod
+    def _lab_to_rgb(lab) -> NDArray[np.float32]:
+        """float32 Lab → float32 sRGB.  Avoids float64 intermediates."""
+        f32 = np.float32
+        lab = np.asarray(lab, dtype=f32)
+        ref = np.array([0.95047, 1.00000, 1.08883], dtype=f32)
+        L = lab[..., 0]
+        a = lab[..., 1]
+        b_ch = lab[..., 2]
+        fy = (L + f32(16)) / f32(116)
+        fx = a / f32(500) + fy
+        fz = fy - b_ch / f32(200)
+        eps = f32(0.008856)
+        kappa = f32(903.3)
+        xyz_out = np.empty_like(lab)
+        fx3 = fx ** 3
+        fz3 = fz ** 3
+        xyz_out[..., 0] = np.where(fx3 > eps, fx3, (f32(116) * fx - f32(16)) / kappa) * ref[0]
+        xyz_out[..., 1] = np.where(L > kappa * eps, ((L + f32(16)) / f32(116)) ** 3, L / kappa) * ref[1]
+        xyz_out[..., 2] = np.where(fz3 > eps, fz3, (f32(116) * fz - f32(16)) / kappa) * ref[2]
+        M_inv = np.array([
+            [3.2404542, -1.5371385, -0.4985314],
+            [-0.9692660, 1.8760108, 0.0415560],
+            [0.0556434, -0.2040259, 1.0572252],
+        ], dtype=f32)
+        linear = np.clip(xyz_out @ M_inv.T, f32(0), f32(1))
+        srgb = np.where(linear <= f32(0.0031308), linear * f32(12.92),
+                        f32(1.055) * (linear ** f32(1.0 / 2.4)) - f32(0.055))
+        return np.clip(srgb * f32(255), f32(0), f32(255))
+
+    @staticmethod
+    def compress_dynamic_range(
+        img_array,
+        *,
+        scale_chroma: bool,
+        adaptive_vivid: bool,
+        vivid_chroma_low: float,
+        vivid_chroma_high: float,
+    ) -> NDArray[np.float32]:
+        """Map source Lab range into the panel's reachable L* range."""
+        f32 = np.float32
+        rgb = np.asarray(img_array, dtype=f32)
+        lab = rgb_to_lab(rgb, dtype=f32)
+        L = lab[..., 0]
+        a = lab[..., 1]
+        b_ch = lab[..., 2]
+        black_L = f32(PALETTE_LAB[0, 0])
+        white_L = f32(PALETTE_LAB[1, 0])
+        c_ratio = f32((float(white_L) - float(black_L)) / 100.0)
+        np.multiply(L, f32((float(white_L) - float(black_L)) / 100.0), out=L)
+        np.add(L, black_L, out=L)
+
+        # Soft highlight rolloff: tanh shoulder for the top 15% of the L* range.
+        # Prevents near-white regions from hard-clipping to the panel's white ink;
+        # always on — no config flag needed (monotone, transparent when not clipping).
+        threshold = black_L + f32(0.85) * (white_L - black_L)
+        headroom = white_L - threshold
+        above = L > threshold
+        if np.any(above):
+            delta = L[above] - threshold
+            L[above] = (threshold + headroom * np.tanh(delta / headroom)).astype(f32)
+
+        if adaptive_vivid:
+            chroma = np.sqrt(a * a + b_ch * b_ch)
+            t = np.clip((chroma - f32(vivid_chroma_low)) / f32(vivid_chroma_high - vivid_chroma_low), f32(0.0), f32(1.0))
+            c_factor = c_ratio + (f32(1.0) - c_ratio) * t
+            np.multiply(a, c_factor, out=a)
+            np.multiply(b_ch, c_factor, out=b_ch)
+        elif scale_chroma:
+            np.multiply(a, c_ratio, out=a)
+            np.multiply(b_ch, c_ratio, out=b_ch)
+        return ImageRenderer._lab_to_rgb(lab)
 
     @property
     def dither(self) -> AbstractDither:
@@ -261,7 +239,7 @@ class ImageRenderer(AbstractImageRenderer):
                 f32 = adaptive_saturate(stripe_uint8, sat_max, sat_lo, sat_hi)
             else:
                 f32 = stripe_uint8.astype(np.float32)
-            f32 = compress_dynamic_range(
+            f32 = ImageRenderer.compress_dynamic_range(
                 f32,
                 scale_chroma=cfg.scale_chroma,
                 adaptive_vivid=cfg.adaptive_vivid,

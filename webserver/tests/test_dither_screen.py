@@ -32,7 +32,7 @@ from hokku_server.display import (
 )
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
-from hokku_server.image_classifier import _is_near_grayscale
+from hokku_server.image_classifier import ImageClassifier
 from hokku_server.image_quality import image_compare
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
 
@@ -115,7 +115,7 @@ def _classify(
 
     if app_cfg.classifier_bw_detect_enabled:
         with Image.open(path) as img:
-            is_bw = _is_near_grayscale(img)
+            is_bw = ImageClassifier._is_near_grayscale(img)
 
     if app_cfg.classifier_face_detect_enabled and face_detector is not None:
         has_face = face_detector.has_face(path)

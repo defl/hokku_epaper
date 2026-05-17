@@ -35,9 +35,9 @@ from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming import PALETTE_LAB, adaptive_saturate, rgb_to_lab
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import _apply_prepare_enhancements
-from hokku_server.image_classifier import _is_near_grayscale
+from hokku_server.image_classifier import ImageClassifier
 from hokku_server.image_config import ImageConfig, _bw_safe_image_config
-from hokku_server.image_renderer import ImageRenderer, compress_dynamic_range, open_image_for_render
+from hokku_server.image_renderer import ImageRenderer, open_image_for_render
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 from tests._helpers import is_oversize_fixture
@@ -122,7 +122,7 @@ def _test_images() -> list[Path]:
 def test_drc_maps_white_below_display_white():
     """Pure white should map at or below the panel's white L* (rolloff may pull it lower)."""
     white = np.full((1, 1, 3), 255.0, dtype=np.float32)
-    out = compress_dynamic_range(
+    out = ImageRenderer.compress_dynamic_range(
         white, scale_chroma=False, adaptive_vivid=False,
         vivid_chroma_low=5.0, vivid_chroma_high=15.0,
     )
@@ -138,7 +138,7 @@ def test_drc_maps_white_below_display_white():
 def test_drc_maps_black_above_display_black():
     """A pure-black input should map to the panel's black L*, not stay at L*=0."""
     black = np.zeros((1, 1, 3), dtype=np.float32)
-    out = compress_dynamic_range(
+    out = ImageRenderer.compress_dynamic_range(
         black, scale_chroma=False, adaptive_vivid=False,
         vivid_chroma_low=5.0, vivid_chroma_high=15.0,
     )
@@ -153,7 +153,7 @@ def test_drc_output_in_valid_rgb_range():
     """DRC output must be clipped to [0, 255]."""
     arr = _make_gradient().convert("RGB")
     np_arr = np.asarray(arr, dtype=np.float32)
-    out = compress_dynamic_range(
+    out = ImageRenderer.compress_dynamic_range(
         np_arr, scale_chroma=True, adaptive_vivid=False,
         vivid_chroma_low=5.0, vivid_chroma_high=15.0,
     )
@@ -164,11 +164,11 @@ def test_drc_output_in_valid_rgb_range():
 def test_drc_scale_chroma_reduces_saturation():
     """With scale_chroma=True, a saturated pixel's chroma should be reduced."""
     vivid_red = np.array([[[200.0, 20.0, 20.0]]], dtype=np.float32)
-    out_scaled = compress_dynamic_range(
+    out_scaled = ImageRenderer.compress_dynamic_range(
         vivid_red, scale_chroma=True, adaptive_vivid=False,
         vivid_chroma_low=5.0, vivid_chroma_high=15.0,
     )
-    out_plain = compress_dynamic_range(
+    out_plain = ImageRenderer.compress_dynamic_range(
         vivid_red, scale_chroma=False, adaptive_vivid=False,
         vivid_chroma_low=5.0, vivid_chroma_high=15.0,
     )
@@ -185,11 +185,11 @@ def test_drc_adaptive_vivid_preserves_more_chroma_than_scale_chroma():
     plain scale_chroma (which scales all chroma down by c_ratio ≈ 0.6).
     """
     vivid_red = np.array([[[200.0, 20.0, 20.0]]], dtype=np.float32)
-    out_vivid = compress_dynamic_range(
+    out_vivid = ImageRenderer.compress_dynamic_range(
         vivid_red, scale_chroma=False, adaptive_vivid=True,
         vivid_chroma_low=5.0, vivid_chroma_high=15.0,
     )
-    out_scaled = compress_dynamic_range(
+    out_scaled = ImageRenderer.compress_dynamic_range(
         vivid_red, scale_chroma=True, adaptive_vivid=False,
         vivid_chroma_low=5.0, vivid_chroma_high=15.0,
     )
@@ -205,11 +205,11 @@ def test_drc_adaptive_vivid_preserves_more_chroma_than_scale_chroma():
 def test_drc_adaptive_vivid_no_boost_for_neutral():
     """With adaptive_vivid=True, a neutral grey must not get a chroma boost."""
     grey = np.array([[[128.0, 128.0, 128.0]]], dtype=np.float32)
-    out_vivid = compress_dynamic_range(
+    out_vivid = ImageRenderer.compress_dynamic_range(
         grey, scale_chroma=False, adaptive_vivid=True,
         vivid_chroma_low=5.0, vivid_chroma_high=15.0,
     )
-    out_plain = compress_dynamic_range(
+    out_plain = ImageRenderer.compress_dynamic_range(
         grey, scale_chroma=False, adaptive_vivid=False,
         vivid_chroma_low=5.0, vivid_chroma_high=15.0,
     )
@@ -527,27 +527,27 @@ def test_clahe_keepout_no_crash_when_clip_limit_zero():
 # ── fast: _is_near_grayscale ──────────────────────────────────────────────────
 
 def test_near_grayscale_pure_grey():
-    assert _is_near_grayscale(_make_grey(100, 100, 128))
+    assert ImageClassifier._is_near_grayscale(_make_grey(100, 100, 128))
 
 
 def test_near_grayscale_white():
-    assert _is_near_grayscale(_make_grey(100, 100, 255))
+    assert ImageClassifier._is_near_grayscale(_make_grey(100, 100, 255))
 
 
 def test_near_grayscale_black():
-    assert _is_near_grayscale(_make_grey(100, 100, 0))
+    assert ImageClassifier._is_near_grayscale(_make_grey(100, 100, 0))
 
 
 def test_near_grayscale_vivid_red():
-    assert not _is_near_grayscale(Image.new("RGB", (100, 100), (220, 20, 20)))
+    assert not ImageClassifier._is_near_grayscale(Image.new("RGB", (100, 100), (220, 20, 20)))
 
 
 def test_near_grayscale_vivid_blue():
-    assert not _is_near_grayscale(Image.new("RGB", (100, 100), (20, 50, 200)))
+    assert not ImageClassifier._is_near_grayscale(Image.new("RGB", (100, 100), (20, 50, 200)))
 
 
 def test_near_grayscale_vivid_green():
-    assert not _is_near_grayscale(Image.new("RGB", (100, 100), (20, 180, 30)))
+    assert not ImageClassifier._is_near_grayscale(Image.new("RGB", (100, 100), (20, 180, 30)))
 
 
 def test_near_grayscale_mixed_mostly_grey():
@@ -556,7 +556,7 @@ def test_near_grayscale_mixed_mostly_grey():
     arr = np.full((100, 100, 3), 128, dtype=np.uint8)
     arr[:5, :5] = [220, 20, 20]   # tiny red patch — below the 95th-percentile
     img = Image.fromarray(arr)
-    assert _is_near_grayscale(img)
+    assert ImageClassifier._is_near_grayscale(img)
 
 
 def test_near_grayscale_forest_bw():
@@ -564,7 +564,7 @@ def test_near_grayscale_forest_bw():
     bw_path = _TEST_IMAGES_DIR / "Forest_road_Slavne_2017_BW_G9.jpg"
     assert bw_path.exists(), f"Test image missing from repo: {bw_path}"
     with open_image_for_render(bw_path) as img:
-        assert _is_near_grayscale(img), "BW forest image should be detected as grayscale"
+        assert ImageClassifier._is_near_grayscale(img), "BW forest image should be detected as grayscale"
 
 
 def test_near_grayscale_colour_photo():
@@ -572,7 +572,7 @@ def test_near_grayscale_colour_photo():
     colour_path = _TEST_IMAGES_DIR / "Actress_Anna_Unterberger-2.jpg"
     assert colour_path.exists(), f"Test image missing from repo: {colour_path}"
     with open_image_for_render(colour_path) as img:
-        assert not _is_near_grayscale(img), "Colour photo should not read as grayscale"
+        assert not ImageClassifier._is_near_grayscale(img), "Colour photo should not read as grayscale"
 
 
 # ── fast: _bw_safe_image_config ───────────────────────────────────────────────

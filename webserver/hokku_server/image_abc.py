@@ -35,14 +35,6 @@ if TYPE_CHECKING:
     pass
 
 
-def _preview_canvas_dims(orientation: Orientation, max_side_px: int) -> tuple[int, int]:
-    """Scale (FULL_W, PANEL_H) so the longer side is ≤ max_side_px."""
-    s = min(1.0, float(max_side_px) / float(max(FULL_W, PANEL_H)))
-    cw = max(1, int(FULL_W * s))
-    ch = max(1, int(PANEL_H * s))
-    return cw, ch
-
-
 def transform_bboxes_to_canvas_norm(
     bboxes_norm: tuple[BoundingBox, ...] | None,
     orig_w: int,
@@ -105,21 +97,11 @@ def transform_bboxes_to_canvas_norm(
     return out
 
 
-def _encode_panel_rgb_to_png(panel_rgb: NDArray[np.uint8], orientation: Orientation) -> bytes:
-    """Panel-memory RGB → PNG bytes in the visible (browser) orientation."""
-    img = Image.fromarray(np.asarray(panel_rgb, dtype=np.uint8))
-    if orientation == "landscape":
-        img = img.rotate(90, expand=True)
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-
 def preview_png_from_panel_bytes(panel_bytes: bytes, orientation: "Orientation") -> bytes:
     """Decode an already-rendered panel binary back to a PNG preview."""
     idx = panel_bytes_to_indices(panel_bytes)
     rgb = indices_to_preview_rgb(idx)
-    return _encode_panel_rgb_to_png(rgb, orientation)
+    return AbstractImageRenderer._encode_panel_rgb_to_png(rgb, orientation)
 
 
 def _apply_prepare_enhancements(
@@ -200,6 +182,26 @@ class AbstractImageRenderer(ABC):
     boolean padding mask.  Concrete subclasses implement ``render_indices()``
     which calls ``_prepare_canvas()`` and dispatches to their dither strategy.
     """
+
+    # ── Static helpers ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _preview_canvas_dims(orientation: Orientation, max_side_px: int) -> tuple[int, int]:
+        """Scale (FULL_W, PANEL_H) so the longer side is ≤ max_side_px."""
+        s = min(1.0, float(max_side_px) / float(max(FULL_W, PANEL_H)))
+        cw = max(1, int(FULL_W * s))
+        ch = max(1, int(PANEL_H * s))
+        return cw, ch
+
+    @staticmethod
+    def _encode_panel_rgb_to_png(panel_rgb: NDArray[np.uint8], orientation: Orientation) -> bytes:
+        """Panel-memory RGB → PNG bytes in the visible (browser) orientation."""
+        img = Image.fromarray(np.asarray(panel_rgb, dtype=np.uint8))
+        if orientation == "landscape":
+            img = img.rotate(90, expand=True)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
 
     # ── Template method ────────────────────────────────────────────────────
 
@@ -345,10 +347,10 @@ class AbstractImageRenderer(ABC):
         clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
     ) -> bytes:
         """Smaller panel → PNG preview bytes."""
-        cw, ch = _preview_canvas_dims(orientation, max_side_px)
+        cw, ch = self._preview_canvas_dims(orientation, max_side_px)
         idx = self.render_indices(
             img, cfg, orientation, cw, ch, crop_to_fill_threshold,
             clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
         )
         preview_rgb = indices_to_preview_rgb(idx)
-        return _encode_panel_rgb_to_png(preview_rgb, orientation)
+        return self._encode_panel_rgb_to_png(preview_rgb, orientation)

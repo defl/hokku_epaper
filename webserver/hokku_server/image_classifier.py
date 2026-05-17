@@ -26,27 +26,6 @@ _DB_NAME = "image_classifier.json"
 GRAYSCALE_CHROMA_THRESHOLD = 8.0
 
 
-def _is_near_grayscale(img) -> bool:
-    """True iff a PIL Image is essentially monochrome."""
-    thumb = img.copy()
-    thumb.thumbnail((200, 200))
-    arr = np.asarray(thumb.convert("RGB"), dtype=np.float64)
-    lab = rgb_to_lab(arr)
-    chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
-    p95_chroma = float(np.percentile(chroma, 95))
-    is_bw = p95_chroma < GRAYSCALE_CHROMA_THRESHOLD
-    import sys
-    status = "B&W" if is_bw else "NOT B&W"
-    print(f"  [B&W check] 95th %ile chroma = {p95_chroma:.2f} (threshold {GRAYSCALE_CHROMA_THRESHOLD}): {status}", file=sys.stderr)
-    return is_bw
-
-
-def _check_grayscale(path: Path) -> bool:
-    """True iff the image at *path* is essentially monochrome."""
-    with Image.open(path) as img:
-        return _is_near_grayscale(img)
-
-
 @dataclass(frozen=True)
 class Observations:
     """Raw per-image detection results.  None = not yet observed."""
@@ -114,6 +93,27 @@ class ImageClassifier:
 
     # ── Internals ────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _is_near_grayscale(img) -> bool:
+        """True iff a PIL Image is essentially monochrome."""
+        import sys
+        thumb = img.copy()
+        thumb.thumbnail((200, 200))
+        arr = np.asarray(thumb.convert("RGB"), dtype=np.float64)
+        lab = rgb_to_lab(arr)
+        chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
+        p95_chroma = float(np.percentile(chroma, 95))
+        is_bw = p95_chroma < GRAYSCALE_CHROMA_THRESHOLD
+        status = "B&W" if is_bw else "NOT B&W"
+        print(f"  [B&W check] 95th %ile chroma = {p95_chroma:.2f} (threshold {GRAYSCALE_CHROMA_THRESHOLD}): {status}", file=sys.stderr)
+        return is_bw
+
+    @staticmethod
+    def _check_grayscale(path: Path) -> bool:
+        """True iff the image at *path* is essentially monochrome."""
+        with Image.open(path) as img:
+            return ImageClassifier._is_near_grayscale(img)
+
     def _classify(self, path: Path, sha1: str) -> tuple[ImageConfig, tuple[BoundingBox, ...]]:
         """Return (image_config, face_bboxes) for this image."""
         cfg = self._config
@@ -125,7 +125,7 @@ class ImageClassifier:
             dirty = False
 
             if cfg.classifier_bw_detect_enabled and obs.is_bw is None:
-                obs = replace(obs, is_bw=_check_grayscale(path))
+                obs = replace(obs, is_bw=self._check_grayscale(path))
                 dirty = True
 
             if cfg.classifier_face_detect_enabled and obs.face_bboxes is None:

@@ -17,13 +17,13 @@ from PIL import Image as _Image
 
 from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES
-from hokku_server.image_manager_abstract import _hash_name
+from hokku_server.image_manager_abstract import AbstractImageManager
 from hokku_server.screen_image_config import ScreenImageConfig
 
 
 def test_hash_name_stable():
-    assert _hash_name("photo.jpg") == _hash_name("photo.jpg")
-    assert _hash_name("photo.jpg") != _hash_name("photo.png")
+    assert AbstractImageManager._hash_name("photo.jpg") == AbstractImageManager._hash_name("photo.jpg")
+    assert AbstractImageManager._hash_name("photo.jpg") != AbstractImageManager._hash_name("photo.png")
 
 
 def test_register_and_convert(app_config: AppConfig, image_manager_factory, make_test_image):
@@ -103,8 +103,7 @@ def test_remove_clears_cache(app_config: AppConfig, image_manager_factory, make_
     mgr.wait_for_idle()
     rec = mgr.status("a.png")
     assert rec is not None
-    from hokku_server.image_record import slug_for
-    panel_path = Path(app_config.cache_dir) / "images" / f"{rec.name_hash}_{slug_for(rec, app_config.orientation)}_panel.bin.zst"
+    panel_path = Path(app_config.cache_dir) / "images" / f"{rec.name_hash}_{rec.slug(app_config.orientation)}_panel.bin.zst"
     assert panel_path.exists()
 
     mgr.remove("a.png")

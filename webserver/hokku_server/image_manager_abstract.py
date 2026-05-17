@@ -32,9 +32,6 @@ from hokku_server.image_classifier import ImageClassifier
 from hokku_server.image_record import (
     ConversionProgress,
     ImageRecord,
-    record_from_dict,
-    record_to_dict,
-    slug_for,
 )
 from hokku_server.image_renderer import IMAGE_EXTENSIONS
 from hokku_server.orientation import Orientation
@@ -52,42 +49,6 @@ _THUMB_MAX_PX = 300
 _THUMB_QUALITY = 85
 
 _KNOWN_SUFFIXES = (_PANEL_SUFFIX, _PREVIEW_SUFFIX, _THUMB_SUFFIX)
-
-
-def _hash_name(name: str) -> str:
-    return hashlib.sha1(name.encode("utf-8")).hexdigest()[:_NAME_HASH_LEN]
-
-
-def _sha1_of_file(path: Path) -> str:
-    h = hashlib.sha1()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _try_read_image_dims(path: Path) -> tuple[int | None, int | None, str | None]:
-    """Open *path* just far enough to read pixel dimensions.
-
-    PIL is lazy — for most formats it reads only the file header, not the
-    full pixel data, so this is fast even for large images.
-
-    Returns ``(width, height, None)`` on success or ``(None, None, error)``
-    on failure.
-    """
-    try:
-        with Image.open(path) as img:
-            w, h = img.size
-        return w, h, None
-    except Exception as e:
-        return None, None, f"{type(e).__name__}: {e}"
-
-
-def _atomic_write_json(path: Path, payload: dict) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w") as f:
-        json.dump(payload, f, indent=2)
-    os.replace(tmp, path)
 
 
 class AbstractImageManager(ABC):
@@ -334,7 +295,7 @@ class AbstractImageManager(ABC):
         rec = self._records.get(name)
         if rec is None or rec.convert_status != "ok":
             return None
-        s = slug_for(rec, orientation)
+        s = rec.slug(orientation)
         if not s:
             return None
         path = self._panel_path(rec.name_hash, s)
@@ -368,7 +329,7 @@ class AbstractImageManager(ABC):
         rec = self._records.get(name)
         if rec is None or rec.convert_status != "ok":
             return None
-        s = slug_for(rec, self._config.orientation)
+        s = rec.slug(self._config.orientation)
         if not s:
             return None
         path = self._preview_path(rec.name_hash, s)
@@ -519,6 +480,34 @@ class AbstractImageManager(ABC):
 
     # ── Internals ────────────────────────────────────────────────
 
+    @staticmethod
+    def _hash_name(name: str) -> str:
+        return hashlib.sha1(name.encode("utf-8")).hexdigest()[:_NAME_HASH_LEN]
+
+    @staticmethod
+    def _sha1_of_file(path: Path) -> str:
+        h = hashlib.sha1()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    @staticmethod
+    def _try_read_image_dims(path: Path) -> tuple[int | None, int | None, str | None]:
+        """Open *path* just far enough to read pixel dimensions."""
+        try:
+            with Image.open(path) as img:
+                w, h = img.size
+            return w, h, None
+        except Exception as e:
+            return None, None, f"{type(e).__name__}: {e}"
+
+    def _atomic_write_json(self, payload: dict) -> None:
+        tmp = self._db_path.with_suffix(self._db_path.suffix + ".tmp")
+        with open(tmp, "w") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, self._db_path)
+
     def _panel_path(self, name_hash: str, slug: str) -> Path:
         return self._images_dir / f"{name_hash}_{slug}{_PANEL_SUFFIX}"
 
@@ -545,24 +534,24 @@ class AbstractImageManager(ABC):
             return
         for name, rec_dict in data.get("images", {}).items():
             try:
-                self._records[name] = record_from_dict(rec_dict)
+                self._records[name] = ImageRecord.from_dict(rec_dict)
             except (KeyError, TypeError, ValueError) as e:
                 print(f"  Warning: skipping malformed db entry {name!r}: {e}")
 
     def _save_db(self) -> None:
         payload = {
             "version": _DB_VERSION,
-            "images": {n: record_to_dict(r) for n, r in self._records.items()},
+            "images": {n: r.to_dict() for n, r in self._records.items()},
         }
-        _atomic_write_json(self._db_path, payload)
+        self._atomic_write_json(payload)
 
     def _register_new(self, name: str, src_path: Path) -> None:
         st = src_path.stat()
-        w, h, dim_err = _try_read_image_dims(src_path)
+        w, h, dim_err = self._try_read_image_dims(src_path)
         self._records[name] = ImageRecord(
             name=name,
-            name_hash=_hash_name(name),
-            original_sha1=_sha1_of_file(src_path),
+            name_hash=self._hash_name(name),
+            original_sha1=self._sha1_of_file(src_path),
             original_size_bytes=st.st_size,
             original_mtime=st.st_mtime,
             added_at=time.time(),
@@ -614,10 +603,10 @@ class AbstractImageManager(ABC):
             )
             if content_changed:
                 # Cheap heuristic missed; fall back to sha1.
-                new_sha = _sha1_of_file(src_path)
+                new_sha = self._sha1_of_file(src_path)
                 if new_sha != existing.original_sha1:
                     self._delete_cache_files(existing.name_hash)
-                    w, h, dim_err = _try_read_image_dims(src_path)
+                    w, h, dim_err = self._try_read_image_dims(src_path)
                     self._records[name] = replace(
                         existing,
                         original_sha1=new_sha,
@@ -636,7 +625,7 @@ class AbstractImageManager(ABC):
             if existing.convert_status == "ok":
                 screen_cfg = self._classifier.screen_config_for(src_path, existing.original_sha1)
                 predicted_slug = screen_cfg.cache_slug()
-                if slug_for(existing, self._config.orientation) != predicted_slug:
+                if existing.slug(self._config.orientation) != predicted_slug:
                     self._records[name] = replace(
                         existing,
                         convert_status="pending",
