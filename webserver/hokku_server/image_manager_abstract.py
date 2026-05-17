@@ -262,13 +262,7 @@ class AbstractImageManager(ABC):
         # can be served in its preferred orientation without waiting for re-sync.
         for rec in pending:
             try:
-                base_cfg = screen_configs.get(rec.name)
-                self._submit_one(rec.name, base_cfg)
-
-                if base_cfg is not None:
-                    for orientation in Orientation:
-                        if orientation != base_cfg.orientation:
-                            self._render_orientation(rec.name, replace(base_cfg, orientation=orientation))
+                self._submit_one(rec.name, screen_configs.get(rec.name))
             except Exception as e:
                 # Defensive: _submit_one() should handle its own errors, but catch
                 # any unexpected exceptions to prevent entire sync() from crashing.
@@ -783,28 +777,48 @@ class AbstractImageManager(ABC):
                     original_sha1 = self._records[name].original_sha1
                 screen_cfg = self._classifier.screen_config_for(src_path, original_sha1)
 
-            expected_slug = screen_cfg.cache_slug()
-
             # _inflight was already populated by sync() under the lock, so no need
             # to add here.  The assert is a safety net during development.
             assert name in self._inflight, f"{name!r} missing from _inflight at dispatch"
 
-            render_args = (
-                str(src_path),
-                asdict(screen_cfg.image_config),
-                screen_cfg.orientation,
-                screen_cfg.crop_to_fill_threshold,
-                tuple(asdict(b) for b in screen_cfg.clahe_keepout_bboxes) if screen_cfg.clahe_keepout_bboxes else None,
-            )
-            print(f"  Submitted {name!r} for dithering")
-            self._dispatch_render(
-                name, expected_slug, screen_cfg.orientation, render_args, time.monotonic(),
-                update_status=True,
-            )
+            # Dispatch primary orientation (manages lifecycle: pending → ok).
+            self._dispatch_cfg(name, screen_cfg, update_status=True)
+
+            # Dispatch every other orientation (no lifecycle side-effects).
+            for orientation in Orientation:
+                if orientation != screen_cfg.orientation:
+                    self._dispatch_cfg(name, replace(screen_cfg, orientation=orientation), update_status=False)
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             print(f"  Failed to submit {name!r}: {err}")
             self._mark_as_failed(name, err)
+
+    def _dispatch_cfg(self, name: str, cfg: ScreenImageConfig, *, update_status: bool) -> None:
+        """File-check then dispatch one (image, orientation) render job.
+
+        If the panel file for this cfg's slug already exists the orientation
+        slug is recorded in the DB and no render is dispatched.
+        ``update_status=True`` drives the primary lifecycle (pending → ok,
+        progress counter); ``update_status=False`` only writes files and
+        updates the orientation slug.
+        """
+        with self._db_lock:
+            rec = self._records.get(name)
+        if rec is None:
+            return
+        slug = cfg.cache_slug()
+        if self._panel_path(rec.name_hash, slug).exists():
+            self._set_orientation_slug(name, cfg.orientation, slug)
+            return
+        render_args = (
+            str(self._upload_dir / name),
+            asdict(cfg.image_config),
+            cfg.orientation,
+            cfg.crop_to_fill_threshold,
+            tuple(asdict(b) for b in cfg.clahe_keepout_bboxes) if cfg.clahe_keepout_bboxes else None,
+        )
+        print(f"  Submitted {name!r} for dithering ({cfg.orientation})")
+        self._dispatch_render(name, slug, cfg.orientation, render_args, time.monotonic(), update_status=update_status)
 
     def _set_orientation_slug(self, name: str, orientation: Orientation, slug: str) -> None:
         """Update landscape_image_config_slug or portrait_image_config_slug in the record."""
@@ -817,36 +831,6 @@ class AbstractImageManager(ABC):
             else:
                 self._records[name] = replace(cur, portrait_image_config_slug=slug)
             self._save_db()
-
-    def _render_orientation(self, name: str, cfg: ScreenImageConfig) -> None:
-        """Dispatch a render for an alternate orientation without lifecycle side-effects.
-
-        Checks the cache first — if the panel file already exists the slug is
-        recorded and no render is dispatched.  The done callback writes files
-        and updates the orientation slug only; convert_status and _progress are
-        not touched.
-        """
-        with self._db_lock:
-            rec = self._records.get(name)
-        if rec is None:
-            return
-        slug = cfg.cache_slug()
-        panel_path = self._panel_path(rec.name_hash, slug)
-        if panel_path.exists():
-            self._set_orientation_slug(name, cfg.orientation, slug)
-            return
-        render_args = (
-            str(self._upload_dir / name),
-            asdict(cfg.image_config),
-            cfg.orientation,
-            cfg.crop_to_fill_threshold,
-            tuple(asdict(b) for b in cfg.clahe_keepout_bboxes) if cfg.clahe_keepout_bboxes else None,
-        )
-        print(f"  Submitted {name!r} for dithering ({cfg.orientation})")
-        self._dispatch_render(
-            name, slug, cfg.orientation, render_args, time.monotonic(),
-            update_status=False,
-        )
 
     def _on_render_done(
         self,
