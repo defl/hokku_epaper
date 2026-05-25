@@ -1,4 +1,4 @@
-hokku-server (3.0.1~dev.1-1) unstable; urgency=medium
+hokku-server (3.0.0-2) unstable; urgency=medium
 
   * fix: add resvg-py to postinst pip installs (SVG support was broken on fresh install)
 
