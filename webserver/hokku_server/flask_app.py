@@ -85,7 +85,10 @@ def _resolve_static_folder() -> Path:
 
 
 def _read_git_describe() -> tuple[str, str | None]:
-    """Returns (git describe --tags output, full commit hash or None)."""
+    """Returns (version string, full commit hash or None).
+
+    Prefers git describe (dev tree); falls back to installed package metadata.
+    """
     try:
         repo_root = Path(__file__).resolve().parent.parent.parent
         describe = subprocess.check_output(
@@ -100,8 +103,15 @@ def _read_git_describe() -> tuple[str, str | None]:
             stderr=subprocess.DEVNULL,
             timeout=2,
         ).decode("ascii").strip()
-        return describe or "unknown", commit or None
+        if describe:
+            return describe, commit or None
     except (OSError, subprocess.SubprocessError):
+        pass
+
+    try:
+        from importlib.metadata import version
+        return version("hokku-server"), None
+    except Exception:
         return "unknown", None
 
 

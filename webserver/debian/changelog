@@ -1,3 +1,9 @@
+hokku-server (3.0.1~dev.3-1) unstable; urgency=medium
+
+  * fix: show installed package version in footer when git is unavailable
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 25 May 2026 00:00:00 +0000
+
 hokku-server (3.0.0-2) unstable; urgency=medium
 
   * fix: add resvg-py to postinst pip installs (SVG support was broken on fresh install)
