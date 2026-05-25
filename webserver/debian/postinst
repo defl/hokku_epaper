@@ -85,6 +85,14 @@ if ! python3 -c "import scipy.linalg.cython_blas" 2>/dev/null; then
     echo "Warning: Could not upgrade scipy. Numba JIT compilation may fail."
 fi
 
+# Install resvg-py via pip for SVG rasterisation support
+if ! python3 -c "import resvg_py" 2>/dev/null; then
+    echo "Installing resvg-py for SVG support..."
+    pip3 install --break-system-packages "resvg-py>=0.3" 2>/dev/null || \
+    pip3 install "resvg-py>=0.3" 2>/dev/null || \
+    echo "Warning: Could not install resvg-py. SVG support will be unavailable."
+fi
+
 # Install zeroconf via pip — required for mDNS / Bonjour advertisement so
 # the server is discoverable as "Hokku on <hostname>" on the local network
 # without needing to know the IP address.
