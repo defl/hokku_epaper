@@ -1,8 +1,8 @@
-hokku-server (3.0.0~beta6-1) unstable; urgency=medium
+hokku-server (3.0.0-1) unstable; urgency=medium
 
-  * Release v3.0.0-beta6
+  * Stable release v3.0.0
 
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 17 May 2026 00:00:00 +0000
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 24 May 2026 00:00:00 +0000
 
 hokku-server (3.0.0~beta5-3) unstable; urgency=medium
 
