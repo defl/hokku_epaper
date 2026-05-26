@@ -330,10 +330,11 @@ def create_app(
             return jsonify({"error": str(e)}), 409
         return jsonify({"ok": True, "next_image": name})
 
-    @app.route("/hokku/api/clear_cache", methods=["POST"])
-    def api_clear_cache():
+    @app.route("/hokku/api/clear_all_caches", methods=["POST"])
+    def api_clear_all_caches():
         state.manager.clear_caches()
-        state.manager.sync()  # kick off reconversion immediately
+        state.classifier.clear_cache()
+        state.manager.sync()
         return jsonify({"ok": True})
 
     @app.route("/hokku/api/screens/<string:name>", methods=["DELETE"])
@@ -375,17 +376,6 @@ def create_app(
         state.manager.scrub_stale_cache()
         return jsonify({"ok": True})
 
-    @app.route("/hokku/api/classifier/clear", methods=["POST"])
-    def api_classifier_clear():
-        """Wipe all cached classifier observations (is_bw / has_face) and trigger re-sync.
-
-        Deletes image_classifier.json and kicks off immediate re-classification.
-        Already-rendered panel .bin files are NOT touched — they are keyed by
-        ScreenImageConfig slug and remain valid unless the classification result changes.
-        """
-        state.classifier.clear_cache()
-        state.manager.sync()
-        return jsonify({"ok": True})
 
     # ── API: status + config ───────────────────────────────────
 
