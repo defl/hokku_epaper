@@ -4,6 +4,7 @@ One DB file (``serve_scheduler.json``) carries all of:
 - ``by_name``: per-image rotation pointer + cumulative stats
 - ``last_served``: which image was served last (used for time-shown attribution)
 - ``screens``: per-screen telemetry (request count, battery, frame state)
+- ``next_for``: pre-computed next image per orientation (LANDSCAPE, PORTRAIT, NEUTRAL)
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 from hokku_server.filesystem import atomic_write_json
 from hokku_server.image_manager_abstract import AbstractImageManager
+from hokku_server.image_record import ConvertStatus, ImageRecord
 from hokku_server.orientation import Orientation
 from hokku_server.screen_config import ScreenConfig
 from hokku_server.screen_headers import battery_percent, parse_battery_header
@@ -87,51 +89,50 @@ class ServeScheduler:
         self._screens: dict[str, ScreenTelemetryEntry] = {}
         self._screen_configs: dict[str, ScreenConfig] = {}
         self._last_served: tuple[str, float] | None = None
-        self._next_name: str | None = None
+        self._next_for: dict[Orientation, str | None] = {o: None for o in Orientation}
         self._load()
         # Pre-determine the next image right now so the UI can show it
         # immediately without waiting for the first screen request.
         with self._lock:
-            ready = [r for r in self._manager.list() if r.convert_status == "ok"]
+            ready = [r for r in self._manager.list() if r.convert_status == ConvertStatus.OK]
             if ready:
                 ready_names = {r.name for r in ready}
                 self._reconcile(ready_names)
-                if self._next_name is None or self._next_name not in ready_names:
-                    self._precompute_next_locked(ready_names)
+                self._precompute_all_locked(ready)
 
     # ── Rotation ─────────────────────────────────────────────────
 
-    def pick_next(self) -> str | None:
-        """Return the pre-determined next image (or recompute if it became invalid).
+    def pick_next(self, orientation: Orientation) -> str | None:
+        """Return the pre-determined next image for the given orientation filter.
 
+        orientation=NEUTRAL means no filter — returns the global best next image.
         Reconciles state with manager.list() before returning — adds new
         entries, drops orphans, resets show_index for everyone when a new
         image appears so it gets a fair chance immediately.
         """
         with self._lock:
-            ready = [r for r in self._manager.list() if r.convert_status == "ok"]
+            ready = [r for r in self._manager.list() if r.convert_status == ConvertStatus.OK]
             ready_names = {r.name for r in ready}
             self._reconcile(ready_names)
 
             if not ready:
-                if self._next_name is not None:
-                    self._next_name = None
-                    self._save()
+                self._next_for = {o: None for o in Orientation}
+                self._save()
                 return None
 
-            # If the pre-determined choice is still valid, honour it.
-            if self._next_name in ready_names:
-                return self._next_name
+            # If the pre-computed choice for this orientation is still valid, honour it.
+            if self._next_for.get(orientation) in ready_names:
+                return self._next_for[orientation]
 
-            # Pre-determined image was deleted or not yet set — recompute.
-            self._precompute_next_locked(ready_names)
+            # Pre-computed choice is stale or absent — recompute all orientations.
+            self._precompute_all_locked(ready)
             self._save()
-            return self._next_name
+            return self._next_for.get(orientation)
 
     def mark_served(self, name: str) -> None:
         """Bump rotation pointer and stats. Attributes elapsed time to the
-        previously-served image. Pre-computes the *next* next image so the
-        UI reflects the upcoming choice immediately."""
+        previously-served image. Pre-computes the next image for all orientations
+        so the UI reflects the upcoming choice immediately."""
         with self._lock:
             now = time.time()
             self._attribute_show_time(now)
@@ -144,13 +145,11 @@ class ServeScheduler:
                 total_show_minutes=cur.total_show_minutes,
             )
             self._last_served = (name, now)
-            # Consumed — pick the next one right now so the badge is stable.
-            self._next_name = None
-            ready_names = {
-                r.name for r in self._manager.list() if r.convert_status == "ok"
-            }
+            # Consumed — recompute the next image for all orientations immediately.
+            ready = [r for r in self._manager.list() if r.convert_status == ConvertStatus.OK]
+            ready_names = {r.name for r in ready}
             self._reconcile(ready_names)
-            self._precompute_next_locked(ready_names)
+            self._precompute_all_locked(ready)
             self._save()
 
     # ── Stats retrieval ──────────────────────────────────────────
@@ -167,10 +166,10 @@ class ServeScheduler:
         with self._lock:
             return self._last_served
 
-    def peek_next(self) -> str | None:
-        """Return the pre-determined next image name without consuming it."""
+    def peek_next(self, orientation: Orientation) -> str | None:
+        """Return the pre-determined next image for the given orientation without consuming it."""
         with self._lock:
-            return self._next_name
+            return self._next_for.get(orientation)
 
     def set_next(self, name: str) -> None:
         """Force a specific image to be served next (overrides rotation order).
@@ -178,10 +177,13 @@ class ServeScheduler:
         Raises ValueError if the image is not currently ready to serve.
         """
         with self._lock:
-            ready = {r.name for r in self._manager.list() if r.convert_status == "ok"}
+            ready = {r.name for r in self._manager.list() if r.convert_status == ConvertStatus.OK}
             if name not in ready:
                 raise ValueError(f"Image {name!r} is not ready to serve")
-            self._next_name = name
+            # Override all orientation slots to the forced image (it will be
+            # filtered by orientation at serve time if a filter is active).
+            for o in Orientation:
+                self._next_for[o] = name
             self._save()
 
     # ── Screen telemetry ─────────────────────────────────────────
@@ -259,13 +261,18 @@ class ServeScheduler:
                 self._last_served = None
             self._save()
 
-    # ── Per-screen orientation config ────────────────────────────
+    # ── Per-screen config ─────────────────────────────────────────
 
-    def get_screen_orientation_override(self, name: str) -> Orientation | None:
-        """Return this screen's orientation override, or None if following global."""
+    def get_screen_config(self, name: str) -> ScreenConfig:
+        """Return the full config for a screen (default ScreenConfig if not set)."""
         with self._lock:
-            cfg = self._screen_configs.get(name)
-            return cfg.orientation_override if cfg else None
+            return self._screen_configs.get(name, ScreenConfig())
+
+    def set_screen_config(self, name: str, config: ScreenConfig) -> None:
+        """Persist the full config for a screen."""
+        with self._lock:
+            self._screen_configs[name] = config
+            self._save()
 
     def get_screen_orientation(self, name: str) -> Orientation:
         """Always returns the effective orientation for a screen.
@@ -273,46 +280,34 @@ class ServeScheduler:
         Returns the per-screen override if one is set; otherwise falls back
         to the global server orientation from AppConfig.
         """
-        with self._lock:
-            cfg = self._screen_configs.get(name)
-            override = cfg.orientation_override if cfg else None
+        cfg = self.get_screen_config(name)
+        override = cfg.orientation_override
         return override if override is not None else self._manager.config.orientation
-
-    def set_screen_orientation(self, name: str, orientation: Orientation | None) -> None:
-        """Set or clear the orientation override for a screen."""
-        with self._lock:
-            if orientation is None:
-                self._screen_configs.pop(name, None)
-            else:
-                self._screen_configs[name] = ScreenConfig(orientation_override=orientation)
-            self._save()
 
     # ── Internals ────────────────────────────────────────────────
 
     def _atomic_write_json(self, payload: dict) -> None:
         atomic_write_json(self._db_path, payload)
 
-    def _precompute_next_locked(self, ready_names: set[str]) -> None:
-        """Pick and store the next image to serve. Must be called under self._lock.
+    def _precompute_all_locked(self, ready: list[ImageRecord]) -> None:
+        """Pre-compute the next image for every orientation value.
 
-        Selects the image with the lowest show_index; alphabetical order breaks
-        ties deterministically so the choice is stable for the entire wait
-        period between serves.
+        NEUTRAL = unfiltered (best across all images).
+        LANDSCAPE/PORTRAIT = best among images matching that orientation filter.
+        Must be called under self._lock.
         """
-        if not ready_names:
-            self._next_name = None
-            return
-        entries = [
-            (name, self._stats[name].show_index)
-            for name in ready_names
-            if name in self._stats
-        ]
-        if not entries:
-            self._next_name = None
-            return
-        min_idx = min(idx for _, idx in entries)
-        candidates = sorted(name for name, idx in entries if idx == min_idx)
-        self._next_name = candidates[0]
+        for orientation in Orientation:
+            if orientation == Orientation.NEUTRAL:
+                eligible = ready
+            else:
+                eligible = [r for r in ready if r.matches_orientation_filter(orientation)]
+            if not eligible:
+                self._next_for[orientation] = None
+            else:
+                self._next_for[orientation] = min(
+                    (r.name for r in eligible),
+                    key=lambda n: (self._stats[n].show_index, n),
+                )
 
     def _reconcile(self, ready_names: set[str]) -> None:
         # Drop orphans.
@@ -377,14 +372,21 @@ class ServeScheduler:
                 self._last_served = (ls["name"], float(ls["served_at"]))
             except (TypeError, ValueError):
                 pass
-        nn = data.get("next_image")
-        if isinstance(nn, str):
-            self._next_name = nn
+        # Load next_for; migrate from old "next_image" key if needed.
+        next_for_raw = data.get("next_for")
+        if isinstance(next_for_raw, dict):
+            for o in Orientation:
+                val = next_for_raw.get(o.value)
+                self._next_for[o] = val if isinstance(val, str) else None
+        else:
+            old_next = data.get("next_image")
+            if isinstance(old_next, str):
+                self._next_for[Orientation.NEUTRAL] = old_next
 
     def _save(self) -> None:
         payload = {
             "version": 1,
-            "next_image": self._next_name,
+            "next_for": {o.value: self._next_for.get(o) for o in Orientation},
             "last_served": (
                 {"name": self._last_served[0], "served_at": self._last_served[1]}
                 if self._last_served else None

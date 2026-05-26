@@ -67,24 +67,26 @@ _SCREEN_SHORT = min(_SCREEN_W, _SCREEN_H)
 MAX_SOURCE_LONG = 2 * _SCREEN_LONG    # 3200
 MAX_SOURCE_SHORT = 2 * _SCREEN_SHORT  # 2400
 
-# Dimensions reported for SVG files in the image DB. SVGs are rasterised at
-# up to screen resolution so this is a conservative upper bound.
-SVG_PROBE_DIMS: tuple[int, int] = (_SCREEN_LONG, _SCREEN_SHORT)
+# Conservative upper bound used for the upload pixel-budget guard. The actual
+# rasterisation uses a square canvas so both orientations get full resolution.
+SVG_PROBE_DIMS: tuple[int, int] = (_SCREEN_LONG, _SCREEN_LONG)
 
 
 def _rasterize_svg(path: Path) -> Image.Image:
     """Rasterise an SVG to a PIL RGB Image, bounded at screen resolution.
 
     Uses resvg (bundled Rust binary) via resvg_py — no system library required.
-    Output is scaled to fit within _SCREEN_LONG × _SCREEN_SHORT so the internal
-    RGBA buffer stays within the 50 MB per-render budget.
+    A square canvas (_SCREEN_LONG × _SCREEN_LONG) is used so portrait and
+    landscape SVGs both get full-resolution rasterisation regardless of their
+    native orientation. resvg preserves aspect ratio, so the output is never
+    distorted.
     """
     try:
         png_bytes = resvg_py.svg_to_bytes(
             svg_path=str(path),
             dpi=96,            # CSS-standard DPI; correctly converts pt/mm/cm/in to px
             width=_SCREEN_LONG,
-            height=_SCREEN_SHORT,
+            height=_SCREEN_LONG,
             background="white",  # composite transparency against white, not black
         )
     except Exception as exc:

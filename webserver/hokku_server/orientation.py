@@ -14,3 +14,4 @@ class Orientation(str, enum.Enum):
 
     LANDSCAPE = "landscape"
     PORTRAIT = "portrait"
+    NEUTRAL = "neutral"   # square/unknown image — eligible for any screen orientation

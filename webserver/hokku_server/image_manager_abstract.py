@@ -444,10 +444,16 @@ class AbstractImageManager(ABC):
                         except OSError as e:
                             logger.warning("Could not remove cache file %s: %s", f.name, e)
             for name, rec in list(self._records.items()):
+                # Re-read dimensions so improvements to _try_read_image_dims
+                # (e.g. actual SVG viewport instead of probe dims) take effect.
+                src_path = self._upload_dir / name
+                w, h, dim_err = self._try_read_image_dims(src_path)
                 self._records[name] = replace(
                     rec,
-                    convert_status="pending",
-                    convert_error=None,
+                    image_width=w,
+                    image_height=h,
+                    convert_status="pending" if w is not None else "failed",
+                    convert_error=dim_err,
                     landscape_image_config_slug=None,
                     portrait_image_config_slug=None,
                 )
@@ -500,9 +506,52 @@ class AbstractImageManager(ABC):
         """Open *path* just far enough to read pixel dimensions."""
         if path.suffix.lower() == ".svg":
             try:
-                ET.parse(path)
+                tree = ET.parse(path)
             except ET.ParseError as e:
                 return None, None, f"SVG parse error: {e}"
+            root = tree.getroot()
+
+            def _svg_raster_dims(vw: float, vh: float) -> tuple[int, int]:
+                """Pixel dims resvg produces when fitting (vw, vh) into the square canvas."""
+                canvas = SVG_PROBE_DIMS[0]
+                scale = min(canvas / vw, canvas / vh)
+                return int(vw * scale), int(vh * scale)
+
+            def _parse_svg_length(s: str) -> float | None:
+                """Strip any absolute unit suffix and return the numeric value.
+                Units can be ignored here because both dims use the same unit
+                so the ratio (and thus the rasterised pixel output) is preserved.
+                Percentages have no intrinsic size and return None."""
+                s = s.strip()
+                if s.endswith("%"):
+                    return None
+                for unit in ("px", "pt", "mm", "cm", "in", "em", "ex", "pc"):
+                    if s.endswith(unit):
+                        s = s[: -len(unit)].strip()
+                        break
+                try:
+                    v = float(s)
+                    return v if v > 0 else None
+                except ValueError:
+                    return None
+
+            # viewBox="min-x min-y width height" → most reliable intrinsic size
+            vb = root.get("viewBox") or root.get("viewbox")
+            if vb:
+                parts = vb.strip().replace(",", " ").split()
+                if len(parts) == 4:
+                    try:
+                        vw, vh = float(parts[2]), float(parts[3])
+                        if vw > 0 and vh > 0:
+                            return int(vw), int(vh), None
+                    except ValueError:
+                        pass
+            # Fall back to width/height attributes
+            w_val = _parse_svg_length(root.get("width", ""))
+            h_val = _parse_svg_length(root.get("height", ""))
+            if w_val and h_val:
+                return int(w_val), int(h_val), None
+            # No usable intrinsic size (e.g. percentage width) — use probe dims
             return *SVG_PROBE_DIMS, None
         try:
             with Image.open(path) as img:
@@ -789,6 +838,8 @@ class AbstractImageManager(ABC):
 
             # Dispatch every other orientation (no lifecycle side-effects).
             for orientation in Orientation:
+                if orientation == Orientation.NEUTRAL:
+                    continue  # NEUTRAL is not a real render target
                 if orientation != screen_cfg.orientation:
                     self._dispatch_cfg(name, replace(screen_cfg, orientation=orientation), update_status=False)
         except Exception as e:

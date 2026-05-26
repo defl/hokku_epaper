@@ -11,7 +11,7 @@ import io
 import json
 import logging
 import time as _time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -41,6 +41,7 @@ import subprocess
 from hokku_server.app_state import AppState
 from hokku_server.app_config import AppConfig
 from hokku_server.display import FULL_W, PANEL_H, TOTAL_BYTES, VISUAL_H, VISUAL_W
+from hokku_server.image_record import ConvertStatus
 from hokku_server.orientation import Orientation
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import transform_bboxes_to_canvas_norm
@@ -150,7 +151,10 @@ def create_app(
         battery_mv = parse_battery_header(request.headers.get("X-Battery-mV"))
         frame_state = parse_frame_state(request.headers.get("X-Frame-State"))
 
-        chosen = scheduler.pick_next()
+        cfg = scheduler.get_screen_config(screen_name)
+        effective_orientation = scheduler.get_screen_orientation(screen_name)
+        pick_orientation = effective_orientation if cfg.filter_by_orientation else Orientation.NEUTRAL
+        chosen = scheduler.pick_next(orientation=pick_orientation)
         sleep_seconds = (
             calculate_sleep_seconds(config) if chosen else _busy_retry_seconds(config)
         )
@@ -170,7 +174,6 @@ def create_app(
             logger.debug("%s: %s told to retry in %ss", label, screen_name, sleep_seconds)
             return resp
 
-        effective_orientation = scheduler.get_screen_orientation(screen_name)
         binary = manager.panel_bytes_for_orientation(chosen, effective_orientation)
         if binary is None:
             # Cache missing (not yet rendered for this orientation) — tell screen to retry.
@@ -319,7 +322,7 @@ def create_app(
         rec = state.manager.status(name)
         if rec is None:
             return jsonify({"error": f"image {name!r} not found"}), 404
-        if rec.convert_status != "ok":
+        if rec.convert_status != ConvertStatus.OK:
             return jsonify({"error": f"image {name!r} is not ready (status: {rec.convert_status})"}), 409
         try:
             state.scheduler.set_next(name)
@@ -344,14 +347,26 @@ def create_app(
 
     @app.route("/hokku/api/screens/<string:name>/config", methods=["PATCH"])
     def api_screen_config(name: str):
-        """Set or clear the per-screen orientation override."""
+        """Patch per-screen config (orientation override and/or orientation filter)."""
         body = request.get_json(silent=True) or {}
-        raw = body.get("orientation")
-        if raw not in ("landscape", "portrait", None):
-            return jsonify({"error": "orientation must be 'landscape', 'portrait', or null"}), 400
-        orientation = Orientation(raw) if raw else None
-        state.scheduler.set_screen_orientation(name, orientation)
-        state.manager.sync()
+        current = state.scheduler.get_screen_config(name)
+        updates: dict = {}
+
+        if "orientation" in body:
+            raw = body.get("orientation")
+            if raw not in ("landscape", "portrait", None):
+                return jsonify({"error": "orientation must be 'landscape', 'portrait', or null"}), 400
+            updates["orientation_override"] = Orientation(raw) if raw else None
+
+        if "filter_by_orientation" in body:
+            val = body.get("filter_by_orientation")
+            if not isinstance(val, bool):
+                return jsonify({"error": "filter_by_orientation must be a boolean"}), 400
+            updates["filter_by_orientation"] = val
+
+        if updates:
+            state.scheduler.set_screen_config(name, replace(current, **updates))
+            state.manager.sync()
         return jsonify({"ok": True})
 
     @app.route("/hokku/api/scrub", methods=["POST"])
@@ -389,21 +404,23 @@ def create_app(
             obs = classifier.observations_for(r.original_sha1) if r.original_sha1 else None
             entry = {
                 "name": r.name,
-                "dithered": r.convert_status == "ok",
+                "dithered": r.convert_status == ConvertStatus.OK,
                 "status": r.convert_status,
                 "error": r.convert_error,
                 "size_bytes": r.original_size_bytes,
                 "image_width": r.image_width,
                 "image_height": r.image_height,
+                "dimension_unit": "pt" if Path(r.name).suffix.lower() == ".svg" else "px",
+                "native_orientation": r.native_orientation.value if r.convert_status == ConvertStatus.OK else None,
                 "last_conversion_seconds": r.last_conversion_seconds,
                 "is_bw": obs.is_bw if obs else None,
                 "face_bboxes": [[b.x, b.y, b.w, b.h] for b in obs.face_bboxes] if (obs and obs.face_bboxes) else [],
             }
             upload_files.append(entry)
-            if r.convert_status == "failed":
+            if r.convert_status == ConvertStatus.FAILED:
                 failed_files.append({"name": r.name, "error": r.convert_error, "size_bytes": r.original_size_bytes})
 
-        ready_count = sum(1 for r in records if r.convert_status == "ok")
+        ready_count = sum(1 for r in records if r.convert_status == ConvertStatus.OK)
         serve_data: dict[str, dict] = {}
         for n, s in scheduler.stats().items():
             serve_data[n] = {
@@ -418,12 +435,20 @@ def create_app(
             }
 
         screens_payload: dict[str, dict] = {}
+        screen_peek_orientations: set[Orientation] = set()
         for sname, t in scheduler.screens().items():
             next_update_at = None
             if t.last_seen_at and t.last_sleep_seconds:
                 next_update_at = datetime.fromtimestamp(
                     t.last_seen_at + t.last_sleep_seconds
                 ).isoformat(timespec="seconds")
+            scfg = scheduler.get_screen_config(sname)
+            peek_orientation = (
+                scheduler.get_screen_orientation(sname)
+                if scfg.filter_by_orientation
+                else Orientation.NEUTRAL
+            )
+            screen_peek_orientations.add(peek_orientation)
             screens_payload[sname] = {
                 "ip": t.ip,
                 "request_count": t.request_count,
@@ -441,7 +466,8 @@ def create_app(
                 ),
                 "next_update_at": next_update_at,
                 "state": t.frame_state,
-                "orientation_override": scheduler.get_screen_orientation_override(sname),
+                "orientation_override": scfg.orientation_override,
+                "filter_by_orientation": scfg.filter_by_orientation,
             }
 
         disk = manager.cache_disk_info()
@@ -449,7 +475,7 @@ def create_app(
             "server_time": datetime.now().isoformat(timespec="seconds"),
             "upload_size": len(records),
             "pool_size": ready_count,
-            "pool_files": [r.name for r in records if r.convert_status == "ok"],
+            "pool_files": [r.name for r in records if r.convert_status == ConvertStatus.OK],
             "upload_files": upload_files,
             "failed_files": failed_files,
             "serve_data": serve_data,
@@ -460,7 +486,11 @@ def create_app(
             "converting_done": progress.done,
             "converting_total": progress.total,
             "converting_eta_seconds": manager.estimate_remaining_seconds(),
-            "next_image": scheduler.peek_next(),
+            "next_images": {
+                o.value: scheduler.peek_next(orientation=o)
+                for o in screen_peek_orientations
+                if scheduler.peek_next(orientation=o) is not None
+            },
             "cache_used_bytes": disk["cache_used_bytes"],
             "disk_free_bytes": disk["disk_free_bytes"],
             "image_worker_count_resolved": state.manager.resolved_worker_count,
