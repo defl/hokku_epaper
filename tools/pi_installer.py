@@ -1126,6 +1126,24 @@ def select_deb_interactive():
     return release_cache.ensure_cached_asset(asset, CACHE_DIR, label=f"(release {tag})")
 
 
+def fetch_latest_release_deb() -> "Path | None":
+    """Download the latest GitHub release .deb to the cache non-interactively.
+
+    Returns the cached Path on success, None on any failure.
+    """
+    try:
+        rel = release_cache.get_latest_release()
+    except Exception as e:
+        print(f"  Could not fetch latest release from GitHub: {e}")
+        return None
+    tag = rel.get("tag_name", "?")
+    asset = release_cache.find_asset(rel, _deb_name_matches)
+    if asset is None:
+        print(f"  No .deb asset found in release {tag}.")
+        return None
+    return release_cache.ensure_cached_asset(asset, CACHE_DIR, label=f"(release {tag})")
+
+
 def locate_deb_package_interactive():
     """Always ask the user which version to install. Returns Path or None."""
     deb = select_deb_interactive()

@@ -376,7 +376,7 @@ def _mdns_resolve(hostname, timeout=3.0):
     packet = struct.pack("!HHHHHH", 0, 0, 1, 0, 0, 0)
     packet += _encode_name(hostname) + struct.pack("!HH", 1, 0x8001)  # A, QU+IN
 
-    result = [None]
+    result: list[str | None] = [None]
 
     def _run():
         try:

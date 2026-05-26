@@ -32,6 +32,7 @@ class TestFindAsset:
             ]
         }
         a = release_cache.find_asset(release, lambda n: n == "b.bin")
+        assert a is not None
         assert a["browser_download_url"] == "u2"
 
     def test_returns_none_when_no_match(self):
@@ -137,7 +138,9 @@ class TestEnsureCachedAsset:
 class TestMergedFirmwareDetection:
     def test_picks_merged_file(self, tmp_path):
         (tmp_path / "hokku-firmware_v1.0.0.bin").write_bytes(b"x")
-        assert esp32_setup._merged_firmware_file(tmp_path).name == "hokku-firmware_v1.0.0.bin"
+        result = esp32_setup._merged_firmware_file(tmp_path)
+        assert result is not None
+        assert result.name == "hokku-firmware_v1.0.0.bin"
 
     def test_returns_none_when_no_merged(self, tmp_path):
         assert esp32_setup._merged_firmware_file(tmp_path) is None
@@ -149,7 +152,9 @@ class TestMergedFirmwareDetection:
     def test_picks_latest_sorted(self, tmp_path):
         (tmp_path / "hokku-firmware_v1.bin").write_bytes(b"x")
         (tmp_path / "hokku-firmware_v2.bin").write_bytes(b"x")
-        assert esp32_setup._merged_firmware_file(tmp_path).name == "hokku-firmware_v2.bin"
+        latest = esp32_setup._merged_firmware_file(tmp_path)
+        assert latest is not None
+        assert latest.name == "hokku-firmware_v2.bin"
 
     def test_nonexistent_dir(self, tmp_path):
         assert esp32_setup._merged_firmware_file(tmp_path / "nope") is None

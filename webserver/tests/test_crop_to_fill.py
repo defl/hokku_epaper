@@ -209,14 +209,14 @@ def test_perfect_fit_no_bands_at_zero_threshold():
 
 def test_screen_cfg_slug_changes_with_threshold():
     ic = _noop_cfg()
-    a = ScreenImageConfig(image_config=ic, orientation="portrait", crop_to_fill_threshold=0.0)
-    b = ScreenImageConfig(image_config=ic, orientation="portrait", crop_to_fill_threshold=0.02)
+    a = ScreenImageConfig(image_config=ic, orientation=Orientation.PORTRAIT, crop_to_fill_threshold=0.0)
+    b = ScreenImageConfig(image_config=ic, orientation=Orientation.PORTRAIT, crop_to_fill_threshold=0.02)
     assert a.cache_slug() != b.cache_slug()
 
 
 def test_screen_cfg_slug_stable():
     ic = _noop_cfg()
-    cfg = ScreenImageConfig(image_config=ic, orientation="landscape", crop_to_fill_threshold=0.05)
+    cfg = ScreenImageConfig(image_config=ic, orientation=Orientation.LANDSCAPE, crop_to_fill_threshold=0.05)
     assert cfg.cache_slug() == cfg.cache_slug()
 
 
@@ -251,7 +251,7 @@ _THRESHOLDS = [
     ("2pct", 0.02),
     ("50pct", 0.50),
 ]
-_ORIENTATIONS: list[Orientation] = ["portrait", "landscape"]
+_ORIENTATIONS: list[Orientation] = [Orientation.PORTRAIT, Orientation.LANDSCAPE]
 
 
 @pytest.fixture(scope="module", autouse=False)

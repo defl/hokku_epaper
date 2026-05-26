@@ -49,8 +49,11 @@ def test_battery_percent_negative_returns_none():
 
 
 def test_battery_percent_typical_values():
-    assert 0 <= battery_percent(3700) <= 100
-    assert 0 <= battery_percent(3900) <= 100
+    bp_3700 = battery_percent(3700)
+    bp_3900 = battery_percent(3900)
+    assert bp_3700 is not None and bp_3900 is not None
+    assert 0 <= bp_3700 <= 100
+    assert 0 <= bp_3900 <= 100
 
 
 # ── parse_battery_header ──────────────────────────────────────────────────────
@@ -139,4 +142,5 @@ def test_parse_frame_state_empty_object():
 def test_parse_frame_state_nested_dict():
     raw = '{"outer": {"inner": 1}}'
     result = parse_frame_state(raw)
+    assert result is not None
     assert result["outer"] == {"inner": 1}

@@ -156,7 +156,7 @@ def peak_rss_subprocess(
         env={**os.environ},
         cwd=str(Path(__file__).resolve().parent.parent),  # webserver/
     )
-    assert proc.stdin is not None and proc.stdout is not None
+    assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
     try:
         # Hand the payload to the child.
         proc.stdin.write(payload)

@@ -20,6 +20,7 @@ from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
 from hokku_server.image_config import ImageConfig
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
+from hokku_server.orientation import Orientation
 from hokku_server.presets import FALLBACK_PRESET, PRESET_IMAGE_CONFIGS
 from hokku_server.screen_image_config import ScreenImageConfig, _screen_image_config_from_dict
 from tests._helpers import is_oversize_fixture
@@ -99,8 +100,8 @@ def test_cache_slug_changes_on_image_config():
 def test_same_image_config_different_orientation_different_slug():
     """Two ScreenImageConfigs identical except orientation have distinct slugs."""
     ic = _noop_image_config()
-    ls = ScreenImageConfig(image_config=ic, orientation="landscape")
-    pt = ScreenImageConfig(image_config=ic, orientation="portrait")
+    ls = ScreenImageConfig(image_config=ic, orientation=Orientation.LANDSCAPE)
+    pt = ScreenImageConfig(image_config=ic, orientation=Orientation.PORTRAIT)
     # Same image_config slug but different orientation → different combined slug.
     assert ic.cache_slug() == ls.image_config.cache_slug()
     assert ic.cache_slug() == pt.image_config.cache_slug()
@@ -148,7 +149,7 @@ def test_visual_render_all_test_images(_wipe_build_dir):
     assert test_images, f"No test images found in {_TEST_IMAGES_DIR}"
 
     noop_cfg = _noop_image_config()
-    screen_cfg = ScreenImageConfig(image_config=noop_cfg, orientation="landscape")
+    screen_cfg = ScreenImageConfig(image_config=noop_cfg, orientation=Orientation.LANDSCAPE)
 
     for src in test_images:
         dest_original = _BUILD_DIR / f"{src.stem}_original{src.suffix}"

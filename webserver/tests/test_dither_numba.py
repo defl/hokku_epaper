@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from hokku_server.display import PALETTE_MEASURED_RGB
-from hokku_server.dither_config import DitherConfig
+from hokku_server.dither_config import AlgorithmName, DitherConfig
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.dither_unconstrained_numba import NumbaUnconstrainedDither
 
@@ -69,7 +69,7 @@ def test_dither_output_valid_palette_indices(cls) -> None:
 
 @pytest.mark.parametrize("algorithm", ["floyd_steinberg", "atkinson", "stucki"])
 @pytest.mark.parametrize("cls", _numba_classes())
-def test_all_algorithms_produce_valid_output(cls, algorithm: str) -> None:
+def test_all_algorithms_produce_valid_output(cls, algorithm: AlgorithmName) -> None:
     cfg = DitherConfig(
         algorithm=algorithm,
         lut_name="euclidean",

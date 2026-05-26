@@ -124,6 +124,7 @@ def test_larger_image_gets_proportionally_larger_estimate(app_config: AppConfig)
     eta_large = mgr_large.estimate_remaining_seconds()
     assert eta_small == pytest.approx(0.5)
     assert eta_large == pytest.approx(2.0)
+    assert eta_large is not None and eta_small is not None
     assert eta_large / eta_small == pytest.approx(4.0)
 
 
@@ -259,6 +260,7 @@ def test_pixel_estimate_scales_with_pixel_count_not_file_size(app_config: AppCon
     eta_large = mgr_large.estimate_remaining_seconds()
     assert eta_small == pytest.approx(0.5)
     assert eta_large == pytest.approx(2.0)
+    assert eta_large is not None and eta_small is not None
     # Ratio matches pixel ratio (1M / 250K = 4×), not file size ratio (1×)
     assert eta_large / eta_small == pytest.approx(4.0)
 
@@ -314,6 +316,7 @@ def test_estimate_divided_by_worker_count(app_config: AppConfig):
     mgr4._progress = _converting(total=4)
     parallel_eta = mgr4.estimate_remaining_seconds()
     assert parallel_eta == pytest.approx(1.0), f"expected 1.0 s with 4 workers, got {parallel_eta}"
+    assert serial_eta is not None and parallel_eta is not None
     assert serial_eta / parallel_eta == pytest.approx(4.0)
 
 

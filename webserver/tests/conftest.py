@@ -25,6 +25,7 @@ from hokku_server.image_config import ImageConfig
 from hokku_server.image_manager_abstract import AbstractImageManager
 from hokku_server.image_manager_multi import MultiThreadedImageManager
 from hokku_server.image_manager_single import SingleThreadedImageManager
+from hokku_server.orientation import Orientation
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 
@@ -50,7 +51,7 @@ def app_config(tmp_path: Path, fast_image_config: ImageConfig) -> AppConfig:
         cache_dir=str(cache),
         port=18080,
         poll_interval_seconds=1,
-        orientation="landscape",
+        orientation=Orientation.LANDSCAPE,
         image_config_default=fast_image_config,
     )
 

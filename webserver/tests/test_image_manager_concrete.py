@@ -33,8 +33,11 @@ def test_single_threaded_does_not_spawn_threads(app_config: AppConfig, make_test
     mgr.shutdown()
 
     assert mgr.resolved_worker_count == 1
-    assert mgr.status("a.png").convert_status == "ok"
-    assert mgr.status("b.png").convert_status == "ok"
+    rec_a = mgr.status("a.png")
+    rec_b = mgr.status("b.png")
+    assert rec_a is not None and rec_b is not None
+    assert rec_a.convert_status == "ok"
+    assert rec_b.convert_status == "ok"
     # ``sync`` may briefly spawn helper threads inside PIL/numpy that exit
     # before sync returns; what we care about is that no persistent worker
     # thread is left running.

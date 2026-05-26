@@ -12,6 +12,7 @@ from pathlib import Path
 from hokku_server.app_config import AppConfig
 from hokku_server.image_manager_abstract import AbstractImageManager
 from hokku_server.image_manager_single import SingleThreadedImageManager
+from hokku_server.orientation import Orientation
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 # Suffixes as defined in image_manager
@@ -35,7 +36,9 @@ def _images_dir(mgr: AbstractImageManager) -> Path:
 
 def _slug_for(mgr: AbstractImageManager, name: str) -> str:
     """Return the global-orientation slug for a registered image."""
-    return mgr._records[name].slug(mgr._config.orientation)
+    result = mgr._records[name].slug(mgr._config.orientation)
+    assert result is not None
+    return result
 
 
 def _name_hash(mgr: AbstractImageManager, name: str) -> str:
@@ -69,7 +72,9 @@ def test_scrub_old_panel_bin_requeues_image(app_config, make_test_image):
     images are re-queued so the next sync re-renders them compressed."""
     mgr = SingleThreadedImageManager(app_config)
     _register_ok(mgr, "a.png", make_test_image)
-    assert mgr.status("a.png").convert_status == "ok"
+    rec = mgr.status("a.png")
+    assert rec is not None
+    assert rec.convert_status == "ok"
 
     # Plant an old-format uncompressed panel file for the registered image.
     h = _name_hash(mgr, "a.png")
@@ -80,7 +85,9 @@ def test_scrub_old_panel_bin_requeues_image(app_config, make_test_image):
     mgr.sync()
 
     assert not old_panel.exists(), "Old _panel.bin file should be scrubbed"
-    assert mgr.status("a.png").convert_status == "pending", (
+    rec2 = mgr.status("a.png")
+    assert rec2 is not None
+    assert rec2.convert_status == "pending", (
         "Image should be re-queued after old panel file is scrubbed"
     )
 
@@ -148,7 +155,7 @@ def test_scrub_off_keeps_old_slug_files(tmp_path, make_test_image):
         cache_dir=str(cache),
         port=18080,
         poll_interval_seconds=1,
-        orientation="landscape",
+        orientation=Orientation.LANDSCAPE,
         auto_clear_cache=False,
         # Disable classifier so the slug tracks image_config_default cleanly.
         classifier_bw_detect_enabled=False,
@@ -209,7 +216,7 @@ def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
         cache_dir=str(cache),
         port=18080,
         poll_interval_seconds=1,
-        orientation="landscape",
+        orientation=Orientation.LANDSCAPE,
         auto_clear_cache=True,
         # Disable classifier so the slug tracks image_config_default cleanly.
         classifier_bw_detect_enabled=False,
@@ -258,7 +265,7 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
         cache_dir=str(cache),
         port=18080,
         poll_interval_seconds=1,
-        orientation="landscape",
+        orientation=Orientation.LANDSCAPE,
         auto_clear_cache=True,
         classifier_bw_detect_enabled=False,
         image_config_default=base_image,
@@ -313,7 +320,11 @@ def test_clear_caches_marks_all_pending(app_config, make_test_image):
     mgr = SingleThreadedImageManager(app_config)
     make_test_image(Path(mgr._config.upload_dir) / "a.png")
     mgr.sync()
-    assert mgr.status("a.png").convert_status == "ok"
+    rec_before = mgr.status("a.png")
+    assert rec_before is not None
+    assert rec_before.convert_status == "ok"
 
     mgr.clear_caches()
-    assert mgr.status("a.png").convert_status == "pending"
+    rec_after = mgr.status("a.png")
+    assert rec_after is not None
+    assert rec_after.convert_status == "pending"

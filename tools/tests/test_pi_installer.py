@@ -493,6 +493,7 @@ class TestGuessSdDrive:
             {"index": 2, "removable": True, "size_bytes": 64 * 1024**3, "interface": "USB"},
         ]
         picked = pi.guess_sd_drive(drives)
+        assert picked is not None
         assert picked["index"] == 2
 
     def test_ignores_fixed_disks(self):

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from hokku_server.app_config import _CURRENT_VERSION, AppConfig, _migrate
+from hokku_server.orientation import Orientation
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 
@@ -26,7 +27,7 @@ def test_defaults():
 
 def test_cache_slug_changes_with_orientation():
     base = AppConfig()
-    rotated = AppConfig(orientation="portrait")
+    rotated = AppConfig(orientation=Orientation.PORTRAIT)
     assert base.cache_slug() != rotated.cache_slug()
 
 
@@ -52,7 +53,7 @@ def test_save_load_roundtrip(tmp_path: Path):
     cfg = AppConfig(
         upload_dir=str(tmp_path / "uploads"),
         cache_dir=str(tmp_path / "cache"),
-        orientation="portrait",
+        orientation=Orientation.PORTRAIT,
         port=9000,
     )
     p = tmp_path / "config.json"

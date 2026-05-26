@@ -287,7 +287,7 @@ def test_watcher_uses_new_poll_interval_after_reload(app_config: AppConfig, tmp_
     w = Watcher(state)
 
     # Thread is now blocked in gated_sync() — safe to install our spy.
-    sleep_durations: list[float] = []
+    sleep_durations: list[float | None] = []
     sleep_called = _threading.Event()
     original_wait = w._wake.wait
 

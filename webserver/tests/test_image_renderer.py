@@ -17,6 +17,7 @@ from hokku_server.dither_unconstrained import UnconstrainedDither
 from hokku_server.dither_unconstrained_numba import NumbaUnconstrainedDither
 from hokku_server.image_config import ImageConfig
 from hokku_server.image_renderer import ImageRenderer
+from hokku_server.orientation import Orientation
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 
@@ -74,8 +75,8 @@ def test_explicit_dither_stored() -> None:
 
 
 @pytest.mark.parametrize("dither", _dither_params())
-@pytest.mark.parametrize("orientation", ["portrait", "landscape"])
-def test_render_indices_shape(dither, orientation: str) -> None:
+@pytest.mark.parametrize("orientation", [Orientation.PORTRAIT, Orientation.LANDSCAPE])
+def test_render_indices_shape(dither, orientation: Orientation) -> None:
     r = ImageRenderer(dither)
     img = _synth_img(60, 80)
     cfg = _noop_cfg()
@@ -90,7 +91,7 @@ def test_render_indices_valid_palette_values(dither) -> None:
 
     n_palette = len(PALETTE_MEASURED_RGB)
     r = ImageRenderer(dither)
-    idx = r.render_indices(_synth_img(), _noop_cfg(), "portrait", 32, 32)
+    idx = r.render_indices(_synth_img(), _noop_cfg(), Orientation.PORTRAIT, 32, 32)
     assert int(idx.min()) >= 0
     assert int(idx.max()) < n_palette
 
@@ -102,7 +103,7 @@ def test_render_indices_valid_palette_values(dither) -> None:
 def test_render_preview_png_returns_bytes(dither) -> None:
     r = ImageRenderer(dither)
     img = _synth_img()
-    data = r.render_preview_png(img, _noop_cfg(), "portrait", max_side_px=64)
+    data = r.render_preview_png(img, _noop_cfg(), Orientation.PORTRAIT, max_side_px=64)
     assert isinstance(data, bytes)
     assert data[:4] == b"\x89PNG"
 
@@ -116,7 +117,7 @@ def test_all_strategies_produce_valid_output(dither) -> None:
 
     n_palette = len(PALETTE_MEASURED_RGB)
     cfg = _noop_cfg()
-    idx = ImageRenderer(dither).render_indices(_synth_img(48, 48), cfg, "portrait", 48, 48)
+    idx = ImageRenderer(dither).render_indices(_synth_img(48, 48), cfg, Orientation.PORTRAIT, 48, 48)
     assert idx.shape == (48, 48)
     assert idx.dtype == np.uint8
     assert int(idx.min()) >= 0

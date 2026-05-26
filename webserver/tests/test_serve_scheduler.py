@@ -62,6 +62,7 @@ def test_fair_rotation(app_config: AppConfig, make_test_image):
 def test_stats_after_serves(app_config: AppConfig, make_test_image):
     mgr, sched = _setup(app_config, make_test_image, ["a.png"])
     n = sched.pick_next(Orientation.NEUTRAL)
+    assert n is not None
     sched.mark_served(n)
     s = sched.stats_for("a.png")
     assert s is not None
@@ -76,7 +77,9 @@ def test_persistence(app_config: AppConfig, make_test_image):
 
     # New scheduler instance over the same files
     sched2 = ServeScheduler(mgr)
-    assert sched2.stats_for("a.png").total_show_count == 1
+    stats_a = sched2.stats_for("a.png")
+    assert stats_a is not None
+    assert stats_a.total_show_count == 1
     last = sched2.last_served()
     assert last is not None and last[0] == "b.png"
 

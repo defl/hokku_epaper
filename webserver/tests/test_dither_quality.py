@@ -188,15 +188,15 @@ def test_preview_png_max_side_respected():
 
 
 def test_preview_from_panel_bytes_is_valid_png():
-    raw = render_panel_bytes(_make_rgb(), _FAST_CFG, "landscape")
-    png = preview_png_from_panel_bytes(raw, "landscape")
+    raw = render_panel_bytes(_make_rgb(), _FAST_CFG, Orientation.LANDSCAPE)
+    png = preview_png_from_panel_bytes(raw, Orientation.LANDSCAPE)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_preview_from_panel_bytes_landscape_dimensions():
     """panel_bytes → PNG must be the full visible panel size in landscape."""
-    raw = render_panel_bytes(_make_rgb(), _FAST_CFG, "landscape")
-    png = preview_png_from_panel_bytes(raw, "landscape")
+    raw = render_panel_bytes(_make_rgb(), _FAST_CFG, Orientation.LANDSCAPE)
+    png = preview_png_from_panel_bytes(raw, Orientation.LANDSCAPE)
     w, h = _png_size(png)
     assert (w, h) == (VISUAL_W, VISUAL_H), f"Expected {VISUAL_W}x{VISUAL_H}, got {w}x{h}"
 
@@ -221,7 +221,7 @@ def test_bw_image_renders_without_error():
     # so it is exercised identically, and the full-panel render finishes in <1s
     # instead of ~13s under pure-Python StreamingDither.
     raw = ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
-        _make_grey(10, 10), cfg, "landscape", 0.0
+        _make_grey(10, 10), cfg, Orientation.LANDSCAPE, 0.0
     )
     assert len(raw) == TOTAL_BYTES
     idx = panel_bytes_to_indices(raw)
@@ -356,7 +356,7 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
         "numba_unconstrained": NumbaUnconstrainedDither(),
     }
     with open_image_for_render(src) as img:
-        raw = ImageRenderer(_DITHER_FOR_MODE[mode]).render_panel_bytes(img, cfg, "landscape")
+        raw = ImageRenderer(_DITHER_FOR_MODE[mode]).render_panel_bytes(img, cfg, Orientation.LANDSCAPE)
 
     assert len(raw) == TOTAL_BYTES
 
@@ -365,7 +365,7 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
     assert int(idx.min()) >= 0
     assert int(idx.max()) <= 5
 
-    png_bytes = _indices_to_png(idx, "landscape")
+    png_bytes = _indices_to_png(idx, Orientation.LANDSCAPE)
     (_BUILD_FULL_DIR / f"{src.stem}__{preset_name}__{mode}.png").write_bytes(png_bytes)
 
     w, h = _png_size(png_bytes)
@@ -511,7 +511,7 @@ def test_dither_quality_metrics():
             cfg = PRESET_IMAGE_CONFIGS[preset_name]
             with open_image_for_render(src) as img:
                 raw = ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
-                    img, cfg, "landscape"
+                    img, cfg, Orientation.LANDSCAPE
                 )
             idx = panel_bytes_to_indices(raw)
             all_results[preset_name][src.stem] = image_compare(
