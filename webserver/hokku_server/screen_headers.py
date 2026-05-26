@@ -1,4 +1,5 @@
 """Parse firmware HTTP headers (battery, frame state)."""
+
 from __future__ import annotations
 
 import json

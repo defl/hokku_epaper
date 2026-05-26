@@ -1,4 +1,5 @@
 """Hokku Spectra 6 e-ink image server."""
+
 from __future__ import annotations
 
 import argparse
@@ -50,7 +51,9 @@ def main() -> None:
     config = AppConfig.load(config_path)
 
     if not config.upload_dir:
-        logger.critical("upload_dir is not set in config — edit your config.json and set upload_dir")
+        logger.critical(
+            "upload_dir is not set in config — edit your config.json and set upload_dir"
+        )
         sys.exit(1)
     if not config.cache_dir:
         logger.critical("cache_dir is not set in config — edit your config.json and set cache_dir")
@@ -103,7 +106,9 @@ def main() -> None:
     except OSError as exc:
         logger.critical(
             "Port %s is already in use (%s). Find the owner with: ss -tlnp | grep :%s",
-            config.port, exc, config.port,
+            config.port,
+            exc,
+            config.port,
         )
         sys.exit(1)
     finally:

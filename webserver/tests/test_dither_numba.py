@@ -5,16 +5,17 @@ numba is a hard dependency (see pyproject.toml). Import failure is a real error.
 Parity tests against the pure-Python reference implementations (StreamingDither,
 UnconstrainedDither) live in test_dither_quality.py, marked time_intensive.
 """
+
 from __future__ import annotations
 
-import numba  # hard dep — must be installed
+import numba  # noqa: F401 — hard dep, must be installed
 import numpy as np
 import pytest
 
+from hokku_server.display import PALETTE_MEASURED_RGB
 from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.dither_unconstrained_numba import NumbaUnconstrainedDither
-from hokku_server.display import PALETTE_MEASURED_RGB
 
 
 def _fs_cfg() -> DitherConfig:
@@ -116,6 +117,7 @@ def test_numba_streaming_and_numba_unconstrained_agree() -> None:
     unconstrained_result = NumbaUnconstrainedDither().dither(canvas, cfg)
 
     np.testing.assert_array_equal(
-        streaming_result, unconstrained_result,
+        streaming_result,
+        unconstrained_result,
         err_msg="NumbaStreamingDither and NumbaUnconstrainedDither diverged on identical input",
     )

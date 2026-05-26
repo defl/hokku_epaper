@@ -1,8 +1,9 @@
-﻿"""AbstractFaceDetector + shared preprocess helpers.
+"""AbstractFaceDetector + shared preprocess helpers.
 
 The sole concrete detector is ``OpenCVYuNetFaceDetector`` in
 ``face_detect_yunet_opencv.py`` (cv2.FaceDetectorYN + YuNet ONNX model).
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

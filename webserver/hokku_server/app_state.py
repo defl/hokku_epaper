@@ -4,14 +4,13 @@ A single AppState instance is shared between the Flask app and the Watcher
 thread. Calling reload() atomically swaps in new instances built from a new
 AppConfig — no process restart required.
 """
+
 from __future__ import annotations
 
 import logging
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-logger = logging.getLogger(__name__)
 
 from hokku_server.app_config import AppConfig
 from hokku_server.image_classifier import ImageClassifier
@@ -24,6 +23,8 @@ from hokku_server.worker_count import resolve_worker_count
 
 if TYPE_CHECKING:
     from hokku_server.watcher import Watcher
+
+logger = logging.getLogger(__name__)
 
 
 def build_manager(
@@ -60,7 +61,7 @@ class AppState:
         classifier: ImageClassifier,
         manager: AbstractImageManager,
         scheduler: ServeScheduler,
-        watcher: "Watcher | None" = None,
+        watcher: Watcher | None = None,
         zc: object = None,
     ) -> None:
         self._lock = threading.Lock()

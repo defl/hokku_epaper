@@ -1,9 +1,10 @@
 """Smoke tests for ImageRenderer and the AbstractImageRenderer interface."""
+
 from __future__ import annotations
 
 from dataclasses import replace
 
-import numba  # hard dep — must be installed
+import numba  # noqa: F401 — hard dep, must be installed
 import numpy as np
 import pytest
 from PIL import Image
@@ -57,6 +58,7 @@ def _noop_cfg() -> ImageConfig:
 
 # ── Construction ──────────────────────────────────────────────────────────────
 
+
 def test_dither_stored_is_numba_streaming() -> None:
     r = ImageRenderer(NumbaStreamingDither())
     assert isinstance(r.dither, NumbaStreamingDither)
@@ -69,6 +71,7 @@ def test_explicit_dither_stored() -> None:
 
 
 # ── render_indices ────────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("dither", _dither_params())
 @pytest.mark.parametrize("orientation", ["portrait", "landscape"])
@@ -94,6 +97,7 @@ def test_render_indices_valid_palette_values(dither) -> None:
 
 # ── render_panel_bytes / render_preview_png ───────────────────────────────────
 
+
 @pytest.mark.parametrize("dither", _dither_params())
 def test_render_preview_png_returns_bytes(dither) -> None:
     r = ImageRenderer(dither)
@@ -105,15 +109,14 @@ def test_render_preview_png_returns_bytes(dither) -> None:
 
 # ── Strategy equivalence ──────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize("dither", _dither_params())
 def test_all_strategies_produce_valid_output(dither) -> None:
     """Every strategy must produce valid palette indices — correct shape and dtype."""
 
     n_palette = len(PALETTE_MEASURED_RGB)
     cfg = _noop_cfg()
-    idx = ImageRenderer(dither).render_indices(
-        _synth_img(48, 48), cfg, "portrait", 48, 48
-    )
+    idx = ImageRenderer(dither).render_indices(_synth_img(48, 48), cfg, "portrait", 48, 48)
     assert idx.shape == (48, 48)
     assert idx.dtype == np.uint8
     assert int(idx.min()) >= 0
@@ -136,7 +139,8 @@ def test_streaming_and_unconstrained_agree_on_preprocessed_canvas() -> None:
     idx_s = StreamingDither().dither(arr, cfg)
     idx_u = UnconstrainedDither().dither(arr, cfg)
     np.testing.assert_array_equal(
-        idx_s, idx_u,
+        idx_s,
+        idx_u,
         err_msg="StreamingDither and UnconstrainedDither disagree on the same preprocessed canvas",
     )
 
@@ -157,6 +161,7 @@ def test_numba_streaming_and_streaming_agree_on_preprocessed_canvas() -> None:
     idx_s = StreamingDither().dither(arr, cfg)
     idx_n = NumbaStreamingDither().dither(arr, cfg)
     np.testing.assert_array_equal(
-        idx_s, idx_n,
+        idx_s,
+        idx_n,
         err_msg="NumbaStreamingDither diverged from StreamingDither on identical preprocessed canvas",
     )

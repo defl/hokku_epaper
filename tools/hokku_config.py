@@ -15,14 +15,13 @@ Usage:
     hokku-config restore config_backup.json
     hokku-config erase
 """
+
 import argparse
-import csv
 import json
 import os
 import struct
 import sys
 import tempfile
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -57,8 +56,8 @@ NVS_ENTRY_SIZE = 32
 # Entry types (ESP-IDF NVS)
 # Note: uint8 (0x01) and namespace share the same type code.
 # Namespace entries have ns_idx=0; data entries have ns_idx>0.
-U8_TYPE = 0x01       # uint8 (also used for namespace entries)
-STR_TYPE = 0x21      # String
+U8_TYPE = 0x01  # uint8 (also used for namespace entries)
+STR_TYPE = 0x21  # String
 
 # Config version — increment every time NVS config fields change.
 # Must match firmware's CONFIG_VERSION. Source of truth is CLAUDE.md.
@@ -72,8 +71,14 @@ def _find_nvs_partition_gen():
     """Find ESP-IDF's nvs_partition_gen.py tool."""
     # Check common ESP-IDF installation paths
     candidates = [
-        Path(os.environ.get("IDF_PATH", "")) / "components" / "nvs_flash" / "nvs_partition_generator" / "nvs_partition_gen.py",
-        Path("C:/esp/v5.5.3/esp-idf/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"),
+        Path(os.environ.get("IDF_PATH", ""))
+        / "components"
+        / "nvs_flash"
+        / "nvs_partition_generator"
+        / "nvs_partition_gen.py",
+        Path(
+            "C:/esp/v5.5.3/esp-idf/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"
+        ),
         Path("/opt/esp-idf/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"),
     ]
     for p in candidates:
@@ -113,8 +118,7 @@ def _build_nvs_binary(config_dict):
         )
     if idf_python is None:
         raise RuntimeError(
-            "Cannot find ESP-IDF Python environment. "
-            "Set IDF_PYTHON_ENV_PATH or install ESP-IDF."
+            "Cannot find ESP-IDF Python environment. Set IDF_PYTHON_ENV_PATH or install ESP-IDF."
         )
 
     # Build CSV: key,type,encoding,value
@@ -140,7 +144,9 @@ def _build_nvs_binary(config_dict):
     try:
         result = subprocess.run(
             [str(idf_python), str(nvs_gen), "generate", csv_path, bin_path, hex(NVS_SIZE)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode != 0:
             raise RuntimeError(f"nvs_partition_gen.py failed: {result.stderr}")
@@ -177,7 +183,7 @@ def _read_nvs(partition_data):
     ns_map = {}  # ns_index -> ns_name
 
     while offset + NVS_ENTRY_SIZE <= NVS_PAGE_SIZE:
-        entry = page[offset:offset + NVS_ENTRY_SIZE]
+        entry = page[offset : offset + NVS_ENTRY_SIZE]
         ns_idx = entry[0]
         entry_type = entry[1]
         span = entry[2]
@@ -202,7 +208,7 @@ def _read_nvs(partition_data):
             str_len = struct.unpack_from("<H", entry, 24)[0]
             # String data is in subsequent entries
             data_offset = offset + NVS_ENTRY_SIZE
-            data_bytes = page[data_offset:data_offset + str_len - 1]  # exclude null
+            data_bytes = page[data_offset : data_offset + str_len - 1]  # exclude null
             result[key] = data_bytes.decode("utf-8", errors="replace")
 
         offset += span * NVS_ENTRY_SIZE
@@ -211,6 +217,7 @@ def _read_nvs(partition_data):
 
 
 # ── esptool integration ────────────────────────────────────────────
+
 
 def _flash_nvs(port, nvs_binary):
     """Flash NVS partition binary to ESP32 via esptool."""
@@ -226,12 +233,17 @@ def _flash_nvs(port, nvs_binary):
 
     try:
         args = [
-            "--chip", "esp32s3",
-            "--port", port,
-            "--baud", "921600",
+            "--chip",
+            "esp32s3",
+            "--port",
+            port,
+            "--baud",
+            "921600",
             "write-flash",
-            "--flash-mode", "dio",
-            hex(NVS_OFFSET), tmp_path,
+            "--flash-mode",
+            "dio",
+            hex(NVS_OFFSET),
+            tmp_path,
         ]
         print(f"Flashing NVS partition ({len(nvs_binary)} bytes) to {port}...")
         esptool.main(args)
@@ -253,11 +265,16 @@ def _read_nvs_from_device(port):
 
     try:
         args = [
-            "--chip", "esp32s3",
-            "--port", port,
-            "--baud", "921600",
+            "--chip",
+            "esp32s3",
+            "--port",
+            port,
+            "--baud",
+            "921600",
             "read-flash",
-            hex(NVS_OFFSET), hex(NVS_SIZE), tmp_path,
+            hex(NVS_OFFSET),
+            hex(NVS_SIZE),
+            tmp_path,
         ]
         print(f"Reading NVS partition from {port}...")
         esptool.main(args)
@@ -268,6 +285,7 @@ def _read_nvs_from_device(port):
 
 
 # ── Backup helpers ─────────────────────────────────────────────────
+
 
 def backup_dir():
     d = Path.home() / ".hokku" / "backups"
@@ -303,6 +321,7 @@ def _get_port(args_port):
 
 
 # ── CLI commands ───────────────────────────────────────────────────
+
 
 def cmd_set(args):
     """Set configuration values by generating and flashing an NVS partition."""
@@ -389,7 +408,9 @@ def cmd_backup(args):
         print("No configuration found on device.")
         return
 
-    output = args.file or str(backup_dir() / f"config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    output = args.file or str(
+        backup_dir() / f"config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    )
     with open(output, "w") as f:
         json.dump(config, f, indent=2)
     print(f"Configuration backed up to: {output}")
@@ -439,12 +460,17 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     set_parser = subparsers.add_parser("set", help="Set configuration values")
-    set_parser.add_argument("--ssid",      help="Primary WiFi network name (required)")
-    set_parser.add_argument("--password",  help="Primary WiFi password")
-    set_parser.add_argument("--ssid2",     help="Secondary WiFi network name (optional)")
+    set_parser.add_argument("--ssid", help="Primary WiFi network name (required)")
+    set_parser.add_argument("--password", help="Primary WiFi password")
+    set_parser.add_argument("--ssid2", help="Secondary WiFi network name (optional)")
     set_parser.add_argument("--password2", help="Secondary WiFi password")
-    set_parser.add_argument("--order",     help="WiFi order: 'primary' (always try primary first) or 'last' (try last-used first)")
-    set_parser.add_argument("--url", help="Image server URL (e.g. http://server:8080/hokku/screen/)")
+    set_parser.add_argument(
+        "--order",
+        help="WiFi order: 'primary' (always try primary first) or 'last' (try last-used first)",
+    )
+    set_parser.add_argument(
+        "--url", help="Image server URL (e.g. http://server:8080/hokku/screen/)"
+    )
     set_parser.add_argument("--name", help="Screen name for identification (max 64 bytes)")
     set_parser.set_defaults(func=cmd_set)
 
@@ -452,7 +478,9 @@ def main():
     get_parser.set_defaults(func=cmd_get)
 
     backup_parser = subparsers.add_parser("backup", help="Backup config to JSON file")
-    backup_parser.add_argument("file", nargs="?", help="Output file (default: timestamped in ~/.hokku/backups/)")
+    backup_parser.add_argument(
+        "file", nargs="?", help="Output file (default: timestamped in ~/.hokku/backups/)"
+    )
     backup_parser.set_defaults(func=cmd_backup)
 
     restore_parser = subparsers.add_parser("restore", help="Restore config from JSON file")

@@ -42,21 +42,23 @@ from urllib.request import Request, urlopen
 import numpy as np
 from PIL import Image
 
-
 # ── Display parameters (mirrors display.py) ────────────────────────────────
 PANEL_W = 600
 PANEL_H = 1600
-PANEL_BYTES = PANEL_W * PANEL_H // 2   # 480 000 bytes
-TOTAL_BYTES = PANEL_BYTES * 2           # 960 000 bytes
+PANEL_BYTES = PANEL_W * PANEL_H // 2  # 480 000 bytes
+TOTAL_BYTES = PANEL_BYTES * 2  # 960 000 bytes
 
-PALETTE = np.array([
-    [0,   0,   0  ],   # 0 Black
-    [255, 255, 255],   # 1 White
-    [255, 230, 50 ],   # 2 Yellow
-    [200, 20,  20 ],   # 3 Red
-    [30,  80,  200],   # 4 Blue
-    [20,  120, 40 ],   # 5 Green
-], dtype=np.uint8)
+PALETTE = np.array(
+    [
+        [0, 0, 0],  # 0 Black
+        [255, 255, 255],  # 1 White
+        [255, 230, 50],  # 2 Yellow
+        [200, 20, 20],  # 3 Red
+        [30, 80, 200],  # 4 Blue
+        [20, 120, 40],  # 5 Green
+    ],
+    dtype=np.uint8,
+)
 
 # Nibble → palette index for the six known inks.
 _KNOWN = {0x0: 0, 0x1: 1, 0x2: 2, 0x3: 3, 0x5: 4, 0x6: 5}
@@ -68,6 +70,7 @@ for _nib, _idx in {**_KNOWN, **_UNKNOWN}.items():
 
 
 # ── Core rendering ─────────────────────────────────────────────────────────
+
 
 def unpack_panel(data: bytes) -> np.ndarray:
     """Unpack 480 K of 4-bpp panel data → (1600, 600) uint8 palette-index array."""
@@ -82,18 +85,20 @@ def render_to_image(binary: bytes) -> Image.Image:
     """Convert a 960 K panel binary → landscape PIL Image (1600×1200)."""
     if len(binary) != TOTAL_BYTES:
         raise ValueError(f"Expected {TOTAL_BYTES} bytes, got {len(binary)}")
-    p1 = unpack_panel(binary[:PANEL_BYTES])   # (1600, 600)
-    p2 = unpack_panel(binary[PANEL_BYTES:])   # (1600, 600)
+    p1 = unpack_panel(binary[:PANEL_BYTES])  # (1600, 600)
+    p2 = unpack_panel(binary[PANEL_BYTES:])  # (1600, 600)
     rgb = PALETTE[np.concatenate([p1, p2], axis=1)]  # (1600, 1200, 3)
     img = Image.fromarray(rgb, "RGB")
-    return img.rotate(90, expand=True)          # → (1600, 1200) landscape
+    return img.rotate(90, expand=True)  # → (1600, 1200) landscape
 
 
 # ── Simulated frame state ──────────────────────────────────────────────────
 
+
 @dataclass
 class SimState:
     """Per-process counters that mimic the firmware's RTC-persistent fields."""
+
     boot: int = 0
     start_monotonic: float = field(default_factory=time.monotonic)
     last_sleep_seconds: int = 0
@@ -128,6 +133,7 @@ def build_frame_state(state: SimState, battery_mv: int | None) -> str:
 
 
 # ── Network fetch ──────────────────────────────────────────────────────────
+
 
 def fetch_screen(
     server_url: str,
@@ -167,7 +173,6 @@ def fetch_screen(
 
     req = Request(url, headers=hdrs)
     with urlopen(req, timeout=timeout) as resp:
-        status = resp.status
         resp_headers = {k.lower(): v for k, v in resp.headers.items()}
         data = resp.read()
 
@@ -189,6 +194,7 @@ def load_from_file(path: Path) -> tuple[bytes, dict[str, str]]:
 
 
 # ── Display helpers ────────────────────────────────────────────────────────
+
 
 def _show_once(img: Image.Image) -> None:
     """Open the image in the OS default viewer (new window each time)."""
@@ -214,6 +220,7 @@ def _watch_tkinter(
     """
     try:
         import tkinter as tk
+
         from PIL import ImageTk
     except ImportError as e:
         log(f"  tkinter/ImageTk not available ({e}); opening a new window each refresh")
@@ -234,7 +241,7 @@ def _watch_tkinter(
         try:
             binary, headers = fetch_fn()
             img = render_to_image(binary)
-            img_small = img.resize((DISPLAY_W, DISPLAY_H), Image.LANCZOS)
+            img_small = img.resize((DISPLAY_W, DISPLAY_H), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img_small)
             label.config(image=photo)
             _photo_ref[0] = photo
@@ -292,6 +299,7 @@ def _watch_fallback(fetch_fn, screen_name, interval_override, log):
 
 # ── CLI ────────────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Hokku screen simulator — render 960 K panel binary as an image",
@@ -306,48 +314,55 @@ def main():
 
     src = parser.add_mutually_exclusive_group()
     src.add_argument(
-        "--server", "-s",
+        "--server",
+        "-s",
         default="http://localhost:8080",
         metavar="URL",
         help="Hokku server base URL (default: http://localhost:8080)",
     )
     src.add_argument(
-        "--file", "-f",
+        "--file",
+        "-f",
         type=Path,
         metavar="FILE",
         help="Load from a local .bin file instead of fetching from a server",
     )
 
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         type=Path,
         metavar="FILE",
         help="Save the rendered PNG to this file instead of (or in addition to) displaying",
     )
     parser.add_argument(
-        "--download", "-d",
+        "--download",
+        "-d",
         type=Path,
         metavar="FILE",
         help="Save the raw panel binary (.bin) to this file",
     )
     parser.add_argument(
-        "--watch", "-w",
+        "--watch",
+        "-w",
         nargs="?",
-        const=None,      # --watch with no value → use server's X-Sleep-Seconds
+        const=None,  # --watch with no value → use server's X-Sleep-Seconds
         type=int,
         metavar="SECONDS",
         help="Auto-refresh mode. Without a value: honour the server's X-Sleep-Seconds. "
-             "With a value: refresh every N seconds regardless.",
+        "With a value: refresh every N seconds regardless.",
     )
     parser.add_argument(
-        "--battery", "-b",
+        "--battery",
+        "-b",
         type=int,
         default=None,
         metavar="MV",
         help="Simulated battery voltage in mV sent as X-Battery-mV (e.g. 3800)",
     )
     parser.add_argument(
-        "--quiet", "-q",
+        "--quiet",
+        "-q",
         action="store_true",
         help="Suppress status messages",
     )
@@ -360,24 +375,29 @@ def main():
 
     # Build the fetch function (closure over args).
     if args.file:
+
         def _fetch():
             log(f"  Loading: {args.file}")
             return load_from_file(args.file)
     else:
         sim_state = SimState()
+
         def _fetch():
             url = args.server.rstrip("/") + "/hokku/screen/"
             log(f"  → GET {url}  (X-Screen-Name: {args.name!r})")
             data, headers = fetch_screen(
-                args.server, args.name,
+                args.server,
+                args.name,
                 battery_mv=args.battery,
                 sim_state=sim_state,
             )
             sleep_s = headers.get("x-sleep-seconds", "?")
-            epoch  = headers.get("x-server-time-epoch", "?")
-            ctype  = headers.get("content-type", "?")
-            log(f"  ← {len(data)} bytes  X-Sleep-Seconds={sleep_s}"
-                f"  X-Server-Time-Epoch={epoch}  Content-Type={ctype}")
+            epoch = headers.get("x-server-time-epoch", "?")
+            ctype = headers.get("content-type", "?")
+            log(
+                f"  ← {len(data)} bytes  X-Sleep-Seconds={sleep_s}"
+                f"  X-Server-Time-Epoch={epoch}  Content-Type={ctype}"
+            )
             return data, headers
 
     if args.watch is not None or (args.watch is None and "--watch" in sys.argv or "-w" in sys.argv):

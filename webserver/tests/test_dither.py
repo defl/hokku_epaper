@@ -1,5 +1,6 @@
 """Dither LUTs, noop kernel, cache_slug stability, and concrete-class smoke tests."""
-import numba  # hard dep — must be installed
+
+import numba  # noqa: F401 — hard dep, must be installed
 import numpy as np
 import pytest
 
@@ -10,13 +11,12 @@ from hokku_server.dither_streaming import (
     _cached_euclidean_lut,
     _cached_hue_aware_lut,
     dither,
-    noop_dither,
 )
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.dither_unconstrained_numba import NumbaUnconstrainedDither
 
-
 # ── LUT and palette ───────────────────────────────────────────────────────────
+
 
 def test_palette_lab_shape():
     assert PALETTE_LAB.shape == (6, 3)
@@ -60,6 +60,7 @@ def test_cache_slug_stable_and_distinct():
 
 
 # ── Concrete class parametrization ────────────────────────────────────────────
+
 
 def _concrete_classes():
     return [

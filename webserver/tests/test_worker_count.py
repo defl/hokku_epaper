@@ -1,14 +1,13 @@
 """Unit tests for worker_count.resolve_worker_count()."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from hokku_server.worker_count import resolve_worker_count
 
-
 # ── configured >= 1 returns literally ─────────────────────────────────────────
+
 
 def test_serial_returns_1():
     assert resolve_worker_count(1) == 1
@@ -23,6 +22,7 @@ def test_explicit_high_returns_same():
 
 
 # ── auto mode (configured == 0) ───────────────────────────────────────────────
+
 
 def _mock_psutil(available_bytes: int):
     """Return a context-manager patch that sets psutil available RAM."""

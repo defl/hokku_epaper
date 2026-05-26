@@ -7,6 +7,7 @@ to come up at hokku.local.
 
 Windows-only (uses \\.\PhysicalDriveN and wmic). Admin required.
 """
+
 import ctypes
 import ctypes.wintypes as wt
 import datetime
@@ -33,7 +34,7 @@ WEBSERVER_PORT = 8080
 # First boot on a Pi Zero 2 W installs ~90 Debian packages (and optionally samba,
 # another ~36 packages + ~100 MB). Over wifi on a tiny SoC that's 5-10 minutes.
 # 60s was catastrophically optimistic.
-INSTALLING_BEACON_WAIT_SECS = 300   # Boot 1 takes ~1-2 min; 5 min is generous
+INSTALLING_BEACON_WAIT_SECS = 300  # Boot 1 takes ~1-2 min; 5 min is generous
 WEBSERVER_WAIT_SECS = 900
 
 PI_OS_LATEST_URL = "https://downloads.raspberrypi.com/raspios_lite_arm64_latest"
@@ -166,6 +167,7 @@ def _available_timezones():
     """
     try:
         import zoneinfo
+
         tzs = set(zoneinfo.available_timezones())
         return tzs if tzs else None
     except Exception:
@@ -182,7 +184,10 @@ def validate_timezone(s):
     if available is not None:
         if s in available:
             return True, ""
-        return False, f"{s!r} is not a known IANA timezone (e.g. Europe/London, America/New_York, UTC)"
+        return (
+            False,
+            f"{s!r} is not a known IANA timezone (e.g. Europe/London, America/New_York, UTC)",
+        )
     # Fallback: enforce shape (word, or Region/City, or Region/Sub/City).
     # Valid characters per IANA zone names: A-Za-z0-9 _ - + (plus / separators).
     if " " in s or ".." in s:
@@ -195,6 +200,7 @@ def validate_timezone(s):
 
 
 # ---------- Windows helpers ----------
+
 
 def is_admin():
     try:
@@ -222,7 +228,7 @@ def fmt_drive_id(drive):
 
 # ---------- Drive listing (PowerShell primary, wmic fallback) ----------
 
-_POWERSHELL_DRIVES = r'''
+_POWERSHELL_DRIVES = r"""
 $out = @()
 foreach ($d in Get-CimInstance Win32_DiskDrive) {
     $letters = @()
@@ -243,7 +249,7 @@ foreach ($d in Get-CimInstance Win32_DiskDrive) {
     }
 }
 $out | ConvertTo-Json -Compress -Depth 3
-'''
+"""
 
 
 def _run_powershell_drives():
@@ -252,7 +258,9 @@ def _run_powershell_drives():
         try:
             res = subprocess.run(
                 [exe, "-NoProfile", "-NonInteractive", "-Command", _POWERSHELL_DRIVES],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
         except FileNotFoundError:
             continue
@@ -280,15 +288,17 @@ def parse_powershell_drives(stdout):
             letters = [letters]
         media = r.get("MediaType") or ""
         removable = "Removable" in media or "External" in media
-        drives.append({
-            "index": int(r.get("Index", -1)),
-            "model": (r.get("Model") or "").strip(),
-            "size_bytes": int(r.get("Size") or 0),
-            "interface": (r.get("InterfaceType") or "").strip(),
-            "media": media,
-            "removable": removable,
-            "letters": list(letters),
-        })
+        drives.append(
+            {
+                "index": int(r.get("Index", -1)),
+                "model": (r.get("Model") or "").strip(),
+                "size_bytes": int(r.get("Size") or 0),
+                "interface": (r.get("InterfaceType") or "").strip(),
+                "media": media,
+                "removable": removable,
+                "letters": list(letters),
+            }
+        )
     return drives
 
 
@@ -305,7 +315,7 @@ def _wmic(command):
 
 def parse_wmic_table(output):
     """Parse fixed-width wmic /format:table output into list of dicts."""
-    lines = [l.rstrip() for l in output.splitlines() if l.strip()]
+    lines = [ln.rstrip() for ln in output.splitlines() if ln.strip()]
     if len(lines) < 2:
         return []
     header_line = lines[0]
@@ -333,10 +343,16 @@ def parse_wmic_table(output):
 
 def _wmic_list_drive_letters_for(disk_index):
     """wmic-based partition→letter mapping for one physical disk."""
-    out = _wmic([
-        "wmic", "path", "Win32_DiskDriveToDiskPartition", "get",
-        "Antecedent,Dependent", "/format:list"
-    ])
+    out = _wmic(
+        [
+            "wmic",
+            "path",
+            "Win32_DiskDriveToDiskPartition",
+            "get",
+            "Antecedent,Dependent",
+            "/format:list",
+        ]
+    )
     partitions = []
     for blk in out.replace("\r", "").split("\n\n"):
         d = {}
@@ -349,16 +365,27 @@ def _wmic_list_drive_letters_for(disk_index):
         if 'DeviceID="' not in ante or 'DeviceID="' not in dep:
             continue
         try:
-            disk_n = int(ante.split('DeviceID="')[1].split('"')[0].split("\\\\")[-1].replace("PHYSICALDRIVE", ""))
+            disk_n = int(
+                ante.split('DeviceID="')[1]
+                .split('"')[0]
+                .split("\\\\")[-1]
+                .replace("PHYSICALDRIVE", "")
+            )
         except Exception:
             continue
         part_id = dep.split('DeviceID="')[1].split('"')[0]
         partitions.append((disk_n, part_id))
 
-    out2 = _wmic([
-        "wmic", "path", "Win32_LogicalDiskToPartition", "get",
-        "Antecedent,Dependent", "/format:list"
-    ])
+    out2 = _wmic(
+        [
+            "wmic",
+            "path",
+            "Win32_LogicalDiskToPartition",
+            "get",
+            "Antecedent,Dependent",
+            "/format:list",
+        ]
+    )
     letters = []
     for blk in out2.replace("\r", "").split("\n\n"):
         d = {}
@@ -372,7 +399,7 @@ def _wmic_list_drive_letters_for(disk_index):
             continue
         part_id = ante.split('DeviceID="')[1].split('"')[0]
         letter = dep.split('DeviceID="')[1].split('"')[0]
-        for (di, pid) in partitions:
+        for di, pid in partitions:
             if di == disk_index and pid == part_id:
                 letters.append(letter)
     return letters
@@ -385,8 +412,9 @@ def list_disk_drives():
         return parse_powershell_drives(ps_out)
 
     # Fallback: wmic
-    out = _wmic(["wmic", "diskdrive", "get",
-                 "Index,Model,Size,InterfaceType,MediaType", "/format:table"])
+    out = _wmic(
+        ["wmic", "diskdrive", "get", "Index,Model,Size,InterfaceType,MediaType", "/format:table"]
+    )
     rows = parse_wmic_table(out)
     drives = []
     for r in rows:
@@ -400,15 +428,17 @@ def list_disk_drives():
             size = 0
         media = r.get("MediaType", "")
         removable = "Removable" in media or "External" in media
-        drives.append({
-            "index": idx,
-            "model": r.get("Model", ""),
-            "size_bytes": size,
-            "interface": r.get("InterfaceType", ""),
-            "media": media,
-            "removable": removable,
-            "letters": _wmic_list_drive_letters_for(idx),
-        })
+        drives.append(
+            {
+                "index": idx,
+                "model": r.get("Model", ""),
+                "size_bytes": size,
+                "interface": r.get("InterfaceType", ""),
+                "media": media,
+                "removable": removable,
+                "letters": _wmic_list_drive_letters_for(idx),
+            }
+        )
     return drives
 
 
@@ -422,7 +452,9 @@ def list_drive_letters_for(disk_index):
 
 def guess_sd_drive(drives):
     """Pick the most SD-card-like drive. Returns drive dict or None."""
-    candidates = [d for d in drives if d["removable"] and 2 * 1024**3 <= d["size_bytes"] <= 256 * 1024**3]
+    candidates = [
+        d for d in drives if d["removable"] and 2 * 1024**3 <= d["size_bytes"] <= 256 * 1024**3
+    ]
     if not candidates:
         return None
     # Prefer USB interface
@@ -443,8 +475,10 @@ def wait_for_new_drive(initial_indices, prompt):
             # Pick the first removable new drive
             removable = [d for d in new if d["removable"]]
             picked = removable[0] if removable else new[0]
-            print(f"  New drive detected: {fmt_drive_id(picked)} "
-                  f"— {picked['model']} ({fmt_gb(picked['size_bytes'])})")
+            print(
+                f"  New drive detected: {fmt_drive_id(picked)} "
+                f"— {picked['model']} ({fmt_gb(picked['size_bytes'])})"
+            )
             return picked
         sys.stdout.write(f"\r  waiting {spin[i % 4]} ")
         sys.stdout.flush()
@@ -463,8 +497,10 @@ def prompt_sd_drive():
     guess = guess_sd_drive(initial)
 
     if guess:
-        print(f"  Detected likely SD card: {fmt_drive_id(guess)} — "
-              f"{guess['model']} ({fmt_gb(guess['size_bytes'])})")
+        print(
+            f"  Detected likely SD card: {fmt_drive_id(guess)} — "
+            f"{guess['model']} ({fmt_gb(guess['size_bytes'])})"
+        )
         print()
         print(f"    [Enter]  use {fmt_drive_id(guess)}")
         print("    l        list all drives and pick manually")
@@ -499,8 +535,10 @@ def _print_drive_list(drives):
     print("  All disk drives:")
     for d in drives:
         removable = "removable" if d["removable"] else "fixed"
-        print(f"    {fmt_drive_id(d)}  {d['model']}  {fmt_gb(d['size_bytes'])}  "
-              f"{d['interface']}/{removable}")
+        print(
+            f"    {fmt_drive_id(d)}  {d['model']}  {fmt_gb(d['size_bytes'])}  "
+            f"{d['interface']}/{removable}"
+        )
 
 
 def _prompt_drive_index():
@@ -514,6 +552,7 @@ def _prompt_drive_index():
 
 # ---------- Image download/cache ----------
 
+
 def ensure_cache_dir():
     CACHE_DIR.mkdir(exist_ok=True)
     return CACHE_DIR
@@ -525,7 +564,9 @@ def prompt_image_path():
     print("  Step 2 of 4: Pi OS 64-bit Lite image")
     print("  -----------------------------------")
     ensure_cache_dir()
-    cached = sorted(CACHE_DIR.glob("*raspios*arm64*lite*.img*")) + sorted(CACHE_DIR.glob("*.img.xz"))
+    cached = sorted(CACHE_DIR.glob("*raspios*arm64*lite*.img*")) + sorted(
+        CACHE_DIR.glob("*.img.xz")
+    )
     cached = [p for p in cached if p.is_file()]
 
     if cached:
@@ -586,7 +627,9 @@ def _download_with_progress(url, dest):
                     if now - last > 0.5:
                         if total:
                             pct = got * 100 // total
-                            sys.stdout.write(f"\r    {pct:3d}%  {got / 1024**2:.1f} / {total / 1024**2:.1f} MB")
+                            sys.stdout.write(
+                                f"\r    {pct:3d}%  {got / 1024**2:.1f} / {total / 1024**2:.1f} MB"
+                            )
                         else:
                             sys.stdout.write(f"\r    {got / 1024**2:.1f} MB")
                         sys.stdout.flush()
@@ -604,6 +647,7 @@ def _download_with_progress(url, dest):
 
 
 # ---------- Install config prompt ----------
+
 
 def _yesno(prompt, default_yes=True):
     suffix = "[Y/n]" if default_yes else "[y/N]"
@@ -628,8 +672,17 @@ def _prompt_validated(prompt, validator, hidden=False, default=None):
         print(f"  ERROR: {reason}")
 
 
-_STICKY_KEYS = ("wifi_ssid", "wifi_pass", "user", "password", "ssh_enabled",
-                "samba", "country", "timezone", "mdns_hostname")
+_STICKY_KEYS = (
+    "wifi_ssid",
+    "wifi_pass",
+    "user",
+    "password",
+    "ssh_enabled",
+    "samba",
+    "country",
+    "timezone",
+    "mdns_hostname",
+)
 
 
 def _masked(s):
@@ -664,6 +717,7 @@ def collect_install_config():
     as defaults. Any changes the user makes are saved back for the next run.
     Passwords are stored in plain text — the user opted in to this caching."""
     import release_cache
+
     sticky = release_cache.load_settings()
 
     print()
@@ -672,18 +726,24 @@ def collect_install_config():
     if sticky:
         print("  (defaults from previous run in brackets; press Enter to keep)")
     else:
-        print("  (printable ASCII only; `\"`, `\\`, newlines are not allowed)")
+        print('  (printable ASCII only; `"`, `\\`, newlines are not allowed)')
 
-    wifi_ssid = _prompt_with_sticky("WiFi SSID", validate_ssid,
-                                    sticky.get("wifi_ssid"), default=None)
-    wifi_pass = _prompt_with_sticky("WiFi Password (empty = open network)",
-                                    validate_wifi_password,
-                                    sticky.get("wifi_pass"), default="", hidden=True)
+    wifi_ssid = _prompt_with_sticky(
+        "WiFi SSID", validate_ssid, sticky.get("wifi_ssid"), default=None
+    )
+    wifi_pass = _prompt_with_sticky(
+        "WiFi Password (empty = open network)",
+        validate_wifi_password,
+        sticky.get("wifi_pass"),
+        default="",
+        hidden=True,
+    )
     if not wifi_pass:
         print("  WARNING: empty WiFi password — open network assumed.")
 
-    user = _prompt_with_sticky("Linux username", validate_username,
-                               sticky.get("user"), default=PI_OS_DEFAULT_USER)
+    user = _prompt_with_sticky(
+        "Linux username", validate_username, sticky.get("user"), default=PI_OS_DEFAULT_USER
+    )
     while True:
         password = _prompt_with_sticky(
             f"Password for '{user}'",
@@ -703,14 +763,16 @@ def collect_install_config():
     ssh_default = sticky.get("ssh_enabled", False)
     ssh_enabled = _yesno("Enable SSH login?", default_yes=ssh_default)
     samba_default = sticky.get("samba", False)
-    samba = _yesno("Install Samba (Windows file share) with same credentials?",
-                   default_yes=samba_default)
+    samba = _yesno(
+        "Install Samba (Windows file share) with same credentials?", default_yes=samba_default
+    )
 
     print()
     print("  Bonjour / mDNS")
     mdns_default = sticky.get("mdns_hostname", "hokku")
-    use_mdns = _yesno("Advertise the webserver via Bonjour (*.local)?",
-                      default_yes=bool(mdns_default))
+    use_mdns = _yesno(
+        "Advertise the webserver via Bonjour (*.local)?", default_yes=bool(mdns_default)
+    )
     if use_mdns:
         mdns_hostname = _prompt_with_sticky(
             "Bonjour hostname (the part before .local)",
@@ -764,6 +826,7 @@ def collect_install_config():
 
 # ---------- Raw disk write ----------
 
+
 def _open_physical_drive_for_write(index):
     r"""Open \\.\PhysicalDriveN with GENERIC_READ|WRITE. Returns handle."""
     path = f"\\\\.\\PhysicalDrive{index}"
@@ -771,7 +834,10 @@ def _open_physical_drive_for_write(index):
         path,
         GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
-        None, OPEN_EXISTING, 0, None,
+        None,
+        OPEN_EXISTING,
+        0,
+        None,
     )
     if h == INVALID_HANDLE_VALUE:
         err = ctypes.get_last_error()
@@ -785,7 +851,10 @@ def _open_volume(letter):
         path,
         GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
-        None, OPEN_EXISTING, 0, None,
+        None,
+        OPEN_EXISTING,
+        0,
+        None,
     )
     if h == INVALID_HANDLE_VALUE:
         return None
@@ -795,7 +864,14 @@ def _open_volume(letter):
 def _ioctl(handle, code):
     returned = wt.DWORD(0)
     ok = ctypes.windll.kernel32.DeviceIoControl(
-        handle, code, None, 0, None, 0, ctypes.byref(returned), None,
+        handle,
+        code,
+        None,
+        0,
+        None,
+        0,
+        ctypes.byref(returned),
+        None,
     )
     return bool(ok)
 
@@ -830,17 +906,20 @@ def _unlock_volumes(handles):
 
 def write_image_to_disk(image_path, drive):
     disk_index = drive["index"]
-    disk_size_bytes = drive["size_bytes"]
     """Decompress (if .xz) and raw-write `image_path` to PhysicalDrive<disk_index>.
     Prints progress. Returns True on success."""
     is_xz = str(image_path).endswith(".xz")
-    src_size = image_path.stat().st_size  # only useful for .img; for .xz we don't know decompressed size
+    src_size = (
+        image_path.stat().st_size
+    )  # only useful for .img; for .xz we don't know decompressed size
 
     print()
     print(f"  Writing {image_path.name} to {fmt_drive_id(drive)} ...")
     if is_xz:
-        print(f"  (The .img.xz is decompressed on the fly — the actual amount")
-        print(f"   written to the card is ~3 GB, not the {image_path.stat().st_size // 1024**2} MB source.)")
+        print("  (The .img.xz is decompressed on the fly — the actual amount")
+        print(
+            f"   written to the card is ~3 GB, not the {image_path.stat().st_size // 1024**2} MB source.)"
+        )
     print("  This takes 3-10 minutes. Do not remove the card.")
 
     vol_handles = _dismount_volumes(disk_index)
@@ -892,7 +971,9 @@ def write_image_to_disk(image_path, drive):
                     written += len(buf)
                     if time.time() - last_report > 1.0:
                         pct = written * 100 // src_size if src_size else 0
-                        sys.stdout.write(f"\r    {pct:3d}%  {written / 1024**2:.1f} / {src_size / 1024**2:.1f} MB")
+                        sys.stdout.write(
+                            f"\r    {pct:3d}%  {written / 1024**2:.1f} / {src_size / 1024**2:.1f} MB"
+                        )
                         sys.stdout.flush()
                         last_report = time.time()
         finally:
@@ -916,7 +997,11 @@ def write_image_to_disk(image_path, drive):
 def _raw_write(handle, buf):
     written = wt.DWORD(0)
     ok = ctypes.windll.kernel32.WriteFile(
-        handle, buf, len(buf), ctypes.byref(written), None,
+        handle,
+        buf,
+        len(buf),
+        ctypes.byref(written),
+        None,
     )
     if not ok or written.value != len(buf):
         err = ctypes.get_last_error()
@@ -924,6 +1009,7 @@ def _raw_write(handle, buf):
 
 
 # ---------- Boot partition customization ----------
+
 
 def find_bootfs_letter(disk_index, timeout=30):
     """After imaging, Windows re-mounts the FAT bootfs partition. Poll for its letter."""
@@ -988,12 +1074,14 @@ def select_deb_interactive():
     for p in local:
         mtime = p.stat().st_mtime
         date = datetime.date.fromtimestamp(mtime).isoformat()
-        entries.append({
-            "label": f"{p.name}  [{date}, local build]",
-            "kind": "local",
-            "path": p,
-            "release": None,
-        })
+        entries.append(
+            {
+                "label": f"{p.name}  [{date}, local build]",
+                "kind": "local",
+                "path": p,
+                "release": None,
+            }
+        )
     for rel in github_releases:
         asset = release_cache.find_asset(rel, _deb_name_matches)
         if asset is None:
@@ -1002,12 +1090,14 @@ def select_deb_interactive():
             continue  # already shown as local
         tag = rel.get("tag_name", "?")
         date = (rel.get("published_at") or "")[:10]
-        entries.append({
-            "label": f"{asset['name']}  [{date}, GitHub {tag}]",
-            "kind": "github",
-            "path": None,
-            "release": rel,
-        })
+        entries.append(
+            {
+                "label": f"{asset['name']}  [{date}, GitHub {tag}]",
+                "kind": "github",
+                "path": None,
+                "release": rel,
+            }
+        )
 
     if not entries:
         print("  No installable .deb versions found.")
@@ -1065,7 +1155,9 @@ def inject_boot_customization(bootfs_letter, cfg, deb_path):
     firstboot = _render_firstboot(cfg)
 
     (boot / "firstrun.sh").write_bytes(firstrun.encode("utf-8").replace(b"\r\n", b"\n"))
-    (hokku_dir / "firstboot-install.sh").write_bytes(firstboot.encode("utf-8").replace(b"\r\n", b"\n"))
+    (hokku_dir / "firstboot-install.sh").write_bytes(
+        firstboot.encode("utf-8").replace(b"\r\n", b"\n")
+    )
     print("    wrote firstrun.sh + hokku/firstboot-install.sh")
 
     # Patch cmdline.txt — Pi OS expects systemd.run=/boot/firmware/firstrun.sh on a single line.
@@ -1403,6 +1495,7 @@ echo "=== firstboot-install.sh done $(date) ==="
 
 # ---------- Wait for Pi on network ----------
 
+
 def wait_for_installing_beacon(timeout=INSTALLING_BEACON_WAIT_SECS, ssh_enabled=False):
     """Phase 1: poll for hokku-installing.local on mDNS (avahi beacon, Boot 1).
     Returns the Pi's IP on success, None on timeout."""
@@ -1423,10 +1516,10 @@ def wait_for_installing_beacon(timeout=INSTALLING_BEACON_WAIT_SECS, ssh_enabled=
             print(f"  {fqdn} is up at {ip} after {e_min}:{e_sec:02d}.")
             if ssh_enabled:
                 print()
-                print(f"  Boot 2 (package install) is now running.")
-                print(f"  You can SSH in to watch progress:")
-                print(f"    ssh hokku@hokku-installing.local")
-                print(f"    tail -f /var/log/hokku-firstboot-install.log")
+                print("  Boot 2 (package install) is now running.")
+                print("  You can SSH in to watch progress:")
+                print("    ssh hokku@hokku-installing.local")
+                print("    tail -f /var/log/hokku-firstboot-install.log")
             return ip
         except socket.gaierror:
             pass
@@ -1435,7 +1528,9 @@ def wait_for_installing_beacon(timeout=INSTALLING_BEACON_WAIT_SECS, ssh_enabled=
         bar = "█" * filled + "░" * (bar_width - filled)
         e_min, e_sec = divmod(elapsed, 60)
         r_min, r_sec = divmod(remaining, 60)
-        sys.stdout.write(f"\r  [{bar}]  {e_min}:{e_sec:02d} elapsed  {r_min}:{r_sec:02d} remaining  ")
+        sys.stdout.write(
+            f"\r  [{bar}]  {e_min}:{e_sec:02d} elapsed  {r_min}:{r_sec:02d} remaining  "
+        )
         sys.stdout.flush()
         time.sleep(2)
     print()
@@ -1444,8 +1539,7 @@ def wait_for_installing_beacon(timeout=INSTALLING_BEACON_WAIT_SECS, ssh_enabled=
     return None
 
 
-def wait_for_webserver(host, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SECS,
-                       ssh_enabled=False):
+def wait_for_webserver(host, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SECS, ssh_enabled=False):
     """Poll /hokku/api/status and check for 'server_time' in the JSON response.
     `host` is an IP address or hostname used verbatim (no .local appended).
     Returns True if a genuine hokku webserver responds within timeout."""
@@ -1472,7 +1566,9 @@ def wait_for_webserver(host, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SECS,
         bar = "█" * filled + "░" * (bar_width - filled)
         e_min, e_sec = divmod(elapsed, 60)
         r_min, r_sec = divmod(remaining, 60)
-        sys.stdout.write(f"\r  [{bar}]  {e_min}:{e_sec:02d} elapsed  {r_min}:{r_sec:02d} remaining  ")
+        sys.stdout.write(
+            f"\r  [{bar}]  {e_min}:{e_sec:02d} elapsed  {r_min}:{r_sec:02d} remaining  "
+        )
         sys.stdout.flush()
         time.sleep(2)
     print()
@@ -1494,7 +1590,9 @@ def check_existing_server(hostname="hokku"):
         return False
     print(f"resolved to {ip}.")
     try:
-        with urllib.request.urlopen(f"http://{fqdn}:{WEBSERVER_PORT}/hokku/api/status", timeout=3) as r:
+        with urllib.request.urlopen(
+            f"http://{fqdn}:{WEBSERVER_PORT}/hokku/api/status", timeout=3
+        ) as r:
             if r.status == 200 and "server_time" in json.loads(r.read()):
                 print("  Webserver is running.")
                 return True
@@ -1505,13 +1603,15 @@ def check_existing_server(hostname="hokku"):
 
 # ---------- Orchestration ----------
 
+
 def _apply_mdns_config(host, mdns_hostname):
     """POST mdns_hostname to the running server's config API. Logs result.
     `host` is the IP (or hostname) to reach the server — not the new mDNS name."""
     url = f"http://{host}:{WEBSERVER_PORT}/hokku/api/config"
     body = json.dumps({"mdns_hostname": mdns_hostname}).encode()
     req = urllib.request.Request(
-        url, data=body,
+        url,
+        data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
@@ -1594,8 +1694,7 @@ def run():
     drive["letters"] = list_drive_letters_for(drive["index"])
     print()
     print("  !! ALL DATA ON THE FOLLOWING DEVICE WILL BE ERASED !!")
-    print(f"    {fmt_drive_id(drive)}  {drive['model']}  "
-          f"{fmt_gb(drive['size_bytes'])}")
+    print(f"    {fmt_drive_id(drive)}  {drive['model']}  {fmt_gb(drive['size_bytes'])}")
     if input("  Type 'YES' to proceed: ").strip() != "YES":
         print("  Aborted.")
         return None
@@ -1606,7 +1705,9 @@ def run():
     print("  Locating bootfs partition...")
     boot_letter = find_bootfs_letter(drive["index"])
     if not boot_letter:
-        print("  ERROR: could not find bootfs partition after write. Eject and reinsert card, then manually customize.")
+        print(
+            "  ERROR: could not find bootfs partition after write. Eject and reinsert card, then manually customize."
+        )
         return None
     print(f"  bootfs at {boot_letter}")
     try:

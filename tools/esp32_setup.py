@@ -3,6 +3,7 @@
 Extracted from the old hokku_setup.py so the top-level installer can drive
 the Pi-install phase and the ESP32 phase as separate stages.
 """
+
 import os
 import sys
 import tempfile
@@ -14,9 +15,13 @@ import serial.tools.list_ports
 
 import release_cache
 from hokku_config import (
-    ESP32S3_VID, ESP32S3_PID,
-    NVS_OFFSET, NVS_SIZE, CONFIG_VERSION,
-    _build_nvs_binary, _read_nvs,
+    CONFIG_VERSION,
+    ESP32S3_PID,
+    ESP32S3_VID,
+    NVS_OFFSET,
+    NVS_SIZE,
+    _build_nvs_binary,
+    _read_nvs,
 )
 
 SCRIPT_DIR = Path(__file__).parent
@@ -34,6 +39,7 @@ APP_OFFSET = 0x10000
 
 
 # -------- firmware location resolver --------
+
 
 def _merged_firmware_file(directory):
     """Return the merged hokku-firmware_<version>.bin in `directory`, or None."""
@@ -113,12 +119,13 @@ def _release_app_header(directory=None):
 
 # -------- device scan --------
 
+
 def scan_devices():
     """Return list of {port, description, is_esp32, config, ...} for all serial ports."""
     all_ports = serial.tools.list_ports.comports()
     devices = []
     for port in all_ports:
-        is_esp32 = (port.vid == ESP32S3_VID and port.pid == ESP32S3_PID)
+        is_esp32 = port.vid == ESP32S3_VID and port.pid == ESP32S3_PID
         device = {
             "port": port.device,
             "description": port.description or port.device,
@@ -156,13 +163,20 @@ def read_device_flash(port):
         old_stdout = sys.stdout
         sys.stdout = open(os.devnull, "w")
         try:
-            esptool.main([
-                "--chip", "esp32s3",
-                "--port", port,
-                "--baud", "921600",
-                "read-flash",
-                hex(read_start), hex(read_size), tmp_path,
-            ])
+            esptool.main(
+                [
+                    "--chip",
+                    "esp32s3",
+                    "--port",
+                    port,
+                    "--baud",
+                    "921600",
+                    "read-flash",
+                    hex(read_start),
+                    hex(read_size),
+                    tmp_path,
+                ]
+            )
         finally:
             sys.stdout.close()
             sys.stdout = old_stdout
@@ -170,7 +184,7 @@ def read_device_flash(port):
         with open(tmp_path, "rb") as f:
             data = f.read()
         nvs_data = data[:NVS_SIZE]
-        app_header = data[APP_OFFSET - NVS_OFFSET:][:256]
+        app_header = data[APP_OFFSET - NVS_OFFSET :][:256]
         return nvs_data, app_header
     except Exception:
         return None, None
@@ -229,6 +243,7 @@ def parse_device_state(nvs_data, app_header):
 
 
 # -------- device selection UI --------
+
 
 def format_device_line(idx, device):
     parts = [f"  [{idx}] {device['port']}"]
@@ -312,11 +327,13 @@ def select_device(devices):
 
 # -------- config display/prompt --------
 
+
 def _parse_server_url(url):
     if not url:
         return None, None
     try:
         from urllib.parse import urlparse
+
         p = urlparse(url)
         return p.hostname, p.port or 8080
     except Exception:
@@ -344,18 +361,20 @@ def show_current_config(config):
 def _mdns_resolve(hostname, timeout=3.0):
     """Resolve a .local hostname via mDNS multicast. Returns IP string or None.
     Uses only the standard library — no zeroconf dependency needed."""
-    import socket, struct, threading
+    import socket
+    import struct
+    import threading
 
     def _encode_name(name):
-        out = b''
-        for label in name.rstrip('.').split('.'):
-            b = label.encode('ascii')
+        out = b""
+        for label in name.rstrip(".").split("."):
+            b = label.encode("ascii")
             out += bytes([len(b)]) + b
-        return out + b'\x00'
+        return out + b"\x00"
 
     # mDNS query packet: QU bit set so the responder sends a unicast reply
-    packet = struct.pack('!HHHHHH', 0, 0, 1, 0, 0, 0)
-    packet += _encode_name(hostname) + struct.pack('!HH', 1, 0x8001)  # A, QU+IN
+    packet = struct.pack("!HHHHHH", 0, 0, 1, 0, 0, 0)
+    packet += _encode_name(hostname) + struct.pack("!HH", 1, 0x8001)  # A, QU+IN
 
     result = [None]
 
@@ -364,8 +383,8 @@ def _mdns_resolve(hostname, timeout=3.0):
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.settimeout(timeout)
-            sock.bind(('', 0))
-            sock.sendto(packet, ('224.0.0.251', 5353))
+            sock.bind(("", 0))
+            sock.sendto(packet, ("224.0.0.251", 5353))
             deadline = time.time() + timeout
             while time.time() < deadline:
                 try:
@@ -374,32 +393,36 @@ def _mdns_resolve(hostname, timeout=3.0):
                     break
                 # Walk the answer section looking for an A record
                 try:
-                    ancount = struct.unpack('!H', data[6:8])[0]
-                    qdcount = struct.unpack('!H', data[4:6])[0]
+                    ancount = struct.unpack("!H", data[6:8])[0]
+                    qdcount = struct.unpack("!H", data[4:6])[0]
                     pos = 12
                     # Skip questions
                     for _ in range(qdcount):
                         while pos < len(data):
-                            if data[pos] & 0xc0 == 0xc0:
-                                pos += 2; break
+                            if data[pos] & 0xC0 == 0xC0:
+                                pos += 2
+                                break
                             if data[pos] == 0:
-                                pos += 1; break
+                                pos += 1
+                                break
                             pos += data[pos] + 1
                         pos += 4
                     # Parse answers
                     for _ in range(ancount):
                         while pos < len(data):
-                            if data[pos] & 0xc0 == 0xc0:
-                                pos += 2; break
+                            if data[pos] & 0xC0 == 0xC0:
+                                pos += 2
+                                break
                             if data[pos] == 0:
-                                pos += 1; break
+                                pos += 1
+                                break
                             pos += data[pos] + 1
                         if pos + 10 > len(data):
                             break
-                        rtype, _, _, rdlen = struct.unpack('!HHIH', data[pos:pos + 10])
+                        rtype, _, _, rdlen = struct.unpack("!HHIH", data[pos : pos + 10])
                         pos += 10
                         if rtype == 1 and rdlen == 4:  # A record
-                            result[0] = socket.inet_ntoa(data[pos:pos + 4])
+                            result[0] = socket.inet_ntoa(data[pos : pos + 4])
                             return
                         pos += rdlen
                 except Exception:
@@ -423,17 +446,20 @@ def _resolve_host(hostname):
     Windows/macOS/Linux for .local via the OS mDNS stack), then falls back
     to a manual mDNS query for .local names."""
     import socket
+
     try:
         return socket.getaddrinfo(hostname, None, socket.AF_INET)[0][4][0]
     except socket.gaierror:
         pass
-    if hostname.endswith('.local'):
+    if hostname.endswith(".local"):
         return _mdns_resolve(hostname)
     return None
 
 
 def _check_server_reachable(host, port):
-    import urllib.request, urllib.error
+    import urllib.error
+    import urllib.request
+
     ip = _resolve_host(host)
     if ip is None:
         return False, None
@@ -441,7 +467,7 @@ def _check_server_reachable(host, port):
         urllib.request.urlopen(f"http://{ip}:{port}/hokku/api/time", timeout=5)
         return True, ip
     except urllib.error.HTTPError:
-        return True, ip   # got an HTTP response — server is up, endpoint may differ
+        return True, ip  # got an HTTP response — server is up, endpoint may differ
     except Exception:
         return False, ip
 
@@ -486,14 +512,20 @@ def prompt_config(existing_config=None, pi_credentials=None):
     # --- Secondary WiFi (optional) ---
     existing_ssid2 = cfg.get("wifi_ssid2", "")
     default2 = existing_ssid2
-    prompt2 = f"  Secondary WiFi SSID [{default2}] (Enter to skip): " if default2 \
-              else "  Secondary WiFi SSID (optional, Enter to skip): "
+    prompt2 = (
+        f"  Secondary WiFi SSID [{default2}] (Enter to skip): "
+        if default2
+        else "  Secondary WiFi SSID (optional, Enter to skip): "
+    )
     val = input(prompt2).strip()
     if val:
         cfg["wifi_ssid2"] = val
         existing_pass2 = cfg.get("wifi_pass2", "")
-        prompt = "  Secondary WiFi Password [****]: " if existing_pass2 \
-                 else "  Secondary WiFi Password: "
+        prompt = (
+            "  Secondary WiFi Password [****]: "
+            if existing_pass2
+            else "  Secondary WiFi Password: "
+        )
         val = input(prompt).strip()
         if val:
             cfg["wifi_pass2"] = val
@@ -550,7 +582,7 @@ def prompt_config(existing_config=None, pi_credentials=None):
             else:
                 print("OK")
             break
-        if resolved_ip is None and current_host.endswith('.local'):
+        if resolved_ip is None and current_host.endswith(".local"):
             print("NOT FOUND")
             print(f"  WARNING: Could not resolve {current_host} via mDNS.")
             print("  Make sure the server is running and on the same network.")
@@ -570,7 +602,11 @@ def prompt_config(existing_config=None, pi_credentials=None):
 
     # --- screen name ---
     current = cfg.get("screen_name", "")
-    prompt = f"  Screen Name [{current}]: " if current else "  Screen Name (optional, e.g. Living Room): "
+    prompt = (
+        f"  Screen Name [{current}]: "
+        if current
+        else "  Screen Name (optional, e.g. Living Room): "
+    )
     val = input(prompt).strip()
     if val:
         if len(val.encode("utf-8")) > 64:
@@ -586,9 +622,15 @@ def _pi_config_mismatch(existing_config, pi_credentials):
     if not existing_config or not pi_credentials:
         return []
     diffs = []
-    if pi_credentials.get("wifi_ssid1") and existing_config.get("wifi_ssid1") != pi_credentials["wifi_ssid1"]:
+    if (
+        pi_credentials.get("wifi_ssid1")
+        and existing_config.get("wifi_ssid1") != pi_credentials["wifi_ssid1"]
+    ):
         diffs.append("wifi_ssid1")
-    if pi_credentials.get("wifi_pass1") and existing_config.get("wifi_pass1") != pi_credentials["wifi_pass1"]:
+    if (
+        pi_credentials.get("wifi_pass1")
+        and existing_config.get("wifi_pass1") != pi_credentials["wifi_pass1"]
+    ):
         diffs.append("wifi_pass1")
     if pi_credentials.get("server_ip"):
         host, _ = _parse_server_url(existing_config.get("image_url", ""))
@@ -598,6 +640,7 @@ def _pi_config_mismatch(existing_config, pi_credentials):
 
 
 # -------- flashing --------
+
 
 def write_config(port, config):
     print("  Writing configuration...", end=" ", flush=True)
@@ -617,14 +660,21 @@ def write_config(port, config):
         old_stdout = sys.stdout
         sys.stdout = open(os.devnull, "w")
         try:
-            esptool.main([
-                "--chip", "esp32s3",
-                "--port", port,
-                "--baud", "921600",
-                "write-flash",
-                "--flash-mode", "dio",
-                hex(NVS_OFFSET), tmp_path,
-            ])
+            esptool.main(
+                [
+                    "--chip",
+                    "esp32s3",
+                    "--port",
+                    port,
+                    "--baud",
+                    "921600",
+                    "write-flash",
+                    "--flash-mode",
+                    "dio",
+                    hex(NVS_OFFSET),
+                    tmp_path,
+                ]
+            )
         finally:
             sys.stdout.close()
             sys.stdout = old_stdout
@@ -658,16 +708,25 @@ def flash_firmware(port):
 
     print(f"  Flashing {merged.name} (~30s)...")
     try:
-        esptool.main([
-            "--chip", "esp32s3",
-            "--port", port,
-            "--baud", "921600",
-            "write-flash",
-            "--flash-mode", "dio",
-            "--flash-freq", "80m",
-            "--flash-size", "16MB",
-            hex(BOOTLOADER_OFFSET), str(merged),
-        ])
+        esptool.main(
+            [
+                "--chip",
+                "esp32s3",
+                "--port",
+                port,
+                "--baud",
+                "921600",
+                "write-flash",
+                "--flash-mode",
+                "dio",
+                "--flash-freq",
+                "80m",
+                "--flash-size",
+                "16MB",
+                hex(BOOTLOADER_OFFSET),
+                str(merged),
+            ]
+        )
         print("  Firmware flashed successfully.")
         return True
     except Exception as e:
@@ -729,10 +788,16 @@ def check_boot(port):
 def _refresh_device_state(port):
     nvs_data, app_header = read_device_flash(port)
     state = parse_device_state(nvs_data, app_header)
-    return state["config"], state["firmware_current"], state.get("device_version"), state.get("release_version")
+    return (
+        state["config"],
+        state["firmware_current"],
+        state.get("device_version"),
+        state.get("release_version"),
+    )
 
 
 # -------- main menu --------
+
 
 def main_menu(device, pi_credentials=None, pi_install_ran=False):
     """Configure + flash loop. If `pi_install_ran`, prefer reconfigure-by-default on mismatch."""
@@ -746,7 +811,9 @@ def main_menu(device, pi_credentials=None, pi_install_ran=False):
     if pi_install_ran and config:
         diffs = _pi_config_mismatch(config, pi_credentials)
         if diffs:
-            print(f"  NOTE: existing ESP32 config differs from values used in Pi install: {', '.join(diffs)}.")
+            print(
+                f"  NOTE: existing ESP32 config differs from values used in Pi install: {', '.join(diffs)}."
+            )
             print("  Reconfiguring is recommended.")
 
     while True:
@@ -783,10 +850,12 @@ def main_menu(device, pi_credentials=None, pi_install_ran=False):
             default = "1"
 
         print("  What would you like to do?")
-        for num, label in [("1", "Update configuration"),
-                           ("2", "Configure + flash firmware"),
-                           ("3", "Flash firmware only" + (" (keep existing config)" if config else "")),
-                           ("4", "Exit")]:
+        for num, label in [
+            ("1", "Update configuration"),
+            ("2", "Configure + flash firmware"),
+            ("3", "Flash firmware only" + (" (keep existing config)" if config else "")),
+            ("4", "Exit"),
+        ]:
             marker = " <-- default" if num == default else ""
             print(f"    [{num}] {label}{marker}")
         print()
@@ -824,7 +893,9 @@ def main_menu(device, pi_credentials=None, pi_install_ran=False):
                     write_config(port, config)
                 check_boot(port)
                 print("  Re-reading device state...")
-                config, firmware_current, device_version, release_version = _refresh_device_state(port)
+                config, firmware_current, device_version, release_version = _refresh_device_state(
+                    port
+                )
                 config = config or {}
                 if firmware_current is None:
                     firmware_current = True

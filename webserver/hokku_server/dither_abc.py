@@ -16,6 +16,7 @@ All dither implementations expose the same two-method API:
 
 Common type aliases live here so downstream modules share a single definition.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -49,7 +50,7 @@ class AbstractDither(ABC):
     """
 
     @abstractmethod
-    def dither(self, canvas: CanvasLike, cfg: "DitherConfig") -> UInt8Array:
+    def dither(self, canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
         """Dither a pre-processed canvas.
 
         Parameters
@@ -70,7 +71,7 @@ class AbstractDither(ABC):
     def dither_with_prep(
         self,
         canvas: CanvasLike,
-        cfg: "DitherConfig",
+        cfg: DitherConfig,
         prep_stripe: PrepStripe,
         stripe_h: int = _DEFAULT_STRIPE_H,
     ) -> UInt8Array:

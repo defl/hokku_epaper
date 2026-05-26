@@ -1,20 +1,15 @@
 """ImageClassifier: dispatch policy, caching, persistence, clear_cache."""
+
 from __future__ import annotations
 
 import hashlib
 import json
-import shutil
-from dataclasses import replace
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from hokku_server.app_config import AppConfig
-from hokku_server.image_classifier import ImageClassifier, Observations
-from hokku_server.image_config import ImageConfig
+from hokku_server.image_classifier import ImageClassifier
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
-from hokku_server.screen_image_config import ScreenImageConfig
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_IMAGES = _REPO_ROOT / "images" / "test"
@@ -24,6 +19,7 @@ _COLOUR_LANDSCAPE = _TEST_IMAGES / "Fitz_Roy_1.avif"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _config(
     tmp_path: Path,
@@ -55,6 +51,7 @@ def _sha1(path: Path) -> str:
 
 # ── bw flag off ───────────────────────────────────────────────────────────────
 
+
 def test_bw_flag_off_returns_default(tmp_path):
     cfg = _config(tmp_path)
     clf = ImageClassifier(cfg)
@@ -72,6 +69,7 @@ def test_bw_flag_off_no_json_created(tmp_path):
 
 
 # ── B&W detection ─────────────────────────────────────────────────────────────
+
 
 def test_bw_detect_on_bw_image_returns_bw_config(tmp_path):
     cfg = _config(tmp_path, bw=True)
@@ -101,6 +99,7 @@ def test_bw_detect_persists_observation(tmp_path):
 
 # ── cache hit: no re-detection ────────────────────────────────────────────────
 
+
 def test_cache_hit_no_redetection(tmp_path):
     """A second call with the same sha1 uses the cached observation, not re-running detectors."""
     cfg = _config(tmp_path, bw=True)
@@ -111,13 +110,16 @@ def test_cache_hit_no_redetection(tmp_path):
     clf.screen_config_for(_COLOUR_LANDSCAPE, sha)
 
     # Patch detector at its source — must NOT be called on the second call.
-    with patch.object(ImageClassifier, "_check_grayscale", side_effect=AssertionError("should not re-detect")):
+    with patch.object(
+        ImageClassifier, "_check_grayscale", side_effect=AssertionError("should not re-detect")
+    ):
         sc = clf.screen_config_for(_COLOUR_LANDSCAPE, sha)
 
     assert sc.image_config == cfg.image_config_default
 
 
 # ── clear_cache ───────────────────────────────────────────────────────────────
+
 
 def test_clear_cache_removes_json(tmp_path):
     cfg = _config(tmp_path, bw=True)
@@ -148,6 +150,7 @@ def test_clear_cache_idempotent_if_no_json(tmp_path):
 
 # ── persistence across re-instantiation ──────────────────────────────────────
 
+
 def test_persistence_across_reinstantiation(tmp_path):
     cfg = _config(tmp_path, bw=True)
     sha = _sha1(_COLOUR_LANDSCAPE)
@@ -163,6 +166,7 @@ def test_persistence_across_reinstantiation(tmp_path):
 
 
 # ── ScreenImageConfig slug correctness ───────────────────────────────────────
+
 
 def test_screen_config_slug_differs_by_dispatch_outcome(tmp_path):
     """The two dispatch outcomes (bw vs default) produce different ScreenImageConfig slugs."""

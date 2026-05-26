@@ -6,6 +6,7 @@ Hue-aware variants enable adaptive saturation + adaptive vivid by default
 since they pair well with the hue-constrained palette mapping. BW variants
 disable colour boosting to avoid tinting near-neutral greys.
 """
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -83,13 +84,13 @@ def _bw(algorithm: str, serpentine: bool = False) -> ImageConfig:
 
 
 PRESET_IMAGE_CONFIGS: dict[str, ImageConfig] = {
-    "floyd_steinberg":           _plain("floyd_steinberg", serpentine=True),
+    "floyd_steinberg": _plain("floyd_steinberg", serpentine=True),
     "floyd_steinberg_hue_aware": _hue_aware("floyd_steinberg", serpentine=True),
-    "floyd_steinberg_bw":        _bw("floyd_steinberg", serpentine=True),
-    "atkinson":                  _plain("atkinson"),
-    "atkinson_hue_aware":        _hue_aware("atkinson"),
-    "stucki":                    _plain("stucki"),
-    "stucki_hue_aware":          _hue_aware("stucki"),
+    "floyd_steinberg_bw": _bw("floyd_steinberg", serpentine=True),
+    "atkinson": _plain("atkinson"),
+    "atkinson_hue_aware": _hue_aware("atkinson"),
+    "stucki": _plain("stucki"),
+    "stucki_hue_aware": _hue_aware("stucki"),
 }
 
 FALLBACK_PRESET = "floyd_steinberg_hue_aware"

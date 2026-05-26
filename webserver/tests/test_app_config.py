@@ -1,15 +1,15 @@
 """AppConfig: load/save roundtrip, defaults, cache_slug, version + migrations."""
+
 from __future__ import annotations
 
 import contextlib
 import io
 import json
-from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
 
-from hokku_server.app_config import AppConfig, _CURRENT_VERSION, _MIGRATIONS, _migrate
+from hokku_server.app_config import _CURRENT_VERSION, AppConfig, _migrate
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 
@@ -118,10 +118,14 @@ def test_image_configs_roundtrip(tmp_path: Path):
 def test_image_field_with_partial_blob_falls_back_to_default(tmp_path: Path):
     """A corrupt image_config_default blob (partial dither) falls back to the default preset."""
     p = tmp_path / "c.json"
-    p.write_text(json.dumps({
-        "version": _CURRENT_VERSION,
-        "image_config_default": {"dither": {}},
-    }))
+    p.write_text(
+        json.dumps(
+            {
+                "version": _CURRENT_VERSION,
+                "image_config_default": {"dither": {}},
+            }
+        )
+    )
     cfg = AppConfig.load(p)
     assert cfg.image_config_default == PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
 
@@ -152,7 +156,6 @@ def test_image_worker_thread_count_roundtrips(tmp_path: Path):
     cfg.save(p)
     loaded = AppConfig.load(p)
     assert loaded.image_worker_thread_count == 3
-
 
 
 def test_cache_slug_invariant_to_worker_count():
@@ -208,8 +211,12 @@ def test_v3_migrates_forward():
 
 def test_v3_migration_removes_old_mdns_enabled():
     """Old alpha configs with mdns_enabled bool get it removed and hostname added."""
-    old_v3_blob = {"version": 3, "image_worker_thread_count": 1, "face_detector": "yunet_opencv",
-                   "mdns_enabled": True}
+    old_v3_blob = {
+        "version": 3,
+        "image_worker_thread_count": 1,
+        "face_detector": "yunet_opencv",
+        "mdns_enabled": True,
+    }
     migrated = _migrate(old_v3_blob)
     assert "mdns_enabled" not in migrated
     assert migrated["mdns_hostname"] == "hokku"
@@ -218,8 +225,12 @@ def test_v3_migration_removes_old_mdns_enabled():
 
 def test_v4_migrates_to_v5_removes_face_detector():
     """A v4 dict loses face_detector in the v4→v5 migration."""
-    v4_blob = {"version": 4, "image_worker_thread_count": 1, "face_detector": "yunet_opencv",
-               "mdns_hostname": "hokku"}
+    v4_blob = {
+        "version": 4,
+        "image_worker_thread_count": 1,
+        "face_detector": "yunet_opencv",
+        "mdns_hostname": "hokku",
+    }
     migrated = _migrate(v4_blob)
     assert migrated["version"] == _CURRENT_VERSION
     assert "face_detector" not in migrated

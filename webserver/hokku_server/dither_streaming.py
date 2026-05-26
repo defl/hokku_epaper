@@ -10,13 +10,12 @@ This module also owns the shared colour-space helpers and LUT builders that
 other dither implementations reuse.  They are module-level functions so they
 can be re-exported by the dither_constrained.py backward-compatibility shim.
 """
+
 from __future__ import annotations
 
 import logging
 from functools import lru_cache
-
-logger = logging.getLogger(__name__)
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -24,56 +23,63 @@ from PIL import Image
 
 from hokku_server.display import PALETTE_MEASURED_RGB
 from hokku_server.dither_abc import (
+    _DEFAULT_STRIPE_H,
     AbstractDither,
     CanvasLike,
     DiffusionKernel,
     FloatArray,
     PrepStripe,
     UInt8Array,
-    _DEFAULT_STRIPE_H,
 )
 from hokku_server.dither_config import AlgorithmName, DitherConfig, LutName  # noqa: F401
 
 if TYPE_CHECKING:
     pass
 
+logger = logging.getLogger(__name__)
+
 
 # ── Colour space ────────────────────────────────────────────────────────────
 
 
-def srgb_to_linear(c: ArrayLike, *, dtype=np.float64) -> FloatArray:
+def srgb_to_linear(c: ArrayLike, *, dtype: Any = np.float64) -> FloatArray:
     arr = np.asarray(c, dtype=dtype) / dtype(255.0)
-    return np.where(arr <= dtype(0.04045), arr / dtype(12.92),
-                    ((arr + dtype(0.055)) / dtype(1.055)) ** dtype(2.4))
+    return np.where(
+        arr <= dtype(0.04045),
+        arr / dtype(12.92),
+        ((arr + dtype(0.055)) / dtype(1.055)) ** dtype(2.4),
+    )
 
 
-def linear_to_xyz(rgb: ArrayLike, *, dtype=np.float64) -> FloatArray:
+def linear_to_xyz(rgb: ArrayLike, *, dtype: Any = np.float64) -> FloatArray:
     rgb = np.asarray(rgb, dtype=dtype)
-    M = np.array([
-        [0.4124564, 0.3575761, 0.1804375],
-        [0.2126729, 0.7151522, 0.0721750],
-        [0.0193339, 0.1191920, 0.9503041],
-    ], dtype=dtype)
+    M = np.array(
+        [
+            [0.4124564, 0.3575761, 0.1804375],
+            [0.2126729, 0.7151522, 0.0721750],
+            [0.0193339, 0.1191920, 0.9503041],
+        ],
+        dtype=dtype,
+    )
     return rgb @ M.T
 
 
-def xyz_to_lab(xyz: ArrayLike, *, dtype=np.float64) -> FloatArray:
+def xyz_to_lab(xyz: ArrayLike, *, dtype: Any = np.float64) -> FloatArray:
     xyz = np.asarray(xyz, dtype=dtype)
     ref = np.array([0.95047, 1.00000, 1.08883], dtype=dtype)
     scaled = xyz / ref
-    f = np.where(scaled > dtype(0.008856),
-                 scaled ** dtype(1 / 3),
-                 dtype(7.787) * scaled + dtype(16 / 116))
+    f = np.where(
+        scaled > dtype(0.008856), scaled ** dtype(1 / 3), dtype(7.787) * scaled + dtype(16 / 116)
+    )
     L = dtype(116) * f[..., 1] - dtype(16)
     a = dtype(500) * (f[..., 0] - f[..., 1])
     b = dtype(200) * (f[..., 1] - f[..., 2])
     return np.stack([L, a, b], axis=-1)
 
 
-def rgb_to_lab(rgb: ArrayLike, *, dtype=np.float64) -> FloatArray:
+def rgb_to_lab(rgb: ArrayLike, *, dtype: Any = np.float64) -> FloatArray:
     arr = np.clip(np.asarray(rgb, dtype=dtype), 0, 255)
-    return xyz_to_lab(linear_to_xyz(srgb_to_linear(arr, dtype=dtype),
-                                    dtype=dtype), dtype=dtype)
+    return xyz_to_lab(linear_to_xyz(srgb_to_linear(arr, dtype=dtype), dtype=dtype), dtype=dtype)
 
 
 PALETTE_LAB = rgb_to_lab(PALETTE_MEASURED_RGB)
@@ -94,8 +100,7 @@ def adaptive_saturate(
     rgb = np.asarray(img_array, dtype=f32)
     lab = rgb_to_lab(rgb, dtype=f32)
     chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
-    t = np.clip((chroma - f32(low_thresh)) / f32(high_thresh - low_thresh),
-                f32(0.0), f32(1.0))
+    t = np.clip((chroma - f32(low_thresh)) / f32(high_thresh - low_thresh), f32(0.0), f32(1.0))
     factor = f32(1.0) + f32(max_enhance - 1.0) * t
     lab[..., 1] *= factor
     lab[..., 2] *= factor
@@ -110,24 +115,25 @@ def adaptive_saturate(
     eps = f32(0.008856)
     kappa = f32(903.3)
     xyz_out = np.empty_like(lab)
-    fx3 = fx ** 3
-    fz3 = fz ** 3
-    xyz_out[..., 0] = np.where(fx3 > eps, fx3,
-                               (f32(116) * fx - f32(16)) / kappa) * ref[0]
-    xyz_out[..., 1] = np.where(L > kappa * eps,
-                               ((L + f32(16)) / f32(116)) ** 3,
-                               L / kappa) * ref[1]
-    xyz_out[..., 2] = np.where(fz3 > eps, fz3,
-                               (f32(116) * fz - f32(16)) / kappa) * ref[2]
-    M_inv = np.array([
-        [3.2404542, -1.5371385, -0.4985314],
-        [-0.9692660, 1.8760108, 0.0415560],
-        [0.0556434, -0.2040259, 1.0572252],
-    ], dtype=f32)
+    fx3 = fx**3
+    fz3 = fz**3
+    xyz_out[..., 0] = np.where(fx3 > eps, fx3, (f32(116) * fx - f32(16)) / kappa) * ref[0]
+    xyz_out[..., 1] = np.where(L > kappa * eps, ((L + f32(16)) / f32(116)) ** 3, L / kappa) * ref[1]
+    xyz_out[..., 2] = np.where(fz3 > eps, fz3, (f32(116) * fz - f32(16)) / kappa) * ref[2]
+    M_inv = np.array(
+        [
+            [3.2404542, -1.5371385, -0.4985314],
+            [-0.9692660, 1.8760108, 0.0415560],
+            [0.0556434, -0.2040259, 1.0572252],
+        ],
+        dtype=f32,
+    )
     linear = np.clip(xyz_out @ M_inv.T, f32(0), f32(1))
-    srgb = np.where(linear <= f32(0.0031308),
-                    linear * f32(12.92),
-                    f32(1.055) * (linear ** f32(1.0 / 2.4)) - f32(0.055))
+    srgb = np.where(
+        linear <= f32(0.0031308),
+        linear * f32(12.92),
+        f32(1.055) * (linear ** f32(1.0 / 2.4)) - f32(0.055),
+    )
     return np.clip(srgb * f32(255), f32(0), f32(255))
 
 
@@ -161,22 +167,20 @@ def build_rgb_lut_hue_aware(
 
     pal_a = PALETTE_LAB[:, 1]
     pal_b = PALETTE_LAB[:, 2]
-    pal_chroma = np.sqrt(pal_a ** 2 + pal_b ** 2)
+    pal_chroma = np.sqrt(pal_a**2 + pal_b**2)
     pal_hue = np.arctan2(pal_b, pal_a)
     neutral_pal = pal_chroma < neutral_chroma
 
     pix_a = lab_grid[:, 1]
     pix_b = lab_grid[:, 2]
-    pix_chroma = np.sqrt(pix_a ** 2 + pix_b ** 2)
+    pix_chroma = np.sqrt(pix_a**2 + pix_b**2)
     pix_hue = np.arctan2(pix_b, pix_a)
     dh = pix_hue[:, None] - pal_hue[None, :]
     dh = np.arctan2(np.sin(dh), np.cos(dh))
     dh_deg = np.abs(np.degrees(dh))
 
     forbidden = (
-        (pix_chroma[:, None] > neutral_chroma)
-        & (~neutral_pal[None, :])
-        & (dh_deg > hue_cutoff_deg)
+        (pix_chroma[:, None] > neutral_chroma) & (~neutral_pal[None, :]) & (dh_deg > hue_cutoff_deg)
     )
     dists = np.sum((lab_grid[:, None, :] - PALETTE_LAB[None, :, :]) ** 2, axis=2)
     dists = np.where(forbidden, np.inf, dists)
@@ -314,8 +318,13 @@ class StreamingDither(AbstractDither):
         if cfg.algorithm == "noop":
             return noop_dither(canvas, lut, scale, cfg.serpentine)
         return self._diffuse(
-            canvas, _KERNEL_FOR[cfg.algorithm], lut, scale, cfg.serpentine,
-            prep_stripe=prep_stripe, stripe_h=stripe_h,
+            canvas,
+            _KERNEL_FOR[cfg.algorithm],
+            lut,
+            scale,
+            cfg.serpentine,
+            prep_stripe=prep_stripe,
+            stripe_h=stripe_h,
         )
 
     @staticmethod

@@ -9,6 +9,7 @@ the server. These tests verify three layers of defense:
 2. /hokku/api/upload returns the file in "skipped" with a clear reason.
 3. PIL's Image.MAX_IMAGE_PIXELS is set to the project cap.
 """
+
 from __future__ import annotations
 
 import io
@@ -19,7 +20,6 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from hokku_server import image_renderer
 from hokku_server.app_state import AppState, build_manager
 from hokku_server.flask_app import create_app
 from hokku_server.image_classifier import ImageClassifier

@@ -1,13 +1,12 @@
 """Tests for hokku_config CLI tool (NVS partition flashing approach)."""
+
 import json
 import os
 import struct
+import sys
 import tempfile
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import hokku_config
@@ -63,7 +62,7 @@ class TestNvsBinaryGeneration:
         config = {
             "wifi_ssid1": "PrimaryNet",
             "wifi_pass1": "secret123",
-            "image_url":  "http://192.168.1.100:8080/hokku/screen/",
+            "image_url": "http://192.168.1.100:8080/hokku/screen/",
         }
         binary = hokku_config._build_nvs_binary(config)
         result = hokku_config._read_nvs(binary)
@@ -78,7 +77,7 @@ class TestNvsBinaryGeneration:
             "wifi_pass1": "primary_pw",
             "wifi_ssid2": "BackupNet",
             "wifi_pass2": "backup_pw",
-            "image_url":  "http://192.168.1.100:8080/hokku/screen/",
+            "image_url": "http://192.168.1.100:8080/hokku/screen/",
         }
         binary = hokku_config._build_nvs_binary(config)
         result = hokku_config._read_nvs(binary)
@@ -138,7 +137,11 @@ class TestNvsBinaryGeneration:
 class TestBackupRestore:
     def test_backup_file_format(self):
         """Backup creates valid JSON."""
-        config = {"wifi_ssid1": "TestNet", "wifi_pass1": "secret", "image_url": "http://test:8080/hokku/"}
+        config = {
+            "wifi_ssid1": "TestNet",
+            "wifi_pass1": "secret",
+            "image_url": "http://test:8080/hokku/",
+        }
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(config, f, indent=2)
             temp_path = f.name
@@ -151,7 +154,11 @@ class TestBackupRestore:
 
     def test_restore_reads_json(self):
         """Restore parses JSON correctly."""
-        config = {"wifi_ssid1": "RestoreNet", "wifi_pass1": "secret123", "image_url": "http://restore:8080/hokku/"}
+        config = {
+            "wifi_ssid1": "RestoreNet",
+            "wifi_pass1": "secret123",
+            "image_url": "http://restore:8080/hokku/",
+        }
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(config, f, indent=2)
             temp_path = f.name

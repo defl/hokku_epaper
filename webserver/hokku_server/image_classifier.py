@@ -4,6 +4,7 @@ Wired with AppConfig at construction so ImageManager doesn't need to know
 about face / B&W detection. Caches raw observations keyed by sha1 of the
 original file content in <cache_dir>/image_classifier.json.
 """
+
 from __future__ import annotations
 
 import json
@@ -12,19 +13,19 @@ import threading
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 import numpy as np
 from PIL import Image
 
 from hokku_server.app_config import AppConfig
-from hokku_server.image_renderer import open_image_for_render
-from hokku_server.filesystem import atomic_write_json
 from hokku_server.bounding_box import BoundingBox
-from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
-from hokku_server.image_config import ImageConfig
 from hokku_server.dither_streaming import rgb_to_lab
+from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
+from hokku_server.filesystem import atomic_write_json
+from hokku_server.image_config import ImageConfig
+from hokku_server.image_renderer import open_image_for_render
 from hokku_server.screen_image_config import ScreenImageConfig
+
+logger = logging.getLogger(__name__)
 
 _DB_NAME = "image_classifier.json"
 
@@ -34,6 +35,7 @@ GRAYSCALE_CHROMA_THRESHOLD = 8.0
 @dataclass(frozen=True)
 class Observations:
     """Raw per-image detection results.  None = not yet observed."""
+
     is_bw: bool | None = None
     face_bboxes: tuple[BoundingBox, ...] | None = None  # None = not yet detected
 
@@ -109,7 +111,12 @@ class ImageClassifier:
         p95_chroma = float(np.percentile(chroma, 95))
         is_bw = p95_chroma < GRAYSCALE_CHROMA_THRESHOLD
         status = "B&W" if is_bw else "NOT B&W"
-        logger.debug("[B&W check] 95th %%ile chroma = %.2f (threshold %s): %s", p95_chroma, GRAYSCALE_CHROMA_THRESHOLD, status)
+        logger.debug(
+            "[B&W check] 95th %%ile chroma = %.2f (threshold %s): %s",
+            p95_chroma,
+            GRAYSCALE_CHROMA_THRESHOLD,
+            status,
+        )
         return is_bw
 
     @staticmethod
@@ -165,7 +172,9 @@ class ImageClassifier:
             raw_bboxes = d.get("face_bboxes")
             if raw_bboxes is not None:
                 try:
-                    face_bboxes = tuple(BoundingBox(x=b['x'], y=b['y'], w=b['w'], h=b['h']) for b in raw_bboxes)
+                    face_bboxes = tuple(
+                        BoundingBox(x=b["x"], y=b["y"], w=b["w"], h=b["h"]) for b in raw_bboxes
+                    )
                 except (ValueError, KeyError, TypeError):
                     # Invalid bbox data, treat as not yet detected
                     face_bboxes = None

@@ -4,6 +4,7 @@ Used by both the Pi installer (hokku-server .deb) and the ESP32 setup
 (firmware binaries). One release query is memoised per process so we don't
 hammer the GitHub API during a single run.
 """
+
 import json
 import sys
 import time
@@ -119,6 +120,7 @@ def _reset_cache_for_tests():
 
 # ---------- sticky install settings ----------
 
+
 def load_settings():
     """Load previously-saved install settings (wifi SSID/PSK, Linux username/
     password, country, timezone, ssh/samba flags) from .cache/settings.json.
@@ -131,7 +133,7 @@ def load_settings():
     if not SETTINGS_FILE.exists():
         return {}
     try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
@@ -150,7 +152,7 @@ def save_settings(settings):
         except OSError:
             pass  # Windows ignores mode bits on FAT
         tmp.replace(SETTINGS_FILE)
-    except OSError as e:
+    except OSError:
         try:
             tmp.unlink()
         except OSError:

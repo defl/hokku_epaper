@@ -8,6 +8,7 @@ verify the *one* property each concrete is supposed to deliver:
 * MultiThreadedImageManager actually parallelises — two simultaneous
   renders both enter the worker function before either returns.
 """
+
 from __future__ import annotations
 
 import threading
@@ -19,9 +20,7 @@ from hokku_server.image_manager_multi import MultiThreadedImageManager
 from hokku_server.image_manager_single import SingleThreadedImageManager
 
 
-def test_single_threaded_does_not_spawn_threads(
-    app_config: AppConfig, make_test_image
-):
+def test_single_threaded_does_not_spawn_threads(app_config: AppConfig, make_test_image):
     """SingleThreadedImageManager.sync() runs entirely on the calling thread."""
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
@@ -39,9 +38,7 @@ def test_single_threaded_does_not_spawn_threads(
     # ``sync`` may briefly spawn helper threads inside PIL/numpy that exit
     # before sync returns; what we care about is that no persistent worker
     # thread is left running.
-    assert after == before, (
-        f"thread count grew during sync: before={before} after={after}"
-    )
+    assert after == before, f"thread count grew during sync: before={before} after={after}"
 
 
 def test_multi_threaded_runs_in_parallel(app_config: AppConfig, monkeypatch):
@@ -62,6 +59,7 @@ def test_multi_threaded_runs_in_parallel(app_config: AppConfig, monkeypatch):
     mgr = MultiThreadedImageManager(app_config, worker_count=2)
     try:
         from hokku_server.orientation import Orientation
+
         mgr._dispatch_render("a.png", "slug", Orientation.LANDSCAPE, (), 0.0)
         mgr._dispatch_render("b.png", "slug", Orientation.LANDSCAPE, (), 0.0)
         # Joining the barrier proves both workers entered fake_render_one

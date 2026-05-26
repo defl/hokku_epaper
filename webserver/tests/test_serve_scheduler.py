@@ -1,7 +1,7 @@
 """ServeScheduler: rotation fairness, stats, telemetry, persistence."""
+
 from __future__ import annotations
 
-import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,7 +12,9 @@ from hokku_server.screen_config import ScreenConfig
 from hokku_server.serve_scheduler import ServeScheduler
 
 
-def _setup(app_config: AppConfig, make_test_image, names: list[str]) -> tuple[SingleThreadedImageManager, ServeScheduler]:
+def _setup(
+    app_config: AppConfig, make_test_image, names: list[str]
+) -> tuple[SingleThreadedImageManager, ServeScheduler]:
     upload = Path(app_config.upload_dir)
     for n in names:
         make_test_image(upload / n)
@@ -103,30 +105,43 @@ def test_orphan_dropped_on_pick(app_config: AppConfig, make_test_image):
 
 # ── Orientation filter tests ──────────────────────────────────────────────────
 
+
 def test_pick_next_orientation_filter_landscape(app_config: AppConfig, make_test_image):
     # 40×30 = landscape, 30×40 = portrait
-    mgr, sched = _setup_with_sizes(app_config, make_test_image, [
-        ("land.png", (40, 30)),
-        ("port.png", (30, 40)),
-    ])
+    mgr, sched = _setup_with_sizes(
+        app_config,
+        make_test_image,
+        [
+            ("land.png", (40, 30)),
+            ("port.png", (30, 40)),
+        ],
+    )
     result = sched.pick_next(Orientation.LANDSCAPE)
     assert result == "land.png"
 
 
 def test_pick_next_orientation_filter_portrait(app_config: AppConfig, make_test_image):
-    mgr, sched = _setup_with_sizes(app_config, make_test_image, [
-        ("land.png", (40, 30)),
-        ("port.png", (30, 40)),
-    ])
+    mgr, sched = _setup_with_sizes(
+        app_config,
+        make_test_image,
+        [
+            ("land.png", (40, 30)),
+            ("port.png", (30, 40)),
+        ],
+    )
     result = sched.pick_next(Orientation.PORTRAIT)
     assert result == "port.png"
 
 
 def test_pick_next_neutral_includes_all(app_config: AppConfig, make_test_image):
-    mgr, sched = _setup_with_sizes(app_config, make_test_image, [
-        ("land.png", (40, 30)),
-        ("port.png", (30, 40)),
-    ])
+    mgr, sched = _setup_with_sizes(
+        app_config,
+        make_test_image,
+        [
+            ("land.png", (40, 30)),
+            ("port.png", (30, 40)),
+        ],
+    )
     # NEUTRAL = no filter, so the first pick is whichever has lowest show_index (alphabetical tie-break)
     result = sched.pick_next(Orientation.NEUTRAL)
     assert result in ("land.png", "port.png")
@@ -134,9 +149,13 @@ def test_pick_next_neutral_includes_all(app_config: AppConfig, make_test_image):
 
 def test_pick_next_neutral_image_eligible_under_any_filter(app_config: AppConfig, make_test_image):
     # 30×30 = square = NEUTRAL
-    mgr, sched = _setup_with_sizes(app_config, make_test_image, [
-        ("square.png", (30, 30)),
-    ])
+    mgr, sched = _setup_with_sizes(
+        app_config,
+        make_test_image,
+        [
+            ("square.png", (30, 30)),
+        ],
+    )
     assert sched.pick_next(Orientation.LANDSCAPE) == "square.png"
     assert sched.pick_next(Orientation.PORTRAIT) == "square.png"
     assert sched.pick_next(Orientation.NEUTRAL) == "square.png"
@@ -144,9 +163,13 @@ def test_pick_next_neutral_image_eligible_under_any_filter(app_config: AppConfig
 
 def test_pick_next_orientation_filter_no_match_returns_none(app_config: AppConfig, make_test_image):
     # Only portrait images; requesting landscape yields None
-    mgr, sched = _setup_with_sizes(app_config, make_test_image, [
-        ("port.png", (30, 40)),
-    ])
+    mgr, sched = _setup_with_sizes(
+        app_config,
+        make_test_image,
+        [
+            ("port.png", (30, 40)),
+        ],
+    )
     assert sched.pick_next(Orientation.LANDSCAPE) is None
 
 
@@ -174,43 +197,66 @@ def test_set_screen_config_preserves_all_fields(app_config: AppConfig):
     assert updated.filter_by_orientation is True
 
 
-def test_precompute_recomputes_all_orientations_on_mark_served(app_config: AppConfig, make_test_image):
-    mgr, sched = _setup_with_sizes(app_config, make_test_image, [
-        ("land.png", (40, 30)),
-        ("port.png", (30, 40)),
-    ])
+def test_precompute_recomputes_all_orientations_on_mark_served(
+    app_config: AppConfig, make_test_image
+):
+    mgr, sched = _setup_with_sizes(
+        app_config,
+        make_test_image,
+        [
+            ("land.png", (40, 30)),
+            ("port.png", (30, 40)),
+        ],
+    )
     # After mark_served, _next_for should update for all orientations
     sched.mark_served("land.png")
-    assert sched._next_for[Orientation.LANDSCAPE] is not None or sched._next_for[Orientation.NEUTRAL] == "port.png"
+    assert (
+        sched._next_for[Orientation.LANDSCAPE] is not None
+        or sched._next_for[Orientation.NEUTRAL] == "port.png"
+    )
     assert sched._next_for[Orientation.PORTRAIT] == "port.png"
 
 
 def test_precompute_all_locked_landscape_only(app_config: AppConfig, make_test_image):
     # Only landscape images: NEUTRAL and LANDSCAPE point to same image, PORTRAIT is None
-    mgr, sched = _setup_with_sizes(app_config, make_test_image, [
-        ("land.png", (40, 30)),
-    ])
+    mgr, sched = _setup_with_sizes(
+        app_config,
+        make_test_image,
+        [
+            ("land.png", (40, 30)),
+        ],
+    )
     assert sched._next_for[Orientation.NEUTRAL] == "land.png"
     assert sched._next_for[Orientation.LANDSCAPE] == "land.png"
     assert sched._next_for[Orientation.PORTRAIT] is None
 
 
 def test_precompute_all_locked_mixed(app_config: AppConfig, make_test_image):
-    mgr, sched = _setup_with_sizes(app_config, make_test_image, [
-        ("land.png", (40, 30)),
-        ("port.png", (30, 40)),
-    ])
+    mgr, sched = _setup_with_sizes(
+        app_config,
+        make_test_image,
+        [
+            ("land.png", (40, 30)),
+            ("port.png", (30, 40)),
+        ],
+    )
     # Both orientations have a candidate; NEUTRAL picks alphabetically first (both show_index=0)
     assert sched._next_for[Orientation.LANDSCAPE] == "land.png"
     assert sched._next_for[Orientation.PORTRAIT] == "port.png"
     assert sched._next_for[Orientation.NEUTRAL] in ("land.png", "port.png")
 
 
-def test_precompute_all_locked_neutral_images_appear_in_all_slots(app_config: AppConfig, make_test_image):
+def test_precompute_all_locked_neutral_images_appear_in_all_slots(
+    app_config: AppConfig, make_test_image
+):
     # Square image (NEUTRAL) should be picked for all three orientation slots
-    mgr, sched = _setup_with_sizes(app_config, make_test_image, [
-        ("square.png", (30, 30)),
-    ])
+    mgr, sched = _setup_with_sizes(
+        app_config,
+        make_test_image,
+        [
+            ("square.png", (30, 30)),
+        ],
+    )
     assert sched._next_for[Orientation.NEUTRAL] == "square.png"
     assert sched._next_for[Orientation.LANDSCAPE] == "square.png"
     assert sched._next_for[Orientation.PORTRAIT] == "square.png"

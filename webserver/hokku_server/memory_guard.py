@@ -16,11 +16,12 @@ per-thread budget when running multiple workers in parallel, set the limit
 to ``N × per_thread_budget + baseline_overhead`` — that's the responsibility
 of the worker-pool driver, not this module.
 """
+
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 
 def _resource_module():
@@ -29,6 +30,7 @@ def _resource_module():
         return None
     try:
         import resource
+
         return resource
     except ImportError:
         return None
@@ -47,6 +49,7 @@ def baseline_rss_bytes() -> int:
     """
     try:
         import psutil
+
         return int(psutil.Process().memory_info().rss)
     except ImportError:
         res = _resource_module()

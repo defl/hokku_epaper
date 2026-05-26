@@ -5,6 +5,7 @@ Unit tests (always run).
 Slow visual-rendering test is marked ``time_intensive`` — see the bottom of
 this file. Run with: pytest -m time_intensive
 """
+
 from __future__ import annotations
 
 import shutil
@@ -17,15 +18,14 @@ from hokku_server.display import TOTAL_BYTES
 from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
-from hokku_server.image_config import ImageConfig, _image_config_from_dict
+from hokku_server.image_config import ImageConfig
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
 from hokku_server.presets import FALLBACK_PRESET, PRESET_IMAGE_CONFIGS
 from hokku_server.screen_image_config import ScreenImageConfig, _screen_image_config_from_dict
-
 from tests._helpers import is_oversize_fixture
 
-
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _noop_image_config() -> ImageConfig:
     """Identity-ish ImageConfig with the noop ditherer — fast for rendering tests."""
@@ -59,6 +59,7 @@ def _make_screen_cfg(orientation: str = "landscape") -> ScreenImageConfig:
 
 
 # ── unit tests ────────────────────────────────────────────────────────────────
+
 
 def test_roundtrip_landscape():
     cfg = _make_screen_cfg("landscape")
@@ -133,13 +134,16 @@ def test_visual_render_all_test_images(_wipe_build_dir):
       build/test_screen_image/<stem>__noop.png
       build/test_screen_image/<stem>_original<ext>
     """
+
     def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0):
-        return ImageRenderer(NumbaStreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
+        return ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
+            img, cfg, orientation, crop_to_fill_threshold
+        )
 
     test_images = sorted(
-        p for p in _TEST_IMAGES_DIR.iterdir()
-        if p.suffix.lower() in _IMAGE_EXTS
-        and not is_oversize_fixture(p)
+        p
+        for p in _TEST_IMAGES_DIR.iterdir()
+        if p.suffix.lower() in _IMAGE_EXTS and not is_oversize_fixture(p)
     )
     assert test_images, f"No test images found in {_TEST_IMAGES_DIR}"
 

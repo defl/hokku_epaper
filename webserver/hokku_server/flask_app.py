@@ -1,24 +1,25 @@
-﻿"""Flask application factory and route handlers.
+"""Flask application factory and route handlers.
 
 Routes only — no module-level mutable globals. Live state lives in the
 AppState instance passed to ``create_app()``. All route handlers read
 ``state.manager`` / ``state.scheduler`` / ``state.config`` at the start of
 each request so they automatically pick up a hot-reloaded config.
 """
+
 from __future__ import annotations
 
 import io
 import json
 import logging
+import os
+import subprocess
 import time as _time
 from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
-from PIL import Image, UnidentifiedImageError
-
+import pillow_jxl  # noqa: F401 — registers JXL format with PIL
+import psutil
 from flask import (
     Flask,
     abort,
@@ -30,27 +31,30 @@ from flask import (
     send_file,
     send_from_directory,
 )
+from PIL import Image, UnidentifiedImageError
 from pillow_heif import register_heif_opener
-import pillow_jxl
 from werkzeug.utils import secure_filename
 
-import os
-import psutil
-import subprocess
-
-from hokku_server.app_state import AppState
 from hokku_server.app_config import AppConfig
+from hokku_server.app_state import AppState
 from hokku_server.display import FULL_W, PANEL_H, TOTAL_BYTES, VISUAL_H, VISUAL_W
-from hokku_server.image_record import ConvertStatus
-from hokku_server.orientation import Orientation
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import transform_bboxes_to_canvas_norm
 from hokku_server.image_config import _image_config_from_dict
-from hokku_server.image_renderer import IMAGE_EXTENSIONS, ImageRenderer, MAX_UPLOAD_BYTES, MAX_UPLOAD_PIXELS, SVG_PROBE_DIMS, open_image_for_render
+from hokku_server.image_record import ConvertStatus
+from hokku_server.image_renderer import (
+    IMAGE_EXTENSIONS,
+    MAX_UPLOAD_PIXELS,
+    SVG_PROBE_DIMS,
+    ImageRenderer,
+    open_image_for_render,
+)
+from hokku_server.orientation import Orientation
 from hokku_server.presets import PRESET_IMAGE_CONFIGS, PRESET_META
 from hokku_server.screen_headers import parse_battery_header, parse_frame_state
 from hokku_server.time_utils import calculate_sleep_seconds, format_duration_human
 
+logger = logging.getLogger(__name__)
 
 register_heif_opener()
 
@@ -92,18 +96,26 @@ def _read_git_describe() -> tuple[str, str | None]:
     """
     try:
         repo_root = Path(__file__).resolve().parent.parent.parent
-        describe = subprocess.check_output(
-            ["git", "describe", "--tags", "--always"],
-            cwd=str(repo_root),
-            stderr=subprocess.DEVNULL,
-            timeout=2,
-        ).decode("ascii").strip()
-        commit = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(repo_root),
-            stderr=subprocess.DEVNULL,
-            timeout=2,
-        ).decode("ascii").strip()
+        describe = (
+            subprocess.check_output(
+                ["git", "describe", "--tags", "--always"],
+                cwd=str(repo_root),
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+            .decode("ascii")
+            .strip()
+        )
+        commit = (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(repo_root),
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+            .decode("ascii")
+            .strip()
+        )
         if describe:
             return describe, commit or None
     except (OSError, subprocess.SubprocessError):
@@ -111,6 +123,7 @@ def _read_git_describe() -> tuple[str, str | None]:
 
     try:
         from importlib.metadata import version
+
         return version("hokku-server"), None
     except Exception:
         return "unknown", None
@@ -153,17 +166,22 @@ def create_app(
 
         cfg = scheduler.get_screen_config(screen_name)
         effective_orientation = scheduler.get_screen_orientation(screen_name)
-        pick_orientation = effective_orientation if cfg.filter_by_orientation else Orientation.NEUTRAL
-        chosen = scheduler.pick_next(orientation=pick_orientation)
-        sleep_seconds = (
-            calculate_sleep_seconds(config) if chosen else _busy_retry_seconds(config)
+        pick_orientation = (
+            effective_orientation if cfg.filter_by_orientation else Orientation.NEUTRAL
         )
+        chosen = scheduler.pick_next(orientation=pick_orientation)
+        sleep_seconds = calculate_sleep_seconds(config) if chosen else _busy_retry_seconds(config)
 
         if chosen is None:
             progress = manager.conversion_progress()
             converting = progress.total > 0
             scheduler.record_screen_call(
-                screen_name, screen_ip, sleep_seconds, None, battery_mv, frame_state,
+                screen_name,
+                screen_ip,
+                sleep_seconds,
+                None,
+                battery_mv,
+                frame_state,
             )
             if converting:
                 msg, status, label = "Converting images, try again shortly", 503, "Converting"
@@ -179,7 +197,12 @@ def create_app(
             # Cache missing (not yet rendered for this orientation) — tell screen to retry.
             sleep_seconds = _busy_retry_seconds(config)
             scheduler.record_screen_call(
-                screen_name, screen_ip, sleep_seconds, None, battery_mv, frame_state,
+                screen_name,
+                screen_ip,
+                sleep_seconds,
+                None,
+                battery_mv,
+                frame_state,
             )
             resp = make_response("Cached binary missing, try again shortly", 503)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
@@ -187,7 +210,12 @@ def create_app(
 
         scheduler.mark_served(chosen)
         scheduler.record_screen_call(
-            screen_name, screen_ip, sleep_seconds, chosen, battery_mv, frame_state,
+            screen_name,
+            screen_ip,
+            sleep_seconds,
+            chosen,
+            battery_mv,
+            frame_state,
         )
         logger.debug("Serving: %s to %s (sleep_seconds=%s)", chosen, screen_name, sleep_seconds)
 
@@ -274,20 +302,24 @@ def create_app(
                     with Image.open(io.BytesIO(data)) as probe:
                         w, h = probe.size
                 except Image.DecompressionBombError:
-                    skipped.append({
-                        "name": name,
-                        "reason": f"image too large; cap {MAX_UPLOAD_PIXELS:,} px",
-                    })
+                    skipped.append(
+                        {
+                            "name": name,
+                            "reason": f"image too large; cap {MAX_UPLOAD_PIXELS:,} px",
+                        }
+                    )
                     continue
                 except (UnidentifiedImageError, OSError) as e:
                     logger.exception("Upload error for %r: %s: %s", name, type(e).__name__, e)
                     skipped.append({"name": name, "reason": "unreadable image"})
                     continue
             if w * h > MAX_UPLOAD_PIXELS:
-                skipped.append({
-                    "name": name,
-                    "reason": f"image too large ({w}x{h}); cap {MAX_UPLOAD_PIXELS:,} px",
-                })
+                skipped.append(
+                    {
+                        "name": name,
+                        "reason": f"image too large ({w}x{h}); cap {MAX_UPLOAD_PIXELS:,} px",
+                    }
+                )
                 continue
             try:
                 manager.add(name, data)
@@ -323,7 +355,9 @@ def create_app(
         if rec is None:
             return jsonify({"error": f"image {name!r} not found"}), 404
         if rec.convert_status != ConvertStatus.OK:
-            return jsonify({"error": f"image {name!r} is not ready (status: {rec.convert_status})"}), 409
+            return jsonify(
+                {"error": f"image {name!r} is not ready (status: {rec.convert_status})"}
+            ), 409
         try:
             state.scheduler.set_next(name)
         except ValueError as e:
@@ -356,7 +390,9 @@ def create_app(
         if "orientation" in body:
             raw = body.get("orientation")
             if raw not in ("landscape", "portrait", None):
-                return jsonify({"error": "orientation must be 'landscape', 'portrait', or null"}), 400
+                return jsonify(
+                    {"error": "orientation must be 'landscape', 'portrait', or null"}
+                ), 400
             updates["orientation_override"] = Orientation(raw) if raw else None
 
         if "filter_by_orientation" in body:
@@ -375,7 +411,6 @@ def create_app(
         """Remove stale-slug panel/preview files immediately (preserves thumbs)."""
         state.manager.scrub_stale_cache()
         return jsonify({"ok": True})
-
 
     # ── API: status + config ───────────────────────────────────
 
@@ -401,14 +436,20 @@ def create_app(
                 "image_width": r.image_width,
                 "image_height": r.image_height,
                 "dimension_unit": "pt" if Path(r.name).suffix.lower() == ".svg" else "px",
-                "native_orientation": r.native_orientation.value if r.convert_status == ConvertStatus.OK else None,
+                "native_orientation": r.native_orientation.value
+                if r.convert_status == ConvertStatus.OK
+                else None,
                 "last_conversion_seconds": r.last_conversion_seconds,
                 "is_bw": obs.is_bw if obs else None,
-                "face_bboxes": [[b.x, b.y, b.w, b.h] for b in obs.face_bboxes] if (obs and obs.face_bboxes) else [],
+                "face_bboxes": [[b.x, b.y, b.w, b.h] for b in obs.face_bboxes]
+                if (obs and obs.face_bboxes)
+                else [],
             }
             upload_files.append(entry)
             if r.convert_status == ConvertStatus.FAILED:
-                failed_files.append({"name": r.name, "error": r.convert_error, "size_bytes": r.original_size_bytes})
+                failed_files.append(
+                    {"name": r.name, "error": r.convert_error, "size_bytes": r.original_size_bytes}
+                )
 
         ready_count = sum(1 for r in records if r.convert_status == ConvertStatus.OK)
         serve_data: dict[str, dict] = {}
@@ -417,7 +458,8 @@ def create_app(
                 "show_index": s.show_index,
                 "last_request": (
                     datetime.fromtimestamp(s.last_served_at).isoformat(timespec="seconds")
-                    if s.last_served_at else None
+                    if s.last_served_at
+                    else None
                 ),
                 "total_show_count": s.total_show_count,
                 "total_show_minutes": s.total_show_minutes,
@@ -444,7 +486,8 @@ def create_app(
                 "request_count": t.request_count,
                 "last_seen": (
                     datetime.fromtimestamp(t.last_seen_at).isoformat(timespec="seconds")
-                    if t.last_seen_at else None
+                    if t.last_seen_at
+                    else None
                 ),
                 "last_sleep_seconds": t.last_sleep_seconds,
                 "last_served": t.last_served,
@@ -452,7 +495,8 @@ def create_app(
                 "battery_percent": t.battery_percent,
                 "battery_seen_at": (
                     datetime.fromtimestamp(t.battery_seen_at).isoformat(timespec="seconds")
-                    if t.battery_seen_at else None
+                    if t.battery_seen_at
+                    else None
                 ),
                 "next_update_at": next_update_at,
                 "state": t.frame_state,
@@ -461,32 +505,34 @@ def create_app(
             }
 
         disk = manager.cache_disk_info()
-        return jsonify({
-            "server_time": datetime.now().isoformat(timespec="seconds"),
-            "upload_size": len(records),
-            "pool_size": ready_count,
-            "pool_files": [r.name for r in records if r.convert_status == ConvertStatus.OK],
-            "upload_files": upload_files,
-            "failed_files": failed_files,
-            "serve_data": serve_data,
-            "screens": screens_payload,
-            "last_served": last[0] if last else None,
-            "converting": 1 if progress.current_name or progress.done < progress.total else 0,
-            "converting_name": progress.current_name,
-            "converting_done": progress.done,
-            "converting_total": progress.total,
-            "converting_eta_seconds": manager.estimate_remaining_seconds(),
-            "next_images": {
-                o.value: scheduler.peek_next(orientation=o)
-                for o in screen_peek_orientations
-                if scheduler.peek_next(orientation=o) is not None
-            },
-            "cache_used_bytes": disk["cache_used_bytes"],
-            "disk_free_bytes": disk["disk_free_bytes"],
-            "image_worker_count_resolved": state.manager.resolved_worker_count,
-            "cpu_cores": os.cpu_count(),
-            "memory_available_gb": round(psutil.virtual_memory().available / 1e9, 1),
-        })
+        return jsonify(
+            {
+                "server_time": datetime.now().isoformat(timespec="seconds"),
+                "upload_size": len(records),
+                "pool_size": ready_count,
+                "pool_files": [r.name for r in records if r.convert_status == ConvertStatus.OK],
+                "upload_files": upload_files,
+                "failed_files": failed_files,
+                "serve_data": serve_data,
+                "screens": screens_payload,
+                "last_served": last[0] if last else None,
+                "converting": 1 if progress.current_name or progress.done < progress.total else 0,
+                "converting_name": progress.current_name,
+                "converting_done": progress.done,
+                "converting_total": progress.total,
+                "converting_eta_seconds": manager.estimate_remaining_seconds(),
+                "next_images": {
+                    o.value: scheduler.peek_next(orientation=o)
+                    for o in screen_peek_orientations
+                    if scheduler.peek_next(orientation=o) is not None
+                },
+                "cache_used_bytes": disk["cache_used_bytes"],
+                "disk_free_bytes": disk["disk_free_bytes"],
+                "image_worker_count_resolved": state.manager.resolved_worker_count,
+                "cpu_cores": os.cpu_count(),
+                "memory_available_gb": round(psutil.virtual_memory().available / 1e9, 1),
+            }
+        )
 
     @app.route("/hokku/api/config", methods=["GET"])
     def api_config_get():
@@ -498,16 +544,18 @@ def create_app(
                 "label": meta.get("label", name),
                 "description": meta.get("description", ""),
             }
-        return jsonify({
-            "config": state.config.to_dict(),
-            "config_defaults": AppConfig().to_dict(),
-            "dither_presets": presets,
-            "server_time": datetime.now().isoformat(timespec="seconds"),
-            "panel": {"visual_w": VISUAL_W, "visual_h": VISUAL_H, "total_bytes": TOTAL_BYTES},
-            "git_describe": git_describe,
-            "commit_url": f"{_REPO_URL}/commit/{git_hash}" if git_hash else None,
-            "repo_url": _REPO_URL,
-        })
+        return jsonify(
+            {
+                "config": state.config.to_dict(),
+                "config_defaults": AppConfig().to_dict(),
+                "dither_presets": presets,
+                "server_time": datetime.now().isoformat(timespec="seconds"),
+                "panel": {"visual_w": VISUAL_W, "visual_h": VISUAL_H, "total_bytes": TOTAL_BYTES},
+                "git_describe": git_describe,
+                "commit_url": f"{_REPO_URL}/commit/{git_hash}" if git_hash else None,
+                "repo_url": _REPO_URL,
+            }
+        )
 
     @app.route("/hokku/api/config", methods=["POST"])
     def api_config_post():
@@ -568,14 +616,18 @@ def create_app(
             if obs and obs.face_bboxes:
                 face_bboxes_orig = obs.face_bboxes
 
-        use_clahe_keepout = body.get("clahe_keepout", state.config.classifier_face_detect_clahe_keepout)
+        use_clahe_keepout = body.get(
+            "clahe_keepout", state.config.classifier_face_detect_clahe_keepout
+        )
         keepout = face_bboxes_orig if (face_bboxes_orig and use_clahe_keepout) else None
 
         logger.debug("Preview: %r", name)
         with open_image_for_render(path) as img:
             orig_w, orig_h = img.size
             png = ImageRenderer(NumbaStreamingDither()).render_preview_png(
-                img, cfg, state.config.orientation,
+                img,
+                cfg,
+                state.config.orientation,
                 clahe_keepout_bboxes_norm=keepout,
             )
         logger.debug("Preview done: %r", name)

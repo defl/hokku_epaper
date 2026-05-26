@@ -1,4 +1,5 @@
 """Kill any server on :8080, start a fresh one from current source, open Playwright."""
+
 import asyncio
 import socket
 import subprocess
@@ -21,9 +22,7 @@ def port_in_use(port: int) -> bool:
 
 def kill_port_8080() -> None:
     """Kill whatever owns :8080 using netstat + taskkill."""
-    out = subprocess.run(
-        ["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True
-    ).stdout
+    out = subprocess.run(["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True).stdout
     for line in out.splitlines():
         parts = line.split()
         if len(parts) >= 5 and parts[1].endswith(":8080") and parts[3] == "LISTENING":

@@ -1,9 +1,9 @@
 """Background poll loop: periodically calls ImageManager.sync()."""
+
 from __future__ import annotations
 
 import logging
 import threading
-import time
 
 from hokku_server.app_state import AppState
 
@@ -33,7 +33,9 @@ class Watcher:
         self._run = True
         self._wake = threading.Event()
         threading.Thread(
-            target=self.run_forever, daemon=True, name="watcher",
+            target=self.run_forever,
+            daemon=True,
+            name="watcher",
         ).start()
 
     def wake(self) -> None:

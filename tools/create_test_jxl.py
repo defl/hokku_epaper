@@ -1,6 +1,7 @@
 from pathlib import Path
+
+import pillow_jxl  # noqa: F401 — registers JXL format with PIL
 from PIL import Image
-import pillow_jxl
 
 _ROOT = Path(__file__).resolve().parent.parent
 _OUT = _ROOT / "images" / "test"

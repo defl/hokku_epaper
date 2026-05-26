@@ -1,4 +1,5 @@
 """Shared test fixtures."""
+
 from __future__ import annotations
 
 import sys
@@ -20,7 +21,6 @@ if str(_REPO_ROOT) not in sys.path:
 register_heif_opener()
 
 from hokku_server.app_config import AppConfig
-from hokku_server.dither_config import DitherConfig
 from hokku_server.image_config import ImageConfig
 from hokku_server.image_manager_abstract import AbstractImageManager
 from hokku_server.image_manager_multi import MultiThreadedImageManager
@@ -89,8 +89,10 @@ def image_manager_factory(request):
 @pytest.fixture
 def make_test_image():
     """Factory for writing a tiny solid-colour image into a path."""
+
     def _make(path: Path, size=(40, 30), color=(180, 60, 60)) -> Path:
         img = Image.new("RGB", size, color)
         img.save(path)
         return path
+
     return _make

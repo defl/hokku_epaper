@@ -16,6 +16,7 @@ Why dicts, not dataclasses?
     Round-tripping through ``_image_config_from_dict`` keeps the IPC contract
     narrow and easy to audit.
 """
+
 from __future__ import annotations
 
 
@@ -55,14 +56,16 @@ def render_one(
     import pillow_avif  # noqa: F401
     import pillow_jxl  # noqa: F401
     from pillow_heif import register_heif_opener
+
     register_heif_opener()
 
     from pathlib import Path
+
     from hokku_server.bounding_box import BoundingBox
     from hokku_server.dither_streaming_numba import NumbaStreamingDither
     from hokku_server.image_abc import preview_png_from_panel_bytes
-    from hokku_server.image_renderer import ImageRenderer, open_image_for_render
     from hokku_server.image_config import _image_config_from_dict
+    from hokku_server.image_renderer import ImageRenderer, open_image_for_render
 
     cfg = _image_config_from_dict(image_config_dict)
     renderer = ImageRenderer(NumbaStreamingDither())
@@ -72,15 +75,16 @@ def render_one(
     if clahe_keepout_bboxes:
         try:
             bboxes_norm = tuple(
-                BoundingBox(x=b['x'], y=b['y'], w=b['w'], h=b['h'])
-                for b in clahe_keepout_bboxes
+                BoundingBox(x=b["x"], y=b["y"], w=b["w"], h=b["h"]) for b in clahe_keepout_bboxes
             )
         except (KeyError, TypeError, ValueError):
             bboxes_norm = None
 
     with open_image_for_render(Path(image_path)) as img:
         panel_bytes = renderer.render_panel_bytes(
-            img, cfg, orientation,  # type: ignore[arg-type]
+            img,
+            cfg,
+            orientation,  # type: ignore[arg-type]
             crop_to_fill_threshold,
             clahe_keepout_bboxes_norm=bboxes_norm,
         )

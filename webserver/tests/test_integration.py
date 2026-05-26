@@ -14,6 +14,7 @@ A second test class spins up a real Werkzeug HTTP server so that
 tools.screen_sim.fetch_screen() (the real urllib path) can be exercised
 end-to-end, including --download mode.
 """
+
 from __future__ import annotations
 
 import shutil
@@ -25,23 +26,19 @@ from pathlib import Path
 import pytest
 from werkzeug.serving import make_server
 
-from tools.screen_sim import fetch_screen
-
-from hokku_server.app_state import AppState, build_manager
 from hokku_server.app_config import AppConfig
+from hokku_server.app_state import AppState, build_manager
 from hokku_server.display import TOTAL_BYTES, panel_bytes_to_indices
 from hokku_server.flask_app import create_app
 from hokku_server.image_classifier import ImageClassifier
 from hokku_server.serve_scheduler import ServeScheduler
 
 # Path to a real source image (small enough to be fast with noop dither).
-_TEST_IMAGE = (
-    Path(__file__).resolve().parent.parent.parent
-    / "images" / "test" / "Fitz_Roy_1.avif"
-)
+_TEST_IMAGE = Path(__file__).resolve().parent.parent.parent / "images" / "test" / "Fitz_Roy_1.avif"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _make_state(config: AppConfig) -> AppState:
     clf = ImageClassifier(config)
@@ -67,6 +64,7 @@ def _free_port() -> int:
 
 
 # ── Flask test-client tests ───────────────────────────────────────────────────
+
 
 @pytest.fixture
 def live_state(app_config: AppConfig) -> AppState:
@@ -106,9 +104,7 @@ def test_serve_binary_exact_size(live_client):
         "/hokku/screen/",
         headers={"X-Screen-Name": "test-screen"},
     )
-    assert len(resp.data) == TOTAL_BYTES, (
-        f"Expected {TOTAL_BYTES} bytes, got {len(resp.data)}"
-    )
+    assert len(resp.data) == TOTAL_BYTES, f"Expected {TOTAL_BYTES} bytes, got {len(resp.data)}"
 
 
 def test_serve_binary_valid_palette_indices(live_client):
@@ -227,8 +223,8 @@ def test_api_status_200_and_shape(live_client):
     for entry in data["upload_files"]:
         assert "name" in entry
         assert "dithered" in entry
-        assert "is_bw" in entry          # classifier observation — must exist
-        assert "face_bboxes" in entry    # face detection — list (was removed has_face bool)
+        assert "is_bw" in entry  # classifier observation — must exist
+        assert "face_bboxes" in entry  # face detection — list (was removed has_face bool)
 
 
 def test_serve_binary_no_images_returns_404_or_503(app_config: AppConfig, tmp_path: Path):
@@ -245,6 +241,7 @@ def test_serve_binary_no_images_returns_404_or_503(app_config: AppConfig, tmp_pa
 
 
 # ── Real HTTP server + screen_sim.fetch_screen() ─────────────────────────────
+
 
 @pytest.fixture
 def http_server(app_config: AppConfig, tmp_path: Path):

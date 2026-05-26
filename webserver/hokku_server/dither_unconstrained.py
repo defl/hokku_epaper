@@ -38,12 +38,11 @@ Intended uses:
     from the reference algorithm, the unconstrained output is the
     ground truth.
 """
+
 from __future__ import annotations
 
 import logging
 from functools import lru_cache
-
-logger = logging.getLogger(__name__)
 from typing import Any, TypeAlias
 
 import numpy as np
@@ -51,8 +50,10 @@ from numpy.typing import ArrayLike, NDArray
 from PIL import Image
 
 from hokku_server.display import PALETTE_MEASURED_RGB
-from hokku_server.dither_abc import AbstractDither, CanvasLike, UInt8Array  # noqa: F401
+from hokku_server.dither_abc import AbstractDither
 from hokku_server.dither_config import DitherConfig
+
+logger = logging.getLogger(__name__)
 
 UInt8Array: TypeAlias = NDArray[np.uint8]
 FloatArray: TypeAlias = NDArray[Any]
@@ -62,6 +63,7 @@ _DiffusionKernel = tuple[tuple[int, int, float], ...]
 
 # ── Color space (self-contained copy) ─────────────────────────────
 
+
 def _srgb_to_linear(c: ArrayLike) -> FloatArray:
     c = np.asarray(c, dtype=np.float64) / 255.0
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
@@ -69,18 +71,21 @@ def _srgb_to_linear(c: ArrayLike) -> FloatArray:
 
 def _linear_to_xyz(rgb: ArrayLike) -> FloatArray:
     rgb = np.asarray(rgb, dtype=np.float64)
-    M = np.array([
-        [0.4124564, 0.3575761, 0.1804375],
-        [0.2126729, 0.7151522, 0.0721750],
-        [0.0193339, 0.1191920, 0.9503041],
-    ])
+    M = np.array(
+        [
+            [0.4124564, 0.3575761, 0.1804375],
+            [0.2126729, 0.7151522, 0.0721750],
+            [0.0193339, 0.1191920, 0.9503041],
+        ]
+    )
     return rgb @ M.T
 
 
 def _xyz_to_lab(xyz: ArrayLike) -> FloatArray:
+    arr = np.asarray(xyz)
     ref = np.array([0.95047, 1.00000, 1.08883])
-    xyz = xyz / ref
-    f = np.where(xyz > 0.008856, xyz ** (1 / 3), 7.787 * xyz + 16 / 116)
+    arr = arr / ref
+    f = np.where(arr > 0.008856, arr ** (1 / 3), 7.787 * arr + 16 / 116)
     L = 116 * f[..., 1] - 16
     a = 500 * (f[..., 0] - f[..., 1])
     b = 200 * (f[..., 1] - f[..., 2])
@@ -97,6 +102,7 @@ _PALETTE_LAB = _rgb_to_lab(PALETTE_MEASURED_RGB)
 
 # ── LUTs (self-contained copy) ─────────────────────────────────────
 
+
 def _build_rgb_lut() -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index by Euclidean Lab distance."""
     steps = 32
@@ -105,9 +111,7 @@ def _build_rgb_lut() -> tuple[UInt8Array, float]:
     rr, gg, bb = np.meshgrid(vals, vals, vals, indexing="ij")
     rgb_grid = np.stack([rr, gg, bb], axis=-1).reshape(-1, 3)
     lab_grid = _rgb_to_lab(rgb_grid)
-    dists = np.sum(
-        (lab_grid[:, None, :] - _PALETTE_LAB[None, :, :]) ** 2, axis=2
-    )
+    dists = np.sum((lab_grid[:, None, :] - _PALETTE_LAB[None, :, :]) ** 2, axis=2)
     lut = np.argmin(dists, axis=1).astype(np.uint8).reshape(steps, steps, steps)
     return lut, scale
 
@@ -126,26 +130,22 @@ def _build_rgb_lut_hue_aware(
 
     pal_a = _PALETTE_LAB[:, 1]
     pal_b = _PALETTE_LAB[:, 2]
-    pal_chroma = np.sqrt(pal_a ** 2 + pal_b ** 2)
+    pal_chroma = np.sqrt(pal_a**2 + pal_b**2)
     pal_hue = np.arctan2(pal_b, pal_a)
     neutral_pal = pal_chroma < neutral_chroma
 
     pix_a = lab_grid[:, 1]
     pix_b = lab_grid[:, 2]
-    pix_chroma = np.sqrt(pix_a ** 2 + pix_b ** 2)
+    pix_chroma = np.sqrt(pix_a**2 + pix_b**2)
     pix_hue = np.arctan2(pix_b, pix_a)
     dh = pix_hue[:, None] - pal_hue[None, :]
     dh = np.arctan2(np.sin(dh), np.cos(dh))
     dh_deg = np.abs(np.degrees(dh))
 
     forbidden = (
-        (pix_chroma[:, None] > neutral_chroma)
-        & (~neutral_pal[None, :])
-        & (dh_deg > hue_cutoff_deg)
+        (pix_chroma[:, None] > neutral_chroma) & (~neutral_pal[None, :]) & (dh_deg > hue_cutoff_deg)
     )
-    dists = np.sum(
-        (lab_grid[:, None, :] - _PALETTE_LAB[None, :, :]) ** 2, axis=2
-    )
+    dists = np.sum((lab_grid[:, None, :] - _PALETTE_LAB[None, :, :]) ** 2, axis=2)
     dists = np.where(forbidden, np.inf, dists)
     lut = np.argmin(dists, axis=1).astype(np.uint8).reshape(steps, steps, steps)
     return lut, scale
@@ -176,9 +176,7 @@ def _cached_euclidean_lut() -> tuple[UInt8Array, float]:
 
 
 @lru_cache(maxsize=16)
-def _cached_hue_aware_lut(
-    hue_cutoff_deg: float, neutral_chroma: float
-) -> tuple[UInt8Array, float]:
+def _cached_hue_aware_lut(hue_cutoff_deg: float, neutral_chroma: float) -> tuple[UInt8Array, float]:
     return _build_rgb_lut_hue_aware(hue_cutoff_deg, neutral_chroma)
 
 
@@ -230,6 +228,7 @@ _STUCKI_KERNEL: _DiffusionKernel = (
 
 
 # ── Algorithms ──────────────────────────────────────────────────────
+
 
 def _canvas_to_float32(canvas: CanvasLike) -> tuple[NDArray[np.float32], int, int]:
     """Convert canvas to a writable float32 H×W×3 array."""
@@ -313,6 +312,7 @@ def _noop(
 
 # ── Public interface ───────────────────────────────────────────────
 
+
 def dither(canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
     """Run the configured full-canvas dither algorithm.
 
@@ -357,4 +357,6 @@ class UnconstrainedDither(AbstractDither):
         lut, lut_scale = _lut_and_scale(cfg)
         if cfg.algorithm == "noop":
             return _noop(canvas, lut, lut_scale, cfg.serpentine)
-        return _full_canvas_diffusion(canvas, self._KERNELS[cfg.algorithm], lut, lut_scale, cfg.serpentine)
+        return _full_canvas_diffusion(
+            canvas, self._KERNELS[cfg.algorithm], lut, lut_scale, cfg.serpentine
+        )

@@ -1,11 +1,10 @@
 """Unit tests for time_utils: calculate_sleep_seconds and format_duration_human."""
+
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 from unittest.mock import patch
-from datetime import datetime, timezone, timedelta
-
-import pytest
 
 from hokku_server.app_config import AppConfig
 from hokku_server.time_utils import (
@@ -14,8 +13,8 @@ from hokku_server.time_utils import (
     format_duration_human,
 )
 
-
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _cfg(**kwargs) -> AppConfig:
     return replace(AppConfig(), **kwargs)
@@ -28,6 +27,7 @@ def _fake_now(hour: int, minute: int, second: int = 0) -> datetime:
 
 
 # ── calculate_sleep_seconds ───────────────────────────────────────────────────
+
 
 def test_debug_fast_refresh_returns_constant():
     cfg = _cfg(debug_fast_refresh=True)
@@ -96,6 +96,7 @@ def test_multiple_slots_picks_nearest_future():
 
 
 # ── format_duration_human ─────────────────────────────────────────────────────
+
 
 def test_format_negative_is_zero():
     assert format_duration_human(-5) == "0m"

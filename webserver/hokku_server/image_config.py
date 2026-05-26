@@ -1,10 +1,11 @@
 """ImageConfig dataclass and its JSON helper."""
+
 from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, field, fields, replace
-from typing import Any, Literal
+from dataclasses import asdict, dataclass, fields, replace
+from typing import Any
 
 from hokku_server.dither_config import DitherConfig
 from hokku_server.orientation import Orientation  # noqa: F401 (re-exported)
@@ -44,7 +45,7 @@ class ImageConfig:
         return hashlib.sha256(raw.encode()).hexdigest()[:14]
 
 
-def _bw_safe_image_config(cfg: "ImageConfig") -> "ImageConfig":
+def _bw_safe_image_config(cfg: ImageConfig) -> ImageConfig:
     """Return *cfg* with saturation boosters disabled (safe for B&W images)."""
     return replace(
         cfg,
@@ -65,7 +66,10 @@ def _image_config_from_dict(blob: Any, *, field_path: str = "image_config") -> I
         blob:       The dict (or None) to parse.
         field_path: Used in error messages to identify which config field is bad.
     """
-    from hokku_server.presets import FALLBACK_PRESET, PRESET_IMAGE_CONFIGS  # avoid circular at import time
+    from hokku_server.presets import (  # avoid circular at import time
+        FALLBACK_PRESET,
+        PRESET_IMAGE_CONFIGS,
+    )
 
     if blob is None:
         return PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
@@ -75,7 +79,9 @@ def _image_config_from_dict(blob: Any, *, field_path: str = "image_config") -> I
     dither_blob = blob.get("dither")
     if not isinstance(dither_blob, dict):
         return PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
-    dither_kwargs = {f.name: dither_blob[f.name] for f in fields(DitherConfig) if f.name in dither_blob}
+    dither_kwargs = {
+        f.name: dither_blob[f.name] for f in fields(DitherConfig) if f.name in dither_blob
+    }
     missing_dither = {f.name for f in fields(DitherConfig)} - dither_kwargs.keys()
     if missing_dither:
         return PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]

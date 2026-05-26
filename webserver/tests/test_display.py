@@ -1,4 +1,5 @@
 """Wire-format pack/unpack roundtrip + palette sanity."""
+
 import numpy as np
 import pytest
 

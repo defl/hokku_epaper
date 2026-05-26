@@ -16,6 +16,7 @@ Serial mode (configured == 1):
 Manual mode (configured >= 2):
     returns configured verbatim; user's responsibility to have enough RAM.
 """
+
 from __future__ import annotations
 
 import os
@@ -44,8 +45,8 @@ def resolve_worker_count(configured: int) -> int:
     cpu_workers = max(1, (os.cpu_count() or 2) - 1)
 
     avail = psutil.virtual_memory().available
-    _OS_RESERVE = 100 * 1024 * 1024   # 100 MB headroom for OS + Flask
-    _PER_WORKER =  30 * 1024 * 1024   # ~30 MB incremental RSS per thread
+    _OS_RESERVE = 100 * 1024 * 1024  # 100 MB headroom for OS + Flask
+    _PER_WORKER = 30 * 1024 * 1024  # ~30 MB incremental RSS per thread
     ram_workers = max(1, (avail - _OS_RESERVE) // _PER_WORKER)
 
     return max(1, min(cpu_workers, int(ram_workers)))

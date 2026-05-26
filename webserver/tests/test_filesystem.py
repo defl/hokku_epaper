@@ -1,4 +1,5 @@
 """Tests for hokku_server.filesystem.atomic_write_json."""
+
 from __future__ import annotations
 
 import json
@@ -94,8 +95,7 @@ def test_sleep_durations_between_retries(tmp_path: Path):
         if threading.current_thread() is test_thread:
             sleep_calls.append(s)
 
-    with patch(_REPLACE, side_effect=flaky), \
-         patch(_SLEEP, side_effect=track_sleep):
+    with patch(_REPLACE, side_effect=flaky), patch(_SLEEP, side_effect=track_sleep):
         atomic_write_json(path, {})
 
     assert sleep_calls == pytest.approx([0.05, 0.10, 0.20, 0.40])

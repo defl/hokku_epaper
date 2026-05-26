@@ -1,9 +1,10 @@
-﻿"""AppConfig dataclass: persisted server settings.
+"""AppConfig dataclass: persisted server settings.
 
 Strict, schema-driven parser with a version field and migration chain.
 Unversioned configs (no "version" key) are silently replaced with a
 fresh default v1 on first load.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -14,12 +15,15 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Callable
 
-logger = logging.getLogger(__name__)
-
 from hokku_server.filesystem import atomic_write_json
-from hokku_server.image_config import ImageConfig, _image_config_from_dict  # noqa: F401 (re-exported)
+from hokku_server.image_config import (  # noqa: F401 (re-exported)
+    ImageConfig,
+    _image_config_from_dict,
+)
 from hokku_server.orientation import Orientation  # noqa: F401 (re-exported)
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
+
+logger = logging.getLogger(__name__)
 
 _CURRENT_VERSION = 5
 
@@ -98,7 +102,9 @@ class AppConfig:
         default_factory=lambda: PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
     )
     classifier_bw_detect_enabled: bool = True
-    image_config_bw: ImageConfig = field(default_factory=lambda: PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"])
+    image_config_bw: ImageConfig = field(
+        default_factory=lambda: PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+    )
     classifier_face_detect_enabled: bool = True
     classifier_face_detect_clahe_keepout: bool = True
     image_config_face: ImageConfig = field(
@@ -126,7 +132,7 @@ class AppConfig:
         return hashlib.sha256(raw.encode()).hexdigest()[:14]
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "AppConfig":
+    def from_dict(cls, data: dict[str, Any]) -> AppConfig:
         """Parse from a dict. Returns a fresh default v1 when 'version' is absent."""
         if not isinstance(data, dict):
             raise ValueError("config must be a JSON object")
@@ -172,7 +178,8 @@ class AppConfig:
                 valid = [o.value for o in Orientation]
                 logger.error(
                     "Config 'orientation' has invalid value %r; must be one of %s",
-                    raw, valid,
+                    raw,
+                    valid,
                 )
                 sys.exit(1)
 
@@ -182,7 +189,7 @@ class AppConfig:
         return asdict(self)
 
     @classmethod
-    def load(cls, path: Path) -> "AppConfig":
+    def load(cls, path: Path) -> AppConfig:
         """Read JSON from path. exit(1) on unparseable JSON.
 
         Missing file or valid JSON without 'version' → writes a fresh default

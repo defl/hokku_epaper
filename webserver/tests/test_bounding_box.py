@@ -1,5 +1,7 @@
 """Tests for BoundingBox dataclass."""
+
 import pytest
+
 from hokku_server.bounding_box import BoundingBox
 
 

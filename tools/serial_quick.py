@@ -20,8 +20,8 @@ from serial import SerialException
 from serial.tools import list_ports
 
 BAUD = 115200
-READ_TIMEOUT_S = 0.05       # 50ms — how long each read() blocks
-RECONNECT_POLL_S = 0.05     # 50ms — poll for port 20x/sec
+READ_TIMEOUT_S = 0.05  # 50ms — how long each read() blocks
+RECONNECT_POLL_S = 0.05  # 50ms — poll for port 20x/sec
 
 
 def ts() -> str:

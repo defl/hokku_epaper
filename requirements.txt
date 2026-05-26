@@ -29,3 +29,7 @@ resvg-py           # SVG rasterisation (bundles Rust binary; no system lib requi
 pytest
 pytest-xdist
 tzdata               # IANA timezone data for zoneinfo on Windows (validate_timezone test)
+
+# Dev tools
+ruff
+pyright

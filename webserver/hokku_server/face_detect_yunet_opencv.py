@@ -4,6 +4,7 @@ Heaviest of the three detectors (~80–120 MB resident) because importing
 ``cv2.FaceDetectorYN_create`` triggers opencv's DNN backend, which embeds
 its own ONNX runtime. Accuracy is excellent.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,8 +13,8 @@ import cv2
 
 from hokku_server.bounding_box import BoundingBox
 from hokku_server.face_detect_abstract import (
-    AbstractFaceDetector,
     DEFAULT_SCORE_THRESHOLD,
+    AbstractFaceDetector,
     load_image_resized,
 )
 
@@ -31,8 +32,10 @@ class OpenCVYuNetFaceDetector(AbstractFaceDetector):
         if loaded is None:
             return []
         img, det_w, det_h = loaded
-        det = cv2.FaceDetectorYN_create(
-            str(_MODEL), "", (det_w, det_h),
+        det = cv2.FaceDetectorYN_create(  # type: ignore[attr-defined]
+            str(_MODEL),
+            "",
+            (det_w, det_h),
             score_threshold=self._score_threshold,
         )
         _, faces = det.detect(img)

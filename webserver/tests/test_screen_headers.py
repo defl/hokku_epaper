@@ -1,4 +1,5 @@
 """Unit tests for screen_headers: battery_percent, parse_battery_header, parse_frame_state."""
+
 from __future__ import annotations
 
 import pytest
@@ -11,8 +12,8 @@ from hokku_server.screen_headers import (
     parse_frame_state,
 )
 
-
 # ── battery_percent ───────────────────────────────────────────────────────────
+
 
 def test_battery_percent_at_empty():
     assert battery_percent(BATTERY_MV_EMPTY) == 0
@@ -53,6 +54,7 @@ def test_battery_percent_typical_values():
 
 
 # ── parse_battery_header ──────────────────────────────────────────────────────
+
 
 def test_parse_battery_header_valid():
     assert parse_battery_header("3800") == 3800
@@ -96,6 +98,7 @@ def test_parse_battery_header_float_string_returns_none():
 
 
 # ── parse_frame_state ─────────────────────────────────────────────────────────
+
 
 def test_parse_frame_state_valid_dict():
     raw = '{"mode": "USB_AWAKE", "uptime": 123}'

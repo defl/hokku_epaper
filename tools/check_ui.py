@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import asyncio
+
 from playwright.async_api import async_playwright
+
 
 async def check_ui():
     async with async_playwright() as p:
@@ -17,7 +19,11 @@ async def check_ui():
             print(f"Header status: {header}")
 
             # Get dithering badge status
-            dithering_text = await page.locator("button, span").filter(has_text="Dithering").first.text_content(timeout=1000)
+            dithering_text = (
+                await page.locator("button, span")
+                .filter(has_text="Dithering")
+                .first.text_content(timeout=1000)
+            )
             print(f"Dithering badge: {dithering_text}")
 
             # Count image cards
@@ -26,10 +32,10 @@ async def check_ui():
 
             # Get status of first few images
             images = await page.locator("h3, h4").all()
-            print(f"\nFirst 5 images on page:")
+            print("\nFirst 5 images on page:")
             for i, img in enumerate(images[:5]):
                 name = await img.text_content()
-                print(f"  {i+1}. {name}")
+                print(f"  {i + 1}. {name}")
 
             print("\nWaiting 5 seconds to see if page updates...")
             await page.wait_for_timeout(5000)
@@ -42,5 +48,6 @@ async def check_ui():
             print(f"Error: {e}")
         finally:
             await browser.close()
+
 
 asyncio.run(check_ui())

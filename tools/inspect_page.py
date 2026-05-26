@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import asyncio
+
 from playwright.async_api import async_playwright
+
 
 async def inspect_page():
     async with async_playwright() as p:
@@ -21,10 +23,12 @@ async def inspect_page():
             print(f"Dithering in progress: {status_data.get('dithering_in_progress', 'N/A')}")
             print(f"Failed count: {status_data.get('failed_count', 'N/A')}")
 
-            pending = status_data.get('pending_conversions', [])
+            pending = status_data.get("pending_conversions", [])
             print(f"\nPending conversions ({len(pending)}):")
             for img in pending[:3]:
-                print(f"  - {img['name']}: status={img.get('convert_status')}, error={img.get('convert_error')}")
+                print(
+                    f"  - {img['name']}: status={img.get('convert_status')}, error={img.get('convert_error')}"
+                )
 
             print("\n=== Page Content ===")
             # Get the main status text from the page
@@ -43,5 +47,6 @@ async def inspect_page():
             print(f"Error: {e}")
         finally:
             await browser.close()
+
 
 asyncio.run(inspect_page())
