@@ -3,11 +3,12 @@
 Items captured during development that aren't urgent enough to block current
 work but worth picking up later.
 
-v3.0
-
 v3.1
  - screen log push to webserver in POST, UI in screen (backwards compatible protocol)
+ - force screens to only show images in their orientation
  - white border optimizer
+ - linting auto-formatting etc
+ - overhaul for defensive coding
 
 v4.0 - The Appliance
  - This is a single Pi computer that can server images as well as flash
