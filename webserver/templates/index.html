@@ -1104,8 +1104,7 @@
 
     <div class="config-row">
       <label></label>
-      <button class="btn btn-danger" onclick="clearCache()">Clear Cache &amp; Re-convert</button>
-      <button class="btn btn-secondary" onclick="clearClassifierCache()" title="Wipe cached B&amp;W / face detection results. Panel .bin files are untouched.">Clear Classifier Cache</button>
+      <button class="btn btn-danger" onclick="clearAllCaches()">Clear caches and reconvert</button>
     </div>
 
   </div><!-- /cfg-advanced-body -->
@@ -1926,24 +1925,14 @@ async function scrubStaleCache() {
   }
 }
 
-async function clearCache(silent = false) {
-  if (!silent && !confirm('Clear all cached conversions and re-process all images?')) return;
+async function clearAllCaches() {
+  if (!confirm('Clear all caches (conversions + classifier) and re-process all images?')) return;
   try {
-    await fetch('/hokku/api/clear_cache', {method: 'POST'});
-    if (!silent) showToast('Cache cleared, re-converting...');
+    await fetch('/hokku/api/clear_all_caches', {method: 'POST'});
+    showToast('Caches cleared, re-converting...');
     refreshStatus();
   } catch (e) {
-    if (!silent) showToast('Error: ' + e.message);
-  }
-}
-
-async function clearClassifierCache() {
-  try {
-    await fetch('/hokku/api/classifier/clear', {method: 'POST'});
-    showToast('Classifier cache cleared — re-detecting and re-rendering...');
-    refreshStatus();
-  } catch (e) {
-    showToast('Error clearing classifier cache: ' + e.message);
+    showToast('Error: ' + e.message);
   }
 }
 
@@ -1990,9 +1979,8 @@ function formatNextUpdate(iso) {
     const d = Math.floor(abs/86400), h = Math.round((abs%86400)/3600);
     rel = (delta >= 0 ? 'in ' : '') + (h ? `${d}d ${h}h` : `${d}d`) + (delta < 0 ? ' ago' : '');
   }
-  // Show the absolute wall-clock time too so you can spot misaligned schedules.
   const wall = t.toLocaleString(undefined, {hour12: false});
-  return `<span title="${wall}">${wall} <span style="color:#888">(${rel})</span></span>`;
+  return `<span title="${wall}">${rel}</span>`;
 }
 
 // Screens more than an hour past their scheduled wake are flagged as
