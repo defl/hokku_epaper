@@ -1195,6 +1195,7 @@ function toggleConfigAdvanced() {
 let ditherState = null;
 let ditherPresets = {};
 let configDefaults = null;
+let lastPanelData = {visual_w: {{visual_w}}, visual_h: {{visual_h}}};
 
 // Classifier secondary config states — full ImageConfig dicts for B&W / face.
 let bwDitherState = null;
@@ -2466,6 +2467,23 @@ function showImageDetails(fname) {
   const ditherStr = (entry.last_conversion_seconds != null)
     ? `${entry.last_conversion_seconds.toFixed(1)} s`
     : '–';
+  // Minimum letterbox fill limit: only for raster images whose aspect ratio
+  // doesn't perfectly match the screen. Computed from the fit/cover scale ratio
+  // using the same formula as _prepare_canvas() in image_abc.py.
+  let fillLimitCell = null;
+  if (!isVector && entry.image_width && entry.image_height) {
+    const orient = (currentConfig && currentConfig.orientation) || 'landscape';
+    const visW = orient === 'landscape' ? lastPanelData.visual_w : lastPanelData.visual_h;
+    const visH = orient === 'landscape' ? lastPanelData.visual_h : lastPanelData.visual_w;
+    const scaleFit   = Math.min(visW / entry.image_width, visH / entry.image_height);
+    const scaleCover = Math.max(visW / entry.image_width, visH / entry.image_height);
+    const zoomRatio  = scaleCover / scaleFit - 1.0;
+    if (zoomRatio > 1e-9) {
+      const minPct = Math.ceil(zoomRatio * 100);
+      fillLimitCell = `${minPct}% <span title="Minimum ‘Letterbox fill limit’ to display this image without letterbox bars (based on current ${orient} orientation). Set the global slider to at least this value." style="cursor:help"><svg width="13" height="13" style="vertical-align:middle;stroke:#6b7280"><use href="#icon-help-circle"/></svg></span>`;
+    }
+  }
+
   const rows = [
     ['Dimensions', dimsCell],
     ['Orientation', orientStr],
@@ -2475,6 +2493,7 @@ function showImageDetails(fname) {
     ['Display time', sd.total_show_formatted || '0m'],
     ['B&amp;W detected', yesno(entry.is_bw)],
     ['Face detected',  yesno(entry.face_bboxes ? entry.face_bboxes.length > 0 : null)],
+    ...(fillLimitCell ? [['Letterbox fill limit', fillLimitCell]] : []),
   ];
   document.getElementById('img-detail-table').innerHTML =
     rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
@@ -2577,6 +2596,7 @@ async function loadConfig() {
     document.getElementById('debug-secs').textContent = debugSecs;
 
     // Dither presets + current state for all three panels.
+    lastPanelData = data.panel || {visual_w: {{visual_w}}, visual_h: {{visual_h}}};
     configDefaults = data.config_defaults || null;
     ditherPresets = data.dither_presets || {};
     ditherState     = JSON.parse(JSON.stringify(cfg.image_config_default || {}));

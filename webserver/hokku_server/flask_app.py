@@ -233,7 +233,7 @@ def create_app(
 
     @app.route("/hokku/ui")
     def web_gui():
-        return render_template("index.html")
+        return render_template("index.html", visual_w=VISUAL_W, visual_h=VISUAL_H)
 
     @app.route("/hokku/static/<path:filename>")
     def static_asset(filename: str):
