@@ -4,6 +4,7 @@ Extracted from the old hokku_setup.py so the top-level installer can drive
 the Pi-install phase and the ESP32 phase as separate stages.
 """
 
+import logging
 import os
 import socket
 import struct
@@ -30,6 +31,8 @@ from hokku_config import (
     _build_nvs_binary,
     _read_nvs,
 )
+
+logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).parent
 LOCAL_FIRMWARE_DIR = SCRIPT_DIR.parent / "firmware" / "release"
@@ -422,15 +425,15 @@ def _mdns_resolve(hostname, timeout=3.0):
                             result[0] = socket.inet_ntoa(data[pos : pos + 4])
                             return
                         pos += rdlen
-                except Exception:  # noqa: S110 — malformed mDNS response; skip silently
-                    pass
-        except Exception:  # noqa: S110 — mDNS query failed; caller treats None as unresolved
-            pass
+                except Exception as e:
+                    logger.warning("malformed mDNS packet, skipping: %s", e)
+        except Exception as e:
+            logger.warning("mDNS query failed: %s", e)
         finally:
             try:
                 sock.close()
-            except Exception:  # noqa: S110 — best-effort close
-                pass
+            except Exception as e:
+                logger.warning("socket close failed: %s", e)
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -748,8 +751,8 @@ def check_boot(port):
     finally:
         try:
             ser.close()
-        except Exception:  # noqa: S110 — best-effort serial close
-            pass
+        except Exception as e:
+            logger.warning("serial port close failed: %s", e)
 
     if saw_fail:
         print("  Boot check: FAILED — crash markers in serial output.")

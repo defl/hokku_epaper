@@ -13,6 +13,7 @@ exclude = [
 select = ["E", "W", "F", "I", "UP", "B", "PLC0415", "S", "C4", "RUF"]
 ignore = [
     "E501",   # line too long — formatter handles this
+    "S101",   # assert — invariant checks are intentional and desirable in this codebase
     "S603",   # subprocess with list args — all calls in this codebase use fixed lists
     "S310",   # urllib URL open — all URLs are https:// to known hosts
     "S608",   # SQL injection — no SQL in this codebase; false positive on bash heredoc

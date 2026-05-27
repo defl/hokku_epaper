@@ -7,6 +7,7 @@ test verifies it is at least importable and doesn't error.
 
 from __future__ import annotations
 
+import logging
 import sys
 
 import numpy as np
@@ -73,8 +74,8 @@ def test_limit_restored_after_context() -> None:
     try:
         with memory_limit(tight):
             pass
-    except Exception:  # noqa: S110
-        pass
+    except Exception as e:
+        logging.warning("memory_limit context raised during limit-restore test: %s", e)
 
     after = resource.getrlimit(resource.RLIMIT_AS)  # type: ignore[attr-defined]
     assert after == before, f"limit not restored: {before!r} → {after!r}"

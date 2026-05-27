@@ -32,7 +32,7 @@ class ImageRecord:
 
     def slug(self, orientation: Orientation) -> str | None:
         """Return the cached slug for the given orientation, or None if not yet rendered."""
-        assert orientation != Orientation.NEUTRAL, "slug() requires LANDSCAPE or PORTRAIT"  # noqa: S101 — invariant check
+        assert orientation != Orientation.NEUTRAL, "slug() requires LANDSCAPE or PORTRAIT"
         return (
             self.landscape_image_config_slug
             if orientation == Orientation.LANDSCAPE
@@ -45,19 +45,19 @@ class ImageRecord:
 
         Only valid for ok-status images — callers must ensure convert_status == ConvertStatus.OK.
         """
-        assert self.convert_status == ConvertStatus.OK, (  # noqa: S101 — invariant check
+        assert self.convert_status == ConvertStatus.OK, (
             f"native_orientation called on non-ok image {self.name!r} "
             f"(status={self.convert_status})"
         )
         w, h = self.image_width, self.image_height
-        assert w and h, f"ok-status image {self.name!r} has invalid dimensions ({w}, {h})"  # noqa: S101 — invariant check
+        assert w and h, f"ok-status image {self.name!r} has invalid dimensions ({w}, {h})"
         if w == h:
             return Orientation.NEUTRAL
         return Orientation.LANDSCAPE if w > h else Orientation.PORTRAIT
 
     def matches_orientation_filter(self, orientation: Orientation) -> bool:
         """True if this image is eligible when a screen filters by the given orientation."""
-        assert orientation != Orientation.NEUTRAL, "pass LANDSCAPE or PORTRAIT to a filter"  # noqa: S101 — invariant check
+        assert orientation != Orientation.NEUTRAL, "pass LANDSCAPE or PORTRAIT to a filter"
         return self.native_orientation in (Orientation.NEUTRAL, orientation)
 
     def to_dict(self) -> dict:

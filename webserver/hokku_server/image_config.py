@@ -8,7 +8,6 @@ from dataclasses import asdict, dataclass, fields, replace
 from typing import Any
 
 from hokku_server.dither_config import DitherConfig
-from hokku_server.orientation import Orientation  # noqa: F401 — re-exported for callers
 
 
 @dataclass(frozen=True)

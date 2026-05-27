@@ -30,7 +30,8 @@ from hokku_server.display import PANEL_H as _SCREEN_H
 from hokku_server.dither_abc import AbstractDither
 from hokku_server.dither_streaming import PALETTE_LAB, adaptive_saturate, rgb_to_lab
 from hokku_server.image_abc import AbstractImageRenderer
-from hokku_server.image_config import ImageConfig, Orientation
+from hokku_server.image_config import ImageConfig
+from hokku_server.orientation import Orientation
 
 IMAGE_EXTENSIONS = {
     ".jpg",

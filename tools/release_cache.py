@@ -6,11 +6,14 @@ hammer the GitHub API during a single run.
 """
 
 import json
+import logging
 import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 GITHUB_RELEASES_LATEST = "https://api.github.com/repos/defl/hokku_epaper/releases/latest"
 GITHUB_RELEASES_ALL = "https://api.github.com/repos/defl/hokku_epaper/releases"
@@ -88,8 +91,8 @@ def _download_with_progress(url, dest):
         print(f"\n  ERROR: download failed: {e}")
         try:
             tmp.unlink()
-        except Exception:  # noqa: S110
-            pass
+        except Exception as e:
+            logger.warning("tmp file unlink failed: %s", e)
         return False
 
 

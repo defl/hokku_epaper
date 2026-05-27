@@ -30,7 +30,8 @@ from hokku_server.display import (
     indices_to_preview_rgb,
     panel_bytes_to_indices,
 )
-from hokku_server.image_config import ImageConfig, Orientation
+from hokku_server.image_config import ImageConfig
+from hokku_server.orientation import Orientation
 
 if TYPE_CHECKING:
     pass

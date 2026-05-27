@@ -11,6 +11,7 @@ Requires: pip install pyserial
 """
 
 import argparse
+import logging
 import sys
 import time
 from datetime import datetime
@@ -18,6 +19,8 @@ from datetime import datetime
 import serial
 from serial import SerialException
 from serial.tools import list_ports
+
+logger = logging.getLogger(__name__)
 
 BAUD = 115200
 READ_TIMEOUT_S = 0.05  # 50ms — how long each read() blocks
@@ -103,8 +106,8 @@ def main() -> None:
             finally:
                 try:
                     ser.close()
-                except Exception:  # noqa: S110
-                    pass
+                except Exception as e:
+                    logger.warning("serial port close failed: %s", e)
 
         except SerialException as e:
             status(f"serial error: {e} - reconnecting")

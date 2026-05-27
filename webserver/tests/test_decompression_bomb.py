@@ -13,6 +13,7 @@ the server. These tests verify three layers of defense:
 from __future__ import annotations
 
 import io
+import logging
 import struct
 import zlib
 from pathlib import Path
@@ -118,8 +119,8 @@ def test_api_upload_rejects_bomb(app_config):
     finally:
         try:
             state.manager.shutdown()
-        except Exception:  # noqa: S110
-            pass
+        except Exception as e:
+            logging.warning("manager shutdown failed during test teardown: %s", e)
 
 
 def test_api_upload_accepts_normal_image(tmp_path: Path, app_config, make_test_image):
@@ -140,8 +141,8 @@ def test_api_upload_accepts_normal_image(tmp_path: Path, app_config, make_test_i
     finally:
         try:
             state.manager.shutdown()
-        except Exception:  # noqa: S110
-            pass
+        except Exception as e:
+            logging.warning("manager shutdown failed during test teardown: %s", e)
 
 
 def test_upload_pixel_cap_matches_image_cap():

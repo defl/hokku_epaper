@@ -30,8 +30,9 @@ from hokku_server.display import TOTAL_BYTES
 from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
-from hokku_server.image_config import ImageConfig, Orientation
+from hokku_server.image_config import ImageConfig
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
+from hokku_server.orientation import Orientation
 from hokku_server.presets import FALLBACK_PRESET, PRESET_IMAGE_CONFIGS
 from hokku_server.screen_image_config import ScreenImageConfig
 from tests._helpers import is_oversize_fixture

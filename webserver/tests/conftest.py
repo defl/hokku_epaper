@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -83,8 +84,8 @@ def image_manager_factory(request):
     for mgr in created:
         try:
             mgr.shutdown()
-        except Exception:  # noqa: S110
-            pass
+        except Exception as e:
+            logging.warning("manager shutdown failed during fixture teardown: %s", e)
 
 
 @pytest.fixture

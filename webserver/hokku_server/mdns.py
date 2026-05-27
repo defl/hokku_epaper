@@ -70,8 +70,8 @@ def start_mdns(port: int, hostname: str) -> Any:
             if zc is not None:
                 try:
                     zc.close()
-                except Exception:  # noqa: S110
-                    pass
+                except Exception as e:
+                    logger.warning("zeroconf close failed: %s", e)
             if attempt < 3:
                 logger.warning(
                     "Attempt %d failed (%s: %s) — retrying in 3s",

@@ -13,6 +13,7 @@ import ctypes.wintypes as wt
 import datetime
 import getpass
 import json
+import logging
 import lzma
 import shutil
 import socket
@@ -25,6 +26,8 @@ import zoneinfo
 from pathlib import Path
 
 import release_cache
+
+logger = logging.getLogger(__name__)
 
 REPO_ROOT = release_cache.REPO_ROOT
 CACHE_DIR = release_cache.CACHE_DIR
@@ -263,7 +266,8 @@ def _run_powershell_drives():
             )
         except FileNotFoundError:
             continue
-        except Exception:  # noqa: S112 — PowerShell unavailable; try next exe
+        except Exception as e:
+            logger.warning("PowerShell variant %r failed, trying next: %s", exe, e)
             continue
         if res.returncode == 0 and res.stdout.strip():
             return res.stdout
@@ -370,7 +374,8 @@ def _wmic_list_drive_letters_for(disk_index):
                 .split("\\\\")[-1]
                 .replace("PHYSICALDRIVE", "")
             )
-        except Exception:  # noqa: S112 — malformed wmic output; skip entry
+        except Exception as e:
+            logger.warning("malformed wmic output, skipping disk entry: %s", e)
             continue
         part_id = dep.split('DeviceID="')[1].split('"')[0]
         partitions.append((disk_n, part_id))
@@ -640,8 +645,8 @@ def _download_with_progress(url, dest):
         print(f"\n  ERROR: download failed: {e}")
         try:
             tmp.unlink()
-        except Exception:  # noqa: S110 — best-effort cleanup of partial download
-            pass
+        except Exception as e:
+            logger.warning("tmp file unlink failed: %s", e)
         return False
 
 
@@ -1575,8 +1580,8 @@ def wait_for_webserver(host, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SECS, s
                     sys.stdout.write(f"\r  {'':>{bar_width + 36}}\r")  # clear line
                     print(f"  Webserver up after {e_min}:{e_sec:02d}.")
                     return True
-        except Exception:  # noqa: S110
-            pass
+        except Exception as e:
+            logger.warning("webserver poll attempt failed: %s", e)
         filled = min(bar_width, int(bar_width * elapsed / timeout))
         bar = "█" * filled + "░" * (bar_width - filled)
         e_min, e_sec = divmod(elapsed, 60)

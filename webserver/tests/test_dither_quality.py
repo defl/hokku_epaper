@@ -53,9 +53,10 @@ from hokku_server.dither_unconstrained import UnconstrainedDither
 from hokku_server.dither_unconstrained_numba import NumbaUnconstrainedDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
 from hokku_server.image_classifier import ImageClassifier
-from hokku_server.image_config import ImageConfig, Orientation
+from hokku_server.image_config import ImageConfig
 from hokku_server.image_quality import image_compare
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
+from hokku_server.orientation import Orientation
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 from tests._helpers import is_oversize_fixture
 
