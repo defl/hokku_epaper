@@ -400,7 +400,9 @@ def main():
             )
             return data, headers
 
-    if args.watch is not None or ((args.watch is None and "--watch" in sys.argv) or "-w" in sys.argv):
+    if args.watch is not None or (
+        (args.watch is None and "--watch" in sys.argv) or "-w" in sys.argv
+    ):
         # Watch mode — determine if --watch was actually passed.
         watch_mode = any(a in sys.argv for a in ("--watch", "-w"))
     else:

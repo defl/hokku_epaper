@@ -497,7 +497,9 @@ class AbstractImageManager(ABC):
 
     @staticmethod
     def _hash_name(name: str) -> str:
-        return hashlib.sha1(name.encode("utf-8"), usedforsecurity=False).hexdigest()[:_NAME_HASH_LEN]
+        return hashlib.sha1(name.encode("utf-8"), usedforsecurity=False).hexdigest()[
+            :_NAME_HASH_LEN
+        ]
 
     @staticmethod
     def _sha1_of_file(path: Path) -> str:
@@ -842,7 +844,9 @@ class AbstractImageManager(ABC):
 
             # _inflight was already populated by sync() under the lock, so no need
             # to add here.  The assert is a safety net during development.
-            assert name in self._inflight, f"{name!r} missing from _inflight at dispatch"  # sync() pre-populates _inflight under lock
+            assert name in self._inflight, (
+                f"{name!r} missing from _inflight at dispatch"
+            )  # sync() pre-populates _inflight under lock
 
             # Dispatch primary orientation (manages lifecycle: pending → ok).
             self._dispatch_cfg(name, screen_cfg, update_status=True)

@@ -356,7 +356,9 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
         "numba_unconstrained": NumbaUnconstrainedDither(),
     }
     with open_image_for_render(src) as img:
-        raw = ImageRenderer(_DITHER_FOR_MODE[mode]).render_panel_bytes(img, cfg, Orientation.LANDSCAPE)
+        raw = ImageRenderer(_DITHER_FOR_MODE[mode]).render_panel_bytes(
+            img, cfg, Orientation.LANDSCAPE
+        )
 
     assert len(raw) == TOTAL_BYTES
 

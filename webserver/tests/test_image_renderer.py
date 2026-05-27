@@ -116,7 +116,9 @@ def test_all_strategies_produce_valid_output(dither) -> None:
 
     n_palette = len(PALETTE_MEASURED_RGB)
     cfg = _noop_cfg()
-    idx = ImageRenderer(dither).render_indices(_synth_img(48, 48), cfg, Orientation.PORTRAIT, 48, 48)
+    idx = ImageRenderer(dither).render_indices(
+        _synth_img(48, 48), cfg, Orientation.PORTRAIT, 48, 48
+    )
     assert idx.shape == (48, 48)
     assert idx.dtype == np.uint8
     assert int(idx.min()) >= 0

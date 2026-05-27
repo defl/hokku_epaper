@@ -19,7 +19,8 @@ repos:
     hooks:
       - id: pyright
         name: pyright
-        language: system
-        entry: .venv/Scripts/pyright.exe
+        language: python
+        entry: pyright
         pass_filenames: false
         always_run: true
+        additional_dependencies: ["pyright==1.1.409"]
