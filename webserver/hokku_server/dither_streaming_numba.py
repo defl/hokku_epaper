@@ -20,6 +20,7 @@ the first row of the next stripe.
 
 from __future__ import annotations
 
+import numba
 import numpy as np
 from PIL import Image
 
@@ -45,11 +46,6 @@ from hokku_server.dither_streaming import (
 
 def _make_jit_fn():
     """Build and return the Numba-JIT diffuse function.  Called once at first use."""
-    try:
-        import numba
-    except ImportError as exc:
-        raise ImportError("NumbaStreamingDither requires numba (pip install numba).") from exc
-
     @numba.njit(nogil=True, cache=True)
     def _diffuse_stripe(
         stripe: np.ndarray,  # float32 (stripe_h, W, 3) — pre-processed stripe

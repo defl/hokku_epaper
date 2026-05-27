@@ -5,11 +5,18 @@ the Pi-install phase and the ESP32 phase as separate stages.
 """
 
 import os
+import socket
+import struct
 import sys
 import tempfile
+import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
+import esptool
 import serial
 import serial.tools.list_ports
 
@@ -147,11 +154,6 @@ def scan_devices():
 
 def read_device_flash(port):
     """One esptool read covering NVS partition + app header. Returns (nvs, header) or (None, None)."""
-    try:
-        import esptool
-    except ImportError:
-        return None, None
-
     read_start = NVS_OFFSET
     read_end = APP_OFFSET + 256
     read_size = read_end - read_start
@@ -332,8 +334,6 @@ def _parse_server_url(url):
     if not url:
         return None, None
     try:
-        from urllib.parse import urlparse
-
         p = urlparse(url)
         return p.hostname, p.port or 8080
     except Exception:
@@ -361,9 +361,6 @@ def show_current_config(config):
 def _mdns_resolve(hostname, timeout=3.0):
     """Resolve a .local hostname via mDNS multicast. Returns IP string or None.
     Uses only the standard library — no zeroconf dependency needed."""
-    import socket
-    import struct
-    import threading
 
     def _encode_name(name):
         out = b""
@@ -425,14 +422,14 @@ def _mdns_resolve(hostname, timeout=3.0):
                             result[0] = socket.inet_ntoa(data[pos : pos + 4])
                             return
                         pos += rdlen
-                except Exception:
+                except Exception:  # noqa: S110 — malformed mDNS response; skip silently
                     pass
-        except Exception:
+        except Exception:  # noqa: S110 — mDNS query failed; caller treats None as unresolved
             pass
         finally:
             try:
                 sock.close()
-            except Exception:
+            except Exception:  # noqa: S110 — best-effort close
                 pass
 
     t = threading.Thread(target=_run, daemon=True)
@@ -445,8 +442,6 @@ def _resolve_host(hostname):
     """Return an IP for hostname. Tries getaddrinfo first (works on modern
     Windows/macOS/Linux for .local via the OS mDNS stack), then falls back
     to a manual mDNS query for .local names."""
-    import socket
-
     try:
         return socket.getaddrinfo(hostname, None, socket.AF_INET)[0][4][0]
     except socket.gaierror:
@@ -457,9 +452,6 @@ def _resolve_host(hostname):
 
 
 def _check_server_reachable(host, port):
-    import urllib.error
-    import urllib.request
-
     ip = _resolve_host(host)
     if ip is None:
         return False, None
@@ -645,12 +637,6 @@ def _pi_config_mismatch(existing_config, pi_credentials):
 def write_config(port, config):
     print("  Writing configuration...", end=" ", flush=True)
     nvs_binary = _build_nvs_binary(config)
-    try:
-        import esptool
-    except ImportError:
-        print("FAILED")
-        print("  Error: esptool not installed. Run: pip install esptool")
-        return False
 
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
         f.write(nvs_binary)
@@ -693,12 +679,6 @@ def write_config(port, config):
 
 def flash_firmware(port):
     """Flash the merged hokku-firmware_<version>.bin image at offset 0x0."""
-    try:
-        import esptool
-    except ImportError:
-        print("  Error: esptool not installed. Run: pip install esptool")
-        return False
-
     merged = _merged_firmware_file(FIRMWARE_DIR)
     if not merged:
         print(f"  ERROR: No hokku-firmware_*.bin in {FIRMWARE_DIR}.")
@@ -768,7 +748,7 @@ def check_boot(port):
     finally:
         try:
             ser.close()
-        except Exception:
+        except Exception:  # noqa: S110 — best-effort serial close
             pass
 
     if saw_fail:
@@ -909,16 +889,9 @@ def main_menu(device, pi_credentials=None, pi_install_ran=False):
 
 
 def _prepare(require_firmware):
-    """Shared prelude for the run_* helpers: check esptool, resolve firmware
-    (if needed), scan, and let the user pick a device. Returns the selected
-    device dict, or None on failure."""
-    try:
-        import esptool  # noqa: F401
-    except ImportError:
-        print("  ERROR: esptool is not installed.")
-        print("  Run: pip install esptool pyserial")
-        return None
-
+    """Shared prelude for the run_* helpers: resolve firmware (if needed),
+    scan, and let the user pick a device. Returns the selected device dict,
+    or None on failure."""
     if require_firmware and resolve_firmware_dir(interactive=True) is None:
         print("  ERROR: no firmware available locally or from GitHub. Aborting.")
         return None

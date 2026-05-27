@@ -27,9 +27,12 @@ resvg-py           # SVG rasterisation (bundles Rust binary; no system lib requi
 
 # Tests
 pytest
+pytest-cov
 pytest-xdist
 tzdata               # IANA timezone data for zoneinfo on Windows (validate_timezone test)
 
 # Dev tools
+defusedxml           # safe XML/SVG parsing (replaces xml.etree in user-upload path)
+pre-commit
 ruff
 pyright

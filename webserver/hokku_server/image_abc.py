@@ -30,7 +30,7 @@ from hokku_server.display import (
     indices_to_preview_rgb,
     panel_bytes_to_indices,
 )
-from hokku_server.image_config import ImageConfig, Orientation  # noqa: F401 (re-exported)
+from hokku_server.image_config import ImageConfig, Orientation
 
 if TYPE_CHECKING:
     pass
@@ -304,7 +304,7 @@ class AbstractImageRenderer(ABC):
             padding_mask = np.rot90(padding_mask, k=3)
 
         arr = np.asarray(composed, dtype=np.uint8)
-        composed = None  # noqa: F841
+        composed = None
         return arr, padding_mask
 
     # ── Abstract core ──────────────────────────────────────────────────────

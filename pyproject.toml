@@ -10,13 +10,22 @@ exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "UP", "B"]
+select = ["E", "W", "F", "I", "UP", "B", "PLC0415", "S", "C4", "RUF"]
 ignore = [
-    "E501",  # line too long — formatter handles this
+    "E501",   # line too long — formatter handles this
+    "S603",   # subprocess with list args — all calls in this codebase use fixed lists
+    "S310",   # urllib URL open — all URLs are https:// to known hosts
+    "S608",   # SQL injection — no SQL in this codebase; false positive on bash heredoc
+    "RUF001", # ambiguous unicode in strings — intentional math notation (×, –, −, σ)
+    "RUF002", # same in docstrings
+    "RUF003", # same in comments
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"webserver/tests/conftest.py" = ["E402"]  # sys.path setup must precede local imports
+"webserver/tests/conftest.py" = ["E402"]        # sys.path setup must precede local imports
+"**/test_*.py" = ["S101", "S106"]               # assert and test credentials are normal in pytest
+"tools/tests/*.py" = ["S101", "S106"]           # same for tools test suite
+"webserver/tests/_*.py" = ["S101"]              # test helpers (not prefixed test_)
 
 [tool.ruff.lint.isort]
 known-first-party = ["hokku_server", "hokku_config", "hokku_setup"]
@@ -40,3 +49,20 @@ exclude = [
     "webserver/debian",
 ]
 typeCheckingMode = "basic"
+
+[tool.coverage.run]
+source = ["webserver/hokku_server"]
+omit = [
+    "webserver/hokku_server/dither_unconstrained_numba.py",
+    "webserver/hokku_server/dither_streaming_numba.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "\\.\\.\\.",
+    "raise NotImplementedError",
+]

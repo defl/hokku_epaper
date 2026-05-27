@@ -353,7 +353,7 @@ def test_flask_config_get_returns_current_config(flask_client):
 
 
 def test_flask_config_post_returns_ok_not_restarting(flask_client):
-    client, state, _ = flask_client
+    client, _, _ = flask_client
     resp = client.post(
         "/hokku/api/config",
         data=json.dumps({"orientation": "landscape"}),

@@ -310,18 +310,18 @@ class TestShellEscape:
 
 class TestRenderFirstrun:
     def _cfg(self, **overrides):
-        base = dict(
-            hostname="hokku-server",
-            wifi_ssid="MyWifi",
-            wifi_pass="mypass1234",
-            user="hokku",
-            password="hokku",
-            ssh_enabled=True,
-            samba=False,
-            server_ip="192.168.1.10",
-            country="GB",
-            timezone="Europe/London",
-        )
+        base = {
+            "hostname": "hokku-server",
+            "wifi_ssid": "MyWifi",
+            "wifi_pass": "mypass1234",
+            "user": "hokku",
+            "password": "hokku",
+            "ssh_enabled": True,
+            "samba": False,
+            "server_ip": "192.168.1.10",
+            "country": "GB",
+            "timezone": "Europe/London",
+        }
         base.update(overrides)
         return base
 
@@ -366,16 +366,16 @@ class TestRenderFirstrun:
 
 class TestRenderFirstboot:
     def test_samba_share_points_at_upload_dir(self):
-        cfg = dict(
-            user="alice",
-            password="pw",
-            samba=True,
-            wifi_ssid="s",
-            wifi_pass="p",
-            ssh_enabled=True,
-            hostname="h",
-            server_ip=None,
-        )
+        cfg = {
+            "user": "alice",
+            "password": "pw",
+            "samba": True,
+            "wifi_ssid": "s",
+            "wifi_pass": "p",
+            "ssh_enabled": True,
+            "hostname": "h",
+            "server_ip": None,
+        }
         script = pi._render_firstboot(cfg)
         # Share must target the hokku-server upload dir, NOT the user's home.
         assert "/var/lib/hokku/upload" in script
@@ -399,31 +399,31 @@ class TestRenderFirstboot:
         guarded by a check for the install-samba marker file that firstrun.sh
         only creates when the user opted in. samba=False in cfg therefore means
         the block exists in the script but the runtime `if [ -f ... ]` skips it."""
-        cfg = dict(
-            user="u",
-            password="p",
-            samba=False,
-            wifi_ssid="s",
-            wifi_pass="p",
-            ssh_enabled=True,
-            hostname="h",
-            server_ip=None,
-        )
+        cfg = {
+            "user": "u",
+            "password": "p",
+            "samba": False,
+            "wifi_ssid": "s",
+            "wifi_pass": "p",
+            "ssh_enabled": True,
+            "hostname": "h",
+            "server_ip": None,
+        }
         script = pi._render_firstboot(cfg)
         assert "/boot/firmware/hokku/install-samba" in script
         assert "apt-get install -y samba" in script  # gated at runtime
 
     def test_installs_deb(self):
-        cfg = dict(
-            user="u",
-            password="p",
-            samba=False,
-            wifi_ssid="s",
-            wifi_pass="p",
-            ssh_enabled=True,
-            hostname="h",
-            server_ip=None,
-        )
+        cfg = {
+            "user": "u",
+            "password": "p",
+            "samba": False,
+            "wifi_ssid": "s",
+            "wifi_pass": "p",
+            "ssh_enabled": True,
+            "hostname": "h",
+            "server_ip": None,
+        }
         script = pi._render_firstboot(cfg)
         assert "hokku-server.deb" in script
         assert "systemctl enable hokku-server" in script

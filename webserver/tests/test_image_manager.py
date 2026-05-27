@@ -19,6 +19,7 @@ from PIL import Image as _Image
 from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES
 from hokku_server.image_manager_abstract import AbstractImageManager
+from hokku_server.orientation import Orientation
 from hokku_server.screen_image_config import ScreenImageConfig
 
 
@@ -44,8 +45,6 @@ def test_register_and_convert(app_config: AppConfig, image_manager_factory, make
     assert [r.name for r in records] == ["a.png", "b.png"]
     assert all(r.convert_status == "ok" for r in records)
     assert all(r.original_sha1 for r in records)
-    from hokku_server.orientation import Orientation
-
     expected_slug = ScreenImageConfig(
         image_config=app_config.image_config_default,
         orientation=app_config.orientation,

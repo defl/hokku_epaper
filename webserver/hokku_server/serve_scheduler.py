@@ -90,7 +90,7 @@ class ServeScheduler:
         self._screens: dict[str, ScreenTelemetryEntry] = {}
         self._screen_configs: dict[str, ScreenConfig] = {}
         self._last_served: tuple[str, float] | None = None
-        self._next_for: dict[Orientation, str | None] = {o: None for o in Orientation}
+        self._next_for: dict[Orientation, str | None] = dict.fromkeys(Orientation, None)
         self._load()
         # Pre-determine the next image right now so the UI can show it
         # immediately without waiting for the first screen request.
@@ -117,7 +117,7 @@ class ServeScheduler:
             self._reconcile(ready_names)
 
             if not ready:
-                self._next_for = {o: None for o in Orientation}
+                self._next_for = dict.fromkeys(Orientation, None)
                 self._save()
                 return None
 

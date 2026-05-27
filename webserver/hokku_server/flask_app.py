@@ -16,9 +16,10 @@ import subprocess
 import time as _time
 from dataclasses import asdict, replace
 from datetime import datetime
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
-import pillow_jxl  # noqa: F401 — registers JXL format with PIL
+import pillow_jxl  # noqa: F401 — PIL plugin registration
 import psutil
 from flask import (
     Flask,
@@ -98,7 +99,7 @@ def _read_git_describe() -> tuple[str, str | None]:
         repo_root = Path(__file__).resolve().parent.parent.parent
         describe = (
             subprocess.check_output(
-                ["git", "describe", "--tags", "--always"],
+                ["git", "describe", "--tags", "--always"],  # noqa: S607 — git on PATH is expected
                 cwd=str(repo_root),
                 stderr=subprocess.DEVNULL,
                 timeout=2,
@@ -108,7 +109,7 @@ def _read_git_describe() -> tuple[str, str | None]:
         )
         commit = (
             subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
+                ["git", "rev-parse", "HEAD"],  # noqa: S607
                 cwd=str(repo_root),
                 stderr=subprocess.DEVNULL,
                 timeout=2,
@@ -122,9 +123,7 @@ def _read_git_describe() -> tuple[str, str | None]:
         pass
 
     try:
-        from importlib.metadata import version
-
-        return version("hokku-server"), None
+        return _pkg_version("hokku-server"), None
     except Exception:
         return "unknown", None
 

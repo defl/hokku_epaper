@@ -19,44 +19,31 @@ of the worker-pool driver, not this module.
 
 from __future__ import annotations
 
-import sys
+import types
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+import psutil
 
-def _resource_module():
+try:
+    import resource as _resource_mod  # Linux/macOS only
+except ImportError:
+    _resource_mod = None  # type: ignore[assignment]  # Windows
+
+
+def _resource_module() -> types.ModuleType | None:
     """Return the ``resource`` module if available on this platform, else None."""
-    if sys.platform == "win32":
-        return None
-    try:
-        import resource
-
-        return resource
-    except ImportError:
-        return None
+    return _resource_mod
 
 
 def supported() -> bool:
     """True iff RLIMIT_AS is available on this platform."""
-    return _resource_module() is not None
+    return _resource_mod is not None
 
 
 def baseline_rss_bytes() -> int:
-    """Return current RSS in bytes (baseline you'd add to the per-render budget).
-
-    On Linux, ``ru_maxrss`` is in KiB; on macOS it's in bytes — we use psutil
-    if available to side-step that footgun.
-    """
-    try:
-        import psutil
-
-        return int(psutil.Process().memory_info().rss)
-    except ImportError:
-        res = _resource_module()
-        if res is None:
-            return 0
-        # Linux ru_maxrss is KiB; we just return that as a rough fallback.
-        return int(res.getrusage(res.RUSAGE_SELF).ru_maxrss * 1024)
+    """Return current RSS in bytes (baseline you'd add to the per-render budget)."""
+    return int(psutil.Process().memory_info().rss)
 
 
 @contextmanager

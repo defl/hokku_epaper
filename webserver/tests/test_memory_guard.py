@@ -13,6 +13,11 @@ import numpy as np
 import psutil
 import pytest
 
+try:
+    import resource  # Linux/macOS only
+except ImportError:
+    resource = None  # type: ignore[assignment]
+
 from hokku_server.memory_guard import memory_limit, supported
 
 
@@ -60,8 +65,7 @@ def test_excessive_alloc_raises_memory_error() -> None:
 @pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_AS not available on Windows")
 def test_limit_restored_after_context() -> None:
     """After exiting the context manager the old RLIMIT_AS must be restored."""
-    import resource
-
+    assert resource is not None
     before = resource.getrlimit(resource.RLIMIT_AS)  # type: ignore[attr-defined]
 
     baseline = psutil.Process().memory_info().vms
@@ -69,7 +73,7 @@ def test_limit_restored_after_context() -> None:
     try:
         with memory_limit(tight):
             pass
-    except Exception:
+    except Exception:  # noqa: S110
         pass
 
     after = resource.getrlimit(resource.RLIMIT_AS)  # type: ignore[attr-defined]

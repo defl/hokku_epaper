@@ -32,7 +32,6 @@ from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 
-import numba  # noqa: F401 — hard dep, must be installed
 import numpy as np
 import pytest
 from PIL import Image
@@ -552,7 +551,7 @@ def test_dither_quality_metrics():
     (_BUILD_METRICS_DIR / "metrics.txt").write_text(output + "\n", encoding="utf-8")
 
     metric_keys = list(next(iter(next(iter(all_results.values())).values())))
-    tsv_rows = ["\t".join(["image", "preset"] + metric_keys)]
+    tsv_rows = ["\t".join(["image", "preset", *metric_keys])]
     for src in images:
         for preset_name in presets:
             m = all_results[preset_name][src.stem]

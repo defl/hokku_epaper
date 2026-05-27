@@ -31,7 +31,7 @@ from hokku_server.dither_abc import (
     PrepStripe,
     UInt8Array,
 )
-from hokku_server.dither_config import AlgorithmName, DitherConfig, LutName  # noqa: F401
+from hokku_server.dither_config import DitherConfig
 
 if TYPE_CHECKING:
     pass
@@ -380,7 +380,7 @@ class StreamingDither(AbstractDither):
                 y1 = min(new_y0 + sh, H)
                 stripe_data = prep_stripe(canvas_arr[new_y0:y1])  # type: ignore[misc]
                 stripe_y0 = new_y0
-            assert stripe_data is not None
+            assert stripe_data is not None  # noqa: S101 — type-narrowing guard; never stripped in practice
             return stripe_data[y - stripe_y0].astype(np.float32, copy=True)
 
         rolling[0] += _row_pixels(0)

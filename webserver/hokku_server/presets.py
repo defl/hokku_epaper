@@ -11,14 +11,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from hokku_server.dither_config import DitherConfig
+from hokku_server.dither_config import AlgorithmName, DitherConfig
 from hokku_server.image_config import ImageConfig
 
 
-def _plain(algorithm: str, serpentine: bool = False) -> ImageConfig:
+def _plain(algorithm: AlgorithmName, serpentine: bool = False) -> ImageConfig:
     return ImageConfig(
         dither=DitherConfig(
-            algorithm=algorithm,  # type: ignore[arg-type]
+            algorithm=algorithm,
             lut_name="euclidean",
             serpentine=serpentine,
             hue_cutoff_deg=95.0,
@@ -46,10 +46,10 @@ def _plain(algorithm: str, serpentine: bool = False) -> ImageConfig:
     )
 
 
-def _hue_aware(algorithm: str, serpentine: bool = False) -> ImageConfig:
+def _hue_aware(algorithm: AlgorithmName, serpentine: bool = False) -> ImageConfig:
     return ImageConfig(
         dither=DitherConfig(
-            algorithm=algorithm,  # type: ignore[arg-type]
+            algorithm=algorithm,
             lut_name="hue_aware",
             serpentine=serpentine,
             hue_cutoff_deg=95.0,
@@ -77,7 +77,7 @@ def _hue_aware(algorithm: str, serpentine: bool = False) -> ImageConfig:
     )
 
 
-def _bw(algorithm: str, serpentine: bool = False) -> ImageConfig:
+def _bw(algorithm: AlgorithmName, serpentine: bool = False) -> ImageConfig:
     plain_cfg = _plain(algorithm, serpentine)
     bw_dither = replace(plain_cfg.dither, lut_name="bw")
     return replace(plain_cfg, dither=bw_dither, color_enhance=1.05)

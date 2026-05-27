@@ -1,6 +1,5 @@
 """Dither LUTs, noop kernel, cache_slug stability, and concrete-class smoke tests."""
 
-import numba  # noqa: F401 — hard dep, must be installed
 import numpy as np
 import pytest
 
@@ -31,7 +30,7 @@ def test_euclidean_lut_cube():
 
 
 def test_hue_aware_lut_cube():
-    lut, scale = _cached_hue_aware_lut(95.0, 8.0)
+    lut, _ = _cached_hue_aware_lut(95.0, 8.0)
     assert lut.shape == (32, 32, 32)
     assert lut.max() <= 5
 

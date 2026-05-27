@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import numba  # noqa: F401 — hard dep, must be installed
 import numpy as np
 import pytest
 from PIL import Image

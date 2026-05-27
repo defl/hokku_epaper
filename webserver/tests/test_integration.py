@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 import pytest
+from tools.screen_sim import fetch_screen
 from werkzeug.serving import make_server
 
 from hokku_server.app_config import AppConfig
@@ -206,7 +207,7 @@ def test_api_status_200_and_shape(live_client):
     detection was dropped).  Any attribute access on obs that doesn't exist
     will blow up here rather than silently on the Pi.
     """
-    client, _, name = live_client
+    client, _, _ = live_client
     resp = client.get("/hokku/api/status")
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.data[:200]}"
 
@@ -275,17 +276,13 @@ def http_server(app_config: AppConfig, tmp_path: Path):
 
 def test_fetch_screen_returns_correct_size(http_server):
     """fetch_screen() over a real HTTP connection returns TOTAL_BYTES."""
-    from tools.screen_sim import fetch_screen
-
     base_url, _ = http_server
-    data, headers = fetch_screen(base_url, "sim-screen")
+    data, _ = fetch_screen(base_url, "sim-screen")
     assert len(data) == TOTAL_BYTES
 
 
 def test_fetch_screen_headers_present(http_server):
     """fetch_screen() returns the expected firmware-facing headers."""
-    from tools.screen_sim import fetch_screen
-
     base_url, _ = http_server
     _, headers = fetch_screen(base_url, "sim-screen")
     assert "x-sleep-seconds" in headers
@@ -296,8 +293,6 @@ def test_fetch_screen_headers_present(http_server):
 
 def test_fetch_screen_valid_palette_indices(http_server):
     """Payload from the real server contains only valid palette nibbles."""
-    from tools.screen_sim import fetch_screen
-
     base_url, _ = http_server
     data, _ = fetch_screen(base_url, "sim-screen")
     indices = panel_bytes_to_indices(data)
@@ -308,8 +303,6 @@ def test_fetch_screen_valid_palette_indices(http_server):
 def test_fetch_screen_download_mode(http_server, tmp_path: Path):
     """Saving the binary to disk via fetch_screen() + write reproduces the
     exact bytes that a real screen would receive."""
-    from tools.screen_sim import fetch_screen
-
     base_url, _ = http_server
     data, _ = fetch_screen(base_url, "dl-screen")
 
@@ -323,8 +316,6 @@ def test_fetch_screen_download_mode(http_server, tmp_path: Path):
 
 def test_fetch_screen_battery_header_forwarded(http_server):
     """X-Battery-mV sent by the sim reaches the server's telemetry."""
-    from tools.screen_sim import fetch_screen
-
     base_url, state = http_server
     fetch_screen(base_url, "battery-sim", battery_mv=3750)
     screens = state.scheduler.screens()

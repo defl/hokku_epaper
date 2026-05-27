@@ -213,4 +213,4 @@ def test_memory_guard_raises_memory_error_when_exceeded() -> None:
     with pytest.raises((MemoryError, np.core._exceptions._ArrayMemoryError)):  # type: ignore[attr-defined]
         with memory_limit(cap):
             # Try to allocate 100 MB — must fail.
-            _waste = np.zeros(100 * 1024 * 1024, dtype=np.uint8)  # noqa: F841
+            _waste = np.zeros(100 * 1024 * 1024, dtype=np.uint8)

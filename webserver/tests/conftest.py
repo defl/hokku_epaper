@@ -83,7 +83,7 @@ def image_manager_factory(request):
     for mgr in created:
         try:
             mgr.shutdown()
-        except Exception:
+        except Exception:  # noqa: S110
             pass
 
 

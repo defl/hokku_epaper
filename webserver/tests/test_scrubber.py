@@ -205,8 +205,6 @@ def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
     cache = tmp_path / "ca"
     cache.mkdir()
 
-    from hokku_server.presets import PRESET_IMAGE_CONFIGS
-
     base_image = replace(
         PRESET_IMAGE_CONFIGS["atkinson"],
         dither=replace(PRESET_IMAGE_CONFIGS["atkinson"].dither, algorithm="noop"),
@@ -253,8 +251,6 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
     upload.mkdir()
     cache = tmp_path / "ca"
     cache.mkdir()
-
-    from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
     base_image = replace(
         PRESET_IMAGE_CONFIGS["atkinson"],

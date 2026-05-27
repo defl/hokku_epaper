@@ -24,6 +24,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -174,7 +175,7 @@ def test_upload_bad_extension_is_skipped(bare_client):
 
 
 def test_delete_existing_image(bare_client):
-    client, state = bare_client
+    client, _ = bare_client
     img = _TEST_IMAGES_DIR / "grayscale_linear_bar_1200x300.png"
     _upload_bytes(client, img.read_bytes(), img.name)
 
@@ -211,7 +212,7 @@ def test_retry_missing_image_returns_404(bare_client):
 
 
 def test_show_next_ready_image(synced_client):
-    client, state, name = synced_client
+    client, _, name = synced_client
     resp = client.post(f"/hokku/api/show_next/{name}")
     assert resp.status_code == 200
     body = resp.get_json()
@@ -266,7 +267,7 @@ def test_status_top_level_keys(synced_client):
         "converting_done",
         "converting_total",
         "converting_eta_seconds",
-        "next_image",
+        "next_images",
         "cache_used_bytes",
         "disk_free_bytes",
         "image_worker_count_resolved",
@@ -392,8 +393,6 @@ def test_config_post_without_config_path_returns_500(bare_state: AppState):
 def test_dither_preview_returns_png(synced_client):
     client, _, name = synced_client
     # Use the atkinson preset dict as the image config body.
-    from dataclasses import asdict
-
     img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson"])
     resp = client.post(
         "/hokku/api/dither/preview",
@@ -406,8 +405,6 @@ def test_dither_preview_returns_png(synced_client):
 
 def test_dither_preview_face_bboxes_header_present(synced_client):
     client, _, name = synced_client
-    from dataclasses import asdict
-
     img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson"])
     resp = client.post(
         "/hokku/api/dither/preview",
@@ -421,8 +418,6 @@ def test_dither_preview_face_bboxes_header_present(synced_client):
 
 def test_dither_preview_missing_image_returns_404(bare_client):
     client, _ = bare_client
-    from dataclasses import asdict
-
     resp = client.post(
         "/hokku/api/dither/preview",
         json={"name": "ghost.jpg", "image": asdict(PRESET_IMAGE_CONFIGS["atkinson"])},

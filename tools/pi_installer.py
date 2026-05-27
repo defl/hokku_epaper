@@ -21,6 +21,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import zoneinfo
 from pathlib import Path
 
 import release_cache
@@ -29,7 +30,7 @@ REPO_ROOT = release_cache.REPO_ROOT
 CACHE_DIR = release_cache.CACHE_DIR
 PI_OS_HOSTNAME = "hokku"
 PI_OS_DEFAULT_USER = "hokku"
-PI_OS_DEFAULT_PASS = "hokku"
+PI_OS_DEFAULT_PASS = "hokku"  # noqa: S105 — intentional default; user is prompted to change this
 WEBSERVER_PORT = 8080
 # First boot on a Pi Zero 2 W installs ~90 Debian packages (and optionally samba,
 # another ~36 packages + ~100 MB). Over wifi on a tiny SoC that's 5-10 minutes.
@@ -166,8 +167,6 @@ def _available_timezones():
     rejecting every valid zone.
     """
     try:
-        import zoneinfo
-
         tzs = set(zoneinfo.available_timezones())
         return tzs if tzs else None
     except Exception:
@@ -264,7 +263,7 @@ def _run_powershell_drives():
             )
         except FileNotFoundError:
             continue
-        except Exception:
+        except Exception:  # noqa: S112 — PowerShell unavailable; try next exe
             continue
         if res.returncode == 0 and res.stdout.strip():
             return res.stdout
@@ -371,7 +370,7 @@ def _wmic_list_drive_letters_for(disk_index):
                 .split("\\\\")[-1]
                 .replace("PHYSICALDRIVE", "")
             )
-        except Exception:
+        except Exception:  # noqa: S112 — malformed wmic output; skip entry
             continue
         part_id = dep.split('DeviceID="')[1].split('"')[0]
         partitions.append((disk_n, part_id))
@@ -641,7 +640,7 @@ def _download_with_progress(url, dest):
         print(f"\n  ERROR: download failed: {e}")
         try:
             tmp.unlink()
-        except Exception:
+        except Exception:  # noqa: S110 — best-effort cleanup of partial download
             pass
         return False
 
@@ -716,8 +715,6 @@ def collect_install_config():
     Previously-entered values are loaded from .cache/settings.json and used
     as defaults. Any changes the user makes are saved back for the next run.
     Passwords are stored in plain text — the user opted in to this caching."""
-    import release_cache
-
     sticky = release_cache.load_settings()
 
     print()
@@ -1578,7 +1575,7 @@ def wait_for_webserver(host, port=WEBSERVER_PORT, timeout=WEBSERVER_WAIT_SECS, s
                     sys.stdout.write(f"\r  {'':>{bar_width + 36}}\r")  # clear line
                     print(f"  Webserver up after {e_min}:{e_sec:02d}.")
                     return True
-        except Exception:
+        except Exception:  # noqa: S110
             pass
         filled = min(bar_width, int(bar_width * elapsed / timeout))
         bar = "█" * filled + "░" * (bar_width - filled)

@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Any, TypeAlias
+from typing import Any, ClassVar, TypeAlias
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -343,7 +343,7 @@ class UnconstrainedDither(AbstractDither):
       * Offline rendering where RAM is not the bottleneck.
     """
 
-    _KERNELS: dict[str, _DiffusionKernel] = {
+    _KERNELS: ClassVar[dict[str, _DiffusionKernel]] = {
         "floyd_steinberg": _FS_KERNEL,
         "atkinson": _ATKINSON_KERNEL,
         "stucki": _STUCKI_KERNEL,

@@ -70,7 +70,7 @@ def start_mdns(port: int, hostname: str) -> Any:
             if zc is not None:
                 try:
                     zc.close()
-                except Exception:
+                except Exception:  # noqa: S110
                     pass
             if attempt < 3:
                 logger.warning(

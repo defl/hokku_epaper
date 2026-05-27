@@ -88,7 +88,7 @@ def _download_with_progress(url, dest):
         print(f"\n  ERROR: download failed: {e}")
         try:
             tmp.unlink()
-        except Exception:
+        except Exception:  # noqa: S110
             pass
         return False
 

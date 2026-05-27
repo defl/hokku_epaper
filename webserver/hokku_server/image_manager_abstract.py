@@ -19,11 +19,11 @@ import logging
 import shutil
 import threading
 import time
-import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from dataclasses import asdict, replace
 from pathlib import Path
 
+import defusedxml.ElementTree as ET
 import zstd
 from PIL import Image, ImageOps
 
@@ -497,11 +497,11 @@ class AbstractImageManager(ABC):
 
     @staticmethod
     def _hash_name(name: str) -> str:
-        return hashlib.sha1(name.encode("utf-8")).hexdigest()[:_NAME_HASH_LEN]
+        return hashlib.sha1(name.encode("utf-8"), usedforsecurity=False).hexdigest()[:_NAME_HASH_LEN]
 
     @staticmethod
     def _sha1_of_file(path: Path) -> str:
-        h = hashlib.sha1()
+        h = hashlib.sha1(usedforsecurity=False)
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(65536), b""):
                 h.update(chunk)
@@ -516,6 +516,8 @@ class AbstractImageManager(ABC):
             except ET.ParseError as e:
                 return None, None, f"SVG parse error: {e}"
             root = tree.getroot()
+            if root is None:
+                return *SVG_PROBE_DIMS, None
 
             def _svg_raster_dims(vw: float, vh: float) -> tuple[int, int]:
                 """Pixel dims resvg produces when fitting (vw, vh) into the square canvas."""
@@ -840,7 +842,7 @@ class AbstractImageManager(ABC):
 
             # _inflight was already populated by sync() under the lock, so no need
             # to add here.  The assert is a safety net during development.
-            assert name in self._inflight, f"{name!r} missing from _inflight at dispatch"
+            assert name in self._inflight, f"{name!r} missing from _inflight at dispatch"  # noqa: S101 — invariant check; sync() pre-populates _inflight under lock
 
             # Dispatch primary orientation (manages lifecycle: pending → ok).
             self._dispatch_cfg(name, screen_cfg, update_status=True)

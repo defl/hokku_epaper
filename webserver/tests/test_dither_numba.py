@@ -8,7 +8,6 @@ UnconstrainedDither) live in test_dither_quality.py, marked time_intensive.
 
 from __future__ import annotations
 
-import numba  # noqa: F401 — hard dep, must be installed
 import numpy as np
 import pytest
 

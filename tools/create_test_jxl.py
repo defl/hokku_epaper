@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import pillow_jxl  # noqa: F401 — registers JXL format with PIL
+import pillow_jxl  # noqa: F401 — PIL plugin registration
 from PIL import Image
 
 _ROOT = Path(__file__).resolve().parent.parent

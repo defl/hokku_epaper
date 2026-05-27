@@ -20,12 +20,18 @@ import argparse
 import json
 import os
 import struct
+import subprocess
 import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
 
 import serial.tools.list_ports
+
+try:
+    import esptool as _esptool
+except ImportError:
+    _esptool = None  # type: ignore[assignment]
 
 # ESP32-S3 USB Serial/JTAG VID:PID
 ESP32S3_VID = 0x303A
@@ -106,8 +112,6 @@ def _build_nvs_binary(config_dict):
     Creates a CSV with the config values and calls the ESP-IDF tool to
     generate a properly formatted NVS partition binary.
     """
-    import subprocess
-
     nvs_gen = _find_nvs_partition_gen()
     idf_python = _find_idf_python()
 
@@ -221,9 +225,7 @@ def _read_nvs(partition_data):
 
 def _flash_nvs(port, nvs_binary):
     """Flash NVS partition binary to ESP32 via esptool."""
-    try:
-        import esptool
-    except ImportError:
+    if _esptool is None:
         print("Error: esptool not installed. Run: pip install esptool")
         sys.exit(1)
 
@@ -246,7 +248,7 @@ def _flash_nvs(port, nvs_binary):
             tmp_path,
         ]
         print(f"Flashing NVS partition ({len(nvs_binary)} bytes) to {port}...")
-        esptool.main(args)
+        _esptool.main(args)
         print("Flash complete. Device will reset.")
     finally:
         os.unlink(tmp_path)
@@ -254,9 +256,7 @@ def _flash_nvs(port, nvs_binary):
 
 def _read_nvs_from_device(port):
     """Read NVS partition from ESP32 via esptool."""
-    try:
-        import esptool
-    except ImportError:
+    if _esptool is None:
         print("Error: esptool not installed. Run: pip install esptool")
         sys.exit(1)
 
@@ -277,7 +277,7 @@ def _read_nvs_from_device(port):
             tmp_path,
         ]
         print(f"Reading NVS partition from {port}...")
-        esptool.main(args)
+        _esptool.main(args)
         with open(tmp_path, "rb") as f:
             return f.read()
     finally:

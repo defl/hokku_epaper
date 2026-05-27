@@ -32,7 +32,7 @@ def _cfg_dict(preset: str = "atkinson") -> dict:
 
 
 def test_render_one_panel_bytes_size():
-    panel_bytes, preview_bytes = render_one(str(_FIXTURE_PNG), _cfg_dict(), "landscape")
+    panel_bytes, _ = render_one(str(_FIXTURE_PNG), _cfg_dict(), "landscape")
     assert len(panel_bytes) == TOTAL_BYTES
 
 

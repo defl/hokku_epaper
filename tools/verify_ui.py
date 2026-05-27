@@ -22,13 +22,13 @@ def port_in_use(port: int) -> bool:
 
 def kill_port_8080() -> None:
     """Kill whatever owns :8080 using netstat + taskkill."""
-    out = subprocess.run(["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True).stdout
+    out = subprocess.run(["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True).stdout  # noqa: S607
     for line in out.splitlines():
         parts = line.split()
         if len(parts) >= 5 and parts[1].endswith(":8080") and parts[3] == "LISTENING":
             pid = parts[4]
             print(f"  Killing PID {pid} on :8080 ...")
-            subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
+            subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)  # noqa: S607
             return
 
 

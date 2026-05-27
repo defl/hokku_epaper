@@ -16,11 +16,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from hokku_server.filesystem import atomic_write_json
-from hokku_server.image_config import (  # noqa: F401 (re-exported)
+from hokku_server.image_config import (
     ImageConfig,
     _image_config_from_dict,
 )
-from hokku_server.orientation import Orientation  # noqa: F401 (re-exported)
+from hokku_server.orientation import Orientation
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 logger = logging.getLogger(__name__)

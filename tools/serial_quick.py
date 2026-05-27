@@ -103,7 +103,7 @@ def main() -> None:
             finally:
                 try:
                     ser.close()
-                except Exception:
+                except Exception:  # noqa: S110
                     pass
 
         except SerialException as e:

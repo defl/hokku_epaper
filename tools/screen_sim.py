@@ -219,9 +219,9 @@ def _watch_tkinter(
     Falls back to showing new windows if tkinter / ImageTk is unavailable.
     """
     try:
-        import tkinter as tk
+        import tkinter as tk  # noqa: PLC0415 — optional dependency, deferred per-call
 
-        from PIL import ImageTk
+        from PIL import ImageTk  # noqa: PLC0415 — optional dependency, deferred per-call
     except ImportError as e:
         log(f"  tkinter/ImageTk not available ({e}); opening a new window each refresh")
         _watch_fallback(fetch_fn, screen_name, interval_override, log)
@@ -400,7 +400,7 @@ def main():
             )
             return data, headers
 
-    if args.watch is not None or (args.watch is None and "--watch" in sys.argv or "-w" in sys.argv):
+    if args.watch is not None or ((args.watch is None and "--watch" in sys.argv) or "-w" in sys.argv):
         # Watch mode — determine if --watch was actually passed.
         watch_mode = any(a in sys.argv for a in ("--watch", "-w"))
     else:
@@ -422,7 +422,7 @@ def main():
     # Single-shot fetch.
     log(f"  Screen: {args.name!r}")
     try:
-        binary, headers = _fetch()
+        binary, _ = _fetch()
     except URLError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

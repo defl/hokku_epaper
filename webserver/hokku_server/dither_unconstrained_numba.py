@@ -18,6 +18,7 @@ instantiation so other dither classes remain importable if numba is absent.
 
 from __future__ import annotations
 
+import numba
 import numpy as np
 
 from hokku_server.display import PALETTE_MEASURED_RGB
@@ -40,11 +41,6 @@ from hokku_server.dither_streaming import (
 
 def _make_jit_fn():
     """Build and return the Numba-JIT full-canvas diffuse function."""
-    try:
-        import numba
-    except ImportError as exc:
-        raise ImportError("NumbaUnconstrainedDither requires numba (pip install numba).") from exc
-
     @numba.njit(nogil=True, cache=True)
     def _diffuse_full(
         pixels: np.ndarray,  # float32 (H, W, 3) — mutated in-place

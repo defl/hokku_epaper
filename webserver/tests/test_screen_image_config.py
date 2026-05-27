@@ -52,10 +52,10 @@ def _noop_image_config() -> ImageConfig:
     )
 
 
-def _make_screen_cfg(orientation: str = "landscape") -> ScreenImageConfig:
+def _make_screen_cfg(orientation: Orientation = Orientation.LANDSCAPE) -> ScreenImageConfig:
     return ScreenImageConfig(
         image_config=_noop_image_config(),
-        orientation=orientation,  # type: ignore[arg-type]
+        orientation=orientation,
     )
 
 
@@ -63,14 +63,14 @@ def _make_screen_cfg(orientation: str = "landscape") -> ScreenImageConfig:
 
 
 def test_roundtrip_landscape():
-    cfg = _make_screen_cfg("landscape")
+    cfg = _make_screen_cfg(Orientation.LANDSCAPE)
     d = asdict(cfg)
     restored = _screen_image_config_from_dict(d)
     assert restored == cfg
 
 
 def test_roundtrip_portrait():
-    cfg = _make_screen_cfg("portrait")
+    cfg = _make_screen_cfg(Orientation.PORTRAIT)
     d = asdict(cfg)
     restored = _screen_image_config_from_dict(d)
     assert restored == cfg
@@ -83,8 +83,8 @@ def test_cache_slug_stable():
 
 
 def test_cache_slug_changes_on_orientation():
-    landscape = _make_screen_cfg("landscape")
-    portrait = _make_screen_cfg("portrait")
+    landscape = _make_screen_cfg(Orientation.LANDSCAPE)
+    portrait = _make_screen_cfg(Orientation.PORTRAIT)
     assert landscape.cache_slug() != portrait.cache_slug()
 
 

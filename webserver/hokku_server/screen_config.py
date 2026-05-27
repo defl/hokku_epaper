@@ -24,7 +24,7 @@ class ScreenConfig:
     filter_by_orientation: bool = False
 
     def __post_init__(self) -> None:
-        assert self.orientation_override != Orientation.NEUTRAL, (
+        assert self.orientation_override != Orientation.NEUTRAL, (  # noqa: S101 — dataclass invariant
             "orientation_override cannot be NEUTRAL; use None to follow the global default"
         )
 

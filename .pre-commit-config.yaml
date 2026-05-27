@@ -1,0 +1,25 @@
+# Pre-commit hooks for hokku_epaper.
+# Install once: pre-commit install
+# Run manually: pre-commit run --all-files
+#
+# Note: ruff uses the official upstream repo (downloads a pinned binary).
+# pyright uses the local .venv so it sees the project's type stubs.
+# On Linux/Mac change .venv/Scripts → .venv/bin in the pyright entry.
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.14
+    hooks:
+      - id: ruff                  # lint + auto-fix
+        args: ["--fix", "--output-format=concise"]
+      - id: ruff-format           # formatter (check only; apply with ruff format manually)
+        args: ["--check"]
+
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        language: system
+        entry: .venv/Scripts/pyright.exe
+        pass_filenames: false
+        always_run: true

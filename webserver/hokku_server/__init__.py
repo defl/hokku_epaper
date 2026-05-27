@@ -102,7 +102,7 @@ def main() -> None:
     # leaves you debugging a stale process serving stale content.
     _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        _probe.bind(("0.0.0.0", config.port))
+        _probe.bind(("0.0.0.0", config.port))  # noqa: S104 — intentional: server binds all interfaces
     except OSError as exc:
         logger.critical(
             "Port %s is already in use (%s). Find the owner with: ss -tlnp | grep :%s",
@@ -117,7 +117,7 @@ def main() -> None:
     logger.info("Starting server on port %s", config.port)
     _zc = start_mdns(config.port, config.mdns_hostname) if config.mdns_hostname else None
     state._zc = _zc  # hand ownership to AppState so config reloads can restart mDNS
-    app.run(host="0.0.0.0", port=config.port)
+    app.run(host="0.0.0.0", port=config.port)  # noqa: S104 — intentional: server binds all interfaces
 
 
 if __name__ == "__main__":

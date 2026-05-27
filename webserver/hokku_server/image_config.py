@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, fields, replace
 from typing import Any
 
 from hokku_server.dither_config import DitherConfig
-from hokku_server.orientation import Orientation  # noqa: F401 (re-exported)
+from hokku_server.orientation import Orientation  # noqa: F401 — re-exported for callers
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ def _image_config_from_dict(blob: Any, *, field_path: str = "image_config") -> I
         blob:       The dict (or None) to parse.
         field_path: Used in error messages to identify which config field is bad.
     """
-    from hokku_server.presets import (  # avoid circular at import time
+    from hokku_server.presets import (  # noqa: PLC0415 — deferred to break circular import
         FALLBACK_PRESET,
         PRESET_IMAGE_CONFIGS,
     )

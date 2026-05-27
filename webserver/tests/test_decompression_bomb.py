@@ -118,7 +118,7 @@ def test_api_upload_rejects_bomb(app_config):
     finally:
         try:
             state.manager.shutdown()
-        except Exception:
+        except Exception:  # noqa: S110
             pass
 
 
@@ -140,7 +140,7 @@ def test_api_upload_accepts_normal_image(tmp_path: Path, app_config, make_test_i
     finally:
         try:
             state.manager.shutdown()
-        except Exception:
+        except Exception:  # noqa: S110
             pass
 
 

@@ -18,6 +18,7 @@ from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES
 from hokku_server.image_manager_multi import MultiThreadedImageManager
 from hokku_server.image_manager_single import SingleThreadedImageManager
+from hokku_server.orientation import Orientation
 
 
 def test_single_threaded_does_not_spawn_threads(app_config: AppConfig, make_test_image):
@@ -61,8 +62,6 @@ def test_multi_threaded_runs_in_parallel(app_config: AppConfig, monkeypatch):
 
     mgr = MultiThreadedImageManager(app_config, worker_count=2)
     try:
-        from hokku_server.orientation import Orientation
-
         mgr._dispatch_render("a.png", "slug", Orientation.LANDSCAPE, (), 0.0)
         mgr._dispatch_render("b.png", "slug", Orientation.LANDSCAPE, (), 0.0)
         # Joining the barrier proves both workers entered fake_render_one
