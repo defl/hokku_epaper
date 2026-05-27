@@ -28,6 +28,9 @@ Usage:
 
     # Combine: fetch, save binary AND save PNG, then exit
     python tools/screen_sim.py dev-screen --download hokku.bin --output preview.png
+
+    # Render in portrait orientation (1200×1600, rotated 90° CW from landscape)
+    python tools/screen_sim.py dev-screen --orientation portrait
 """
 
 import argparse
@@ -81,15 +84,24 @@ def unpack_panel(data: bytes) -> np.ndarray:
     return _LUT[panel]
 
 
-def render_to_image(binary: bytes) -> Image.Image:
-    """Convert a 960 K panel binary → landscape PIL Image (1600×1200)."""
+def render_to_image(binary: bytes, orientation: str = "landscape") -> Image.Image:
+    """Convert a 960 K panel binary → PIL Image.
+
+    Args:
+        binary:      Raw 960 K panel data.
+        orientation: ``"landscape"`` (default, 1600×1200) or ``"portrait"``
+                     (1200×1600, an additional 90° CW rotation).
+    """
     if len(binary) != TOTAL_BYTES:
         raise ValueError(f"Expected {TOTAL_BYTES} bytes, got {len(binary)}")
     p1 = unpack_panel(binary[:PANEL_BYTES])  # (1600, 600)
     p2 = unpack_panel(binary[PANEL_BYTES:])  # (1600, 600)
     rgb = PALETTE[np.concatenate([p1, p2], axis=1)]  # (1600, 1200, 3)
     img = Image.fromarray(rgb, "RGB")
-    return img.rotate(90, expand=True)  # → (1600, 1200) landscape
+    img = img.rotate(90, expand=True)  # → (1600, 1200) landscape
+    if orientation == "portrait":
+        img = img.rotate(-90, expand=True)  # → (1200, 1600) portrait (90° CW)
+    return img
 
 
 # ── Simulated frame state ──────────────────────────────────────────────────
@@ -211,6 +223,7 @@ def _watch_tkinter(
     screen_name: str,
     interval_override: int | None,
     log,
+    orientation: str = "landscape",
 ) -> None:
     """Run a persistent tkinter window that refreshes in-place.
 
@@ -224,15 +237,15 @@ def _watch_tkinter(
         from PIL import ImageTk  # noqa: PLC0415 — optional dependency, deferred per-call
     except ImportError as e:
         log(f"  tkinter/ImageTk not available ({e}); opening a new window each refresh")
-        _watch_fallback(fetch_fn, screen_name, interval_override, log)
+        _watch_fallback(fetch_fn, screen_name, interval_override, log, orientation)
         return
 
     root = tk.Tk()
     root.title(f"Hokku — {screen_name}")
     root.configure(bg="black")
 
-    # Scale down to 800×600 so it fits on most screens.
-    DISPLAY_W, DISPLAY_H = 800, 600
+    # Scale preview to fit typical screens; swap dimensions for portrait.
+    DISPLAY_W, DISPLAY_H = (600, 800) if orientation == "portrait" else (800, 600)
     label = tk.Label(root, bg="black", bd=0)
     label.pack(fill=tk.BOTH, expand=True)
     _photo_ref: list = [None]  # keep reference to prevent GC
@@ -240,7 +253,7 @@ def _watch_tkinter(
     def _do_fetch():
         try:
             binary, headers = fetch_fn()
-            img = render_to_image(binary)
+            img = render_to_image(binary, orientation)
             img_small = img.resize((DISPLAY_W, DISPLAY_H), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img_small)
             label.config(image=photo)
@@ -272,12 +285,12 @@ def _watch_tkinter(
         log("\n  Stopped.")
 
 
-def _watch_fallback(fetch_fn, screen_name, interval_override, log):
+def _watch_fallback(fetch_fn, screen_name, interval_override, log, orientation: str = "landscape"):
     """Non-tkinter watch loop — opens a new window on each refresh."""
     while True:
         try:
             binary, headers = fetch_fn()
-            img = render_to_image(binary)
+            img = render_to_image(binary, orientation)
             _show_once(img)
         except (URLError, ValueError) as e:
             log(f"  Error: {e}")
@@ -361,6 +374,13 @@ def main():
         help="Simulated battery voltage in mV sent as X-Battery-mV (e.g. 3800)",
     )
     parser.add_argument(
+        "--orientation",
+        choices=["landscape", "portrait"],
+        default="landscape",
+        help="Display orientation: 'landscape' (default, 1600×1200) or 'portrait' "
+        "(1200×1600, rotated 90° CCW from landscape)",
+    )
+    parser.add_argument(
         "--quiet",
         "-q",
         action="store_true",
@@ -418,7 +438,7 @@ def main():
             log(f"  Refresh interval: {args.watch}s (fixed)")
         else:
             log("  Refresh interval: from server X-Sleep-Seconds")
-        _watch_tkinter(_fetch, args.name, args.watch, log)
+        _watch_tkinter(_fetch, args.name, args.watch, log, args.orientation)
         return
 
     # Single-shot fetch.
@@ -440,7 +460,7 @@ def main():
         args.download.write_bytes(binary)
         log(f"  Saved binary: {args.download}  ({len(binary)} bytes)")
 
-    img = render_to_image(binary)
+    img = render_to_image(binary, args.orientation)
     log(f"  Rendered: {img.size[0]}×{img.size[1]}")
 
     if args.output:
