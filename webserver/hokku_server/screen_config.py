@@ -1,4 +1,5 @@
 """Per-screen user configuration stored alongside telemetry in serve_scheduler.json."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

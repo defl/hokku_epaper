@@ -1,4 +1,5 @@
 """Image quality metrics: compare an original RGB image to a dithered/derived output."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -25,15 +26,15 @@ def _de2000(lab1: NDArray, lab2: NDArray) -> NDArray:
     L1, a1, b1 = lab1[..., 0], lab1[..., 1], lab1[..., 2]
     L2, a2, b2 = lab2[..., 0], lab2[..., 1], lab2[..., 2]
 
-    C1ab = np.sqrt(a1 ** 2 + b1 ** 2)
-    C2ab = np.sqrt(a2 ** 2 + b2 ** 2)
+    C1ab = np.sqrt(a1**2 + b1**2)
+    C2ab = np.sqrt(a2**2 + b2**2)
     Cab_avg7 = ((C1ab + C2ab) / 2.0) ** 7
-    G = 0.5 * (1.0 - np.sqrt(Cab_avg7 / (Cab_avg7 + 25.0 ** 7)))
+    G = 0.5 * (1.0 - np.sqrt(Cab_avg7 / (Cab_avg7 + 25.0**7)))
 
     a1p = a1 * (1.0 + G)
     a2p = a2 * (1.0 + G)
-    C1p = np.sqrt(a1p ** 2 + b1 ** 2)
-    C2p = np.sqrt(a2p ** 2 + b2 ** 2)
+    C1p = np.sqrt(a1p**2 + b1**2)
+    C2p = np.sqrt(a2p**2 + b2**2)
 
     h1p = np.degrees(np.arctan2(b1, a1p)) % 360.0
     h2p = np.degrees(np.arctan2(b2, a2p)) % 360.0
@@ -45,42 +46,48 @@ def _de2000(lab1: NDArray, lab2: NDArray) -> NDArray:
     abs_hdiff = np.abs(h2p - h1p)
     raw_dhp = h2p - h1p
     dhp = np.where(
-        achromatic, 0.0,
-        np.where(abs_hdiff <= 180.0, raw_dhp,
-        np.where(raw_dhp > 180.0, raw_dhp - 360.0, raw_dhp + 360.0)),
+        achromatic,
+        0.0,
+        np.where(
+            abs_hdiff <= 180.0, raw_dhp, np.where(raw_dhp > 180.0, raw_dhp - 360.0, raw_dhp + 360.0)
+        ),
     )
     dHp = 2.0 * np.sqrt(C12p) * np.sin(np.radians(dhp / 2.0))
 
     Lp_avg = (L1 + L2) / 2.0
     Cp_avg = (C1p + C2p) / 2.0
     hp_avg = np.where(
-        achromatic, h1p + h2p,
-        np.where(abs_hdiff <= 180.0, (h1p + h2p) / 2.0,
-        np.where(h1p + h2p < 360.0, (h1p + h2p + 360.0) / 2.0,
-                                      (h1p + h2p - 360.0) / 2.0)),
+        achromatic,
+        h1p + h2p,
+        np.where(
+            abs_hdiff <= 180.0,
+            (h1p + h2p) / 2.0,
+            np.where(h1p + h2p < 360.0, (h1p + h2p + 360.0) / 2.0, (h1p + h2p - 360.0) / 2.0),
+        ),
     )
 
-    T = (1.0
-         - 0.17 * np.cos(np.radians(hp_avg - 30.0))
-         + 0.24 * np.cos(np.radians(2.0 * hp_avg))
-         + 0.32 * np.cos(np.radians(3.0 * hp_avg + 6.0))
-         - 0.20 * np.cos(np.radians(4.0 * hp_avg - 63.0)))
+    T = (
+        1.0
+        - 0.17 * np.cos(np.radians(hp_avg - 30.0))
+        + 0.24 * np.cos(np.radians(2.0 * hp_avg))
+        + 0.32 * np.cos(np.radians(3.0 * hp_avg + 6.0))
+        - 0.20 * np.cos(np.radians(4.0 * hp_avg - 63.0))
+    )
 
     SL = 1.0 + 0.015 * (Lp_avg - 50.0) ** 2 / np.sqrt(20.0 + (Lp_avg - 50.0) ** 2)
     SC = 1.0 + 0.045 * Cp_avg
     SH = 1.0 + 0.015 * Cp_avg * T
 
-    dTheta = 30.0 * np.exp(-((hp_avg - 275.0) / 25.0) ** 2)
-    Cp_avg7 = Cp_avg ** 7
-    RC = 2.0 * np.sqrt(Cp_avg7 / (Cp_avg7 + 25.0 ** 7))
+    dTheta = 30.0 * np.exp(-(((hp_avg - 275.0) / 25.0) ** 2))
+    Cp_avg7 = Cp_avg**7
+    RC = 2.0 * np.sqrt(Cp_avg7 / (Cp_avg7 + 25.0**7))
     RT = -np.sin(np.radians(2.0 * dTheta)) * RC
 
-    return np.sqrt(np.maximum(0.0,
-        (dLp / SL) ** 2
-        + (dCp / SC) ** 2
-        + (dHp / SH) ** 2
-        + RT * (dCp / SC) * (dHp / SH)
-    ))
+    return np.sqrt(
+        np.maximum(
+            0.0, (dLp / SL) ** 2 + (dCp / SC) ** 2 + (dHp / SH) ** 2 + RT * (dCp / SC) * (dHp / SH)
+        )
+    )
 
 
 def _nearest_palette_index(lab: NDArray) -> NDArray:
@@ -173,13 +180,9 @@ def image_compare(
         hue_error = 0.0
 
     nearest = _nearest_palette_index(der_lab)
-    neutral_blue_fraction = (
-        float((nearest[neutral] == _BLUE_IDX).mean()) if neutral.any() else 0.0
-    )
+    neutral_blue_fraction = float((nearest[neutral] == _BLUE_IDX).mean()) if neutral.any() else 0.0
 
-    high_freq_ratio = _high_freq_energy_ratio(
-        der_lab[..., 0] - orig_lab[..., 0], valid
-    )
+    high_freq_ratio = _high_freq_energy_ratio(der_lab[..., 0] - orig_lab[..., 0], valid)
 
     return {
         "neutral_leak": neutral_leak,

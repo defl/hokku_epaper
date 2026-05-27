@@ -14,6 +14,7 @@ A second test class spins up a real Werkzeug HTTP server so that
 tools.screen_sim.fetch_screen() (the real urllib path) can be exercised
 end-to-end, including --download mode.
 """
+
 from __future__ import annotations
 
 import shutil
@@ -23,25 +24,22 @@ import time
 from pathlib import Path
 
 import pytest
+from tools.screen_sim import fetch_screen
 from werkzeug.serving import make_server
 
-from tools.screen_sim import fetch_screen
-
-from hokku_server.app_state import AppState, build_manager
 from hokku_server.app_config import AppConfig
+from hokku_server.app_state import AppState, build_manager
 from hokku_server.display import TOTAL_BYTES, panel_bytes_to_indices
 from hokku_server.flask_app import create_app
 from hokku_server.image_classifier import ImageClassifier
 from hokku_server.serve_scheduler import ServeScheduler
 
 # Path to a real source image (small enough to be fast with noop dither).
-_TEST_IMAGE = (
-    Path(__file__).resolve().parent.parent.parent
-    / "images" / "test" / "Fitz_Roy_1.avif"
-)
+_TEST_IMAGE = Path(__file__).resolve().parent.parent.parent / "images" / "test" / "Fitz_Roy_1.avif"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _make_state(config: AppConfig) -> AppState:
     clf = ImageClassifier(config)
@@ -67,6 +65,7 @@ def _free_port() -> int:
 
 
 # ── Flask test-client tests ───────────────────────────────────────────────────
+
 
 @pytest.fixture
 def live_state(app_config: AppConfig) -> AppState:
@@ -106,9 +105,7 @@ def test_serve_binary_exact_size(live_client):
         "/hokku/screen/",
         headers={"X-Screen-Name": "test-screen"},
     )
-    assert len(resp.data) == TOTAL_BYTES, (
-        f"Expected {TOTAL_BYTES} bytes, got {len(resp.data)}"
-    )
+    assert len(resp.data) == TOTAL_BYTES, f"Expected {TOTAL_BYTES} bytes, got {len(resp.data)}"
 
 
 def test_serve_binary_valid_palette_indices(live_client):
@@ -210,7 +207,7 @@ def test_api_status_200_and_shape(live_client):
     detection was dropped).  Any attribute access on obs that doesn't exist
     will blow up here rather than silently on the Pi.
     """
-    client, _, name = live_client
+    client, _, _ = live_client
     resp = client.get("/hokku/api/status")
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.data[:200]}"
 
@@ -227,8 +224,8 @@ def test_api_status_200_and_shape(live_client):
     for entry in data["upload_files"]:
         assert "name" in entry
         assert "dithered" in entry
-        assert "is_bw" in entry          # classifier observation — must exist
-        assert "face_bboxes" in entry    # face detection — list (was removed has_face bool)
+        assert "is_bw" in entry  # classifier observation — must exist
+        assert "face_bboxes" in entry  # face detection — list (was removed has_face bool)
 
 
 def test_serve_binary_no_images_returns_404_or_503(app_config: AppConfig, tmp_path: Path):
@@ -245,6 +242,7 @@ def test_serve_binary_no_images_returns_404_or_503(app_config: AppConfig, tmp_pa
 
 
 # ── Real HTTP server + screen_sim.fetch_screen() ─────────────────────────────
+
 
 @pytest.fixture
 def http_server(app_config: AppConfig, tmp_path: Path):
@@ -278,17 +276,13 @@ def http_server(app_config: AppConfig, tmp_path: Path):
 
 def test_fetch_screen_returns_correct_size(http_server):
     """fetch_screen() over a real HTTP connection returns TOTAL_BYTES."""
-    from tools.screen_sim import fetch_screen
-
     base_url, _ = http_server
-    data, headers = fetch_screen(base_url, "sim-screen")
+    data, _ = fetch_screen(base_url, "sim-screen")
     assert len(data) == TOTAL_BYTES
 
 
 def test_fetch_screen_headers_present(http_server):
     """fetch_screen() returns the expected firmware-facing headers."""
-    from tools.screen_sim import fetch_screen
-
     base_url, _ = http_server
     _, headers = fetch_screen(base_url, "sim-screen")
     assert "x-sleep-seconds" in headers
@@ -299,8 +293,6 @@ def test_fetch_screen_headers_present(http_server):
 
 def test_fetch_screen_valid_palette_indices(http_server):
     """Payload from the real server contains only valid palette nibbles."""
-    from tools.screen_sim import fetch_screen
-
     base_url, _ = http_server
     data, _ = fetch_screen(base_url, "sim-screen")
     indices = panel_bytes_to_indices(data)
@@ -311,8 +303,6 @@ def test_fetch_screen_valid_palette_indices(http_server):
 def test_fetch_screen_download_mode(http_server, tmp_path: Path):
     """Saving the binary to disk via fetch_screen() + write reproduces the
     exact bytes that a real screen would receive."""
-    from tools.screen_sim import fetch_screen
-
     base_url, _ = http_server
     data, _ = fetch_screen(base_url, "dl-screen")
 
@@ -326,8 +316,6 @@ def test_fetch_screen_download_mode(http_server, tmp_path: Path):
 
 def test_fetch_screen_battery_header_forwarded(http_server):
     """X-Battery-mV sent by the sim reaches the server's telemetry."""
-    from tools.screen_sim import fetch_screen
-
     base_url, state = http_server
     fetch_screen(base_url, "battery-sim", battery_mv=3750)
     screens = state.scheduler.screens()

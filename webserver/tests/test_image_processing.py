@@ -18,6 +18,7 @@ Slow tests (marked ``time_intensive``, skipped by default):
     Writes: build/test_image/<config_name>/<stem>.png
             build/test_image/<config_name>/<stem>_original<ext>
 """
+
 from __future__ import annotations
 
 import shutil
@@ -39,7 +40,6 @@ from hokku_server.image_classifier import ImageClassifier
 from hokku_server.image_config import ImageConfig, _bw_safe_image_config
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
-
 from tests._helpers import is_oversize_fixture
 
 # Panel ink L* limits — same derivation as image.py's private constants.
@@ -48,7 +48,9 @@ _DISPLAY_WHITE_L = float(PALETTE_LAB[1, 0])
 
 
 def render_preview_png(img, cfg, orientation, max_side_px=800, crop_to_fill_threshold=0.0):
-    return ImageRenderer(NumbaStreamingDither()).render_preview_png(img, cfg, orientation, max_side_px, crop_to_fill_threshold)
+    return ImageRenderer(NumbaStreamingDither()).render_preview_png(
+        img, cfg, orientation, max_side_px, crop_to_fill_threshold
+    )
 
 
 # ── shared helpers ────────────────────────────────────────────────────────────
@@ -111,20 +113,24 @@ def _test_images() -> list[Path]:
     if not _TEST_IMAGES_DIR.exists():
         return []
     return sorted(
-        p for p in _TEST_IMAGES_DIR.iterdir()
-        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
-        and not is_oversize_fixture(p)
+        p
+        for p in _TEST_IMAGES_DIR.iterdir()
+        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS and not is_oversize_fixture(p)
     )
 
 
 # ── fast: compress_dynamic_range ─────────────────────────────────────────────
 
+
 def test_drc_maps_white_below_display_white():
     """Pure white should map at or below the panel's white L* (rolloff may pull it lower)."""
     white = np.full((1, 1, 3), 255.0, dtype=np.float32)
     out = ImageRenderer.compress_dynamic_range(
-        white, scale_chroma=False, adaptive_vivid=False,
-        vivid_chroma_low=5.0, vivid_chroma_high=15.0,
+        white,
+        scale_chroma=False,
+        adaptive_vivid=False,
+        vivid_chroma_low=5.0,
+        vivid_chroma_high=15.0,
     )
     out_lab = rgb_to_lab(out.astype(np.float64))
     L_out = float(out_lab[0, 0, 0])
@@ -139,8 +145,11 @@ def test_drc_maps_black_above_display_black():
     """A pure-black input should map to the panel's black L*, not stay at L*=0."""
     black = np.zeros((1, 1, 3), dtype=np.float32)
     out = ImageRenderer.compress_dynamic_range(
-        black, scale_chroma=False, adaptive_vivid=False,
-        vivid_chroma_low=5.0, vivid_chroma_high=15.0,
+        black,
+        scale_chroma=False,
+        adaptive_vivid=False,
+        vivid_chroma_low=5.0,
+        vivid_chroma_high=15.0,
     )
     out_lab = rgb_to_lab(out.astype(np.float64))
     L_out = float(out_lab[0, 0, 0])
@@ -154,8 +163,11 @@ def test_drc_output_in_valid_rgb_range():
     arr = _make_gradient().convert("RGB")
     np_arr = np.asarray(arr, dtype=np.float32)
     out = ImageRenderer.compress_dynamic_range(
-        np_arr, scale_chroma=True, adaptive_vivid=False,
-        vivid_chroma_low=5.0, vivid_chroma_high=15.0,
+        np_arr,
+        scale_chroma=True,
+        adaptive_vivid=False,
+        vivid_chroma_low=5.0,
+        vivid_chroma_high=15.0,
     )
     assert float(out.min()) >= 0.0
     assert float(out.max()) <= 255.0
@@ -165,12 +177,18 @@ def test_drc_scale_chroma_reduces_saturation():
     """With scale_chroma=True, a saturated pixel's chroma should be reduced."""
     vivid_red = np.array([[[200.0, 20.0, 20.0]]], dtype=np.float32)
     out_scaled = ImageRenderer.compress_dynamic_range(
-        vivid_red, scale_chroma=True, adaptive_vivid=False,
-        vivid_chroma_low=5.0, vivid_chroma_high=15.0,
+        vivid_red,
+        scale_chroma=True,
+        adaptive_vivid=False,
+        vivid_chroma_low=5.0,
+        vivid_chroma_high=15.0,
     )
     out_plain = ImageRenderer.compress_dynamic_range(
-        vivid_red, scale_chroma=False, adaptive_vivid=False,
-        vivid_chroma_low=5.0, vivid_chroma_high=15.0,
+        vivid_red,
+        scale_chroma=False,
+        adaptive_vivid=False,
+        vivid_chroma_low=5.0,
+        vivid_chroma_high=15.0,
     )
     lab_scaled = rgb_to_lab(out_scaled.astype(np.float64))
     lab_plain = rgb_to_lab(out_plain.astype(np.float64))
@@ -186,12 +204,18 @@ def test_drc_adaptive_vivid_preserves_more_chroma_than_scale_chroma():
     """
     vivid_red = np.array([[[200.0, 20.0, 20.0]]], dtype=np.float32)
     out_vivid = ImageRenderer.compress_dynamic_range(
-        vivid_red, scale_chroma=False, adaptive_vivid=True,
-        vivid_chroma_low=5.0, vivid_chroma_high=15.0,
+        vivid_red,
+        scale_chroma=False,
+        adaptive_vivid=True,
+        vivid_chroma_low=5.0,
+        vivid_chroma_high=15.0,
     )
     out_scaled = ImageRenderer.compress_dynamic_range(
-        vivid_red, scale_chroma=True, adaptive_vivid=False,
-        vivid_chroma_low=5.0, vivid_chroma_high=15.0,
+        vivid_red,
+        scale_chroma=True,
+        adaptive_vivid=False,
+        vivid_chroma_low=5.0,
+        vivid_chroma_high=15.0,
     )
     lab_vivid = rgb_to_lab(out_vivid.astype(np.float64))
     lab_scaled = rgb_to_lab(out_scaled.astype(np.float64))
@@ -206,12 +230,18 @@ def test_drc_adaptive_vivid_no_boost_for_neutral():
     """With adaptive_vivid=True, a neutral grey must not get a chroma boost."""
     grey = np.array([[[128.0, 128.0, 128.0]]], dtype=np.float32)
     out_vivid = ImageRenderer.compress_dynamic_range(
-        grey, scale_chroma=False, adaptive_vivid=True,
-        vivid_chroma_low=5.0, vivid_chroma_high=15.0,
+        grey,
+        scale_chroma=False,
+        adaptive_vivid=True,
+        vivid_chroma_low=5.0,
+        vivid_chroma_high=15.0,
     )
     out_plain = ImageRenderer.compress_dynamic_range(
-        grey, scale_chroma=False, adaptive_vivid=False,
-        vivid_chroma_low=5.0, vivid_chroma_high=15.0,
+        grey,
+        scale_chroma=False,
+        adaptive_vivid=False,
+        vivid_chroma_low=5.0,
+        vivid_chroma_high=15.0,
     )
     # Both outputs should be very close — neutral grey has no chroma to boost.
     assert np.allclose(out_vivid, out_plain, atol=2.0), (
@@ -221,14 +251,25 @@ def test_drc_adaptive_vivid_no_boost_for_neutral():
 
 # ── fast: _apply_prepare_enhancements ────────────────────────────────────────
 
+
 def test_brightness_increase_brightens():
     img = _make_rgb(40, 30, (100, 100, 100))
-    cfg_bright = _cfg(prepare_brightness=1.5, prepare_contrast=1.0,
-                      prepare_usm_amount=0, prepare_gamma=1.0,
-                      prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
-    cfg_base = _cfg(prepare_brightness=1.0, prepare_contrast=1.0,
-                    prepare_usm_amount=0, prepare_gamma=1.0,
-                    prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
+    cfg_bright = _cfg(
+        prepare_brightness=1.5,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+        prepare_gamma=1.0,
+        prepare_autocontrast_cutoff=0.0,
+        color_enhance=1.0,
+    )
+    cfg_base = _cfg(
+        prepare_brightness=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+        prepare_gamma=1.0,
+        prepare_autocontrast_cutoff=0.0,
+        color_enhance=1.0,
+    )
     out_bright = _apply_prepare_enhancements(img.copy(), cfg_bright)
     out_base = _apply_prepare_enhancements(img.copy(), cfg_base)
     assert _mean_brightness(out_bright) > _mean_brightness(out_base), (
@@ -238,12 +279,22 @@ def test_brightness_increase_brightens():
 
 def test_brightness_decrease_darkens():
     img = _make_rgb(40, 30, (160, 160, 160))
-    cfg_dark = _cfg(prepare_brightness=0.5, prepare_contrast=1.0,
-                    prepare_usm_amount=0, prepare_gamma=1.0,
-                    prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
-    cfg_base = _cfg(prepare_brightness=1.0, prepare_contrast=1.0,
-                    prepare_usm_amount=0, prepare_gamma=1.0,
-                    prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
+    cfg_dark = _cfg(
+        prepare_brightness=0.5,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+        prepare_gamma=1.0,
+        prepare_autocontrast_cutoff=0.0,
+        color_enhance=1.0,
+    )
+    cfg_base = _cfg(
+        prepare_brightness=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+        prepare_gamma=1.0,
+        prepare_autocontrast_cutoff=0.0,
+        color_enhance=1.0,
+    )
     out_dark = _apply_prepare_enhancements(img.copy(), cfg_dark)
     out_base = _apply_prepare_enhancements(img.copy(), cfg_base)
     assert _mean_brightness(out_dark) < _mean_brightness(out_base), (
@@ -254,12 +305,22 @@ def test_brightness_decrease_darkens():
 def test_gamma_below_one_brightens_midtones():
     """Gamma < 1 maps mid-grey upward (brightens)."""
     img = _make_rgb(40, 30, (128, 128, 128))
-    cfg_gamma = _cfg(prepare_gamma=0.5, prepare_brightness=1.0,
-                     prepare_contrast=1.0, prepare_usm_amount=0,
-                     prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
-    cfg_base = _cfg(prepare_gamma=1.0, prepare_brightness=1.0,
-                    prepare_contrast=1.0, prepare_usm_amount=0,
-                    prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
+    cfg_gamma = _cfg(
+        prepare_gamma=0.5,
+        prepare_brightness=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+        prepare_autocontrast_cutoff=0.0,
+        color_enhance=1.0,
+    )
+    cfg_base = _cfg(
+        prepare_gamma=1.0,
+        prepare_brightness=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+        prepare_autocontrast_cutoff=0.0,
+        color_enhance=1.0,
+    )
     out_gamma = _apply_prepare_enhancements(img.copy(), cfg_gamma)
     out_base = _apply_prepare_enhancements(img.copy(), cfg_base)
     assert _mean_brightness(out_gamma) > _mean_brightness(out_base), (
@@ -270,12 +331,22 @@ def test_gamma_below_one_brightens_midtones():
 def test_gamma_above_one_darkens_midtones():
     """Gamma > 1 maps mid-grey downward (darkens)."""
     img = _make_rgb(40, 30, (128, 128, 128))
-    cfg_gamma = _cfg(prepare_gamma=2.0, prepare_brightness=1.0,
-                     prepare_contrast=1.0, prepare_usm_amount=0,
-                     prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
-    cfg_base = _cfg(prepare_gamma=1.0, prepare_brightness=1.0,
-                    prepare_contrast=1.0, prepare_usm_amount=0,
-                    prepare_autocontrast_cutoff=0.0, color_enhance=1.0)
+    cfg_gamma = _cfg(
+        prepare_gamma=2.0,
+        prepare_brightness=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+        prepare_autocontrast_cutoff=0.0,
+        color_enhance=1.0,
+    )
+    cfg_base = _cfg(
+        prepare_gamma=1.0,
+        prepare_brightness=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+        prepare_autocontrast_cutoff=0.0,
+        color_enhance=1.0,
+    )
     out_gamma = _apply_prepare_enhancements(img.copy(), cfg_gamma)
     out_base = _apply_prepare_enhancements(img.copy(), cfg_base)
     assert _mean_brightness(out_gamma) < _mean_brightness(out_base), (
@@ -286,12 +357,24 @@ def test_gamma_above_one_darkens_midtones():
 def test_color_enhance_boosts_saturation():
     """color_enhance > 1 should increase the gap between RGB channels."""
     img = _make_rgb(40, 30, (200, 80, 40))  # warm orange
-    cfg_vivid = _cfg(color_enhance=2.0, use_adaptive_saturate=False,
-                     prepare_autocontrast_cutoff=0.0, prepare_gamma=1.0,
-                     prepare_brightness=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
-    cfg_flat = _cfg(color_enhance=1.0, use_adaptive_saturate=False,
-                    prepare_autocontrast_cutoff=0.0, prepare_gamma=1.0,
-                    prepare_brightness=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
+    cfg_vivid = _cfg(
+        color_enhance=2.0,
+        use_adaptive_saturate=False,
+        prepare_autocontrast_cutoff=0.0,
+        prepare_gamma=1.0,
+        prepare_brightness=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+    )
+    cfg_flat = _cfg(
+        color_enhance=1.0,
+        use_adaptive_saturate=False,
+        prepare_autocontrast_cutoff=0.0,
+        prepare_gamma=1.0,
+        prepare_brightness=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+    )
     out_vivid = _apply_prepare_enhancements(img.copy(), cfg_vivid)
     out_flat = _apply_prepare_enhancements(img.copy(), cfg_flat)
     rgb_vivid = _mean_rgb(out_vivid)
@@ -304,9 +387,15 @@ def test_color_enhance_boosts_saturation():
 
 def test_color_enhance_below_one_desaturates():
     img = _make_rgb(40, 30, (200, 80, 40))
-    cfg_grey = _cfg(color_enhance=0.0, use_adaptive_saturate=False,
-                    prepare_autocontrast_cutoff=0.0, prepare_gamma=1.0,
-                    prepare_brightness=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
+    cfg_grey = _cfg(
+        color_enhance=0.0,
+        use_adaptive_saturate=False,
+        prepare_autocontrast_cutoff=0.0,
+        prepare_gamma=1.0,
+        prepare_brightness=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+    )
     out = _apply_prepare_enhancements(img.copy(), cfg_grey)
     rgb = _mean_rgb(out)
     # At color_enhance=0 the image becomes fully greyscale.
@@ -318,13 +407,26 @@ def test_color_enhance_below_one_desaturates():
 def test_adaptive_saturate_changes_output_vs_color_enhance():
     """use_adaptive_saturate path should produce different output than color_enhance path."""
     img = _make_gradient()
-    cfg_adapt = _cfg(use_adaptive_saturate=True, saturate_max_enhance=1.5,
-                     saturate_low_chroma_thresh=5.0, saturate_high_chroma_thresh=20.0,
-                     prepare_autocontrast_cutoff=0.0, prepare_gamma=1.0,
-                     prepare_brightness=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
-    cfg_enhance = _cfg(use_adaptive_saturate=False, color_enhance=1.5,
-                       prepare_autocontrast_cutoff=0.0, prepare_gamma=1.0,
-                       prepare_brightness=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
+    cfg_adapt = _cfg(
+        use_adaptive_saturate=True,
+        saturate_max_enhance=1.5,
+        saturate_low_chroma_thresh=5.0,
+        saturate_high_chroma_thresh=20.0,
+        prepare_autocontrast_cutoff=0.0,
+        prepare_gamma=1.0,
+        prepare_brightness=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+    )
+    cfg_enhance = _cfg(
+        use_adaptive_saturate=False,
+        color_enhance=1.5,
+        prepare_autocontrast_cutoff=0.0,
+        prepare_gamma=1.0,
+        prepare_brightness=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+    )
     out_adapt = np.asarray(_apply_prepare_enhancements(img.copy(), cfg_adapt))
     out_enhance = np.asarray(_apply_prepare_enhancements(img.copy(), cfg_enhance))
     assert not np.array_equal(out_adapt, out_enhance), (
@@ -359,12 +461,13 @@ def test_enhancements_preserves_image_size():
 # compare two outputs that went through *identical* pipeline steps and only
 # differ in whether keepout was active.
 
+
 def _low_contrast_grey(w: int = 120, h: int = 100) -> Image.Image:
     """Low-contrast grey gradient — every 8×8 CLAHE tile has a real but small
     histogram, guaranteeing a measurable contrast expansion."""
     arr = np.zeros((h, w, 3), dtype=np.uint8)
     for y in range(h):
-        v = 85 + int(25 * y / h)   # luminance 85–110
+        v = 85 + int(25 * y / h)  # luminance 85–110
         arr[y, :] = [v, v, v]
     return Image.fromarray(arr)
 
@@ -373,7 +476,7 @@ def _extract_L(img_rgb: Image.Image, x: int, y: int, w: int, h: int) -> np.ndarr
     """Return the uint8 L* sub-region from an RGB PIL image."""
     arr = np.asarray(img_rgb, dtype=np.uint8)
     lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
-    return lab[y:y + h, x:x + w, 0].copy()
+    return lab[y : y + h, x : x + w, 0].copy()
 
 
 # Strong CLAHE; all other pipeline steps at identity so L* changes are
@@ -402,7 +505,9 @@ def test_clahe_changes_face_l_when_no_keepout():
     img = _low_contrast_grey()
     fx, fy, fw, fh = 30, 25, 60, 50
 
-    out_with = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=[(fx, fy, fw, fh)])
+    out_with = _apply_prepare_enhancements(
+        img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=[(fx, fy, fw, fh)]
+    )
     out_without = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=None)
 
     L_with = _extract_L(out_with, fx, fy, fw, fh)
@@ -431,11 +536,15 @@ def test_clahe_keepout_face_l_differs_from_no_keepout():
     fx, fy, fw, fh = 30, 25, 60, 50
     face_box = [(fx, fy, fw, fh)]
 
-    out_keepout   = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=face_box)
+    out_keepout = _apply_prepare_enhancements(
+        img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=face_box
+    )
     out_no_keepout = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=None)
-    out_no_clahe  = _apply_prepare_enhancements(img.copy(), replace(_CLAHE_CFG, clahe_clip_limit=0.0))
+    out_no_clahe = _apply_prepare_enhancements(
+        img.copy(), replace(_CLAHE_CFG, clahe_clip_limit=0.0)
+    )
 
-    L_keepout    = _extract_L(out_keepout,    fx, fy, fw, fh)
+    L_keepout = _extract_L(out_keepout, fx, fy, fw, fh)
     L_no_keepout = _extract_L(out_no_keepout, fx, fy, fw, fh)
 
     # keepout should differ from no-keepout — CLAHE changed L* in the no-keepout branch
@@ -450,9 +559,15 @@ def test_clahe_keepout_face_l_differs_from_no_keepout():
     # is ≈1.0 (erf(INNER/(√2·σ)) ≈ 1 for the small σ the 120×100 test canvas gives).
     # Small tolerance (≤2) for uint8 Lab round-trip rounding (RGB→Lab→RGB).
     INNER = 5
-    L_keepout_inner = _extract_L(out_keepout,  fx + INNER, fy + INNER, fw - 2 * INNER, fh - 2 * INNER)
-    L_no_clahe_inner = _extract_L(out_no_clahe, fx + INNER, fy + INNER, fw - 2 * INNER, fh - 2 * INNER)
-    delta_vs_no_clahe = int(np.abs(L_keepout_inner.astype(int) - L_no_clahe_inner.astype(int)).max())
+    L_keepout_inner = _extract_L(
+        out_keepout, fx + INNER, fy + INNER, fw - 2 * INNER, fh - 2 * INNER
+    )
+    L_no_clahe_inner = _extract_L(
+        out_no_clahe, fx + INNER, fy + INNER, fw - 2 * INNER, fh - 2 * INNER
+    )
+    delta_vs_no_clahe = int(
+        np.abs(L_keepout_inner.astype(int) - L_no_clahe_inner.astype(int)).max()
+    )
     assert delta_vs_no_clahe <= 2, (
         f"Face interior L* with-keepout should equal no-CLAHE result (±2 for round-trip rounding); "
         f"got max delta={delta_vs_no_clahe}.  The keepout restore is not working correctly."
@@ -469,12 +584,14 @@ def test_clahe_keepout_background_identical_to_no_keepout():
     img = _low_contrast_grey()
     fx, fy, fw, fh = 30, 25, 60, 50
 
-    out_keepout    = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=[(fx, fy, fw, fh)])
+    out_keepout = _apply_prepare_enhancements(
+        img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=[(fx, fy, fw, fh)]
+    )
     out_no_keepout = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=None)
 
     # Background pixel clearly outside the face region.
     bg_y, bg_x = 5, 5
-    L_bg_keepout    = int(_extract_L(out_keepout,    bg_x, bg_y, 1, 1)[0, 0])
+    L_bg_keepout = int(_extract_L(out_keepout, bg_x, bg_y, 1, 1)[0, 0])
     L_bg_no_keepout = int(_extract_L(out_no_keepout, bg_x, bg_y, 1, 1)[0, 0])
 
     assert L_bg_keepout == L_bg_no_keepout, (
@@ -491,21 +608,29 @@ def test_clahe_keepout_multiple_bboxes():
     box1 = (10, 10, 40, 40)
     box2 = (130, 10, 40, 40)
 
-    out_keepout    = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=[box1, box2])
+    out_keepout = _apply_prepare_enhancements(
+        img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=[box1, box2]
+    )
     out_no_keepout = _apply_prepare_enhancements(img.copy(), _CLAHE_CFG, keepout_bboxes_canvas=None)
-    out_no_clahe   = _apply_prepare_enhancements(img.copy(), replace(_CLAHE_CFG, clahe_clip_limit=0.0))
+    out_no_clahe = _apply_prepare_enhancements(
+        img.copy(), replace(_CLAHE_CFG, clahe_clip_limit=0.0)
+    )
 
     INNER = 5
     for label, (bx, by, bw, bh) in [("box1", box1), ("box2", box2)]:
-        L_keepout    = _extract_L(out_keepout,    bx, by, bw, bh)
+        L_keepout = _extract_L(out_keepout, bx, by, bw, bh)
         L_no_keepout = _extract_L(out_no_keepout, bx, by, bw, bh)
 
         assert int(np.abs(L_keepout.astype(int) - L_no_keepout.astype(int)).max()) > 5, (
             f"{label}: keepout should differ from no-keepout (CLAHE not undone)"
         )
         # Check interior only — feathered edges may be partially blended.
-        L_keepout_inner  = _extract_L(out_keepout,  bx + INNER, by + INNER, bw - 2 * INNER, bh - 2 * INNER)
-        L_no_clahe_inner = _extract_L(out_no_clahe, bx + INNER, by + INNER, bw - 2 * INNER, bh - 2 * INNER)
+        L_keepout_inner = _extract_L(
+            out_keepout, bx + INNER, by + INNER, bw - 2 * INNER, bh - 2 * INNER
+        )
+        L_no_clahe_inner = _extract_L(
+            out_no_clahe, bx + INNER, by + INNER, bw - 2 * INNER, bh - 2 * INNER
+        )
         assert int(np.abs(L_keepout_inner.astype(int) - L_no_clahe_inner.astype(int)).max()) <= 2, (
             f"{label}: keepout interior should match no-CLAHE result (±2 round-trip tolerance)"
         )
@@ -516,8 +641,12 @@ def test_clahe_keepout_no_crash_when_clip_limit_zero():
     cfg_no_clahe = replace(_CLAHE_CFG, clahe_clip_limit=0.0)
     img = _low_contrast_grey()
     # Must not raise.
-    out_with_boxes    = _apply_prepare_enhancements(img.copy(), cfg_no_clahe, keepout_bboxes_canvas=[(30, 25, 60, 50)])
-    out_without_boxes = _apply_prepare_enhancements(img.copy(), cfg_no_clahe, keepout_bboxes_canvas=None)
+    out_with_boxes = _apply_prepare_enhancements(
+        img.copy(), cfg_no_clahe, keepout_bboxes_canvas=[(30, 25, 60, 50)]
+    )
+    out_without_boxes = _apply_prepare_enhancements(
+        img.copy(), cfg_no_clahe, keepout_bboxes_canvas=None
+    )
     # Both should produce the same result — CLAHE path was never entered.
     assert np.array_equal(np.asarray(out_with_boxes), np.asarray(out_without_boxes)), (
         "clahe_clip_limit=0 should produce identical output regardless of keepout boxes"
@@ -525,6 +654,7 @@ def test_clahe_keepout_no_crash_when_clip_limit_zero():
 
 
 # ── fast: _is_near_grayscale ──────────────────────────────────────────────────
+
 
 def test_near_grayscale_pure_grey():
     assert ImageClassifier._is_near_grayscale(_make_grey(100, 100, 128))
@@ -554,7 +684,7 @@ def test_near_grayscale_mixed_mostly_grey():
     """Mostly grey with a small coloured patch should still read as grayscale
     (95th-percentile chroma stays low)."""
     arr = np.full((100, 100, 3), 128, dtype=np.uint8)
-    arr[:5, :5] = [220, 20, 20]   # tiny red patch — below the 95th-percentile
+    arr[:5, :5] = [220, 20, 20]  # tiny red patch — below the 95th-percentile
     img = Image.fromarray(arr)
     assert ImageClassifier._is_near_grayscale(img)
 
@@ -564,7 +694,9 @@ def test_near_grayscale_forest_bw():
     bw_path = _TEST_IMAGES_DIR / "Forest_road_Slavne_2017_BW_G9.jpg"
     assert bw_path.exists(), f"Test image missing from repo: {bw_path}"
     with open_image_for_render(bw_path) as img:
-        assert ImageClassifier._is_near_grayscale(img), "BW forest image should be detected as grayscale"
+        assert ImageClassifier._is_near_grayscale(img), (
+            "BW forest image should be detected as grayscale"
+        )
 
 
 def test_near_grayscale_colour_photo():
@@ -572,10 +704,13 @@ def test_near_grayscale_colour_photo():
     colour_path = _TEST_IMAGES_DIR / "Actress_Anna_Unterberger-2.jpg"
     assert colour_path.exists(), f"Test image missing from repo: {colour_path}"
     with open_image_for_render(colour_path) as img:
-        assert not ImageClassifier._is_near_grayscale(img), "Colour photo should not read as grayscale"
+        assert not ImageClassifier._is_near_grayscale(img), (
+            "Colour photo should not read as grayscale"
+        )
 
 
 # ── fast: _bw_safe_image_config ───────────────────────────────────────────────
+
 
 def test_bw_safe_disables_adaptive_saturate():
     cfg = _cfg(use_adaptive_saturate=True)
@@ -612,6 +747,7 @@ def test_bw_safe_preserves_other_fields():
 
 # ── fast: adaptive_saturate ───────────────────────────────────────────────────
 
+
 def test_adaptive_saturate_no_change_on_grey():
     """Neutral grey has near-zero chroma; adaptive_saturate factor ≈ 1.0."""
     grey = np.full((10, 10, 3), 128.0, dtype=np.float64)
@@ -630,6 +766,7 @@ def test_adaptive_saturate_boosts_colourful_pixels():
 
 
 # ── fast: open_image_for_render ───────────────────────────────────────────────
+
 
 def test_open_image_for_render_rgb_mode(tmp_path):
     p = tmp_path / "test.png"
@@ -661,13 +798,24 @@ def test_open_image_for_render_converts_palette_to_rgb(tmp_path):
 
 # ── fast: render_preview_png with different configs ───────────────────────────
 
+
 def test_different_configs_produce_different_preview():
     """Pipeline knobs must actually affect the output pixels."""
     img = _make_gradient(120, 90)
-    cfg_bright = _cfg(prepare_brightness=1.8, prepare_autocontrast_cutoff=0.0,
-                      prepare_gamma=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
-    cfg_dark = _cfg(prepare_brightness=0.4, prepare_autocontrast_cutoff=0.0,
-                    prepare_gamma=1.0, prepare_contrast=1.0, prepare_usm_amount=0)
+    cfg_bright = _cfg(
+        prepare_brightness=1.8,
+        prepare_autocontrast_cutoff=0.0,
+        prepare_gamma=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+    )
+    cfg_dark = _cfg(
+        prepare_brightness=0.4,
+        prepare_autocontrast_cutoff=0.0,
+        prepare_gamma=1.0,
+        prepare_contrast=1.0,
+        prepare_usm_amount=0,
+    )
     p_bright = render_preview_png(img.copy(), cfg_bright, "landscape", max_side_px=100)
     p_dark = render_preview_png(img.copy(), cfg_dark, "landscape", max_side_px=100)
     assert p_bright != p_dark, "brightness 1.8 vs 0.4 must produce different output"
@@ -713,8 +861,11 @@ def test_render_panel_bytes_honours_cfg_without_hidden_override():
     We verify this by rendering the SAME coloured image with hue-aware vs bw-safe
     configs and asserting the outputs differ (proving each cfg was actually honoured).
     """
+
     def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0):
-        return ImageRenderer(NumbaStreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
+        return ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
+            img, cfg, orientation, crop_to_fill_threshold
+        )
 
     # A hue-aware cfg that boosts saturation.
     cfg_hue = replace(
@@ -745,7 +896,6 @@ def test_render_panel_bytes_honours_cfg_without_hidden_override():
 # All use noop dither so the output reflects the enhancement pipeline, not diffusion.
 _SLOW_CONFIGS: dict[str, ImageConfig] = {
     "baseline": _BASE_CFG,
-
     # ── tonal preparation ──
     "gamma_0.6": _cfg(prepare_gamma=0.6),
     "gamma_1.2": _cfg(prepare_gamma=1.2),
@@ -760,12 +910,10 @@ _SLOW_CONFIGS: dict[str, ImageConfig] = {
     "midtone_lift": _cfg(prepare_midtone=1.5),
     "midtone_darken": _cfg(prepare_midtone=0.7),
     "noise_light": _cfg(dither_noise=3.0),
-
     # ── color enhancement ──
     "color_enhance_1.8": _cfg(color_enhance=1.8, use_adaptive_saturate=False),
     "color_enhance_0.5": _cfg(color_enhance=0.5, use_adaptive_saturate=False),
     "color_enhance_0": _cfg(color_enhance=0.0, use_adaptive_saturate=False),
-
     # ── adaptive saturation ──
     "adaptive_saturate": _cfg(
         use_adaptive_saturate=True,
@@ -779,7 +927,6 @@ _SLOW_CONFIGS: dict[str, ImageConfig] = {
         saturate_low_chroma_thresh=3.0,
         saturate_high_chroma_thresh=12.0,
     ),
-
     # ── dynamic range compression ──
     "scale_chroma": _cfg(scale_chroma=True, adaptive_vivid=False),
     "adaptive_vivid": _cfg(
@@ -792,7 +939,6 @@ _SLOW_CONFIGS: dict[str, ImageConfig] = {
         vivid_chroma_low=2.0,
         vivid_chroma_high=8.0,
     ),
-
     # ── combined presets (hue-aware LUT, noop dither) ──
     "atkinson_hue_aware_noop": replace(
         PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
@@ -802,7 +948,6 @@ _SLOW_CONFIGS: dict[str, ImageConfig] = {
         PRESET_IMAGE_CONFIGS["stucki_hue_aware"],
         dither=_NOOP_DITHER,
     ),
-
     # ── extremes ──
     "all_boost": _cfg(
         prepare_gamma=0.7,

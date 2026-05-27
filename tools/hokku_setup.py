@@ -9,6 +9,7 @@ Main-menu driven installer that orchestrates:
 Usage:
     python hokku_setup.py
 """
+
 import shutil
 import sys
 import urllib.error
@@ -37,6 +38,7 @@ def _fmt_size(n):
 
 
 # ---------- startup state scan ----------
+
 
 def _scan_device_status():
     """Scan for an attached ESP32-S3 and return a dict summarising state, or
@@ -104,7 +106,7 @@ def _print_device_status(status):
 # ---------- cache actions ----------
 
 CACHE_PATTERNS = [
-    ("Pi OS images",     "*raspios*.img*"),
+    ("Pi OS images", "*raspios*.img*"),
     ("hokku-server deb", "hokku-server_*.deb"),
     ("firmware bundles", "firmware/**/*"),
     ("install settings", "settings.json"),
@@ -129,7 +131,7 @@ def _parse_firmware_tag(filename):
     """Extract the tag from 'hokku-firmware_<tag>.bin'. Returns tag or 'local'."""
     stem = Path(filename).stem  # drops .bin
     if stem.startswith("hokku-firmware_"):
-        return stem[len("hokku-firmware_"):]
+        return stem[len("hokku-firmware_") :]
     return "local"
 
 
@@ -279,6 +281,7 @@ def action_clear_cache():
 
 # ---------- main menu ----------
 
+
 def _menu_default(status):
     """Pick a sensible default option based on device state."""
     if status is None or "device" not in status:
@@ -312,9 +315,11 @@ def _print_menu(default):
 
 # ---------- advanced submenu ----------
 
+
 def _render_settings(s, reveal):
     """Print the sticky-settings block. If `reveal` is True, show password
     values in the clear; otherwise print '(set)' for anything non-empty."""
+
     def _show(label, key, sensitive=False):
         val = s.get(key)
         if val is None or val == "":
@@ -324,14 +329,15 @@ def _render_settings(s, reveal):
         else:
             display = val
         print(f"    {label:15s} {display}")
-    _show("wifi_ssid:",    "wifi_ssid")
-    _show("wifi_pass:",    "wifi_pass",  sensitive=True)
-    _show("user:",         "user")
-    _show("password:",     "password",   sensitive=True)
-    _show("ssh_enabled:",  "ssh_enabled")
-    _show("samba:",        "samba")
-    _show("country:",      "country")
-    _show("timezone:",     "timezone")
+
+    _show("wifi_ssid:", "wifi_ssid")
+    _show("wifi_pass:", "wifi_pass", sensitive=True)
+    _show("user:", "user")
+    _show("password:", "password", sensitive=True)
+    _show("ssh_enabled:", "ssh_enabled")
+    _show("samba:", "samba")
+    _show("country:", "country")
+    _show("timezone:", "timezone")
 
 
 def action_show_settings():
@@ -426,8 +432,9 @@ def _dispatch(choice):
         print()
         print("  ESP32 phase")
         print("  -----------")
-        return "continue", esp32_setup.run(pi_credentials=pi_credentials,
-                                           pi_install_ran=pi_install_ran)
+        return "continue", esp32_setup.run(
+            pi_credentials=pi_credentials, pi_install_ran=pi_install_ran
+        )
     if choice == "2":
         # Server only: image the SD card, run through mDNS/HTTP wait, then stop.
         result = pi_installer.run()
@@ -437,11 +444,12 @@ def _dispatch(choice):
             return "continue", 1
         print()
         if result.get("webserver_ok"):
-            print(f"  Server ready at http://{result['hostname']}.local:8080/ "
-                  f"(IP {result.get('server_ip') or '?'}).")
+            print(
+                f"  Server ready at http://{result['hostname']}.local:8080/ "
+                f"(IP {result.get('server_ip') or '?'})."
+            )
         else:
-            print("  Server install submitted but HTTP probe timed out — "
-                  "check the Pi directly.")
+            print("  Server install submitted but HTTP probe timed out — check the Pi directly.")
         return "continue", 0
     if choice == "3":
         return "continue", esp32_setup.run_configure_and_flash()

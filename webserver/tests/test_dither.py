@@ -1,22 +1,21 @@
 """Dither LUTs, noop kernel, cache_slug stability, and concrete-class smoke tests."""
-import numba  # hard dep — must be installed
+
 import numpy as np
 import pytest
 
 from hokku_server.display import PALETTE_MEASURED_RGB
-from hokku_server.dither_config import DitherConfig
+from hokku_server.dither_config import AlgorithmName, DitherConfig
 from hokku_server.dither_streaming import (
     PALETTE_LAB,
     _cached_euclidean_lut,
     _cached_hue_aware_lut,
     dither,
-    noop_dither,
 )
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.dither_unconstrained_numba import NumbaUnconstrainedDither
 
-
 # ── LUT and palette ───────────────────────────────────────────────────────────
+
 
 def test_palette_lab_shape():
     assert PALETTE_LAB.shape == (6, 3)
@@ -31,7 +30,7 @@ def test_euclidean_lut_cube():
 
 
 def test_hue_aware_lut_cube():
-    lut, scale = _cached_hue_aware_lut(95.0, 8.0)
+    lut, _ = _cached_hue_aware_lut(95.0, 8.0)
     assert lut.shape == (32, 32, 32)
     assert lut.max() <= 5
 
@@ -60,6 +59,7 @@ def test_cache_slug_stable_and_distinct():
 
 
 # ── Concrete class parametrization ────────────────────────────────────────────
+
 
 def _concrete_classes():
     return [
@@ -104,7 +104,7 @@ def test_dither_output_valid_palette_indices(cls) -> None:
 
 @pytest.mark.parametrize("algorithm", ["floyd_steinberg", "atkinson", "stucki", "noop"])
 @pytest.mark.parametrize("cls", _concrete_classes())
-def test_all_algorithms_all_classes(cls, algorithm: str) -> None:
+def test_all_algorithms_all_classes(cls, algorithm: AlgorithmName) -> None:
     cfg = DitherConfig(
         algorithm=algorithm,
         lut_name="euclidean",

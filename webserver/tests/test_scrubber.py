@@ -3,16 +3,16 @@
 Uses real tmp directories — no mocking of the filesystem — but skips actual
 image conversion by writing dummy cache files directly.
 """
+
 from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
 
-import pytest
-
 from hokku_server.app_config import AppConfig
 from hokku_server.image_manager_abstract import AbstractImageManager
 from hokku_server.image_manager_single import SingleThreadedImageManager
+from hokku_server.orientation import Orientation
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 # Suffixes as defined in image_manager
@@ -22,6 +22,7 @@ _THUMB = "_thumb.jpg"
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
 
 def _write(path: Path, content: bytes = b"x") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -35,7 +36,9 @@ def _images_dir(mgr: AbstractImageManager) -> Path:
 
 def _slug_for(mgr: AbstractImageManager, name: str) -> str:
     """Return the global-orientation slug for a registered image."""
-    return mgr._records[name].slug(mgr._config.orientation)
+    result = mgr._records[name].slug(mgr._config.orientation)
+    assert result is not None
+    return result
 
 
 def _name_hash(mgr: AbstractImageManager, name: str) -> str:
@@ -46,10 +49,11 @@ def _register_ok(mgr: AbstractImageManager, name: str, make_test_image) -> None:
     """Add an image to the manager via the upload path then fake-convert it."""
     upload = Path(mgr._config.upload_dir)
     make_test_image(upload / name)
-    mgr.sync()   # converts (noop kernel — fast; inline pool → synchronous)
+    mgr.sync()  # converts (noop kernel — fast; inline pool → synchronous)
 
 
 # ── always: unknown suffix ────────────────────────────────────────────────────
+
 
 def test_scrub_always_removes_unknown_suffix(app_config, make_test_image):
     mgr = SingleThreadedImageManager(app_config)
@@ -68,7 +72,9 @@ def test_scrub_old_panel_bin_requeues_image(app_config, make_test_image):
     images are re-queued so the next sync re-renders them compressed."""
     mgr = SingleThreadedImageManager(app_config)
     _register_ok(mgr, "a.png", make_test_image)
-    assert mgr.status("a.png").convert_status == "ok"
+    rec = mgr.status("a.png")
+    assert rec is not None
+    assert rec.convert_status == "ok"
 
     # Plant an old-format uncompressed panel file for the registered image.
     h = _name_hash(mgr, "a.png")
@@ -79,12 +85,15 @@ def test_scrub_old_panel_bin_requeues_image(app_config, make_test_image):
     mgr.sync()
 
     assert not old_panel.exists(), "Old _panel.bin file should be scrubbed"
-    assert mgr.status("a.png").convert_status == "pending", (
+    rec2 = mgr.status("a.png")
+    assert rec2 is not None
+    assert rec2.convert_status == "pending", (
         "Image should be re-queued after old panel file is scrubbed"
     )
 
 
 # ── always: orphan (hash unknown) ────────────────────────────────────────────
+
 
 def test_scrub_always_removes_orphan_hash(app_config, make_test_image):
     mgr = SingleThreadedImageManager(app_config)
@@ -112,6 +121,7 @@ def test_scrub_always_removes_orphan_thumb(app_config, make_test_image):
 
 # ── always: known hash → never remove ────────────────────────────────────────
 
+
 def test_scrub_always_keeps_current_slug_files(app_config, make_test_image):
     mgr = SingleThreadedImageManager(app_config)
     _register_ok(mgr, "a.png", make_test_image)
@@ -119,27 +129,33 @@ def test_scrub_always_keeps_current_slug_files(app_config, make_test_image):
 
     h = _name_hash(mgr, "a.png")
     slug = _slug_for(mgr, "a.png")
-    panel   = _images_dir(mgr) / f"{h}_{slug}{_PANEL}"
+    panel = _images_dir(mgr) / f"{h}_{slug}{_PANEL}"
     preview = _images_dir(mgr) / f"{h}_{slug}{_PREVIEW}"
-    thumb   = _images_dir(mgr) / f"{h}{_THUMB}"
+    thumb = _images_dir(mgr) / f"{h}{_THUMB}"
 
     assert thumb.exists(), "Thumbnail should exist after thumbnail_jpg() call"
     mgr.sync()
-    assert panel.exists(),   "Current-slug panel.bin.zst should be kept"
+    assert panel.exists(), "Current-slug panel.bin.zst should be kept"
     assert preview.exists(), "Current-slug preview.png should be kept"
-    assert thumb.exists(),   "Thumbnail should survive scrub"
+    assert thumb.exists(), "Thumbnail should survive scrub"
 
 
 # ── auto_clear OFF: old-slug files preserved ─────────────────────────────────
 
+
 def test_scrub_off_keeps_old_slug_files(tmp_path, make_test_image):
     """With auto_clear_cache=False, old-slug files for registered images survive."""
-    upload = tmp_path / "up"; upload.mkdir()
-    cache  = tmp_path / "ca"; cache.mkdir()
+    upload = tmp_path / "up"
+    upload.mkdir()
+    cache = tmp_path / "ca"
+    cache.mkdir()
 
     base_cfg = AppConfig(
-        upload_dir=str(upload), cache_dir=str(cache), port=18080,
-        poll_interval_seconds=1, orientation="landscape",
+        upload_dir=str(upload),
+        cache_dir=str(cache),
+        port=18080,
+        poll_interval_seconds=1,
+        orientation=Orientation.LANDSCAPE,
         auto_clear_cache=False,
         # Disable classifier so the slug tracks image_config_default cleanly.
         classifier_bw_detect_enabled=False,
@@ -181,20 +197,24 @@ def test_scrub_off_keeps_old_slug_files(tmp_path, make_test_image):
 
 # ── auto_clear ON: old-slug files removed ────────────────────────────────────
 
+
 def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
     """With auto_clear_cache=True, old-slug files for registered images are scrubbed."""
-    upload = tmp_path / "up"; upload.mkdir()
-    cache  = tmp_path / "ca"; cache.mkdir()
-
-    from hokku_server.presets import PRESET_IMAGE_CONFIGS
+    upload = tmp_path / "up"
+    upload.mkdir()
+    cache = tmp_path / "ca"
+    cache.mkdir()
 
     base_image = replace(
         PRESET_IMAGE_CONFIGS["atkinson"],
         dither=replace(PRESET_IMAGE_CONFIGS["atkinson"].dither, algorithm="noop"),
     )
     base_cfg = AppConfig(
-        upload_dir=str(upload), cache_dir=str(cache), port=18080,
-        poll_interval_seconds=1, orientation="landscape",
+        upload_dir=str(upload),
+        cache_dir=str(cache),
+        port=18080,
+        poll_interval_seconds=1,
+        orientation=Orientation.LANDSCAPE,
         auto_clear_cache=True,
         # Disable classifier so the slug tracks image_config_default cleanly.
         classifier_bw_detect_enabled=False,
@@ -210,7 +230,7 @@ def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
     assert old_slug is not None
 
     new_image = replace(base_image, prepare_brightness=0.9)
-    new_cfg   = replace(base_cfg, image_config_default=new_image, auto_clear_cache=True)
+    new_cfg = replace(base_cfg, image_config_default=new_image, auto_clear_cache=True)
 
     mgr2 = SingleThreadedImageManager(new_cfg)
     mgr2.sync()
@@ -227,18 +247,21 @@ def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
 
 def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
     """auto_clear_cache=True must not delete thumbnails."""
-    upload = tmp_path / "up"; upload.mkdir()
-    cache  = tmp_path / "ca"; cache.mkdir()
-
-    from hokku_server.presets import PRESET_IMAGE_CONFIGS
+    upload = tmp_path / "up"
+    upload.mkdir()
+    cache = tmp_path / "ca"
+    cache.mkdir()
 
     base_image = replace(
         PRESET_IMAGE_CONFIGS["atkinson"],
         dither=replace(PRESET_IMAGE_CONFIGS["atkinson"].dither, algorithm="noop"),
     )
     cfg = AppConfig(
-        upload_dir=str(upload), cache_dir=str(cache), port=18080,
-        poll_interval_seconds=1, orientation="landscape",
+        upload_dir=str(upload),
+        cache_dir=str(cache),
+        port=18080,
+        poll_interval_seconds=1,
+        orientation=Orientation.LANDSCAPE,
         auto_clear_cache=True,
         classifier_bw_detect_enabled=False,
         image_config_default=base_image,
@@ -256,7 +279,7 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
 
     # Re-sync with new slug to trigger scrubber with auto_clear=True.
     new_image = replace(base_image, prepare_brightness=0.9)
-    new_cfg   = replace(cfg, image_config_default=new_image, auto_clear_cache=True)
+    new_cfg = replace(cfg, image_config_default=new_image, auto_clear_cache=True)
     mgr2 = SingleThreadedImageManager(new_cfg)
     mgr2.sync()
 
@@ -265,34 +288,39 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
 
 # ── clear_caches: removes everything ─────────────────────────────────────────
 
+
 def test_clear_caches_removes_panel_preview_thumb(app_config, make_test_image):
     mgr = SingleThreadedImageManager(app_config)
     make_test_image(Path(mgr._config.upload_dir) / "a.png")
     mgr.sync()
     mgr.thumbnail_jpg("a.png")
 
-    h    = _name_hash(mgr, "a.png")
+    h = _name_hash(mgr, "a.png")
     slug = _slug_for(mgr, "a.png")
     idir = _images_dir(mgr)
 
-    panel   = idir / f"{h}_{slug}{_PANEL}"
+    panel = idir / f"{h}_{slug}{_PANEL}"
     preview = idir / f"{h}_{slug}{_PREVIEW}"
-    thumb   = idir / f"{h}{_THUMB}"
+    thumb = idir / f"{h}{_THUMB}"
 
     assert panel.exists() and preview.exists() and thumb.exists()
 
     mgr.clear_caches()
 
-    assert not panel.exists(),   "clear_caches should remove panel.bin.zst"
+    assert not panel.exists(), "clear_caches should remove panel.bin.zst"
     assert not preview.exists(), "clear_caches should remove preview.png"
-    assert not thumb.exists(),   "clear_caches should remove thumbnail"
+    assert not thumb.exists(), "clear_caches should remove thumbnail"
 
 
 def test_clear_caches_marks_all_pending(app_config, make_test_image):
     mgr = SingleThreadedImageManager(app_config)
     make_test_image(Path(mgr._config.upload_dir) / "a.png")
     mgr.sync()
-    assert mgr.status("a.png").convert_status == "ok"
+    rec_before = mgr.status("a.png")
+    assert rec_before is not None
+    assert rec_before.convert_status == "ok"
 
     mgr.clear_caches()
-    assert mgr.status("a.png").convert_status == "pending"
+    rec_after = mgr.status("a.png")
+    assert rec_after is not None
+    assert rec_after.convert_status == "pending"

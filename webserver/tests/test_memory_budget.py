@@ -9,9 +9,9 @@ Run with:
 The headline test is ``test_full_render_peak_under_50mb`` — a single
 panel render must fit within 50 MB of the child's baseline RSS.
 """
+
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +22,8 @@ from PIL import Image
 from hokku_server.dither_abc import _DEFAULT_STRIPE_H as DEFAULT_STRIPE_H
 from hokku_server.image_config import ImageConfig
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
-from hokku_server.memory_guard import memory_limit, supported as memguard_supported
+from hokku_server.memory_guard import memory_limit
+from hokku_server.memory_guard import supported as memguard_supported
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 from tests._memory_helpers import (
     peak_python_heap,
@@ -39,9 +40,9 @@ def _real_cfg() -> ImageConfig:
 _TEST_IMAGES = Path(__file__).resolve().parent.parent.parent / "images" / "test"
 
 REAL_IMAGES = [
-    "Robert_De_Niro_KVIFF_portrait.jpg",      # portrait
-    "Fitz_Roy_1.jpg",                          # landscape
-    "Forest_road_Slavne_2017_BW_G9.jpg",       # B&W, 4500×2850
+    "Robert_De_Niro_KVIFF_portrait.jpg",  # portrait
+    "Fitz_Roy_1.jpg",  # landscape
+    "Forest_road_Slavne_2017_BW_G9.jpg",  # B&W, 4500×2850
 ]
 
 
@@ -57,7 +58,7 @@ def huge_jpeg(tmp_path_factory: pytest.TempPathFactory) -> Path:
     # Block-noise pattern compresses but isn't trivial.
     h, w = 4000, 6000
     arr = rng.integers(0, 255, size=(h // 8, w // 8, 3), dtype=np.uint8)
-    img = Image.fromarray(arr).resize((w, h), Image.NEAREST)
+    img = Image.fromarray(arr).resize((w, h), Image.Resampling.NEAREST)
     img.save(out, "JPEG", quality=85)
     return out
 
@@ -65,6 +66,7 @@ def huge_jpeg(tmp_path_factory: pytest.TempPathFactory) -> Path:
 # ──────────────────────────────────────────────────────────────────────
 # Layer C — subprocess RSS sampling (the headline assertion)
 # ──────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.time_intensive
 @pytest.mark.parametrize("image_name", REAL_IMAGES)
@@ -74,11 +76,12 @@ def test_full_render_peak_under_50mb(image_name: str) -> None:
     assert image_path.is_file(), f"Test image missing from repo: {image_path}"
     delta, baseline = peak_rss_subprocess(image_path, cfg=_real_cfg())
     delta_mb = delta / (1024 * 1024)
-    print(f"\n  {image_name}: render peak = {delta_mb:.1f} MB "
-          f"(baseline {baseline / 1024 / 1024:.1f} MB)")
+    print(
+        f"\n  {image_name}: render peak = {delta_mb:.1f} MB "
+        f"(baseline {baseline / 1024 / 1024:.1f} MB)"
+    )
     assert delta < 50 * 1024 * 1024, (
-        f"render of {image_name} consumed {delta_mb:.1f} MB peak — "
-        f"budget is 50 MB"
+        f"render of {image_name} consumed {delta_mb:.1f} MB peak — budget is 50 MB"
     )
 
 
@@ -87,8 +90,10 @@ def test_full_render_huge_jpeg_under_50mb(huge_jpeg: Path) -> None:
     """A 6000×4000 source JPEG must also fit in 50 MB."""
     delta, baseline = peak_rss_subprocess(huge_jpeg, cfg=_real_cfg())
     delta_mb = delta / (1024 * 1024)
-    print(f"\n  6000x4000 JPEG: render peak = {delta_mb:.1f} MB "
-          f"(baseline {baseline / 1024 / 1024:.1f} MB)")
+    print(
+        f"\n  6000x4000 JPEG: render peak = {delta_mb:.1f} MB "
+        f"(baseline {baseline / 1024 / 1024:.1f} MB)"
+    )
     assert delta < 50 * 1024 * 1024, (
         f"huge-JPEG render consumed {delta_mb:.1f} MB peak — budget is 50 MB"
     )
@@ -104,7 +109,6 @@ def test_full_render_huge_png_rejected_by_cap() -> None:
     growth stays minimal and ``open_image_for_render`` raises ``ValueError``.
     """
 
-
     image_path = _TEST_IMAGES / "synth_black_10000x10000.png"
     assert image_path.is_file(), f"Test image missing from repo: {image_path}"
     with pytest.raises((ValueError, Image.DecompressionBombError)):
@@ -114,6 +118,7 @@ def test_full_render_huge_png_rejected_by_cap() -> None:
 # ──────────────────────────────────────────────────────────────────────
 # Layer A — tracemalloc on individual pipeline functions
 # ──────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.time_intensive
 def test_compress_dynamic_range_peak_under_1mb_per_row() -> None:
@@ -125,14 +130,18 @@ def test_compress_dynamic_range_peak_under_1mb_per_row() -> None:
     under 1 MB even with the function's transient buffers.
     """
 
-    row = np.random.default_rng(0).integers(
-        0, 256, size=(1, 3200, 3), dtype=np.uint8
-    ).astype(np.float32)
+    row = (
+        np.random.default_rng(0)
+        .integers(0, 256, size=(1, 3200, 3), dtype=np.uint8)
+        .astype(np.float32)
+    )
     peak = peak_python_heap(
         ImageRenderer.compress_dynamic_range,
         row,
-        scale_chroma=False, adaptive_vivid=False,
-        vivid_chroma_low=10.0, vivid_chroma_high=40.0,
+        scale_chroma=False,
+        adaptive_vivid=False,
+        vivid_chroma_low=10.0,
+        vivid_chroma_high=40.0,
     )
     peak_mb = peak / (1024 * 1024)
     print(f"\n  DRC 3200×1 row peak (Python heap) = {peak_mb:.3f} MB")
@@ -155,15 +164,16 @@ def test_compress_dynamic_range_peak_under_30mb_per_stripe() -> None:
     stripe at a time.
     """
 
-
     stripe = np.random.default_rng(0).integers(
         0, 256, size=(DEFAULT_STRIPE_H, 3200, 3), dtype=np.uint8
     )
     peak = peak_python_heap(
         ImageRenderer.compress_dynamic_range,
         stripe.astype(np.float32),
-        scale_chroma=False, adaptive_vivid=False,
-        vivid_chroma_low=10.0, vivid_chroma_high=40.0,
+        scale_chroma=False,
+        adaptive_vivid=False,
+        vivid_chroma_low=10.0,
+        vivid_chroma_high=40.0,
     )
     peak_mb = peak / (1024 * 1024)
     print(f"\n  DRC 3200×{DEFAULT_STRIPE_H} stripe peak (Python heap) = {peak_mb:.2f} MB")
@@ -176,6 +186,7 @@ def test_compress_dynamic_range_peak_under_30mb_per_stripe() -> None:
 # ──────────────────────────────────────────────────────────────────────
 # RLIMIT_AS hard-guard sanity checks
 # ──────────────────────────────────────────────────────────────────────
+
 
 def test_memory_guard_no_op_when_unsupported_does_not_raise() -> None:
     """The context manager must always be safe to enter regardless of OS.
@@ -199,7 +210,7 @@ def test_memory_guard_raises_memory_error_when_exceeded() -> None:
     # must fail. RLIMIT_AS limits virtual address space (vms). The 5 MB headroom
     # is needed so setrlimit itself doesn't fail due to in-flight allocations.
     cap = cur + 5 * 1024 * 1024
-    with pytest.raises((MemoryError, np.core._exceptions._ArrayMemoryError)):
+    with pytest.raises((MemoryError, np.core._exceptions._ArrayMemoryError)):  # type: ignore[attr-defined]
         with memory_limit(cap):
             # Try to allocate 100 MB — must fail.
-            _waste = np.zeros(100 * 1024 * 1024, dtype=np.uint8)  # noqa: F841
+            _waste = np.zeros(100 * 1024 * 1024, dtype=np.uint8)

@@ -6,6 +6,7 @@ The service appears as ``Hokku <hostname>._http._tcp.local.`` with a
 ``path=/hokku/ui`` TXT record. Using the hostname in the instance name
 keeps multiple hokku servers on the same LAN from colliding during probing.
 """
+
 from __future__ import annotations
 
 import logging
@@ -69,12 +70,14 @@ def start_mdns(port: int, hostname: str) -> Any:
             if zc is not None:
                 try:
                     zc.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("zeroconf close failed: %s", e)
             if attempt < 3:
                 logger.warning(
                     "Attempt %d failed (%s: %s) — retrying in 3s",
-                    attempt, type(exc).__name__, exc,
+                    attempt,
+                    type(exc).__name__,
+                    exc,
                 )
                 time.sleep(3)
 

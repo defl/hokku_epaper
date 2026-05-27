@@ -18,23 +18,23 @@ Covers routes that test_integration.py does not exercise:
   /                              GET   — redirect
   /hokku/ui                      GET   — HTML
 """
+
 from __future__ import annotations
 
 import io
 import json
 import shutil
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from PIL import Image
 
 from hokku_server.app_config import AppConfig
 from hokku_server.app_state import AppState, build_manager
 from hokku_server.flask_app import create_app
 from hokku_server.image_classifier import ImageClassifier
-from hokku_server.serve_scheduler import ServeScheduler
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
-from hokku_server.image_renderer import MAX_UPLOAD_PIXELS
+from hokku_server.serve_scheduler import ServeScheduler
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
@@ -44,9 +44,7 @@ _TEST_IMAGES_DIR = _REPO_ROOT / "images" / "test"
 # All files in images/test/ — each will be uploaded in a parametrized test.
 # CREDITS.md is deliberately included to verify it is rejected on extension.
 # synth_black_10000x10000.png is the intentional "bomb" (100 M px > 40 M cap).
-_ALL_TEST_FILES: list[Path] = sorted(
-    p for p in _TEST_IMAGES_DIR.iterdir() if p.is_file()
-)
+_ALL_TEST_FILES: list[Path] = sorted(p for p in _TEST_IMAGES_DIR.iterdir() if p.is_file())
 
 # Files expected to land in "skipped" rather than "saved".
 _EXPECTED_SKIP: dict[str, str] = {
@@ -56,6 +54,7 @@ _EXPECTED_SKIP: dict[str, str] = {
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
+
 
 def _make_state(config: AppConfig) -> AppState:
     clf = ImageClassifier(config)
@@ -103,6 +102,7 @@ def _upload_bytes(client, data: bytes, filename: str):
 
 
 # ── /hokku/api/upload — every test image ──────────────────────────────────────
+
 
 @pytest.mark.parametrize("img_path", _ALL_TEST_FILES, ids=lambda p: p.name)
 def test_upload_each_test_file(bare_client, img_path: Path):
@@ -173,8 +173,9 @@ def test_upload_bad_extension_is_skipped(bare_client):
 
 # ── /hokku/api/image/<name> DELETE ────────────────────────────────────────────
 
+
 def test_delete_existing_image(bare_client):
-    client, state = bare_client
+    client, _ = bare_client
     img = _TEST_IMAGES_DIR / "grayscale_linear_bar_1200x300.png"
     _upload_bytes(client, img.read_bytes(), img.name)
 
@@ -190,6 +191,7 @@ def test_delete_missing_image_returns_404(bare_client):
 
 
 # ── /hokku/api/image/<name>/retry POST ────────────────────────────────────────
+
 
 def test_retry_existing_image_returns_ok(bare_client):
     client, _ = bare_client
@@ -208,8 +210,9 @@ def test_retry_missing_image_returns_404(bare_client):
 
 # ── /hokku/api/show_next/<name> POST ──────────────────────────────────────────
 
+
 def test_show_next_ready_image(synced_client):
-    client, state, name = synced_client
+    client, _, name = synced_client
     resp = client.post(f"/hokku/api/show_next/{name}")
     assert resp.status_code == 200
     body = resp.get_json()
@@ -235,6 +238,7 @@ def test_show_next_not_ready_returns_409(bare_client):
 
 # ── /hokku/api/status GET ─────────────────────────────────────────────────────
 
+
 def test_status_empty_upload(bare_client):
     client, _ = bare_client
     resp = client.get("/hokku/api/status")
@@ -249,12 +253,26 @@ def test_status_top_level_keys(synced_client):
     client, _, _ = synced_client
     data = client.get("/hokku/api/status").get_json()
     for key in (
-        "server_time", "upload_size", "pool_size", "pool_files",
-        "upload_files", "failed_files", "serve_data", "screens",
-        "last_served", "converting", "converting_name", "converting_done",
-        "converting_total", "converting_eta_seconds", "next_image",
-        "cache_used_bytes", "disk_free_bytes", "image_worker_count_resolved",
-        "cpu_cores", "memory_available_gb",
+        "server_time",
+        "upload_size",
+        "pool_size",
+        "pool_files",
+        "upload_files",
+        "failed_files",
+        "serve_data",
+        "screens",
+        "last_served",
+        "converting",
+        "converting_name",
+        "converting_done",
+        "converting_total",
+        "converting_eta_seconds",
+        "next_images",
+        "cache_used_bytes",
+        "disk_free_bytes",
+        "image_worker_count_resolved",
+        "cpu_cores",
+        "memory_available_gb",
     ):
         assert key in data, f"Missing key {key!r} in /api/status response"
 
@@ -268,14 +286,20 @@ def test_status_upload_file_fields(synced_client):
     assert name in entries
     entry = entries[name]
     for field in (
-        "name", "dithered", "status", "error",
-        "size_bytes", "image_width", "image_height",
-        "last_conversion_seconds", "is_bw", "face_bboxes",
+        "name",
+        "dithered",
+        "status",
+        "error",
+        "size_bytes",
+        "image_width",
+        "image_height",
+        "last_conversion_seconds",
+        "is_bw",
+        "face_bboxes",
     ):
         assert field in entry, f"Missing field {field!r} in upload_file entry"
     assert "has_face" not in entry, (
-        "has_face was removed — use face_bboxes instead; "
-        "the flask_app still references it"
+        "has_face was removed — use face_bboxes instead; the flask_app still references it"
     )
     assert isinstance(entry["face_bboxes"], list)
 
@@ -289,6 +313,7 @@ def test_status_ready_image_is_in_pool(synced_client):
 
 # ── /hokku/api/config GET ─────────────────────────────────────────────────────
 
+
 def test_config_get_returns_200(bare_client):
     client, _ = bare_client
     assert client.get("/hokku/api/config").status_code == 200
@@ -297,7 +322,14 @@ def test_config_get_returns_200(bare_client):
 def test_config_get_top_level_keys(bare_client):
     client, _ = bare_client
     data = client.get("/hokku/api/config").get_json()
-    for key in ("config", "config_defaults", "dither_presets", "panel", "git_describe", "commit_url"):
+    for key in (
+        "config",
+        "config_defaults",
+        "dither_presets",
+        "panel",
+        "git_describe",
+        "commit_url",
+    ):
         assert key in data, f"Missing key {key!r} in /api/config response"
 
 
@@ -320,6 +352,7 @@ def test_config_get_presets_non_empty(bare_client):
 
 
 # ── /hokku/api/config POST ────────────────────────────────────────────────────
+
 
 def test_config_post_valid_field(bare_client, tmp_path):
     client, _ = bare_client
@@ -356,10 +389,10 @@ def test_config_post_without_config_path_returns_500(bare_state: AppState):
 
 # ── /hokku/api/dither/preview POST ───────────────────────────────────────────
 
+
 def test_dither_preview_returns_png(synced_client):
     client, _, name = synced_client
     # Use the atkinson preset dict as the image config body.
-    from dataclasses import asdict
     img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson"])
     resp = client.post(
         "/hokku/api/dither/preview",
@@ -372,7 +405,6 @@ def test_dither_preview_returns_png(synced_client):
 
 def test_dither_preview_face_bboxes_header_present(synced_client):
     client, _, name = synced_client
-    from dataclasses import asdict
     img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson"])
     resp = client.post(
         "/hokku/api/dither/preview",
@@ -386,7 +418,6 @@ def test_dither_preview_face_bboxes_header_present(synced_client):
 
 def test_dither_preview_missing_image_returns_404(bare_client):
     client, _ = bare_client
-    from dataclasses import asdict
     resp = client.post(
         "/hokku/api/dither/preview",
         json={"name": "ghost.jpg", "image": asdict(PRESET_IMAGE_CONFIGS["atkinson"])},
@@ -412,6 +443,7 @@ def test_dither_preview_non_json_body_returns_400(bare_client):
 
 # ── /hokku/api/thumbnail/<name> GET ──────────────────────────────────────────
 
+
 def test_thumbnail_existing_image_returns_jpeg(synced_client):
     client, _, name = synced_client
     resp = client.get(f"/hokku/api/thumbnail/{name}")
@@ -427,6 +459,7 @@ def test_thumbnail_missing_image_returns_404(bare_client):
 
 
 # ── /hokku/api/dithered/<name> GET ───────────────────────────────────────────
+
 
 def test_dithered_existing_image_returns_png(synced_client):
     client, _, name = synced_client
@@ -444,6 +477,7 @@ def test_dithered_missing_image_returns_404(bare_client):
 
 # ── /hokku/api/original/<name> GET ───────────────────────────────────────────
 
+
 def test_original_existing_image_returns_file(synced_client):
     client, _, name = synced_client
     resp = client.get(f"/hokku/api/original/{name}")
@@ -459,6 +493,7 @@ def test_original_missing_image_returns_404(bare_client):
 
 # ── /hokku/api/clear_cache POST ──────────────────────────────────────────────
 
+
 def test_clear_cache_returns_ok(bare_client):
     client, _ = bare_client
     resp = client.post("/hokku/api/clear_cache")
@@ -467,6 +502,7 @@ def test_clear_cache_returns_ok(bare_client):
 
 
 # ── /hokku/api/scrub POST ────────────────────────────────────────────────────
+
 
 def test_scrub_returns_ok(bare_client):
     client, _ = bare_client
@@ -477,6 +513,7 @@ def test_scrub_returns_ok(bare_client):
 
 # ── /hokku/api/classifier/clear POST ─────────────────────────────────────────
 
+
 def test_classifier_clear_returns_ok(bare_client):
     client, _ = bare_client
     resp = client.post("/hokku/api/classifier/clear")
@@ -485,6 +522,7 @@ def test_classifier_clear_returns_ok(bare_client):
 
 
 # ── /hokku/api/screens/<name> DELETE ─────────────────────────────────────────
+
 
 def test_screen_delete_returns_ok(bare_client):
     """Deleting a screen that was never registered must still return ok."""
@@ -506,6 +544,7 @@ def test_screen_delete_removes_from_telemetry(bare_client):
 
 
 # ── navigation ────────────────────────────────────────────────────────────────
+
 
 def test_root_redirects_to_ui(bare_client):
     client, _ = bare_client

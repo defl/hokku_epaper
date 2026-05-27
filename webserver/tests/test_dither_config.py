@@ -1,4 +1,5 @@
 """DitherConfig: round-trip and cache_slug stability."""
+
 from __future__ import annotations
 
 from dataclasses import asdict

@@ -1,4 +1,5 @@
 """Unit tests for image_quality.image_compare."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -7,18 +8,20 @@ import pytest
 from hokku_server.display import PALETTE_MEASURED_RGB
 from hokku_server.image_quality import image_compare
 
-_EXPECTED_KEYS = frozenset({
-    "neutral_leak",
-    "sat_hit",
-    "overall_dE",
-    "overall_dE2000",
-    "neutral_blue_fraction",
-    "lightness_dE",
-    "chroma_dE",
-    "hue_error",
-    "error_roughness",
-    "high_freq_energy_ratio",
-})
+_EXPECTED_KEYS = frozenset(
+    {
+        "neutral_leak",
+        "sat_hit",
+        "overall_dE",
+        "overall_dE2000",
+        "neutral_blue_fraction",
+        "lightness_dE",
+        "chroma_dE",
+        "hue_error",
+        "error_roughness",
+        "high_freq_energy_ratio",
+    }
+)
 
 # ── Shared fixtures ───────────────────────────────────────────────────────────
 
@@ -85,8 +88,10 @@ def test_neutral_leak_high_for_grey_to_blue_ink():
 
 
 def test_neutral_leak_grey_to_blue_exceeds_grey_to_white():
-    assert image_compare(GREY, BLUE_INK)["neutral_leak"] > \
-           image_compare(GREY, WHITE_INK)["neutral_leak"]
+    assert (
+        image_compare(GREY, BLUE_INK)["neutral_leak"]
+        > image_compare(GREY, WHITE_INK)["neutral_leak"]
+    )
 
 
 # ── neutral_blue_fraction ─────────────────────────────────────────────────────
@@ -126,7 +131,7 @@ def test_error_roughness_positive_on_different():
     # Mix of matching and non-matching pixels → std dev > 0
     orig = np.full((4, 4, 3), 128, dtype=np.uint8)
     derived = orig.copy()
-    derived[0, 0] = [0, 0, 0]   # one very wrong pixel
+    derived[0, 0] = [0, 0, 0]  # one very wrong pixel
     assert image_compare(orig, derived)["error_roughness"] > 0.0
 
 
@@ -136,7 +141,7 @@ def test_error_roughness_positive_on_different():
 def test_lightness_de_nonzero_for_brightness_shift():
     m = image_compare(DARK_GREY, LIGHT_GREY)
     assert m["lightness_dE"] > 10.0
-    assert m["chroma_dE"] < 2.0   # both are neutral; chroma barely changes
+    assert m["chroma_dE"] < 2.0  # both are neutral; chroma barely changes
 
 
 def test_chroma_de_nonzero_when_saturation_stripped():

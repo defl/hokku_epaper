@@ -1,4 +1,5 @@
 """Orientation enum shared across the image pipeline."""
+
 from __future__ import annotations
 
 import enum
@@ -14,4 +15,4 @@ class Orientation(str, enum.Enum):
 
     LANDSCAPE = "landscape"
     PORTRAIT = "portrait"
-    NEUTRAL = "neutral"   # square/unknown image — eligible for any screen orientation
+    NEUTRAL = "neutral"  # square/unknown image — eligible for any screen orientation

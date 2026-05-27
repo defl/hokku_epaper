@@ -9,9 +9,11 @@ the server. These tests verify three layers of defense:
 2. /hokku/api/upload returns the file in "skipped" with a clear reason.
 3. PIL's Image.MAX_IMAGE_PIXELS is set to the project cap.
 """
+
 from __future__ import annotations
 
 import io
+import logging
 import struct
 import zlib
 from pathlib import Path
@@ -19,7 +21,6 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from hokku_server import image_renderer
 from hokku_server.app_state import AppState, build_manager
 from hokku_server.flask_app import create_app
 from hokku_server.image_classifier import ImageClassifier
@@ -118,8 +119,8 @@ def test_api_upload_rejects_bomb(app_config):
     finally:
         try:
             state.manager.shutdown()
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning("manager shutdown failed during test teardown: %s", e)
 
 
 def test_api_upload_accepts_normal_image(tmp_path: Path, app_config, make_test_image):
@@ -140,8 +141,8 @@ def test_api_upload_accepts_normal_image(tmp_path: Path, app_config, make_test_i
     finally:
         try:
             state.manager.shutdown()
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning("manager shutdown failed during test teardown: %s", e)
 
 
 def test_upload_pixel_cap_matches_image_cap():

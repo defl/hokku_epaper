@@ -10,6 +10,7 @@ Output (per image):
   build/test_dither_screen/<stem>_original<ext>  — source copy
   build/test_dither_screen/<stem>.metrics.txt    — sidecar quality metrics
 """
+
 from __future__ import annotations
 
 import json
@@ -35,9 +36,7 @@ from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
 from hokku_server.image_classifier import ImageClassifier
 from hokku_server.image_quality import image_compare
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
-
 from tests._helpers import is_oversize_fixture
-
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_PATH = _REPO_ROOT / "webserver" / "config" / "config.json"
@@ -56,9 +55,9 @@ def _test_images() -> list[Path]:
     if not _TEST_IMAGES_DIR.exists():
         return []
     return sorted(
-        p for p in _TEST_IMAGES_DIR.iterdir()
-        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
-        and not is_oversize_fixture(p)
+        p
+        for p in _TEST_IMAGES_DIR.iterdir()
+        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS and not is_oversize_fixture(p)
     )
 
 
@@ -90,7 +89,7 @@ def _fit_source_to_panel_rgb(src: Path) -> tuple[np.ndarray, np.ndarray]:
     img_resized = None
 
     padding_mask = np.ones((visible_h, visible_w), dtype=bool)
-    padding_mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
+    padding_mask[y_off : y_off + new_h, x_off : x_off + new_w] = False
 
     composed = composed.rotate(-90, expand=True)
     padding_mask = np.rot90(padding_mask, k=3)
@@ -168,9 +167,7 @@ def test_render_as_screen() -> None:
         cfg = image_cfg_map[config_name]
 
         with open_image_for_render(src) as img:
-            raw = ImageRenderer(dither).render_panel_bytes(
-                img, cfg, orientation, crop_threshold
-            )
+            raw = ImageRenderer(dither).render_panel_bytes(img, cfg, orientation, crop_threshold)
 
         assert len(raw) == TOTAL_BYTES, f"{src.name}: unexpected panel bytes length"
         idx = panel_bytes_to_indices(raw)
@@ -185,19 +182,22 @@ def test_render_as_screen() -> None:
         m = image_compare(src_arr, PALETTE_MEASURED_RGB[idx], padding_mask=padding_mask)
 
         metric_lines = [f"{k}={v:.4f}" for k, v in m.items()]
-        sidecar = "\n".join([
-            f"image={src.name}",
-            f"config={config_name}",
-            f"is_bw={is_bw}",
-            f"has_face={has_face}",
-            f"orientation={orientation}",
-            f"crop_to_fill_threshold={crop_threshold}",
-            "",
-            *metric_lines,
-        ]) + "\n"
-        (_BUILD_SCREEN_DIR / f"{src.stem}.metrics.txt").write_text(
-            sidecar, encoding="utf-8"
+        sidecar = (
+            "\n".join(
+                [
+                    f"image={src.name}",
+                    f"config={config_name}",
+                    f"is_bw={is_bw}",
+                    f"has_face={has_face}",
+                    f"orientation={orientation}",
+                    f"crop_to_fill_threshold={crop_threshold}",
+                    "",
+                    *metric_lines,
+                ]
+            )
+            + "\n"
         )
+        (_BUILD_SCREEN_DIR / f"{src.stem}.metrics.txt").write_text(sidecar, encoding="utf-8")
 
         print(
             f"  {src.name}: config={config_name}"

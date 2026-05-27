@@ -9,6 +9,7 @@ The shared fit-crop → PIL enhancements → rotate pipeline lives in the
 protected ``_prepare_canvas()`` template method so concrete subclasses
 only need to implement the dither dispatch in ``render_indices()``.
 """
+
 from __future__ import annotations
 
 import math
@@ -29,7 +30,8 @@ from hokku_server.display import (
     indices_to_preview_rgb,
     panel_bytes_to_indices,
 )
-from hokku_server.image_config import ImageConfig, Orientation  # noqa: F401 (re-exported)
+from hokku_server.image_config import ImageConfig
+from hokku_server.orientation import Orientation
 
 if TYPE_CHECKING:
     pass
@@ -97,7 +99,7 @@ def transform_bboxes_to_canvas_norm(
     return out
 
 
-def preview_png_from_panel_bytes(panel_bytes: bytes, orientation: "Orientation") -> bytes:
+def preview_png_from_panel_bytes(panel_bytes: bytes, orientation: Orientation) -> bytes:
     """Decode an already-rendered panel binary back to a PNG preview."""
     idx = panel_bytes_to_indices(panel_bytes)
     rgb = indices_to_preview_rgb(idx)
@@ -146,14 +148,16 @@ def _apply_prepare_enhancements(
                 mask = np.zeros(lab.shape[:2], dtype=np.float32)
                 for fx, fy, fw, fh in keepout_bboxes_canvas:
                     if fw > 0 and fh > 0:
-                        mask[fy:fy + fh, fx:fx + fw] = 1.0
+                        mask[fy : fy + fh, fx : fx + fw] = 1.0
                 mask = cv2.GaussianBlur(mask, (0, 0), sigma)
-                blended = original_L.astype(np.float32) * mask + clahe_L.astype(np.float32) * (1.0 - mask)
+                blended = original_L.astype(np.float32) * mask + clahe_L.astype(np.float32) * (
+                    1.0 - mask
+                )
                 lab[:, :, 0] = np.clip(blended, 0, 255).astype(np.uint8)
             else:
                 lab[:, :, 0] = clahe_L
                 for fx, fy, fw, fh in keepout_bboxes_canvas:
-                    lab[fy:fy + fh, fx:fx + fw, 0] = original_L[fy:fy + fh, fx:fx + fw]
+                    lab[fy : fy + fh, fx : fx + fw, 0] = original_L[fy : fy + fh, fx : fx + fw]
         else:
             lab[:, :, 0] = clahe.apply(lab[:, :, 0])
         canvas = Image.fromarray(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB))
@@ -257,11 +261,14 @@ class AbstractImageRenderer(ABC):
                     fy = int(bbox.y * scaled_h) - y_off
                     fw = int(bbox.w * scaled_w)
                     fh = int(bbox.h * scaled_h)
-                    keepout_canvas.append((
-                        max(0, fx), max(0, fy),
-                        min(fw, visible_w - max(0, fx)),
-                        min(fh, visible_h - max(0, fy)),
-                    ))
+                    keepout_canvas.append(
+                        (
+                            max(0, fx),
+                            max(0, fy),
+                            min(fw, visible_w - max(0, fx)),
+                            min(fh, visible_h - max(0, fy)),
+                        )
+                    )
         else:
             scale = scale_fit
             new_w, new_h = int(src_w * scale), int(src_h * scale)
@@ -274,7 +281,7 @@ class AbstractImageRenderer(ABC):
             composed.paste(img_resized, (x_off, y_off))
             img_resized.close()
             padding_mask = np.ones((visible_h, visible_w), dtype=bool)
-            padding_mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
+            padding_mask[y_off : y_off + new_h, x_off : x_off + new_w] = False
             # Bbox in canvas coords for fit: scale by fit scale, add letterbox offset
             if clahe_keepout_bboxes_norm:
                 for bbox in clahe_keepout_bboxes_norm:
@@ -282,11 +289,14 @@ class AbstractImageRenderer(ABC):
                     fy = int(bbox.y * new_h) + y_off
                     fw = int(bbox.w * new_w)
                     fh = int(bbox.h * new_h)
-                    keepout_canvas.append((
-                        max(0, fx), max(0, fy),
-                        min(fw, visible_w - max(0, fx)),
-                        min(fh, visible_h - max(0, fy)),
-                    ))
+                    keepout_canvas.append(
+                        (
+                            max(0, fx),
+                            max(0, fy),
+                            min(fw, visible_w - max(0, fx)),
+                            min(fh, visible_h - max(0, fy)),
+                        )
+                    )
 
         composed = _apply_prepare_enhancements(composed, cfg, keepout_canvas or None)
 
@@ -295,7 +305,7 @@ class AbstractImageRenderer(ABC):
             padding_mask = np.rot90(padding_mask, k=3)
 
         arr = np.asarray(composed, dtype=np.uint8)
-        composed = None  # noqa: F841
+        composed = None
         return arr, padding_mask
 
     # ── Abstract core ──────────────────────────────────────────────────────
@@ -327,12 +337,17 @@ class AbstractImageRenderer(ABC):
         cfg: ImageConfig,
         orientation: Orientation,
         crop_to_fill_threshold: float = 0.0,
-        clahe_keepout_bboxes_norm: tuple["BoundingBox", ...] | None = None,
+        clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
     ) -> bytes:
         """Full-resolution panel → wire bytes."""
         idx = self.render_indices(
-            img, cfg, orientation, FULL_W, PANEL_H,
-            crop_to_fill_threshold, release_input=True,
+            img,
+            cfg,
+            orientation,
+            FULL_W,
+            PANEL_H,
+            crop_to_fill_threshold,
+            release_input=True,
             clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
         )
         return indices_to_panel_bytes(idx)
@@ -349,7 +364,12 @@ class AbstractImageRenderer(ABC):
         """Smaller panel → PNG preview bytes."""
         cw, ch = self._preview_canvas_dims(orientation, max_side_px)
         idx = self.render_indices(
-            img, cfg, orientation, cw, ch, crop_to_fill_threshold,
+            img,
+            cfg,
+            orientation,
+            cw,
+            ch,
+            crop_to_fill_threshold,
             clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
         )
         preview_rgb = indices_to_preview_rgb(idx)

@@ -1,4 +1,5 @@
 """ImageRecord dataclass and serialisation helpers."""
+
 from __future__ import annotations
 
 import enum
@@ -15,18 +16,18 @@ class ConvertStatus(str, enum.Enum):
 
 @dataclass(frozen=True)
 class ImageRecord:
-    name: str                               # outside-world identifier
-    name_hash: str                          # sha1(name) — on-disk identifier
-    original_sha1: str                      # sha1 of file contents
+    name: str  # outside-world identifier
+    name_hash: str  # sha1(name) — on-disk identifier
+    original_sha1: str  # sha1 of file contents
     original_size_bytes: int
     original_mtime: float
     added_at: float
     convert_status: ConvertStatus
     convert_error: str | None
     landscape_image_config_slug: str | None = None  # ScreenImageConfig slug for landscape render
-    portrait_image_config_slug:  str | None = None  # ScreenImageConfig slug for portrait render
-    last_conversion_seconds: float | None = None    # wall-clock time of last successful render
-    image_width: int | None = None                  # pixel dimensions of the source image
+    portrait_image_config_slug: str | None = None  # ScreenImageConfig slug for portrait render
+    last_conversion_seconds: float | None = None  # wall-clock time of last successful render
+    image_width: int | None = None  # pixel dimensions of the source image
     image_height: int | None = None
 
     def slug(self, orientation: Orientation) -> str | None:
@@ -63,7 +64,7 @@ class ImageRecord:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ImageRecord":
+    def from_dict(cls, d: dict) -> ImageRecord:
         raw_t = d.get("last_conversion_seconds")
         raw_w, raw_h = d.get("image_width"), d.get("image_height")
         return cls(
@@ -86,5 +87,5 @@ class ImageRecord:
 @dataclass(frozen=True)
 class ConversionProgress:
     current_name: str | None  # being converted right now (None if idle)
-    done: int                 # completed this sync cycle
-    total: int                # scheduled this sync cycle
+    done: int  # completed this sync cycle
+    total: int  # scheduled this sync cycle

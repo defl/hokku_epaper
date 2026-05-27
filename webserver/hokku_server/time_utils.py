@@ -2,12 +2,12 @@
 
 Renamed from `time.py` to avoid shadowing stdlib `time`.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
 from hokku_server.app_config import AppConfig
-
 
 DEBUG_FAST_REFRESH_SECONDS = 180
 

@@ -14,6 +14,7 @@ Slow visual test (marked time_intensive):
   - Renders every image in images/test/ at threshold 0, default-feeling 0.02,
     and 0.5 for both orientations, outputting PNGs to build/test_letterbox/.
 """
+
 from __future__ import annotations
 
 import shutil
@@ -25,23 +26,34 @@ import pytest
 from PIL import Image
 
 from hokku_server.app_config import AppConfig
+from hokku_server.display import TOTAL_BYTES
 from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
-from hokku_server.image_config import ImageConfig, Orientation
+from hokku_server.image_config import ImageConfig
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
-from hokku_server.display import TOTAL_BYTES
+from hokku_server.orientation import Orientation
 from hokku_server.presets import FALLBACK_PRESET, PRESET_IMAGE_CONFIGS
 from hokku_server.screen_image_config import ScreenImageConfig
-
 from tests._helpers import is_oversize_fixture
 
 
-def _render_indices(img, cfg, orientation, canvas_w, canvas_h, crop_to_fill_threshold=0.0, *, release_input=False):
-    return ImageRenderer(NumbaStreamingDither()).render_indices(img, cfg, orientation, canvas_w, canvas_h, crop_to_fill_threshold, release_input=release_input)
+def _render_indices(
+    img, cfg, orientation, canvas_w, canvas_h, crop_to_fill_threshold=0.0, *, release_input=False
+):
+    return ImageRenderer(NumbaStreamingDither()).render_indices(
+        img,
+        cfg,
+        orientation,
+        canvas_w,
+        canvas_h,
+        crop_to_fill_threshold,
+        release_input=release_input,
+    )
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _noop_cfg() -> ImageConfig:
     base = PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
@@ -93,10 +105,14 @@ def _render(img, orientation, canvas_w, canvas_h, threshold):
 
 # ── output-dimension tests ────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("orientation,canvas_w,canvas_h", [
-    ("portrait",  100, 133),
-    ("landscape", 133, 100),
-])
+
+@pytest.mark.parametrize(
+    "orientation,canvas_w,canvas_h",
+    [
+        ("portrait", 100, 133),
+        ("landscape", 133, 100),
+    ],
+)
 def test_output_dims_are_canvas_dims(orientation, canvas_w, canvas_h):
     """Result shape must always equal canvas dimensions regardless of threshold."""
     img = _solid_rgb(80, 80)  # square on a non-square canvas
@@ -109,6 +125,7 @@ def test_output_dims_are_canvas_dims(orientation, canvas_w, canvas_h):
 
 
 # ── letterbox behaviour (threshold=0) ────────────────────────────────────────
+
 
 def test_zero_threshold_produces_white_bands_for_non_fitting_image():
     """threshold=0 should produce white bands when aspect ratios differ."""
@@ -128,13 +145,14 @@ def test_zero_threshold_no_crop():
 
 # ── crop-to-fill behaviour ────────────────────────────────────────────────────
 
+
 def test_sufficient_threshold_removes_white_bands():
     """When zoom ≤ threshold, no white padding should remain."""
     # 80×100 image on 100×100 canvas (portrait): zoom needed = 100/80 / 1 - 1 = 25%.
     # With threshold=0.3, bands should be eliminated.
     img = _solid_rgb(80, 100)
     result = _render_indices(img, _noop_cfg(), "portrait", 100, 100, 0.30)
-    assert not _has_white_row(result),    "No white rows expected after crop-to-fill"
+    assert not _has_white_row(result), "No white rows expected after crop-to-fill"
     assert not _has_white_column(result), "No white columns expected after crop-to-fill"
 
 
@@ -153,7 +171,7 @@ def test_threshold_at_exact_zoom_crops():
     # Same setup: zoom_ratio = 0.25
     img = _solid_rgb(100, 80)
     result = _render_indices(img, _noop_cfg(), "portrait", 100, 100, 0.25)
-    assert not _has_white_row(result),    "Should crop-to-fill when threshold == zoom_ratio"
+    assert not _has_white_row(result), "Should crop-to-fill when threshold == zoom_ratio"
     assert not _has_white_column(result), "Should crop-to-fill when threshold == zoom_ratio"
 
 
@@ -178,6 +196,7 @@ def test_landscape_orientation_crop():
 
 # ── perfect-fit image ─────────────────────────────────────────────────────────
 
+
 def test_perfect_fit_no_bands_at_zero_threshold():
     """Image with same aspect ratio as canvas — no white bands at threshold=0."""
     img = _solid_rgb(100, 100)
@@ -188,20 +207,28 @@ def test_perfect_fit_no_bands_at_zero_threshold():
 
 # ── ScreenImageConfig cache_slug ─────────────────────────────────────────────
 
+
 def test_screen_cfg_slug_changes_with_threshold():
     ic = _noop_cfg()
-    a = ScreenImageConfig(image_config=ic, orientation="portrait", crop_to_fill_threshold=0.0)
-    b = ScreenImageConfig(image_config=ic, orientation="portrait", crop_to_fill_threshold=0.02)
+    a = ScreenImageConfig(
+        image_config=ic, orientation=Orientation.PORTRAIT, crop_to_fill_threshold=0.0
+    )
+    b = ScreenImageConfig(
+        image_config=ic, orientation=Orientation.PORTRAIT, crop_to_fill_threshold=0.02
+    )
     assert a.cache_slug() != b.cache_slug()
 
 
 def test_screen_cfg_slug_stable():
     ic = _noop_cfg()
-    cfg = ScreenImageConfig(image_config=ic, orientation="landscape", crop_to_fill_threshold=0.05)
+    cfg = ScreenImageConfig(
+        image_config=ic, orientation=Orientation.LANDSCAPE, crop_to_fill_threshold=0.05
+    )
     assert cfg.cache_slug() == cfg.cache_slug()
 
 
 # ── AppConfig round-trip ──────────────────────────────────────────────────────
+
 
 def test_app_config_crop_threshold_default():
     assert AppConfig().crop_to_fill_threshold == pytest.approx(0.10)
@@ -227,11 +254,11 @@ _BUILD_DIR = _REPO_ROOT / "build" / "test_letterbox"
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff", ".heic", ".heif"}
 
 _THRESHOLDS = [
-    ("0pct",     0.0),
-    ("2pct",     0.02),
-    ("50pct",    0.50),
+    ("0pct", 0.0),
+    ("2pct", 0.02),
+    ("50pct", 0.50),
 ]
-_ORIENTATIONS: list[Orientation] = ["portrait", "landscape"]
+_ORIENTATIONS: list[Orientation] = [Orientation.PORTRAIT, Orientation.LANDSCAPE]
 
 
 @pytest.fixture(scope="module", autouse=False)
@@ -253,13 +280,16 @@ def test_visual_letterbox_all_images(_wipe_letterbox_build):
       build/test_letterbox/<stem>__landscape_0pct.png
       …
     """
+
     def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0):
-        return ImageRenderer(NumbaStreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
+        return ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
+            img, cfg, orientation, crop_to_fill_threshold
+        )
 
     test_images = sorted(
-        p for p in _TEST_IMAGES_DIR.iterdir()
-        if p.suffix.lower() in _IMAGE_EXTS
-        and not is_oversize_fixture(p)
+        p
+        for p in _TEST_IMAGES_DIR.iterdir()
+        if p.suffix.lower() in _IMAGE_EXTS and not is_oversize_fixture(p)
     )
     assert test_images, f"No test images found in {_TEST_IMAGES_DIR}"
 

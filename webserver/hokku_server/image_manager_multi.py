@@ -4,6 +4,7 @@ Single process; GIL-bound while the dither hot path is pure Python.
 Switching to a GIL-releasing implementation later requires no callsite
 changes — threading already gives parallelism for free at that point.
 """
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -48,8 +49,9 @@ class MultiThreadedImageManager(AbstractImageManager):
     ) -> None:
         future = self._executor.submit(render_one, *render_args)
         future.add_done_callback(
-            lambda f, _n=name, _s=expected_slug, _o=orientation, _t=t0, _us=update_status:
+            lambda f, _n=name, _s=expected_slug, _o=orientation, _t=t0, _us=update_status: (
                 self._on_render_done(_n, _s, _o, f, _t, update_status=_us)
+            )
         )
 
     def shutdown(self) -> None:

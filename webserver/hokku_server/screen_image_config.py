@@ -1,4 +1,5 @@
 """ScreenImageConfig — the complete spec for rendering one image onto the panel."""
+
 from __future__ import annotations
 
 import hashlib
@@ -39,9 +40,7 @@ class ScreenImageConfig:
             "crop_to_fill_threshold": self.crop_to_fill_threshold,
             "clahe_keepout_bboxes": bbox_serializable,
         }
-        return hashlib.sha256(
-            json.dumps(payload, sort_keys=True).encode()
-        ).hexdigest()[:14]
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:14]
 
 
 def _screen_image_config_from_dict(d: dict) -> ScreenImageConfig:
@@ -52,7 +51,7 @@ def _screen_image_config_from_dict(d: dict) -> ScreenImageConfig:
     raw = d.get("clahe_keepout_bboxes")
     if raw is not None:
         try:
-            keepout = tuple(BoundingBox(x=b['x'], y=b['y'], w=b['w'], h=b['h']) for b in raw)
+            keepout = tuple(BoundingBox(x=b["x"], y=b["y"], w=b["w"], h=b["h"]) for b in raw)
         except (ValueError, KeyError, TypeError):
             keepout = None
     else:

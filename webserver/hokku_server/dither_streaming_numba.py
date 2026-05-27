@@ -17,20 +17,21 @@ stripe, slides the window, and pre-loads intra-stripe rows itself.  At the
 end of a stripe the window is zeroed, ready for the Python wrapper to add
 the first row of the next stripe.
 """
+
 from __future__ import annotations
 
+import numba
 import numpy as np
-from numpy.typing import NDArray
 from PIL import Image
 
 from hokku_server.display import PALETTE_MEASURED_RGB
 from hokku_server.dither_abc import (
+    _DEFAULT_STRIPE_H,
     AbstractDither,
     CanvasLike,
     DiffusionKernel,
     PrepStripe,
     UInt8Array,
-    _DEFAULT_STRIPE_H,
 )
 from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming import (
@@ -40,31 +41,25 @@ from hokku_server.dither_streaming import (
     noop_dither,
 )
 
-
 # ── Numba JIT kernel ─────────────────────────────────────────────────────────
+
 
 def _make_jit_fn():
     """Build and return the Numba-JIT diffuse function.  Called once at first use."""
-    try:
-        import numba
-    except ImportError as exc:
-        raise ImportError(
-            "NumbaStreamingDither requires numba (pip install numba)."
-        ) from exc
 
     @numba.njit(nogil=True, cache=True)
     def _diffuse_stripe(
-        stripe: np.ndarray,    # float32 (stripe_h, W, 3) — pre-processed stripe
-        y_start: int,          # global row index of stripe[0]
-        H: int,                # total image height
-        rolling: np.ndarray,   # float32 (n_rows, W, 3) — mutated in-place
-        result: np.ndarray,    # uint8 (H, W) — mutated in-place
-        lut: np.ndarray,       # uint8 (n, n, n)
+        stripe: np.ndarray,  # float32 (stripe_h, W, 3) — pre-processed stripe
+        y_start: int,  # global row index of stripe[0]
+        H: int,  # total image height
+        rolling: np.ndarray,  # float32 (n_rows, W, 3) — mutated in-place
+        result: np.ndarray,  # uint8 (H, W) — mutated in-place
+        lut: np.ndarray,  # uint8 (n, n, n)
         lut_scale: float,
-        pal_rgb: np.ndarray,   # float32 (N_PAL, 3)
-        kdx: np.ndarray,       # int32 (K,)
-        kdy: np.ndarray,       # int32 (K,)
-        kwt: np.ndarray,       # float32 (K,)
+        pal_rgb: np.ndarray,  # float32 (N_PAL, 3)
+        kdx: np.ndarray,  # int32 (K,)
+        kdy: np.ndarray,  # int32 (K,)
+        kwt: np.ndarray,  # float32 (K,)
         serpentine: bool,
         n_rows: int,
         lut_max: int,
@@ -227,9 +222,20 @@ class NumbaStreamingDither(AbstractDither):
 
         rolling[0] += arr[0]
         self._fn(
-            arr, 0, H, rolling, result,
-            lut, float(scale), pal_rgb,
-            kdx, kdy, kwt, cfg.serpentine, n_rows, lut_max,
+            arr,
+            0,
+            H,
+            rolling,
+            result,
+            lut,
+            float(scale),
+            pal_rgb,
+            kdx,
+            kdy,
+            kwt,
+            cfg.serpentine,
+            n_rows,
+            lut_max,
         )
         return result
 
@@ -275,9 +281,20 @@ class NumbaStreamingDither(AbstractDither):
 
         while y < H:
             self._fn(
-                stripe, y, H, rolling, result,
-                lut, float(scale), pal_rgb,
-                kdx, kdy, kwt, cfg.serpentine, n_rows, lut_max,
+                stripe,
+                y,
+                H,
+                rolling,
+                result,
+                lut,
+                float(scale),
+                pal_rgb,
+                kdx,
+                kdy,
+                kwt,
+                cfg.serpentine,
+                n_rows,
+                lut_max,
             )
             y += len(stripe)
             if y < H:

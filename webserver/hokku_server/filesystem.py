@@ -1,4 +1,5 @@
 """Filesystem utilities."""
+
 from __future__ import annotations
 
 import json
@@ -30,4 +31,4 @@ def atomic_write_json(path: Path, payload: dict) -> None:
         except PermissionError:
             if attempt == 4:
                 raise
-            _sleep(0.05 * (2 ** attempt))
+            _sleep(0.05 * (2**attempt))

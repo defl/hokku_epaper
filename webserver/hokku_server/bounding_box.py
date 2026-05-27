@@ -1,4 +1,5 @@
 """Shared bounding-box type used across detection and rendering."""
+
 from dataclasses import dataclass
 
 
@@ -10,6 +11,7 @@ class BoundingBox:
     Typically used to represent face bounding boxes or other regions of interest
     that need special handling (e.g., CLAHE keep-out regions).
     """
+
     x: float
     y: float
     w: float

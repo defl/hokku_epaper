@@ -3,15 +3,14 @@
 If AppConfig fields are renamed, added, or their types change this test will
 catch it before shipping so users aren't handed a broken example file.
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import fields
 from pathlib import Path
 
-import pytest
-
-from hokku_server.app_config import AppConfig, _CURRENT_VERSION
+from hokku_server.app_config import _CURRENT_VERSION, AppConfig
 
 _EXAMPLE = Path(__file__).resolve().parents[2] / "webserver" / "config" / "config.json"
 
@@ -21,6 +20,7 @@ def _load_example() -> dict:
 
 
 # ── basic parsability ─────────────────────────────────────────────────────────
+
 
 def test_example_config_exists():
     assert _EXAMPLE.exists(), f"Example config missing: {_EXAMPLE}"

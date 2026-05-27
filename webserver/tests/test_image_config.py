@@ -1,8 +1,10 @@
 """ImageConfig: round-trip and cache_slug stability."""
+
 from __future__ import annotations
 
-import pytest
 from dataclasses import asdict, replace
+
+import pytest
 
 from hokku_server.dither_config import DitherConfig
 from hokku_server.image_config import ImageConfig, _image_config_from_dict
@@ -115,16 +117,23 @@ def test_image_config_from_dict_not_dict_raises():
 
 # ── new field leniency ────────────────────────────────────────────────────────
 
+
 def test_new_fields_use_defaults_when_absent():
     """Missing new fields reset the whole config to the default preset."""
     d = asdict(_default_image_config())
-    for key in ("prepare_midtone", "clahe_clip_limit", "prepare_usm_radius",
-                "prepare_usm_amount", "dither_noise"):
+    for key in (
+        "prepare_midtone",
+        "clahe_clip_limit",
+        "prepare_usm_radius",
+        "prepare_usm_amount",
+        "dither_noise",
+    ):
         d.pop(key, None)
     assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
 
 
 # ── legacy prepare_sharpness backward compat ──────────────────────────────────
+
 
 def test_legacy_sharpness_derives_usm_amount():
     """prepare_sharpness present but no USM keys → derive prepare_usm_amount."""
@@ -150,7 +159,7 @@ def test_legacy_sharpness_identity_resets_to_default():
 def test_explicit_usm_wins_over_legacy_sharpness():
     """When both keys are present, explicit prepare_usm_amount takes precedence."""
     d = asdict(_default_image_config())
-    d["prepare_sharpness"] = 2.0   # would imply 400
-    d["prepare_usm_amount"] = 50   # explicit — must win
+    d["prepare_sharpness"] = 2.0  # would imply 400
+    d["prepare_usm_amount"] = 50  # explicit — must win
     restored = _image_config_from_dict(d)
     assert restored.prepare_usm_amount == 50

@@ -21,27 +21,25 @@ Fast tests (always run):
     - POST /hokku/api/config with bad upload_dir returns 400, state unchanged
     - POST /hokku/api/config without config_path returns 500
 """
+
 from __future__ import annotations
 
 import json
 import threading as _threading
-import unittest.mock
 from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
 
-from hokku_server.app_state import AppState, build_manager
 from hokku_server.app_config import AppConfig
+from hokku_server.app_state import AppState, build_manager
 from hokku_server.flask_app import create_app
 from hokku_server.image_classifier import ImageClassifier
-from hokku_server.image_manager_multi import MultiThreadedImageManager
-from hokku_server.image_manager_single import SingleThreadedImageManager
 from hokku_server.serve_scheduler import ServeScheduler
 from hokku_server.watcher import Watcher
 
-
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _make_state(app_config: AppConfig) -> AppState:
     clf = ImageClassifier(app_config)
@@ -63,6 +61,7 @@ def _alt_config(base: AppConfig, tmp_path: Path) -> AppConfig:
 
 
 # ── AppState unit tests ───────────────────────────────────────────────────────
+
 
 def test_app_state_holds_initial_references(app_config: AppConfig):
     clf = ImageClassifier(app_config)
@@ -152,7 +151,6 @@ def test_reload_is_idempotent(app_config: AppConfig, tmp_path: Path):
     assert state.config is app_config
 
 
-
 def test_reload_always_builds_new_manager(app_config: AppConfig, tmp_path: Path):
     """Even with the same worker count, reload builds a fresh manager."""
     state = _make_state(app_config)
@@ -187,6 +185,7 @@ def test_reload_manager_wired_with_new_classifier(app_config: AppConfig, tmp_pat
 
 
 # ── Watcher unit tests ────────────────────────────────────────────────────────
+
 
 def test_watcher_syncs_immediately_on_construction(app_config: AppConfig):
     """Thread starts in the constructor and syncs without any external call."""
@@ -288,7 +287,7 @@ def test_watcher_uses_new_poll_interval_after_reload(app_config: AppConfig, tmp_
     w = Watcher(state)
 
     # Thread is now blocked in gated_sync() — safe to install our spy.
-    sleep_durations: list[float] = []
+    sleep_durations: list[float | None] = []
     sleep_called = _threading.Event()
     original_wait = w._wake.wait
 
@@ -299,8 +298,8 @@ def test_watcher_uses_new_poll_interval_after_reload(app_config: AppConfig, tmp_
 
     w._wake.wait = capturing_wait  # type: ignore[method-assign]
 
-    sync_may_proceed.set()        # let sync() finish
-    sync_done.wait(timeout=5.0)   # wait until sync returns
+    sync_may_proceed.set()  # let sync() finish
+    sync_done.wait(timeout=5.0)  # wait until sync returns
     sleep_called.wait(timeout=5.0)
 
     assert sleep_durations and sleep_durations[0] == 42
@@ -329,6 +328,7 @@ def test_watcher_stop_exits_cleanly(app_config: AppConfig):
 
 # ── Flask integration tests ───────────────────────────────────────────────────
 
+
 @pytest.fixture
 def flask_state(app_config: AppConfig) -> AppState:
     return _make_state(app_config)
@@ -353,7 +353,7 @@ def test_flask_config_get_returns_current_config(flask_client):
 
 
 def test_flask_config_post_returns_ok_not_restarting(flask_client):
-    client, state, _ = flask_client
+    client, _, _ = flask_client
     resp = client.post(
         "/hokku/api/config",
         data=json.dumps({"orientation": "landscape"}),

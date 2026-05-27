@@ -18,6 +18,7 @@ Non-portraits (expect zero faces detected):
   - grayscale_linear_bar_1200x300.png
   - tree.heic
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -56,9 +57,7 @@ def face_detector():
 def test_portrait_detected(face_detector, filename: str):
     path = _IMAGES / filename
     assert path.exists(), f"Test image missing from repo: {path}"
-    assert face_detector.has_face(path) is True, (
-        f"yunet_opencv should detect a face in {filename}"
-    )
+    assert face_detector.has_face(path) is True, f"yunet_opencv should detect a face in {filename}"
 
 
 @pytest.mark.parametrize("filename", _NON_PORTRAITS)
@@ -76,15 +75,14 @@ def test_missing_file_returns_false(face_detector, tmp_path: Path):
 
 # ── multi-face detection: violin player image ─────────────────────────────────
 
+
 def test_violin_image_detects_multiple_faces(face_detector):
     """string_ensemble_concert.jpeg contains several musicians in the background.
     YuNet should return more than one face bbox, exercising the multi-face path."""
     path = _IMAGES / "string_ensemble_concert.jpeg"
     assert path.exists(), f"Test image missing: {path}"
     bboxes = face_detector.detect(path)
-    assert len(bboxes) >= 2, (
-        f"Expected >=2 faces in the violin player image; got {len(bboxes)}"
-    )
+    assert len(bboxes) >= 2, f"Expected >=2 faces in the violin player image; got {len(bboxes)}"
 
 
 def test_violin_image_bboxes_are_valid_bounding_boxes(face_detector):
@@ -96,10 +94,10 @@ def test_violin_image_bboxes_are_valid_bounding_boxes(face_detector):
         assert isinstance(b, BoundingBox), f"bbox[{i}] is not a BoundingBox: {b!r}"
         assert 0.0 <= b.x <= 1.0, f"bbox[{i}].x out of range: {b.x}"
         assert 0.0 <= b.y <= 1.0, f"bbox[{i}].y out of range: {b.y}"
-        assert b.w > 0.0,         f"bbox[{i}].w must be positive: {b.w}"
-        assert b.h > 0.0,         f"bbox[{i}].h must be positive: {b.h}"
-        assert b.x + b.w <= 1.0,  f"bbox[{i}] extends beyond right edge: x+w={b.x+b.w}"
-        assert b.y + b.h <= 1.0,  f"bbox[{i}] extends beyond bottom edge: y+h={b.y+b.h}"
+        assert b.w > 0.0, f"bbox[{i}].w must be positive: {b.w}"
+        assert b.h > 0.0, f"bbox[{i}].h must be positive: {b.h}"
+        assert b.x + b.w <= 1.0, f"bbox[{i}] extends beyond right edge: x+w={b.x + b.w}"
+        assert b.y + b.h <= 1.0, f"bbox[{i}] extends beyond bottom edge: y+h={b.y + b.h}"
 
 
 def test_violin_image_bboxes_do_not_overlap_excessively(face_detector):
@@ -120,4 +118,3 @@ def test_violin_image_bboxes_do_not_overlap_excessively(face_detector):
                 f"bbox[{i}] and bbox[{j}] overlap by {iom:.2f} (IoM) — "
                 f"likely a duplicate detection: {a}, {b}"
             )
-

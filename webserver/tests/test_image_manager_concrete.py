@@ -8,6 +8,7 @@ verify the *one* property each concrete is supposed to deliver:
 * MultiThreadedImageManager actually parallelises — two simultaneous
   renders both enter the worker function before either returns.
 """
+
 from __future__ import annotations
 
 import threading
@@ -17,11 +18,10 @@ from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES
 from hokku_server.image_manager_multi import MultiThreadedImageManager
 from hokku_server.image_manager_single import SingleThreadedImageManager
+from hokku_server.orientation import Orientation
 
 
-def test_single_threaded_does_not_spawn_threads(
-    app_config: AppConfig, make_test_image
-):
+def test_single_threaded_does_not_spawn_threads(app_config: AppConfig, make_test_image):
     """SingleThreadedImageManager.sync() runs entirely on the calling thread."""
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
@@ -34,14 +34,15 @@ def test_single_threaded_does_not_spawn_threads(
     mgr.shutdown()
 
     assert mgr.resolved_worker_count == 1
-    assert mgr.status("a.png").convert_status == "ok"
-    assert mgr.status("b.png").convert_status == "ok"
+    rec_a = mgr.status("a.png")
+    rec_b = mgr.status("b.png")
+    assert rec_a is not None and rec_b is not None
+    assert rec_a.convert_status == "ok"
+    assert rec_b.convert_status == "ok"
     # ``sync`` may briefly spawn helper threads inside PIL/numpy that exit
     # before sync returns; what we care about is that no persistent worker
     # thread is left running.
-    assert after == before, (
-        f"thread count grew during sync: before={before} after={after}"
-    )
+    assert after == before, f"thread count grew during sync: before={before} after={after}"
 
 
 def test_multi_threaded_runs_in_parallel(app_config: AppConfig, monkeypatch):
@@ -61,7 +62,6 @@ def test_multi_threaded_runs_in_parallel(app_config: AppConfig, monkeypatch):
 
     mgr = MultiThreadedImageManager(app_config, worker_count=2)
     try:
-        from hokku_server.orientation import Orientation
         mgr._dispatch_render("a.png", "slug", Orientation.LANDSCAPE, (), 0.0)
         mgr._dispatch_render("b.png", "slug", Orientation.LANDSCAPE, (), 0.0)
         # Joining the barrier proves both workers entered fake_render_one

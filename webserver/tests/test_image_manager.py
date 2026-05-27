@@ -7,6 +7,7 @@ fixture in conftest.py. After ``mgr.sync()`` we always call
 landed before assertions; on the single-threaded variant ``wait_for_idle``
 is a no-op.
 """
+
 from __future__ import annotations
 
 from io import BytesIO
@@ -18,12 +19,17 @@ from PIL import Image as _Image
 from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES
 from hokku_server.image_manager_abstract import AbstractImageManager
+from hokku_server.orientation import Orientation
 from hokku_server.screen_image_config import ScreenImageConfig
 
 
 def test_hash_name_stable():
-    assert AbstractImageManager._hash_name("photo.jpg") == AbstractImageManager._hash_name("photo.jpg")
-    assert AbstractImageManager._hash_name("photo.jpg") != AbstractImageManager._hash_name("photo.png")
+    assert AbstractImageManager._hash_name("photo.jpg") == AbstractImageManager._hash_name(
+        "photo.jpg"
+    )
+    assert AbstractImageManager._hash_name("photo.jpg") != AbstractImageManager._hash_name(
+        "photo.png"
+    )
 
 
 def test_register_and_convert(app_config: AppConfig, image_manager_factory, make_test_image):
@@ -39,7 +45,6 @@ def test_register_and_convert(app_config: AppConfig, image_manager_factory, make
     assert [r.name for r in records] == ["a.png", "b.png"]
     assert all(r.convert_status == "ok" for r in records)
     assert all(r.original_sha1 for r in records)
-    from hokku_server.orientation import Orientation
     expected_slug = ScreenImageConfig(
         image_config=app_config.image_config_default,
         orientation=app_config.orientation,
@@ -103,7 +108,11 @@ def test_remove_clears_cache(app_config: AppConfig, image_manager_factory, make_
     mgr.wait_for_idle()
     rec = mgr.status("a.png")
     assert rec is not None
-    panel_path = Path(app_config.cache_dir) / "images" / f"{rec.name_hash}_{rec.slug(app_config.orientation)}_panel.bin.zst"
+    panel_path = (
+        Path(app_config.cache_dir)
+        / "images"
+        / f"{rec.name_hash}_{rec.slug(app_config.orientation)}_panel.bin.zst"
+    )
     assert panel_path.exists()
 
     mgr.remove("a.png")
@@ -206,17 +215,21 @@ def test_inflight_prevents_double_submission(
 
     def counting(name, expected_slug, orientation, render_args, t0, *, update_status=True):
         submitted.append(name)
-        return original(name, expected_slug, orientation, render_args, t0, update_status=update_status)
+        return original(
+            name, expected_slug, orientation, render_args, t0, update_status=update_status
+        )
 
     monkeypatch.setattr(mgr, "_dispatch_render", counting)
 
-    mgr.sync()   # submits and completes a.png
+    mgr.sync()  # submits and completes a.png
     mgr.wait_for_idle()
-    mgr.sync()   # a.png is now 'ok'; should NOT resubmit
+    mgr.sync()  # a.png is now 'ok'; should NOT resubmit
     mgr.wait_for_idle()
 
     # Both orientations are dispatched per image; the second sync() must not re-submit.
-    assert submitted == ["a.png", "a.png"], f"a.png should be submitted exactly twice (both orientations), got {submitted}"
+    assert submitted == ["a.png", "a.png"], (
+        f"a.png should be submitted exactly twice (both orientations), got {submitted}"
+    )
 
 
 def test_two_images_both_succeed(app_config: AppConfig, image_manager_factory, make_test_image):
@@ -254,6 +267,7 @@ def _tiny_png_bytes() -> bytes:
 
 
 # ── Conversion-progress correctness ──────────────────────────────────────────
+
 
 def test_progress_total_not_doubled_by_concurrent_sync(
     request, app_config: AppConfig, image_manager_factory, make_test_image
@@ -305,9 +319,7 @@ def test_progress_done_reaches_total_after_sync(
     mgr.wait_for_idle()
 
     prog = mgr.conversion_progress()
-    assert prog.done == prog.total, (
-        f"badge would never clear: done={prog.done} total={prog.total}"
-    )
+    assert prog.done == prog.total, f"badge would never clear: done={prog.done} total={prog.total}"
 
 
 def test_clear_caches_resets_progress(

@@ -9,6 +9,7 @@ Concrete subclasses (SingleThreadedImageManager, MultiThreadedImageManager)
 implement ``_dispatch_render`` and ``resolved_worker_count`` — everything
 else is shared logic and lives here.
 """
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -18,31 +19,32 @@ import logging
 import shutil
 import threading
 import time
-import xml.etree.ElementTree as ET
-import zstd
 from abc import ABC, abstractmethod
 from dataclasses import asdict, replace
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
+import defusedxml.ElementTree as ET
+import zstd
 from PIL import Image, ImageOps
 
 from hokku_server.app_config import AppConfig
-from hokku_server.filesystem import atomic_write_json
 from hokku_server.display import TOTAL_BYTES
+from hokku_server.filesystem import atomic_write_json
 from hokku_server.image_classifier import ImageClassifier
 from hokku_server.image_record import (
     ConversionProgress,
+    ConvertStatus,
     ImageRecord,
 )
 from hokku_server.image_renderer import IMAGE_EXTENSIONS, SVG_PROBE_DIMS, open_image_for_render
 from hokku_server.orientation import Orientation
 from hokku_server.screen_image_config import ScreenImageConfig
 
+logger = logging.getLogger(__name__)
+
 
 _DB_FILENAME = "image_manager.json"
-_DB_VERSION = 3          # bump whenever ImageRecord schema changes; old DB is nuked on mismatch
+_DB_VERSION = 3  # bump whenever ImageRecord schema changes; old DB is nuked on mismatch
 _IMAGES_SUBDIR = "images"
 _PANEL_SUFFIX = "_panel.bin.zst"
 _PREVIEW_SUFFIX = "_preview.png"
@@ -170,11 +172,16 @@ class AbstractImageManager(ABC):
             # progress for the new sync cycle. This ensures _progress accurately
             # reflects only the work being done in THIS cycle, not accumulating
             # stale state from previous completed batches.
-            if not self._inflight and self._progress.done >= self._progress.total and self._progress.total > 0:
+            if (
+                not self._inflight
+                and self._progress.done >= self._progress.total
+                and self._progress.total > 0
+            ):
                 self._progress = ConversionProgress(current_name=None, done=0, total=0)
 
             pending = [
-                r for r in self._records.values()
+                r
+                for r in self._records.values()
                 if r.convert_status == "pending" and r.name not in self._inflight
             ]
             if pending:
@@ -190,7 +197,8 @@ class AbstractImageManager(ABC):
                 # pending (not yet inflight) and double-count them in the total.
                 self._inflight.update(r.name for r in pending)
             needs_thumb = [
-                r for r in self._records.values()
+                r
+                for r in self._records.values()
                 if r.image_width is not None and not self._thumb_path(r).exists()
             ]
 
@@ -245,9 +253,7 @@ class AbstractImageManager(ABC):
         target = self._upload_dir / name
         with self._db_lock:
             if name in self._records or target.exists():
-                raise FileExistsError(
-                    f"Image {name!r} already exists; remove it first to replace."
-                )
+                raise FileExistsError(f"Image {name!r} already exists; remove it first to replace.")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(src_bytes)
             self._register_new(name, target)
@@ -283,7 +289,9 @@ class AbstractImageManager(ABC):
                 # PIL couldn't open this at upload time and won't now; leave as failed.
                 return
             self._records[name] = replace(
-                rec, convert_status="pending", convert_error=None,
+                rec,
+                convert_status="pending",
+                convert_error=None,
             )
             self._save_db()
 
@@ -312,7 +320,9 @@ class AbstractImageManager(ABC):
         if len(data) != TOTAL_BYTES:
             logger.error(
                 "Corrupt panel file %s: expected %d B, got %d B — deleting and re-queuing",
-                path.name, TOTAL_BYTES, len(data),
+                path.name,
+                TOTAL_BYTES,
+                len(data),
             )
             try:
                 path.unlink()
@@ -321,9 +331,7 @@ class AbstractImageManager(ABC):
             with self._db_lock:
                 cur = self._records.get(name)
                 if cur is not None:
-                    self._records[name] = replace(
-                        cur, convert_status="pending", convert_error=None
-                    )
+                    self._records[name] = replace(cur, convert_status="pending", convert_error=None)
                     self._save_db()
             return None
         return data
@@ -351,10 +359,7 @@ class AbstractImageManager(ABC):
         thumb_path = self._thumb_path(rec)
         try:
             src_path = self._upload_dir / name
-            if (
-                thumb_path.exists()
-                and thumb_path.stat().st_mtime >= src_path.stat().st_mtime
-            ):
+            if thumb_path.exists() and thumb_path.stat().st_mtime >= src_path.stat().st_mtime:
                 return thumb_path.read_bytes()
         except OSError:
             pass
@@ -398,7 +403,8 @@ class AbstractImageManager(ABC):
         # still have convert_status="pending" until the worker finishes).
         # Including them inflates the pixel count that needs estimating.
         pending = [
-            r for r in self._records.values()
+            r
+            for r in self._records.values()
             if r.convert_status == "pending" and r.name not in self._inflight
         ]
         if not pending:
@@ -411,22 +417,22 @@ class AbstractImageManager(ABC):
             return None
 
         converted_px = [
-            r for r in self._records.values()
-            if r.last_conversion_seconds is not None
-            and r.image_width and r.image_height
+            r
+            for r in self._records.values()
+            if r.last_conversion_seconds is not None and r.image_width and r.image_height
         ]
         if not converted_px:
             return None
 
-        total_pixels = sum(r.image_width * r.image_height for r in converted_px)
-        total_time   = sum(r.last_conversion_seconds for r in converted_px)
+        total_pixels = sum(r.image_width * r.image_height for r in converted_px)  # type: ignore[operator]
+        total_time = sum(r.last_conversion_seconds for r in converted_px)  # type: ignore[arg-type]
         rate = total_time / total_pixels  # seconds per pixel (single-threaded rate)
 
         # Divide by worker count because renders run in parallel. Without this
         # division the estimate is off by ~worker_count× (e.g. 8× too high with
         # 8 workers).
         workers = max(1, self.resolved_worker_count)
-        serial_estimate = sum(r.image_width * r.image_height * rate for r in pending_px)
+        serial_estimate = sum(r.image_width * r.image_height * rate for r in pending_px)  # type: ignore[operator]
         return serial_estimate / workers
 
     # ── Cache control ────────────────────────────────────────────
@@ -491,11 +497,13 @@ class AbstractImageManager(ABC):
 
     @staticmethod
     def _hash_name(name: str) -> str:
-        return hashlib.sha1(name.encode("utf-8")).hexdigest()[:_NAME_HASH_LEN]
+        return hashlib.sha1(name.encode("utf-8"), usedforsecurity=False).hexdigest()[
+            :_NAME_HASH_LEN
+        ]
 
     @staticmethod
     def _sha1_of_file(path: Path) -> str:
-        h = hashlib.sha1()
+        h = hashlib.sha1(usedforsecurity=False)
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(65536), b""):
                 h.update(chunk)
@@ -510,6 +518,8 @@ class AbstractImageManager(ABC):
             except ET.ParseError as e:
                 return None, None, f"SVG parse error: {e}"
             root = tree.getroot()
+            if root is None:
+                return *SVG_PROBE_DIMS, None
 
             def _svg_raster_dims(vw: float, vh: float) -> tuple[int, int]:
                 """Pixel dims resvg produces when fitting (vw, vh) into the square canvas."""
@@ -584,7 +594,8 @@ class AbstractImageManager(ABC):
         if data.get("version") != _DB_VERSION:
             logger.warning(
                 "DB version mismatch (got %r, need %d) — wiping cache DB; images will be re-rendered on next sync",
-                data.get("version"), _DB_VERSION,
+                data.get("version"),
+                _DB_VERSION,
             )
             return
         for name, rec_dict in data.get("images", {}).items():
@@ -610,7 +621,7 @@ class AbstractImageManager(ABC):
             original_size_bytes=st.st_size,
             original_mtime=st.st_mtime,
             added_at=time.time(),
-            convert_status="failed" if dim_err else "pending",
+            convert_status=ConvertStatus.FAILED if dim_err else ConvertStatus.PENDING,
             convert_error=dim_err,
             image_width=w,
             image_height=h,
@@ -653,8 +664,7 @@ class AbstractImageManager(ABC):
                 continue
 
             content_changed = (
-                existing.original_size_bytes != st.st_size
-                or existing.original_mtime != st.st_mtime
+                existing.original_size_bytes != st.st_size or existing.original_mtime != st.st_mtime
             )
             if content_changed:
                 # Cheap heuristic missed; fall back to sha1.
@@ -667,7 +677,7 @@ class AbstractImageManager(ABC):
                         original_sha1=new_sha,
                         original_size_bytes=st.st_size,
                         original_mtime=st.st_mtime,
-                        convert_status="failed" if dim_err else "pending",
+                        convert_status=ConvertStatus.FAILED if dim_err else ConvertStatus.PENDING,
                         convert_error=dim_err,
                         landscape_image_config_slug=None,
                         portrait_image_config_slug=None,
@@ -741,7 +751,9 @@ class AbstractImageManager(ABC):
                     rec = records_by_hash.get(nh)
                     if rec is not None:
                         self._records[rec.name] = replace(
-                            rec, convert_status="pending", convert_error=None,
+                            rec,
+                            convert_status="pending",
+                            convert_error=None,
                         )
                 self._scrub_file(f, "unknown suffix")
                 continue
@@ -789,7 +801,8 @@ class AbstractImageManager(ABC):
                     portrait_image_config_slug=None,
                 )
                 self._progress = replace(
-                    self._progress, done=self._progress.done + 1,
+                    self._progress,
+                    done=self._progress.done + 1,
                 )
                 self._save_db()
 
@@ -831,7 +844,9 @@ class AbstractImageManager(ABC):
 
             # _inflight was already populated by sync() under the lock, so no need
             # to add here.  The assert is a safety net during development.
-            assert name in self._inflight, f"{name!r} missing from _inflight at dispatch"
+            assert name in self._inflight, (
+                f"{name!r} missing from _inflight at dispatch"
+            )  # sync() pre-populates _inflight under lock
 
             # Dispatch primary orientation (manages lifecycle: pending → ok).
             self._dispatch_cfg(name, screen_cfg, update_status=True)
@@ -841,7 +856,9 @@ class AbstractImageManager(ABC):
                 if orientation == Orientation.NEUTRAL:
                     continue  # NEUTRAL is not a real render target
                 if orientation != screen_cfg.orientation:
-                    self._dispatch_cfg(name, replace(screen_cfg, orientation=orientation), update_status=False)
+                    self._dispatch_cfg(
+                        name, replace(screen_cfg, orientation=orientation), update_status=False
+                    )
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             logger.exception("Failed to submit %r: %s", name, err)
@@ -869,10 +886,14 @@ class AbstractImageManager(ABC):
             asdict(cfg.image_config),
             cfg.orientation,
             cfg.crop_to_fill_threshold,
-            tuple(asdict(b) for b in cfg.clahe_keepout_bboxes) if cfg.clahe_keepout_bboxes else None,
+            tuple(asdict(b) for b in cfg.clahe_keepout_bboxes)
+            if cfg.clahe_keepout_bboxes
+            else None,
         )
         logger.debug("Submitted %r for dithering (%s)", name, cfg.orientation)
-        self._dispatch_render(name, slug, cfg.orientation, render_args, time.monotonic(), update_status=update_status)
+        self._dispatch_render(
+            name, slug, cfg.orientation, render_args, time.monotonic(), update_status=update_status
+        )
 
     def _set_orientation_slug(self, name: str, orientation: Orientation, slug: str) -> None:
         """Update landscape_image_config_slug or portrait_image_config_slug in the record."""
@@ -914,7 +935,9 @@ class AbstractImageManager(ABC):
                     cur = self._records.get(name)
                     if cur is not None:
                         self._records[name] = replace(
-                            cur, convert_status="failed", convert_error=err,
+                            cur,
+                            convert_status="failed",
+                            convert_error=err,
                             landscape_image_config_slug=None,
                             portrait_image_config_slug=None,
                         )
@@ -925,7 +948,9 @@ class AbstractImageManager(ABC):
                         self._log_batch_complete()
                     self._save_db()
             else:
-                logger.warning("Alt-orientation render failed for %r (%s): %s", name, orientation, err)
+                logger.warning(
+                    "Alt-orientation render failed for %r (%s): %s", name, orientation, err
+                )
             return
 
         with self._db_lock:
@@ -971,7 +996,8 @@ class AbstractImageManager(ABC):
         """Log a batch-complete summary (must be called while holding _db_lock)."""
         total = self._progress.total
         n_failed = total - sum(
-            1 for r in self._records.values()
+            1
+            for r in self._records.values()
             if r.convert_status == "ok" and r.last_conversion_seconds is not None
         )
         if n_failed > 0:
@@ -983,7 +1009,7 @@ class AbstractImageManager(ABC):
         thumb_path.parent.mkdir(parents=True, exist_ok=True)
         if src_path.suffix.lower() == ".svg":
             img = open_image_for_render(src_path)  # already RGB
-            img.thumbnail((_THUMB_MAX_PX, _THUMB_MAX_PX), Image.LANCZOS)
+            img.thumbnail((_THUMB_MAX_PX, _THUMB_MAX_PX), Image.Resampling.LANCZOS)
             img.save(thumb_path, format="JPEG", quality=_THUMB_QUALITY)
             img.close()
             return
@@ -1003,5 +1029,5 @@ class AbstractImageManager(ABC):
                 img = bg
             elif img.mode != "RGB":
                 img = img.convert("RGB")
-            img.thumbnail((_THUMB_MAX_PX, _THUMB_MAX_PX), Image.LANCZOS)
+            img.thumbnail((_THUMB_MAX_PX, _THUMB_MAX_PX), Image.Resampling.LANCZOS)
             img.save(thumb_path, format="JPEG", quality=_THUMB_QUALITY)

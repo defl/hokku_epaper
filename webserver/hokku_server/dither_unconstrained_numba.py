@@ -15,10 +15,11 @@ Requires: ``numba >= 0.59`` (``pip install numba``).  0.59+ is needed for
 NumPy 2.x compatibility (``numpy.core`` was removed in NumPy 2.0).  Import is deferred to
 instantiation so other dither classes remain importable if numba is absent.
 """
+
 from __future__ import annotations
 
+import numba
 import numpy as np
-from numpy.typing import NDArray
 
 from hokku_server.display import PALETTE_MEASURED_RGB
 from hokku_server.dither_abc import (
@@ -35,28 +36,22 @@ from hokku_server.dither_streaming import (
     noop_dither,
 )
 
-
 # ── Numba JIT kernel ──────────────────────────────────────────────────────────
+
 
 def _make_jit_fn():
     """Build and return the Numba-JIT full-canvas diffuse function."""
-    try:
-        import numba
-    except ImportError as exc:
-        raise ImportError(
-            "NumbaUnconstrainedDither requires numba (pip install numba)."
-        ) from exc
 
     @numba.njit(nogil=True, cache=True)
     def _diffuse_full(
-        pixels: np.ndarray,   # float32 (H, W, 3) — mutated in-place
-        result: np.ndarray,   # uint8  (H, W)      — mutated in-place
-        lut: np.ndarray,      # uint8  (n, n, n)
+        pixels: np.ndarray,  # float32 (H, W, 3) — mutated in-place
+        result: np.ndarray,  # uint8  (H, W)      — mutated in-place
+        lut: np.ndarray,  # uint8  (n, n, n)
         lut_scale: float,
         pal_rgb: np.ndarray,  # float32 (N_PAL, 3)
-        kdx: np.ndarray,      # int32  (K,)
-        kdy: np.ndarray,      # int32  (K,)
-        kwt: np.ndarray,      # float32 (K,)
+        kdx: np.ndarray,  # int32  (K,)
+        kdy: np.ndarray,  # int32  (K,)
+        kwt: np.ndarray,  # float32 (K,)
         serpentine: bool,
         lut_max: int,
     ) -> None:
@@ -67,8 +62,8 @@ def _make_jit_fn():
         for y in range(H):
             reverse = serpentine and (y % 2 == 0)
             x_start = W - 1 if reverse else 0
-            x_end   = -1    if reverse else W
-            x_step  = -1    if reverse else 1
+            x_end = -1 if reverse else W
+            x_step = -1 if reverse else 1
 
             x = x_start
             while x != x_end:
@@ -133,11 +128,12 @@ def _kernel_arrays(kernel: DiffusionKernel):
     """Convert a kernel tuple-of-tuples to flat int32/float32 arrays for Numba."""
     kdx = np.array([dx for dx, _, _ in kernel], dtype=np.int32)
     kdy = np.array([dy for _, dy, _ in kernel], dtype=np.int32)
-    kwt = np.array([w  for _, _,  w in kernel], dtype=np.float32)
+    kwt = np.array([w for _, _, w in kernel], dtype=np.float32)
     return kdx, kdy, kwt
 
 
 # ── Public class ──────────────────────────────────────────────────────────────
+
 
 class NumbaUnconstrainedDither(AbstractDither):
     """Full-canvas dither whose inner pixel loop is compiled to native code.
@@ -177,8 +173,15 @@ class NumbaUnconstrainedDither(AbstractDither):
         result = np.empty((H, W), dtype=np.uint8)
 
         self._fn(
-            pixels, result,
-            lut, float(scale), pal_rgb,
-            kdx, kdy, kwt, cfg.serpentine, lut_max,
+            pixels,
+            result,
+            lut,
+            float(scale),
+            pal_rgb,
+            kdx,
+            kdy,
+            kwt,
+            cfg.serpentine,
+            lut_max,
         )
         return result

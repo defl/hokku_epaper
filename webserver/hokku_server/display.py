@@ -4,11 +4,11 @@ Constants describe the EL133UF1 / Spectra 6 panel; pack/unpack functions move
 between palette indices (per-pixel uint8 in 0..5) and the device's nibble-packed
 wire format.
 """
+
 from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
-
 
 # Panel geometry — physical halves are 600×1600 each, stitched into 1200×1600.
 PANEL_W = 600
@@ -23,24 +23,30 @@ VISUAL_H = 1200
 
 
 # Measured RGB values of the six on-panel inks (used for Lab→palette LUTs).
-PALETTE_MEASURED_RGB = np.array([
-    [2,   2,   2  ],   # 0 black
-    [190, 200, 200],   # 1 white
-    [205, 202, 0  ],   # 2 yellow
-    [135, 19,  0  ],   # 3 red
-    [5,   64,  158],   # 4 blue
-    [39,  102, 60 ],   # 5 green
-], dtype=np.float32)
+PALETTE_MEASURED_RGB = np.array(
+    [
+        [2, 2, 2],  # 0 black
+        [190, 200, 200],  # 1 white
+        [205, 202, 0],  # 2 yellow
+        [135, 19, 0],  # 3 red
+        [5, 64, 158],  # 4 blue
+        [39, 102, 60],  # 5 green
+    ],
+    dtype=np.float32,
+)
 
 # Punchier RGB used only for browser previews (real ink is duller).
-PALETTE_PREVIEW_RGB = np.array([
-    [0,   0,   0  ],
-    [255, 255, 255],
-    [255, 230, 50 ],
-    [200, 20,  20 ],
-    [30,  80,  200],
-    [20,  120, 40 ],
-], dtype=np.uint8)
+PALETTE_PREVIEW_RGB = np.array(
+    [
+        [0, 0, 0],
+        [255, 255, 255],
+        [255, 230, 50],
+        [200, 20, 20],
+        [30, 80, 200],
+        [20, 120, 40],
+    ],
+    dtype=np.uint8,
+)
 
 # Maps palette index 0..5 → device nibble. Indexes 4 and 7 are skipped on
 # purpose; the controller treats them as undefined.
@@ -50,9 +56,7 @@ PALETTE_NIBBLE = np.array([0x0, 0x1, 0x2, 0x3, 0x5, 0x6], dtype=np.uint8)
 def indices_to_panel_bytes(result_idx: NDArray[np.uint8]) -> bytes:
     """Palette indices (PANEL_H × FULL_W, uint8) → wire bytes for both panels."""
     if result_idx.shape != (PANEL_H, FULL_W):
-        raise ValueError(
-            f"Expected ({PANEL_H}, {FULL_W}), got {result_idx.shape}"
-        )
+        raise ValueError(f"Expected ({PANEL_H}, {FULL_W}), got {result_idx.shape}")
     nibbles = PALETTE_NIBBLE[result_idx]
     panel1 = nibbles[:, :PANEL_W]
     panel2 = nibbles[:, PANEL_W:]

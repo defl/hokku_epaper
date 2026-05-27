@@ -1,4 +1,5 @@
 """DitherConfig dataclass — algorithm, LUT, and scan-order settings."""
+
 from __future__ import annotations
 
 import hashlib

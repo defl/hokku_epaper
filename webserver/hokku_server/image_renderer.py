@@ -13,6 +13,7 @@ Usage::
     renderer = ImageRenderer(NumbaStreamingDither())
     panel_bytes = renderer.render_panel_bytes(img, cfg, "landscape")
 """
+
 from __future__ import annotations
 
 import io
@@ -24,19 +25,27 @@ from numpy.typing import NDArray
 from PIL import Image, ImageOps
 
 from hokku_server.bounding_box import BoundingBox
+from hokku_server.display import FULL_W as _SCREEN_W
+from hokku_server.display import PANEL_H as _SCREEN_H
 from hokku_server.dither_abc import AbstractDither
 from hokku_server.dither_streaming import PALETTE_LAB, adaptive_saturate, rgb_to_lab
-from hokku_server.dither_streaming_numba import NumbaStreamingDither
-from hokku_server.image_abc import (
-    AbstractImageRenderer,
-    Orientation,
-)
-from hokku_server.image_config import ImageConfig, Orientation
-
+from hokku_server.image_abc import AbstractImageRenderer
+from hokku_server.image_config import ImageConfig
+from hokku_server.orientation import Orientation
 
 IMAGE_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif",
-    ".heic", ".heif", ".avif", ".jxl", ".svg",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".bmp",
+    ".tiff",
+    ".webp",
+    ".gif",
+    ".heic",
+    ".heif",
+    ".avif",
+    ".jxl",
+    ".svg",
 }
 
 # Hard cap on decoded pixel count. Anything above raises
@@ -61,10 +70,9 @@ _MAX_SOURCE_LONG_SIDE = max(3200, 1800)  # FULL_W, PANEL_H values
 # more detail than dithering can possibly use — and on a Pi those extra
 # pixels are just RAM pressure waiting to OOM. Pre-shrink to this bbox so
 # decoded buffers stay bounded regardless of source size.
-from hokku_server.display import FULL_W as _SCREEN_W, PANEL_H as _SCREEN_H
 _SCREEN_LONG = max(_SCREEN_W, _SCREEN_H)
 _SCREEN_SHORT = min(_SCREEN_W, _SCREEN_H)
-MAX_SOURCE_LONG = 2 * _SCREEN_LONG    # 3200
+MAX_SOURCE_LONG = 2 * _SCREEN_LONG  # 3200
 MAX_SOURCE_SHORT = 2 * _SCREEN_SHORT  # 2400
 
 # Conservative upper bound used for the upload pixel-budget guard. The actual
@@ -84,7 +92,7 @@ def _rasterize_svg(path: Path) -> Image.Image:
     try:
         png_bytes = resvg_py.svg_to_bytes(
             svg_path=str(path),
-            dpi=96,            # CSS-standard DPI; correctly converts pt/mm/cm/in to px
+            dpi=96,  # CSS-standard DPI; correctly converts pt/mm/cm/in to px
             width=_SCREEN_LONG,
             height=_SCREEN_LONG,
             background="white",  # composite transparency against white, not black
@@ -184,19 +192,27 @@ class ImageRenderer(AbstractImageRenderer):
         eps = f32(0.008856)
         kappa = f32(903.3)
         xyz_out = np.empty_like(lab)
-        fx3 = fx ** 3
-        fz3 = fz ** 3
+        fx3 = fx**3
+        fz3 = fz**3
         xyz_out[..., 0] = np.where(fx3 > eps, fx3, (f32(116) * fx - f32(16)) / kappa) * ref[0]
-        xyz_out[..., 1] = np.where(L > kappa * eps, ((L + f32(16)) / f32(116)) ** 3, L / kappa) * ref[1]
+        xyz_out[..., 1] = (
+            np.where(L > kappa * eps, ((L + f32(16)) / f32(116)) ** 3, L / kappa) * ref[1]
+        )
         xyz_out[..., 2] = np.where(fz3 > eps, fz3, (f32(116) * fz - f32(16)) / kappa) * ref[2]
-        M_inv = np.array([
-            [3.2404542, -1.5371385, -0.4985314],
-            [-0.9692660, 1.8760108, 0.0415560],
-            [0.0556434, -0.2040259, 1.0572252],
-        ], dtype=f32)
+        M_inv = np.array(
+            [
+                [3.2404542, -1.5371385, -0.4985314],
+                [-0.9692660, 1.8760108, 0.0415560],
+                [0.0556434, -0.2040259, 1.0572252],
+            ],
+            dtype=f32,
+        )
         linear = np.clip(xyz_out @ M_inv.T, f32(0), f32(1))
-        srgb = np.where(linear <= f32(0.0031308), linear * f32(12.92),
-                        f32(1.055) * (linear ** f32(1.0 / 2.4)) - f32(0.055))
+        srgb = np.where(
+            linear <= f32(0.0031308),
+            linear * f32(12.92),
+            f32(1.055) * (linear ** f32(1.0 / 2.4)) - f32(0.055),
+        )
         return np.clip(srgb * f32(255), f32(0), f32(255))
 
     @staticmethod
@@ -233,7 +249,11 @@ class ImageRenderer(AbstractImageRenderer):
 
         if adaptive_vivid:
             chroma = np.sqrt(a * a + b_ch * b_ch)
-            t = np.clip((chroma - f32(vivid_chroma_low)) / f32(vivid_chroma_high - vivid_chroma_low), f32(0.0), f32(1.0))
+            t = np.clip(
+                (chroma - f32(vivid_chroma_low)) / f32(vivid_chroma_high - vivid_chroma_low),
+                f32(0.0),
+                f32(1.0),
+            )
             c_factor = c_ratio + (f32(1.0) - c_ratio) * t
             np.multiply(a, c_factor, out=a)
             np.multiply(b_ch, c_factor, out=b_ch)
@@ -256,11 +276,16 @@ class ImageRenderer(AbstractImageRenderer):
         crop_to_fill_threshold: float = 0.0,
         *,
         release_input: bool = False,
-        clahe_keepout_bboxes_norm: "tuple[BoundingBox, ...] | None" = None,
+        clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
     ) -> np.ndarray:
         arr, padding_mask = self._prepare_canvas(
-            img, cfg, orientation, canvas_w, canvas_h,
-            crop_to_fill_threshold, release_input=release_input,
+            img,
+            cfg,
+            orientation,
+            canvas_w,
+            canvas_h,
+            crop_to_fill_threshold,
+            release_input=release_input,
             clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
         )
 

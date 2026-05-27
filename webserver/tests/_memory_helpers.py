@@ -20,6 +20,7 @@ Three layers of measurement:
   peak.  Eliminates pytest / interpreter / cached-LUT contamination.
   This is the headline measurement; expect ~1–2 s overhead per call.
 """
+
 from __future__ import annotations
 
 import os
@@ -47,7 +48,10 @@ def peak_python_heap(fn: Callable, *args: Any, **kwargs: Any) -> int:
 
 
 def peak_rss_sampled(
-    fn: Callable, *args: Any, sample_ms: float = 5.0, **kwargs: Any,
+    fn: Callable,
+    *args: Any,
+    sample_ms: float = 5.0,
+    **kwargs: Any,
 ) -> tuple[int, int]:
     """Run *fn* in this process; sample RSS at sample_ms intervals.
 
@@ -133,14 +137,16 @@ def peak_rss_subprocess(
     ImageConfig.  The RHS of the difference (peak − baseline) is what the
     pipeline alone consumed; that's the number that needs to fit in 50 MB.
     """
-    payload = pickle.dumps({
-        "image_path": str(image_path),
-        "render_kwargs": {
-            "cfg": cfg,
-            "orientation": orientation,
-            "crop_to_fill_threshold": crop_to_fill_threshold,
-        },
-    })
+    payload = pickle.dumps(
+        {
+            "image_path": str(image_path),
+            "render_kwargs": {
+                "cfg": cfg,
+                "orientation": orientation,
+                "crop_to_fill_threshold": crop_to_fill_threshold,
+            },
+        }
+    )
     # Inherit the current python; the test runner already configured the venv.
     proc = subprocess.Popen(
         [sys.executable, "-c", _CHILD_DRIVER],
@@ -150,7 +156,7 @@ def peak_rss_subprocess(
         env={**os.environ},
         cwd=str(Path(__file__).resolve().parent.parent),  # webserver/
     )
-    assert proc.stdin is not None and proc.stdout is not None
+    assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
     try:
         # Hand the payload to the child.
         proc.stdin.write(payload)
@@ -166,7 +172,7 @@ def peak_rss_subprocess(
             baseline = int(child_ps.memory_info().rss)
             peak = baseline
         except psutil.NoSuchProcess:
-            raise RuntimeError("child died before render started")
+            raise RuntimeError("child died before render started") from None
         # Tell the child to proceed.
         proc.stdin.write(b"\n")
         proc.stdin.flush()

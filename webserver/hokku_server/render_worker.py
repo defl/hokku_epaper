@@ -16,6 +16,7 @@ Why dicts, not dataclasses?
     Round-tripping through ``_image_config_from_dict`` keeps the IPC contract
     narrow and easy to audit.
 """
+
 from __future__ import annotations
 
 
@@ -50,19 +51,23 @@ def render_one(
         ``panel_bytes``   — full-resolution packed panel buffer (TOTAL_BYTES long).
         ``preview_bytes`` — PNG bytes of the preview image.
     """
-    # Register format plugins in this worker process (idempotent; PIL ignores
-    # duplicate registrations so it's safe to call on every task).
-    import pillow_avif  # noqa: F401
-    import pillow_jxl  # noqa: F401
-    from pillow_heif import register_heif_opener
+    # All imports are function-local: this callable runs inside a
+    # ProcessPoolExecutor worker subprocess. The subprocess spawns fresh,
+    # so every module must be imported here rather than relying on parent
+    # process state. PIL format plugins must also be re-registered per process.
+    from pathlib import Path  # noqa: PLC0415
+
+    import pillow_avif  # noqa: F401, PLC0415 — PIL plugin registration
+    import pillow_jxl  # noqa: F401, PLC0415 — PIL plugin registration
+    from pillow_heif import register_heif_opener  # noqa: PLC0415
+
     register_heif_opener()
 
-    from pathlib import Path
-    from hokku_server.bounding_box import BoundingBox
-    from hokku_server.dither_streaming_numba import NumbaStreamingDither
-    from hokku_server.image_abc import preview_png_from_panel_bytes
-    from hokku_server.image_renderer import ImageRenderer, open_image_for_render
-    from hokku_server.image_config import _image_config_from_dict
+    from hokku_server.bounding_box import BoundingBox  # noqa: PLC0415
+    from hokku_server.dither_streaming_numba import NumbaStreamingDither  # noqa: PLC0415
+    from hokku_server.image_abc import preview_png_from_panel_bytes  # noqa: PLC0415
+    from hokku_server.image_config import _image_config_from_dict  # noqa: PLC0415
+    from hokku_server.image_renderer import ImageRenderer, open_image_for_render  # noqa: PLC0415
 
     cfg = _image_config_from_dict(image_config_dict)
     renderer = ImageRenderer(NumbaStreamingDither())
@@ -72,15 +77,16 @@ def render_one(
     if clahe_keepout_bboxes:
         try:
             bboxes_norm = tuple(
-                BoundingBox(x=b['x'], y=b['y'], w=b['w'], h=b['h'])
-                for b in clahe_keepout_bboxes
+                BoundingBox(x=b["x"], y=b["y"], w=b["w"], h=b["h"]) for b in clahe_keepout_bboxes
             )
         except (KeyError, TypeError, ValueError):
             bboxes_norm = None
 
     with open_image_for_render(Path(image_path)) as img:
         panel_bytes = renderer.render_panel_bytes(
-            img, cfg, orientation,  # type: ignore[arg-type]
+            img,
+            cfg,
+            orientation,  # type: ignore[arg-type]
             crop_to_fill_threshold,
             clahe_keepout_bboxes_norm=bboxes_norm,
         )

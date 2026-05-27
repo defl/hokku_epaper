@@ -6,6 +6,7 @@ One DB file (``serve_scheduler.json``) carries all of:
 - ``screens``: per-screen telemetry (request count, battery, frame state)
 - ``next_for``: pre-computed next image per orientation (LANDSCAPE, PORTRAIT, NEUTRAL)
 """
+
 from __future__ import annotations
 
 import json
@@ -15,14 +16,14 @@ import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 from hokku_server.filesystem import atomic_write_json
 from hokku_server.image_manager_abstract import AbstractImageManager
 from hokku_server.image_record import ConvertStatus, ImageRecord
 from hokku_server.orientation import Orientation
 from hokku_server.screen_config import ScreenConfig
 from hokku_server.screen_headers import battery_percent, parse_battery_header
+
+logger = logging.getLogger(__name__)
 
 
 _DB_FILENAME = "serve_scheduler.json"
@@ -39,7 +40,7 @@ class ServeStats:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ServeStats":
+    def from_dict(cls, d: dict) -> ServeStats:
         return cls(
             show_index=int(d.get("show_index", 0)),
             last_served_at=d.get("last_served_at"),
@@ -64,7 +65,7 @@ class ScreenTelemetryEntry:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ScreenTelemetryEntry":
+    def from_dict(cls, d: dict) -> ScreenTelemetryEntry:
         return cls(
             ip=d.get("ip", ""),
             request_count=int(d.get("request_count", 0)),
@@ -89,7 +90,7 @@ class ServeScheduler:
         self._screens: dict[str, ScreenTelemetryEntry] = {}
         self._screen_configs: dict[str, ScreenConfig] = {}
         self._last_served: tuple[str, float] | None = None
-        self._next_for: dict[Orientation, str | None] = {o: None for o in Orientation}
+        self._next_for: dict[Orientation, str | None] = dict.fromkeys(Orientation, None)
         self._load()
         # Pre-determine the next image right now so the UI can show it
         # immediately without waiting for the first screen request.
@@ -116,7 +117,7 @@ class ServeScheduler:
             self._reconcile(ready_names)
 
             if not ready:
-                self._next_for = {o: None for o in Orientation}
+                self._next_for = dict.fromkeys(Orientation, None)
                 self._save()
                 return None
 
@@ -231,15 +232,15 @@ class ServeScheduler:
                 request_count=req_count,
                 last_seen_at=now,
                 last_sleep_seconds=int(sleep_seconds),
-                last_served=served_name if served_name is not None else (
-                    existing.last_served if existing else None
-                ),
+                last_served=served_name
+                if served_name is not None
+                else (existing.last_served if existing else None),
                 battery_mv=bat_mv_value,
                 battery_percent=bat_pct,
                 battery_seen_at=bat_seen,
-                frame_state=fs_with_meta if fs_with_meta is not None else (
-                    existing.frame_state if existing else None
-                ),
+                frame_state=fs_with_meta
+                if fs_with_meta is not None
+                else (existing.frame_state if existing else None),
             )
             self._save()
 
@@ -312,9 +313,7 @@ class ServeScheduler:
     def _reconcile(self, ready_names: set[str]) -> None:
         # Drop orphans.
         for name in list(self._stats.keys()):
-            if name not in ready_names and name not in {
-                r.name for r in self._manager.list()
-            }:
+            if name not in ready_names and name not in {r.name for r in self._manager.list()}:
                 del self._stats[name]
 
         # Add fresh entries. If we see any genuinely new name, reset all
@@ -339,7 +338,8 @@ class ServeScheduler:
         if cur is None:
             return
         self._stats[prev_name] = replace(
-            cur, total_show_minutes=cur.total_show_minutes + elapsed_min,
+            cur,
+            total_show_minutes=cur.total_show_minutes + elapsed_min,
         )
 
     def _load(self) -> None:
@@ -389,7 +389,8 @@ class ServeScheduler:
             "next_for": {o.value: self._next_for.get(o) for o in Orientation},
             "last_served": (
                 {"name": self._last_served[0], "served_at": self._last_served[1]}
-                if self._last_served else None
+                if self._last_served
+                else None
             ),
             "by_name": {n: s.to_dict() for n, s in self._stats.items()},
             "screens": {n: t.to_dict() for n, t in self._screens.items()},

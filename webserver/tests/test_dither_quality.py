@@ -24,6 +24,7 @@ Slow tests (marked ``time_intensive``, skipped by default):
   These exist solely for human inspection of dither quality; they are not
   correctness assertions beyond "it ran without error and produced valid output."
 """
+
 from __future__ import annotations
 
 import shutil
@@ -37,27 +38,26 @@ from PIL import Image
 
 from hokku_server.display import (
     FULL_W,
-    PANEL_H,
     PALETTE_MEASURED_RGB,
+    PANEL_H,
     TOTAL_BYTES,
     VISUAL_H,
     VISUAL_W,
     indices_to_preview_rgb,
     panel_bytes_to_indices,
 )
-import numba  # hard dep — must be installed
 from hokku_server.dither_config import DitherConfig
 from hokku_server.dither_streaming import StreamingDither
-from hokku_server.image_quality import image_compare
 from hokku_server.dither_streaming_numba import NumbaStreamingDither
 from hokku_server.dither_unconstrained import UnconstrainedDither
 from hokku_server.dither_unconstrained_numba import NumbaUnconstrainedDither
 from hokku_server.image_abc import preview_png_from_panel_bytes
 from hokku_server.image_classifier import ImageClassifier
-from hokku_server.image_config import ImageConfig, Orientation
+from hokku_server.image_config import ImageConfig
+from hokku_server.image_quality import image_compare
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
+from hokku_server.orientation import Orientation
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
-
 from tests._helpers import is_oversize_fixture
 
 
@@ -67,7 +67,9 @@ def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0, *, unc
 
 
 def render_preview_png(img, cfg, orientation, max_side_px=800, crop_to_fill_threshold=0.0):
-    return ImageRenderer(NumbaStreamingDither()).render_preview_png(img, cfg, orientation, max_side_px, crop_to_fill_threshold)
+    return ImageRenderer(NumbaStreamingDither()).render_preview_png(
+        img, cfg, orientation, max_side_px, crop_to_fill_threshold
+    )
 
 
 # ── module-level helpers ──────────────────────────────────────────────────────
@@ -99,8 +101,8 @@ def _make_grey(w: int = 40, h: int = 30, level: int = 128) -> Image.Image:
 def _make_gradient(w: int = 200, h: int = 150) -> Image.Image:
     """RGB gradient across width/height — gives dither algorithms real content to chew on."""
     arr = np.zeros((h, w, 3), dtype=np.uint8)
-    arr[:, :, 0] = np.linspace(30, 220, w, dtype=np.uint8)[None, :]   # R varies across x
-    arr[:, :, 1] = np.linspace(200, 40, h, dtype=np.uint8)[:, None]   # G varies across y
+    arr[:, :, 0] = np.linspace(30, 220, w, dtype=np.uint8)[None, :]  # R varies across x
+    arr[:, :, 1] = np.linspace(200, 40, h, dtype=np.uint8)[:, None]  # G varies across y
     arr[:, :, 2] = 80
     return Image.fromarray(arr)
 
@@ -114,9 +116,9 @@ def _test_images() -> list[Path]:
     if not _TEST_IMAGES_DIR.exists():
         return []
     return sorted(
-        p for p in _TEST_IMAGES_DIR.iterdir()
-        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
-        and not is_oversize_fixture(p)
+        p
+        for p in _TEST_IMAGES_DIR.iterdir()
+        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS and not is_oversize_fixture(p)
     )
 
 
@@ -131,6 +133,7 @@ def _indices_to_png(idx: np.ndarray, orientation: Orientation) -> bytes:
 
 
 # ── fast: panel_bytes structure ───────────────────────────────────────────────
+
 
 def test_panel_bytes_size():
     raw = render_panel_bytes(_make_rgb(), _FAST_CFG, "landscape")
@@ -153,6 +156,7 @@ def test_panel_bytes_portrait_size():
 
 
 # ── fast: preview PNG structure ───────────────────────────────────────────────
+
 
 def test_preview_png_is_valid_png():
     png = render_preview_png(_make_rgb(), _FAST_CFG, "landscape", max_side_px=100)
@@ -182,21 +186,23 @@ def test_preview_png_max_side_respected():
 
 # ── fast: roundtrip panel_bytes → preview ─────────────────────────────────────
 
+
 def test_preview_from_panel_bytes_is_valid_png():
-    raw = render_panel_bytes(_make_rgb(), _FAST_CFG, "landscape")
-    png = preview_png_from_panel_bytes(raw, "landscape")
+    raw = render_panel_bytes(_make_rgb(), _FAST_CFG, Orientation.LANDSCAPE)
+    png = preview_png_from_panel_bytes(raw, Orientation.LANDSCAPE)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_preview_from_panel_bytes_landscape_dimensions():
     """panel_bytes → PNG must be the full visible panel size in landscape."""
-    raw = render_panel_bytes(_make_rgb(), _FAST_CFG, "landscape")
-    png = preview_png_from_panel_bytes(raw, "landscape")
+    raw = render_panel_bytes(_make_rgb(), _FAST_CFG, Orientation.LANDSCAPE)
+    png = preview_png_from_panel_bytes(raw, Orientation.LANDSCAPE)
     w, h = _png_size(png)
     assert (w, h) == (VISUAL_W, VISUAL_H), f"Expected {VISUAL_W}x{VISUAL_H}, got {w}x{h}"
 
 
 # ── fast: B&W detection ───────────────────────────────────────────────────────
+
 
 def test_bw_detection_neutral_grey():
     assert ImageClassifier._is_near_grayscale(_make_grey(200, 200, 128))
@@ -215,7 +221,7 @@ def test_bw_image_renders_without_error():
     # so it is exercised identically, and the full-panel render finishes in <1s
     # instead of ~13s under pure-Python StreamingDither.
     raw = ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
-        _make_grey(10, 10), cfg, "landscape", 0.0
+        _make_grey(10, 10), cfg, Orientation.LANDSCAPE, 0.0
     )
     assert len(raw) == TOTAL_BYTES
     idx = panel_bytes_to_indices(raw)
@@ -223,6 +229,7 @@ def test_bw_image_renders_without_error():
 
 
 # ── fast: preset determinism & distinctness (via small preview) ───────────────
+
 
 def test_preset_output_is_deterministic():
     """Same inputs always produce identical bytes (no randomness in pipeline)."""
@@ -260,6 +267,7 @@ def test_orientation_changes_panel_output():
 
 # ── fast: all presets smoke-test (small preview) ─────────────────────────────
 
+
 @pytest.mark.parametrize("preset_name", list(PRESET_IMAGE_CONFIGS))
 def test_every_preset_preview_landscape(preset_name: str):
     img = _make_rgb(60, 40)
@@ -281,6 +289,7 @@ def test_every_preset_preview_portrait(preset_name: str):
 
 
 # ── fast: cache_slug stability ────────────────────────────────────────────────
+
 
 def test_image_config_cache_slug_is_stable():
     cfg = PRESET_IMAGE_CONFIGS["atkinson"]
@@ -311,12 +320,7 @@ def _slow_params():
     """All (image, preset, mode) combinations for the full-scale render test."""
     imgs = _test_images()
     presets = list(PRESET_IMAGE_CONFIGS)
-    return [
-        (img, p, m)
-        for img in imgs
-        for p in presets
-        for m in _MODES
-    ]
+    return [(img, p, m) for img in imgs for p in presets for m in _MODES]
 
 
 def _slow_ids():
@@ -346,13 +350,15 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
 
     cfg = PRESET_IMAGE_CONFIGS[preset_name]
     _DITHER_FOR_MODE = {
-        "streaming":           StreamingDither(),
-        "unconstrained":       UnconstrainedDither(),
-        "numba_streaming":     NumbaStreamingDither(),
+        "streaming": StreamingDither(),
+        "unconstrained": UnconstrainedDither(),
+        "numba_streaming": NumbaStreamingDither(),
         "numba_unconstrained": NumbaUnconstrainedDither(),
     }
     with open_image_for_render(src) as img:
-        raw = ImageRenderer(_DITHER_FOR_MODE[mode]).render_panel_bytes(img, cfg, "landscape")
+        raw = ImageRenderer(_DITHER_FOR_MODE[mode]).render_panel_bytes(
+            img, cfg, Orientation.LANDSCAPE
+        )
 
     assert len(raw) == TOTAL_BYTES
 
@@ -361,7 +367,7 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
     assert int(idx.min()) >= 0
     assert int(idx.max()) <= 5
 
-    png_bytes = _indices_to_png(idx, "landscape")
+    png_bytes = _indices_to_png(idx, Orientation.LANDSCAPE)
     (_BUILD_FULL_DIR / f"{src.stem}__{preset_name}__{mode}.png").write_bytes(png_bytes)
 
     w, h = _png_size(png_bytes)
@@ -407,6 +413,7 @@ def test_dither_preview(src: Path, preset_name: str):
 
 # ── slow: parity tests (reference vs Numba) ───────────────────────────────────
 
+
 def _parity_cfg() -> DitherConfig:
     return DitherConfig(
         algorithm="floyd_steinberg",
@@ -430,7 +437,8 @@ def test_numba_streaming_matches_streaming() -> None:
     ref = StreamingDither().dither(canvas, cfg)
     got = NumbaStreamingDither().dither(canvas, cfg)
     np.testing.assert_array_equal(
-        ref, got,
+        ref,
+        got,
         err_msg="NumbaStreamingDither diverged from StreamingDither on identical input",
     )
 
@@ -443,7 +451,8 @@ def test_numba_unconstrained_matches_unconstrained() -> None:
     ref = UnconstrainedDither().dither(canvas, cfg)
     got = NumbaUnconstrainedDither().dither(canvas, cfg)
     np.testing.assert_array_equal(
-        ref, got,
+        ref,
+        got,
         err_msg="NumbaUnconstrainedDither diverged from UnconstrainedDither on identical input",
     )
 
@@ -471,7 +480,7 @@ def _fit_source_to_panel_rgb(src: Path) -> tuple[np.ndarray, np.ndarray]:
     img_resized = None
 
     padding_mask = np.ones((visible_h, visible_w), dtype=bool)
-    padding_mask[y_off:y_off + new_h, x_off:x_off + new_w] = False
+    padding_mask[y_off : y_off + new_h, x_off : x_off + new_w] = False
 
     composed = composed.rotate(-90, expand=True)
     padding_mask = np.rot90(padding_mask, k=3)
@@ -504,7 +513,7 @@ def test_dither_quality_metrics():
             cfg = PRESET_IMAGE_CONFIGS[preset_name]
             with open_image_for_render(src) as img:
                 raw = ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
-                    img, cfg, "landscape"
+                    img, cfg, Orientation.LANDSCAPE
                 )
             idx = panel_bytes_to_indices(raw)
             all_results[preset_name][src.stem] = image_compare(
@@ -537,9 +546,7 @@ def test_dither_quality_metrics():
         nl = sum(m["neutral_leak"] for m in ms) / len(ms)
         sh = sum(m["sat_hit"] for m in ms) / len(ms)
         de = sum(m["overall_dE"] for m in ms) / len(ms)
-        lines.append(
-            f"{preset_name:<{col_w}}  {nl:>12.2f}  {sh:>8.3f}  {de:>10.2f}"
-        )
+        lines.append(f"{preset_name:<{col_w}}  {nl:>12.2f}  {sh:>8.3f}  {de:>10.2f}")
     lines.append(sep)
 
     output = "\n".join(lines)
@@ -547,14 +554,11 @@ def test_dither_quality_metrics():
     (_BUILD_METRICS_DIR / "metrics.txt").write_text(output + "\n", encoding="utf-8")
 
     metric_keys = list(next(iter(next(iter(all_results.values())).values())))
-    tsv_rows = ["\t".join(["image", "preset"] + metric_keys)]
+    tsv_rows = ["\t".join(["image", "preset", *metric_keys])]
     for src in images:
         for preset_name in presets:
             m = all_results[preset_name][src.stem]
             tsv_rows.append(
-                f"{src.stem}\t{preset_name}\t"
-                + "\t".join(f"{m[k]:.4f}" for k in metric_keys)
+                f"{src.stem}\t{preset_name}\t" + "\t".join(f"{m[k]:.4f}" for k in metric_keys)
             )
-    (_BUILD_METRICS_DIR / "metrics.tsv").write_text(
-        "\n".join(tsv_rows) + "\n", encoding="utf-8"
-    )
+    (_BUILD_METRICS_DIR / "metrics.tsv").write_text("\n".join(tsv_rows) + "\n", encoding="utf-8")

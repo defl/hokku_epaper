@@ -1,6 +1,7 @@
 from pathlib import Path
+
+import pillow_jxl  # noqa: F401 — PIL plugin registration
 from PIL import Image
-import pillow_jxl
 
 _ROOT = Path(__file__).resolve().parent.parent
 _OUT = _ROOT / "images" / "test"
