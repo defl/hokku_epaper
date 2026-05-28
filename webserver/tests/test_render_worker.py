@@ -24,7 +24,7 @@ _FIXTURE_PNG = _TEST_IMAGES / "grayscale_linear_bar_1200x300.png"
 _FIXTURE_JPG = _TEST_IMAGES / "RGB_corner_gradient_bilinear_1200.png"
 
 
-def _cfg_dict(preset: str = "atkinson") -> dict:
+def _cfg_dict(preset: str = "atkinson_hue_aware") -> dict:
     return asdict(PRESET_IMAGE_CONFIGS[preset])
 
 

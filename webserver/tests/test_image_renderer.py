@@ -34,7 +34,7 @@ def _synth_img(w: int = 64, h: int = 64) -> Image.Image:
 
 
 def _noop_cfg() -> ImageConfig:
-    base = PRESET_IMAGE_CONFIGS["floyd_steinberg"]
+    base = PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
     return replace(
         base,
         prepare_autocontrast_cutoff=0.0,
@@ -43,7 +43,7 @@ def _noop_cfg() -> ImageConfig:
         prepare_contrast=1.0,
         prepare_usm_amount=0,
         color_enhance=1.0,
-        use_adaptive_saturate=False,
+        adaptive_saturate_space="off",
         adaptive_vivid=False,
         scale_chroma=False,
         dither=DitherConfig(

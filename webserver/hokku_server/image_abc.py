@@ -172,7 +172,7 @@ def _apply_prepare_enhancements(
     )
 
     # 7. Colour enhance (only when adaptive_saturate is off — both boost chroma)
-    if not cfg.use_adaptive_saturate:
+    if cfg.adaptive_saturate_space == "off":
         canvas = ImageEnhance.Color(canvas).enhance(cfg.color_enhance)
 
     return canvas

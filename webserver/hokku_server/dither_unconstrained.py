@@ -100,11 +100,41 @@ def _rgb_to_lab(rgb: ArrayLike) -> FloatArray:
 _PALETTE_LAB = _rgb_to_lab(PALETTE_MEASURED_RGB)
 
 
+def _linear_rgb_to_oklab(rgb: ArrayLike) -> FloatArray:
+    """Linear RGB [0,1] → OKLAB."""
+    rgb = np.asarray(rgb, dtype=np.float64)
+    M1 = np.array(
+        [
+            [0.4122214708, 0.5363325363, 0.0514459929],
+            [0.2119034982, 0.6806995451, 0.1073969566],
+            [0.0883024619, 0.2817188376, 0.6299787005],
+        ]
+    )
+    lms = np.cbrt(rgb @ M1.T)
+    M2 = np.array(
+        [
+            [0.2104542553, 0.7936177850, -0.0040720468],
+            [1.9779984951, -2.4285922050, 0.4505937099],
+            [0.0259040371, 0.7827717662, -0.8086757660],
+        ]
+    )
+    return lms @ M2.T
+
+
+def _rgb_to_oklab(rgb: ArrayLike) -> FloatArray:
+    linear = _srgb_to_linear(np.clip(np.asarray(rgb, dtype=np.float64), 0, 255))
+    return _linear_rgb_to_oklab(linear)
+
+
+_PALETTE_OKLAB = _rgb_to_oklab(PALETTE_MEASURED_RGB)
+_OKLAB_NEUTRAL_CHROMA = 0.05
+
+
 # ── LUTs (self-contained copy) ─────────────────────────────────────
 
 
 def _build_rgb_lut() -> tuple[UInt8Array, float]:
-    """32³ RGB grid → palette index by Euclidean Lab distance."""
+    """32³ RGB grid → palette index by Euclidean CIELAB distance."""
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -112,6 +142,20 @@ def _build_rgb_lut() -> tuple[UInt8Array, float]:
     rgb_grid = np.stack([rr, gg, bb], axis=-1).reshape(-1, 3)
     lab_grid = _rgb_to_lab(rgb_grid)
     dists = np.sum((lab_grid[:, None, :] - _PALETTE_LAB[None, :, :]) ** 2, axis=2)
+    lut = np.argmin(dists, axis=1).astype(np.uint8).reshape(steps, steps, steps)
+    return lut, scale
+
+
+def _build_rgb_lut_weighted() -> tuple[UInt8Array, float]:
+    """32³ RGB grid → palette index by weighted CIELAB distance (2L² + a² + b²)."""
+    steps = 32
+    scale = 256 / steps
+    vals = np.arange(steps) * scale + scale / 2
+    rr, gg, bb = np.meshgrid(vals, vals, vals, indexing="ij")
+    rgb_grid = np.stack([rr, gg, bb], axis=-1).reshape(-1, 3)
+    lab_grid = _rgb_to_lab(rgb_grid)
+    diff = lab_grid[:, None, :] - _PALETTE_LAB[None, :, :]
+    dists = 2.0 * diff[..., 0] ** 2 + diff[..., 1] ** 2 + diff[..., 2] ** 2
     lut = np.argmin(dists, axis=1).astype(np.uint8).reshape(steps, steps, steps)
     return lut, scale
 
@@ -151,6 +195,42 @@ def _build_rgb_lut_hue_aware(
     return lut, scale
 
 
+def _build_rgb_lut_hue_aware_weighted(
+    hue_cutoff_deg: float,
+    neutral_chroma: float,
+) -> tuple[UInt8Array, float]:
+    """Like _build_rgb_lut_hue_aware but uses weighted CIELAB distance (2L² + a² + b²)."""
+    steps = 32
+    scale = 256 / steps
+    vals = np.arange(steps) * scale + scale / 2
+    rr, gg, bb = np.meshgrid(vals, vals, vals, indexing="ij")
+    rgb_grid = np.stack([rr, gg, bb], axis=-1).reshape(-1, 3)
+    lab_grid = _rgb_to_lab(rgb_grid)
+
+    pal_a = _PALETTE_LAB[:, 1]
+    pal_b = _PALETTE_LAB[:, 2]
+    pal_chroma = np.sqrt(pal_a**2 + pal_b**2)
+    pal_hue = np.arctan2(pal_b, pal_a)
+    neutral_pal = pal_chroma < neutral_chroma
+
+    pix_a = lab_grid[:, 1]
+    pix_b = lab_grid[:, 2]
+    pix_chroma = np.sqrt(pix_a**2 + pix_b**2)
+    pix_hue = np.arctan2(pix_b, pix_a)
+    dh = pix_hue[:, None] - pal_hue[None, :]
+    dh = np.arctan2(np.sin(dh), np.cos(dh))
+    dh_deg = np.abs(np.degrees(dh))
+
+    forbidden = (
+        (pix_chroma[:, None] > neutral_chroma) & (~neutral_pal[None, :]) & (dh_deg > hue_cutoff_deg)
+    )
+    diff = lab_grid[:, None, :] - _PALETTE_LAB[None, :, :]
+    dists = 2.0 * diff[..., 0] ** 2 + diff[..., 1] ** 2 + diff[..., 2] ** 2
+    dists = np.where(forbidden, np.inf, dists)
+    lut = np.argmin(dists, axis=1).astype(np.uint8).reshape(steps, steps, steps)
+    return lut, scale
+
+
 def _build_rgb_lut_bw() -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index using ONLY black (0) and white (1) entries.
 
@@ -170,9 +250,123 @@ def _build_rgb_lut_bw() -> tuple[UInt8Array, float]:
     return lut, scale
 
 
+def _build_rgb_lut_oklab() -> tuple[UInt8Array, float]:
+    """32³ RGB grid → palette index by Euclidean OKLAB distance."""
+    steps = 32
+    scale = 256 / steps
+    vals = np.arange(steps) * scale + scale / 2
+    rr, gg, bb = np.meshgrid(vals, vals, vals, indexing="ij")
+    rgb_grid = np.stack([rr, gg, bb], axis=-1).reshape(-1, 3)
+    oklab_grid = _rgb_to_oklab(rgb_grid)
+    dists = np.sum((oklab_grid[:, None, :] - _PALETTE_OKLAB[None, :, :]) ** 2, axis=2)
+    lut = np.argmin(dists, axis=1).astype(np.uint8).reshape(steps, steps, steps)
+    return lut, scale
+
+
+def _build_rgb_lut_oklab_hue_aware(hue_cutoff_deg: float) -> tuple[UInt8Array, float]:
+    """Like _build_rgb_lut_oklab but forbids hue-distant colour palette entries."""
+    steps = 32
+    scale = 256 / steps
+    vals = np.arange(steps) * scale + scale / 2
+    rr, gg, bb = np.meshgrid(vals, vals, vals, indexing="ij")
+    rgb_grid = np.stack([rr, gg, bb], axis=-1).reshape(-1, 3)
+    oklab_grid = _rgb_to_oklab(rgb_grid)
+
+    pal_a = _PALETTE_OKLAB[:, 1]
+    pal_b = _PALETTE_OKLAB[:, 2]
+    pal_chroma = np.sqrt(pal_a**2 + pal_b**2)
+    pal_hue = np.arctan2(pal_b, pal_a)
+    neutral_pal = pal_chroma < _OKLAB_NEUTRAL_CHROMA
+
+    pix_a = oklab_grid[:, 1]
+    pix_b = oklab_grid[:, 2]
+    pix_chroma = np.sqrt(pix_a**2 + pix_b**2)
+    pix_hue = np.arctan2(pix_b, pix_a)
+    dh = pix_hue[:, None] - pal_hue[None, :]
+    dh = np.arctan2(np.sin(dh), np.cos(dh))
+    dh_deg = np.abs(np.degrees(dh))
+
+    forbidden = (
+        (pix_chroma[:, None] > _OKLAB_NEUTRAL_CHROMA)
+        & (~neutral_pal[None, :])
+        & (dh_deg > hue_cutoff_deg)
+    )
+    dists = np.sum((oklab_grid[:, None, :] - _PALETTE_OKLAB[None, :, :]) ** 2, axis=2)
+    dists = np.where(forbidden, np.inf, dists)
+    lut = np.argmin(dists, axis=1).astype(np.uint8).reshape(steps, steps, steps)
+    return lut, scale
+
+
+# ── CAM16-UCS LUTs (lazy-imports colour-science on first build) ───────────
+
+
+def _rgb_to_cam16ucs_unc(rgb: ArrayLike) -> FloatArray:
+    """sRGB [0,255] → CAM16-UCS J', a', b'. Lazy-imports colour-science."""
+    import colour  # noqa: PLC0415 — lazy: 6s import paid only on first CAM16 LUT build
+
+    arr = np.clip(np.asarray(rgb, dtype=np.float64), 0, 255)
+    xyz = _linear_to_xyz(_srgb_to_linear(arr))
+    return colour.XYZ_to_CAM16UCS(xyz)
+
+
+def _build_rgb_lut_cam16ucs() -> tuple[UInt8Array, float]:
+    """32³ RGB grid → palette index by Euclidean CAM16-UCS distance."""
+    steps = 32
+    scale = 256 / steps
+    vals = np.arange(steps) * scale + scale / 2
+    rr, gg, bb = np.meshgrid(vals, vals, vals, indexing="ij")
+    rgb_grid = np.stack([rr, gg, bb], axis=-1).reshape(-1, 3)
+    pal_jab = _rgb_to_cam16ucs_unc(PALETTE_MEASURED_RGB)
+    jab_grid = _rgb_to_cam16ucs_unc(rgb_grid)
+    dists = np.sum((jab_grid[:, None, :] - pal_jab[None, :, :]) ** 2, axis=2)
+    lut = np.argmin(dists, axis=1).astype(np.uint8).reshape(steps, steps, steps)
+    return lut, scale
+
+
+def _build_rgb_lut_cam16ucs_hue_aware(
+    hue_cutoff_deg: float,
+    neutral_chroma: float,
+) -> tuple[UInt8Array, float]:
+    """CAM16-UCS LUT with hue-distant palette entries forbidden."""
+    steps = 32
+    scale = 256 / steps
+    vals = np.arange(steps) * scale + scale / 2
+    rr, gg, bb = np.meshgrid(vals, vals, vals, indexing="ij")
+    rgb_grid = np.stack([rr, gg, bb], axis=-1).reshape(-1, 3)
+    pal_jab = _rgb_to_cam16ucs_unc(PALETTE_MEASURED_RGB)
+    jab_grid = _rgb_to_cam16ucs_unc(rgb_grid)
+
+    pal_a = pal_jab[:, 1]
+    pal_b = pal_jab[:, 2]
+    pal_chroma = np.sqrt(pal_a**2 + pal_b**2)
+    pal_hue = np.arctan2(pal_b, pal_a)
+    neutral_pal = pal_chroma < neutral_chroma
+
+    pix_a = jab_grid[:, 1]
+    pix_b = jab_grid[:, 2]
+    pix_chroma = np.sqrt(pix_a**2 + pix_b**2)
+    pix_hue = np.arctan2(pix_b, pix_a)
+    dh = pix_hue[:, None] - pal_hue[None, :]
+    dh = np.arctan2(np.sin(dh), np.cos(dh))
+    dh_deg = np.abs(np.degrees(dh))
+
+    forbidden = (
+        (pix_chroma[:, None] > neutral_chroma) & (~neutral_pal[None, :]) & (dh_deg > hue_cutoff_deg)
+    )
+    dists = np.sum((jab_grid[:, None, :] - pal_jab[None, :, :]) ** 2, axis=2)
+    dists = np.where(forbidden, np.inf, dists)
+    lut = np.argmin(dists, axis=1).astype(np.uint8).reshape(steps, steps, steps)
+    return lut, scale
+
+
 @lru_cache(maxsize=1)
 def _cached_euclidean_lut() -> tuple[UInt8Array, float]:
     return _build_rgb_lut()
+
+
+@lru_cache(maxsize=1)
+def _cached_euclidean_weighted_lut() -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_weighted()
 
 
 @lru_cache(maxsize=16)
@@ -180,16 +374,57 @@ def _cached_hue_aware_lut(hue_cutoff_deg: float, neutral_chroma: float) -> tuple
     return _build_rgb_lut_hue_aware(hue_cutoff_deg, neutral_chroma)
 
 
+@lru_cache(maxsize=16)
+def _cached_hue_aware_weighted_lut(
+    hue_cutoff_deg: float, neutral_chroma: float
+) -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_hue_aware_weighted(hue_cutoff_deg, neutral_chroma)
+
+
 @lru_cache(maxsize=1)
 def _cached_bw_lut() -> tuple[UInt8Array, float]:
     return _build_rgb_lut_bw()
 
 
+@lru_cache(maxsize=1)
+def _cached_oklab_lut() -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_oklab()
+
+
+@lru_cache(maxsize=16)
+def _cached_oklab_hue_aware_lut(hue_cutoff_deg: float) -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_oklab_hue_aware(hue_cutoff_deg)
+
+
+@lru_cache(maxsize=1)
+def _cached_cam16ucs_lut() -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_cam16ucs()
+
+
+@lru_cache(maxsize=16)
+def _cached_cam16ucs_hue_aware_lut(
+    hue_cutoff_deg: float, neutral_chroma: float
+) -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_cam16ucs_hue_aware(hue_cutoff_deg, neutral_chroma)
+
+
 def _lut_and_scale(cfg: DitherConfig) -> tuple[NDArray[np.uint8], float]:
     if cfg.lut_name == "euclidean":
         return _cached_euclidean_lut()
+    if cfg.lut_name == "euclidean_weighted":
+        return _cached_euclidean_weighted_lut()
     if cfg.lut_name == "bw":
         return _cached_bw_lut()
+    if cfg.lut_name == "oklab":
+        return _cached_oklab_lut()
+    if cfg.lut_name == "oklab_hue_aware":
+        return _cached_oklab_hue_aware_lut(cfg.hue_cutoff_deg)
+    if cfg.lut_name == "cam16ucs":
+        return _cached_cam16ucs_lut()
+    if cfg.lut_name == "cam16ucs_hue_aware":
+        return _cached_cam16ucs_hue_aware_lut(cfg.hue_cutoff_deg, cfg.neutral_chroma)
+    if cfg.lut_name == "hue_aware_weighted":
+        return _cached_hue_aware_weighted_lut(cfg.hue_cutoff_deg, cfg.neutral_chroma)
     return _cached_hue_aware_lut(cfg.hue_cutoff_deg, cfg.neutral_chroma)
 
 
@@ -352,7 +587,17 @@ class UnconstrainedDither(AbstractDither):
     def dither(self, canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
         if cfg.algorithm not in self._KERNELS and cfg.algorithm != "noop":
             raise ValueError(f"Unknown algorithm: {cfg.algorithm!r}")
-        if cfg.lut_name not in ("euclidean", "hue_aware", "bw"):
+        if cfg.lut_name not in (
+            "euclidean",
+            "euclidean_weighted",
+            "hue_aware",
+            "hue_aware_weighted",
+            "bw",
+            "oklab",
+            "oklab_hue_aware",
+            "cam16ucs",
+            "cam16ucs_hue_aware",
+        ):
             raise ValueError(f"Unknown lut_name: {cfg.lut_name!r}")
         lut, lut_scale = _lut_and_scale(cfg)
         if cfg.algorithm == "noop":

@@ -393,7 +393,7 @@ def test_config_post_without_config_path_returns_500(bare_state: AppState):
 def test_dither_preview_returns_png(synced_client):
     client, _, name = synced_client
     # Use the atkinson preset dict as the image config body.
-    img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson"])
+    img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])
     resp = client.post(
         "/hokku/api/dither/preview",
         json={"name": name, "image": img_cfg},
@@ -405,7 +405,7 @@ def test_dither_preview_returns_png(synced_client):
 
 def test_dither_preview_face_bboxes_header_present(synced_client):
     client, _, name = synced_client
-    img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson"])
+    img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])
     resp = client.post(
         "/hokku/api/dither/preview",
         json={"name": name, "image": img_cfg},
@@ -420,7 +420,7 @@ def test_dither_preview_missing_image_returns_404(bare_client):
     client, _ = bare_client
     resp = client.post(
         "/hokku/api/dither/preview",
-        json={"name": "ghost.jpg", "image": asdict(PRESET_IMAGE_CONFIGS["atkinson"])},
+        json={"name": "ghost.jpg", "image": asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])},
     )
     assert resp.status_code == 404
 

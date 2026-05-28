@@ -93,6 +93,15 @@ if ! python3 -c "import resvg_py" 2>/dev/null; then
     echo "Warning: Could not install resvg-py. SVG support will be unavailable."
 fi
 
+# Install colour-science via pip — required for the CAM16-UCS palette LUT
+# variants. Not available as a Debian package.
+if ! python3 -c "import colour" 2>/dev/null; then
+    echo "Installing colour-science for CAM16-UCS palette LUT..."
+    pip3 install --break-system-packages "colour-science>=0.4" 2>/dev/null || \
+    pip3 install "colour-science>=0.4" 2>/dev/null || \
+    echo "Warning: Could not install colour-science. CAM16-UCS LUTs will be unavailable."
+fi
+
 # Install zeroconf via pip — required for mDNS / Bonjour advertisement so
 # the server is discoverable as "Hokku on <hostname>" on the local network
 # without needing to know the IP address.

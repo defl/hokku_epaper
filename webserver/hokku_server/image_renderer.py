@@ -28,7 +28,15 @@ from hokku_server.bounding_box import BoundingBox
 from hokku_server.display import FULL_W as _SCREEN_W
 from hokku_server.display import PANEL_H as _SCREEN_H
 from hokku_server.dither_abc import AbstractDither
-from hokku_server.dither_streaming import PALETTE_LAB, adaptive_saturate, rgb_to_lab
+from hokku_server.dither_streaming import (
+    PALETTE_LAB,
+    PALETTE_OKLAB,
+    adaptive_saturate,
+    adaptive_saturate_oklab,
+    oklab_to_rgb,
+    rgb_to_lab,
+    rgb_to_oklab,
+)
 from hokku_server.image_abc import AbstractImageRenderer
 from hokku_server.image_config import ImageConfig
 from hokku_server.orientation import Orientation
@@ -223,37 +231,120 @@ class ImageRenderer(AbstractImageRenderer):
         adaptive_vivid: bool,
         vivid_chroma_low: float,
         vivid_chroma_high: float,
+        vivid_chroma_low_oklab: float = 0.025,
+        vivid_chroma_high_oklab: float = 0.075,
+        drc_l_space: str = "cielab",
+        drc_chroma_space: str = "cielab",
     ) -> NDArray[np.float32]:
-        """Map source Lab range into the panel's reachable L* range."""
+        """Map source range into the panel's reachable L\\* range.
+
+        L compression and chroma scaling can each run in either CIELAB or
+        OKLAB.  When both spaces are the same, the work happens in one pass;
+        when they differ, the L stage runs first then we round-trip through
+        sRGB into the second space for the chroma stage.
+        """
+        if drc_l_space not in ("cielab", "oklab"):
+            raise ValueError(f"drc_l_space must be 'cielab' or 'oklab', got {drc_l_space!r}")
+        if drc_chroma_space not in ("cielab", "oklab"):
+            raise ValueError(
+                f"drc_chroma_space must be 'cielab' or 'oklab', got {drc_chroma_space!r}"
+            )
+
         f32 = np.float32
         rgb = np.asarray(img_array, dtype=f32)
+
+        # Stage 1: L compression in the requested space.
+        if drc_l_space == "cielab":
+            rgb = ImageRenderer._drc_cielab_l(rgb)
+        else:
+            rgb = ImageRenderer._drc_oklab_l(rgb)
+
+        # Stage 2: chroma scaling in the requested space.
+        if drc_chroma_space == "cielab":
+            return ImageRenderer._drc_cielab_chroma(
+                rgb,
+                scale_chroma=scale_chroma,
+                adaptive_vivid=adaptive_vivid,
+                vivid_chroma_low=vivid_chroma_low,
+                vivid_chroma_high=vivid_chroma_high,
+            )
+        return ImageRenderer._drc_oklab_chroma(
+            rgb,
+            scale_chroma=scale_chroma,
+            adaptive_vivid=adaptive_vivid,
+            vivid_chroma_low=vivid_chroma_low_oklab,
+            vivid_chroma_high=vivid_chroma_high_oklab,
+        )
+
+    @staticmethod
+    def _drc_cielab_l(rgb: NDArray[np.float32]) -> NDArray[np.float32]:
+        """Map source L* into the panel's CIELAB L* range + tanh soft shoulder."""
+        f32 = np.float32
         lab = rgb_to_lab(rgb, dtype=f32)
         L = lab[..., 0]
-        a = lab[..., 1]
-        b_ch = lab[..., 2]
         black_L = f32(PALETTE_LAB[0, 0])
         white_L = f32(PALETTE_LAB[1, 0])
-        c_ratio = f32((float(white_L) - float(black_L)) / 100.0)
-        np.multiply(L, f32((float(white_L) - float(black_L)) / 100.0), out=L)
+        ratio = f32((float(white_L) - float(black_L)) / 100.0)
+        np.multiply(L, ratio, out=L)
         np.add(L, black_L, out=L)
-
-        # Soft highlight rolloff: tanh shoulder for the top 15% of the L* range.
-        # Prevents near-white regions from hard-clipping to the panel's white ink;
-        # always on — no config flag needed (monotone, transparent when not clipping).
         threshold = black_L + f32(0.85) * (white_L - black_L)
         headroom = white_L - threshold
         above = L > threshold
         if np.any(above):
             delta = L[above] - threshold
             L[above] = (threshold + headroom * np.tanh(delta / headroom)).astype(f32)
+        return ImageRenderer._lab_to_rgb(lab)
 
+    @staticmethod
+    def _drc_oklab_l(rgb: NDArray[np.float32]) -> NDArray[np.float32]:
+        """Map source L into the panel's OKLAB L range + tanh soft shoulder.
+
+        Panel anchors come from PALETTE_OKLAB (black L ≈ 0.085, white ≈ 0.825).
+        OKLAB has noticeably better perceived-lightness prediction than CIELAB
+        (Bottosson 2020), so the soft shoulder follows perceived brightness
+        more faithfully near the panel-white limit.
+        """
+        f32 = np.float32
+        oklab = rgb_to_oklab(rgb, dtype=f32)
+        L = oklab[..., 0]
+        black_L = f32(PALETTE_OKLAB[0, 0])
+        white_L = f32(PALETTE_OKLAB[1, 0])
+        # Source L is in [0, 1] in OKLAB — scale to [black_L, white_L].
+        ratio = white_L - black_L
+        np.multiply(L, ratio, out=L)
+        np.add(L, black_L, out=L)
+        threshold = black_L + f32(0.85) * (white_L - black_L)
+        headroom = white_L - threshold
+        above = L > threshold
+        if np.any(above):
+            delta = L[above] - threshold
+            L[above] = (threshold + headroom * np.tanh(delta / headroom)).astype(f32)
+        return oklab_to_rgb(oklab, dtype=f32)
+
+    @staticmethod
+    def _drc_cielab_chroma(
+        rgb: NDArray[np.float32],
+        *,
+        scale_chroma: bool,
+        adaptive_vivid: bool,
+        vivid_chroma_low: float,
+        vivid_chroma_high: float,
+    ) -> NDArray[np.float32]:
+        f32 = np.float32
+        if not (scale_chroma or adaptive_vivid):
+            return rgb
+        lab = rgb_to_lab(rgb, dtype=f32)
+        a = lab[..., 1]
+        b_ch = lab[..., 2]
+        black_L = f32(PALETTE_LAB[0, 0])
+        white_L = f32(PALETTE_LAB[1, 0])
+        c_ratio = f32((float(white_L) - float(black_L)) / 100.0)
         if adaptive_vivid:
             chroma = np.sqrt(a * a + b_ch * b_ch)
-            t = np.clip(
-                (chroma - f32(vivid_chroma_low)) / f32(vivid_chroma_high - vivid_chroma_low),
-                f32(0.0),
-                f32(1.0),
-            )
+            span = f32(vivid_chroma_high - vivid_chroma_low)
+            if span <= 0:
+                span = f32(1e-6)
+            t = np.clip((chroma - f32(vivid_chroma_low)) / span, f32(0.0), f32(1.0))
             c_factor = c_ratio + (f32(1.0) - c_ratio) * t
             np.multiply(a, c_factor, out=a)
             np.multiply(b_ch, c_factor, out=b_ch)
@@ -261,6 +352,40 @@ class ImageRenderer(AbstractImageRenderer):
             np.multiply(a, c_ratio, out=a)
             np.multiply(b_ch, c_ratio, out=b_ch)
         return ImageRenderer._lab_to_rgb(lab)
+
+    @staticmethod
+    def _drc_oklab_chroma(
+        rgb: NDArray[np.float32],
+        *,
+        scale_chroma: bool,
+        adaptive_vivid: bool,
+        vivid_chroma_low: float,
+        vivid_chroma_high: float,
+    ) -> NDArray[np.float32]:
+        f32 = np.float32
+        if not (scale_chroma or adaptive_vivid):
+            return rgb
+        oklab = rgb_to_oklab(rgb, dtype=f32)
+        a = oklab[..., 1]
+        b_ch = oklab[..., 2]
+        black_L = f32(PALETTE_OKLAB[0, 0])
+        white_L = f32(PALETTE_OKLAB[1, 0])
+        # c_ratio is the same fractional compression as the CIELAB path —
+        # both anchors live on a [0, 1]-ish L axis in OKLAB.
+        c_ratio = f32((float(white_L) - float(black_L)) / 1.0)
+        if adaptive_vivid:
+            chroma = np.sqrt(a * a + b_ch * b_ch)
+            span = f32(vivid_chroma_high - vivid_chroma_low)
+            if span <= 0:
+                span = f32(1e-6)
+            t = np.clip((chroma - f32(vivid_chroma_low)) / span, f32(0.0), f32(1.0))
+            c_factor = c_ratio + (f32(1.0) - c_ratio) * t
+            np.multiply(a, c_factor, out=a)
+            np.multiply(b_ch, c_factor, out=b_ch)
+        elif scale_chroma:
+            np.multiply(a, c_ratio, out=a)
+            np.multiply(b_ch, c_ratio, out=b_ch)
+        return oklab_to_rgb(oklab, dtype=f32)
 
     @property
     def dither(self) -> AbstractDither:
@@ -289,16 +414,20 @@ class ImageRenderer(AbstractImageRenderer):
             clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
         )
 
-        use_sat = cfg.use_adaptive_saturate
+        sat_space = cfg.adaptive_saturate_space
         sat_max = cfg.saturate_max_enhance
-        sat_lo = cfg.saturate_low_chroma_thresh
-        sat_hi = cfg.saturate_high_chroma_thresh
+        sat_lo_cielab = cfg.saturate_low_chroma_thresh
+        sat_hi_cielab = cfg.saturate_high_chroma_thresh
+        sat_lo_oklab = cfg.saturate_low_chroma_thresh_oklab
+        sat_hi_oklab = cfg.saturate_high_chroma_thresh_oklab
         noise_std = cfg.dither_noise
 
         def _prep_stripe(stripe_uint8):
-            if use_sat:
-                f32 = adaptive_saturate(stripe_uint8, sat_max, sat_lo, sat_hi)
-            else:
+            if sat_space == "cielab":
+                f32 = adaptive_saturate(stripe_uint8, sat_max, sat_lo_cielab, sat_hi_cielab)
+            elif sat_space == "oklab":
+                f32 = adaptive_saturate_oklab(stripe_uint8, sat_max, sat_lo_oklab, sat_hi_oklab)
+            else:  # "off"
                 f32 = stripe_uint8.astype(np.float32)
             f32 = ImageRenderer.compress_dynamic_range(
                 f32,
@@ -306,6 +435,10 @@ class ImageRenderer(AbstractImageRenderer):
                 adaptive_vivid=cfg.adaptive_vivid,
                 vivid_chroma_low=cfg.vivid_chroma_low,
                 vivid_chroma_high=cfg.vivid_chroma_high,
+                vivid_chroma_low_oklab=cfg.vivid_chroma_low_oklab,
+                vivid_chroma_high_oklab=cfg.vivid_chroma_high_oklab,
+                drc_l_space=cfg.drc_l_space,
+                drc_chroma_space=cfg.drc_chroma_space,
             )
             if noise_std > 0.0:
                 noise = np.random.normal(0.0, noise_std, f32.shape).astype(np.float32)

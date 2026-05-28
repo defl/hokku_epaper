@@ -32,7 +32,7 @@ from hokku_server.presets import PRESET_IMAGE_CONFIGS
 @pytest.fixture
 def fast_image_config() -> ImageConfig:
     """An ImageConfig that uses the noop kernel — instant dither."""
-    base = PRESET_IMAGE_CONFIGS["atkinson"]
+    base = PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
     return replace(
         base,
         dither=replace(base.dither, algorithm="noop"),

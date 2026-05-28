@@ -4,6 +4,7 @@
 # Image processing (webserver)
 numpy
 numba                # JIT-compiled dither inner loop (NumbaDither)
+colour-science       # CAM16-UCS palette LUT — lazy-imported only when used
 Pillow
 pillow-heif          # HEIC/HEIF support
 pillow-avif-plugin   # AVIF support

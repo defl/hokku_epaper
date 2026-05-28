@@ -1,3 +1,14 @@
+hokku-server (3.0.1~dev.17-1) unstable; urgency=medium
+
+  * feat(dither): add OKLAB and CAM16-UCS palette LUTs
+  * feat(dither): add weighted CIELAB distance (2L² + a² + b²) LUT variants
+  * feat(dither): OKLAB-space adaptive saturation (better hue stability)
+  * feat(dither): OKLAB-space dynamic range compression (better lightness prediction)
+  * refactor: trim main preset list to the 3 actual UI defaults; expose
+    all 9 LUTs via the advanced panel instead
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 27 May 2026 00:00:00 +0000
+
 hokku-server (3.0.1~dev.16-1) unstable; urgency=medium
 
   * refactor: remove global orientation; orientation is now per-screen only
