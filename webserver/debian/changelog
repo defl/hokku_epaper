@@ -1,3 +1,10 @@
+hokku-server (3.0.1~dev.19-1) unstable; urgency=medium
+
+  * refactor(config): use Literal types for adaptive_saturate_space and
+    drc_*_space fields (matches existing pattern in dither_config)
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 27 May 2026 12:00:00 +0000
+
 hokku-server (3.0.1~dev.17-1) unstable; urgency=medium
 
   * feat(dither): add OKLAB and CAM16-UCS palette LUTs

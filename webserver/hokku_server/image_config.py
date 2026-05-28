@@ -5,9 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, fields, replace
-from typing import Any
+from typing import Any, Literal
 
 from hokku_server.dither_config import DitherConfig
+
+AdaptiveSaturateSpace = Literal["off", "cielab", "oklab"]
+DrcSpace = Literal["cielab", "oklab"]
 
 
 @dataclass(frozen=True)
@@ -24,7 +27,7 @@ class ImageConfig:
     prepare_brightness: float
     prepare_contrast: float
     color_enhance: float
-    adaptive_saturate_space: str  # "off" | "cielab" | "oklab"
+    adaptive_saturate_space: AdaptiveSaturateSpace
     saturate_max_enhance: float
     saturate_low_chroma_thresh: float  # CIELAB chroma units
     saturate_high_chroma_thresh: float  # CIELAB chroma units
@@ -36,8 +39,8 @@ class ImageConfig:
     vivid_chroma_high: float  # CIELAB chroma units
     vivid_chroma_low_oklab: float  # OKLAB chroma units
     vivid_chroma_high_oklab: float
-    drc_l_space: str  # "cielab" | "oklab" — space for L compression
-    drc_chroma_space: str  # "cielab" | "oklab" — space for chroma scaling
+    drc_l_space: DrcSpace  # space for L compression
+    drc_chroma_space: DrcSpace  # space for chroma scaling
     prepare_midtone: float
     clahe_clip_limit: float
     clahe_keepout_feather: float  # sigma = min(canvas_w, canvas_h) * this; 0 = hard edge

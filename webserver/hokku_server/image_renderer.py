@@ -38,7 +38,7 @@ from hokku_server.dither_streaming import (
     rgb_to_oklab,
 )
 from hokku_server.image_abc import AbstractImageRenderer
-from hokku_server.image_config import ImageConfig
+from hokku_server.image_config import DrcSpace, ImageConfig
 from hokku_server.orientation import Orientation
 
 IMAGE_EXTENSIONS = {
@@ -233,8 +233,8 @@ class ImageRenderer(AbstractImageRenderer):
         vivid_chroma_high: float,
         vivid_chroma_low_oklab: float = 0.025,
         vivid_chroma_high_oklab: float = 0.075,
-        drc_l_space: str = "cielab",
-        drc_chroma_space: str = "cielab",
+        drc_l_space: DrcSpace = "cielab",
+        drc_chroma_space: DrcSpace = "cielab",
     ) -> NDArray[np.float32]:
         """Map source range into the panel's reachable L\\* range.
 
