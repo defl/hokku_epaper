@@ -157,22 +157,34 @@ per image.
 Six named presets cover the three algorithms in plain (Euclidean LUT) and
 hue-aware variants. The default is `atkinson_hue_aware`.
 
-| Preset key                  | Algorithm       | LUT        | Adaptive sat | Adaptive vivid | Default? |
-|-----------------------------|-----------------|------------|:------------:|:--------------:|:--------:|
-| `floyd_steinberg`           | Floyd-Steinberg | euclidean  |              |                |          |
-| `floyd_steinberg_hue_aware` | Floyd-Steinberg | hue_aware  | ✓            | ✓              |          |
-| `atkinson`                  | Atkinson        | euclidean  |              |                |          |
-| `atkinson_hue_aware`        | Atkinson        | hue_aware  | ✓            | ✓              | **Yes**  |
-| `stucki`                    | Stucki          | euclidean  |              |                |          |
-| `stucki_hue_aware`          | Stucki          | hue_aware  | ✓            | ✓              |          |
+| Preset key                              | Algorithm       | LUT                  | Adaptive sat | Adaptive vivid | Default? |
+|-----------------------------------------|-----------------|----------------------|:------------:|:--------------:|:--------:|
+| `floyd_steinberg`                       | Floyd-Steinberg | euclidean            |              |                |          |
+| `floyd_steinberg_hue_aware`             | Floyd-Steinberg | hue_aware            | ✓            | ✓              |          |
+| `floyd_steinberg_euclidean_weighted`    | Floyd-Steinberg | euclidean_weighted   |              |                |          |
+| `floyd_steinberg_hue_aware_weighted`    | Floyd-Steinberg | hue_aware_weighted   | ✓            | ✓              |          |
+| `floyd_steinberg_oklab`                 | Floyd-Steinberg | oklab                |              |                |          |
+| `floyd_steinberg_oklab_hue_aware`       | Floyd-Steinberg | oklab_hue_aware      | ✓            | ✓              |          |
+| `atkinson`                              | Atkinson        | euclidean            |              |                |          |
+| `atkinson_hue_aware`                    | Atkinson        | hue_aware            | ✓            | ✓              | **Yes**  |
+| `atkinson_euclidean_weighted`           | Atkinson        | euclidean_weighted   |              |                |          |
+| `atkinson_hue_aware_weighted`           | Atkinson        | hue_aware_weighted   | ✓            | ✓              |          |
+| `atkinson_oklab`                        | Atkinson        | oklab                |              |                |          |
+| `atkinson_oklab_hue_aware`              | Atkinson        | oklab_hue_aware      | ✓            | ✓              |          |
+| `stucki`                                | Stucki          | euclidean            |              |                |          |
+| `stucki_hue_aware`                      | Stucki          | hue_aware            | ✓            | ✓              |          |
+| `stucki_euclidean_weighted`             | Stucki          | euclidean_weighted   |              |                |          |
+| `stucki_hue_aware_weighted`             | Stucki          | hue_aware_weighted   | ✓            | ✓              |          |
+| `stucki_oklab`                          | Stucki          | oklab                |              |                |          |
+| `stucki_oklab_hue_aware`               | Stucki          | oklab_hue_aware      | ✓            | ✓              |          |
 
 Plain presets use `ImageEnhance.Color(1.2)` (flat PIL saturation) because they
 have no chroma-gated pipeline to protect near-neutral pixels.
 
-Hue-aware presets enable `adaptive_saturate` and `adaptive_vivid` because
-the hue-constrained LUT pairs well with chroma-selective saturation boosting —
-the LUT's hue gate prevents accumulated error from escaping to a wrong-hue
-palette entry even after the saturation boost.
+Hue-aware and OKLAB hue-aware presets enable `adaptive_saturate` and
+`adaptive_vivid` because the hue-constrained LUT pairs well with chroma-selective
+saturation boosting — the LUT's hue gate prevents accumulated error from escaping
+to a wrong-hue palette entry even after the saturation boost.
 
 Presets live in `presets.py` as `PRESET_IMAGE_CONFIGS`, a plain
 `dict[str, ImageConfig]`. There are no partials; every field is spelled out so
@@ -242,6 +254,17 @@ works in float32 Lab space: RGB → Lab, scale a\* and b\* by `factor`, back to
 RGB. This is applied per-stripe (100 rows at a time) to stay within the
 memory budget (see §7).
 
+**OKLAB-space alternative.** `adaptive_saturate_oklab()` in the same module
+does the identical chroma boost but in OKLAB space. OKLAB has measurably
+better hue-stability under chroma scaling than CIELAB (Bottosson 2020 — RMS
+hue error 0.49 vs CIELAB 0.69 against the CAM16-UCS reference). The visible
+difference shows up on blues and yellows: when CIELAB chroma is boosted hard,
+the perceived hue drifts slightly toward purple/orange respectively; OKLAB
+keeps the hue planted while still boosting the saturation. Selected via
+`adaptive_saturate_space="oklab"` on `ImageConfig`. Thresholds live in
+separate `*_oklab` fields because the chroma scales differ by ~100× between
+the two spaces (panel inks: CIELAB chroma 35–80, OKLAB chroma 0.09–0.18).
+
 ### 5c. Phantom pink speckle in near-white regions
 
 Source: white beach umbrella fabric, RGB≈(245, 240, 230), Lab chroma ≈ 5.
@@ -283,6 +306,26 @@ Saturated pixels (tongues, red shirts) keep their full chroma (`c_factor=1.0`)
 so Red/Blue/Green remain reachable.
 
 `compress_dynamic_range()` lives in `image_renderer.py` and is also called per-stripe.
+
+**OKLAB-space alternatives.** Both stages of the DRC (the L\* mapping and
+the chroma scaling) can independently run in OKLAB instead of CIELAB. The
+two `ImageConfig` fields `drc_l_space` and `drc_chroma_space` (each
+`"cielab"` or `"oklab"`) pick the space per stage; they can disagree, in
+which case the L stage runs first and then the buffer is re-encoded into
+the other space for the chroma stage. The motivation:
+
+* **L\* mapping.** OKLAB has an ~8× lower lightness RMS error than CIELAB
+  (Bottosson 2020). The biggest visible difference is the tanh soft-shoulder
+  near panel-white — in CIELAB it slightly compresses tones the eye doesn't
+  perceive as compressed; in OKLAB the shoulder lines up with where viewers
+  actually start losing highlight detail.
+* **Chroma scaling.** OKLAB's better hue uniformity carries over from the
+  saturation case above.
+
+The panel anchors come from `PALETTE_OKLAB[0, 0]` (black ≈ 0.085) and
+`PALETTE_OKLAB[1, 0]` (white ≈ 0.825). `vivid_chroma_low_oklab` /
+`vivid_chroma_high_oklab` are the OKLAB-unit thresholds (defaults
+`0.025` / `0.075`).
 
 ### 5d. B&W photos developing a pink cast
 
@@ -408,7 +451,7 @@ fast sanity check that the LUT and indexing are correct.
 
 ## 8. Palette LUTs
 
-Both LUTs are 32³ `uint8` cubes. At index time the algorithm does:
+All LUTs are 32³ `uint8` cubes. At index time the algorithm does:
 
 ```python
 ri = min(int(r / lut_scale), 31)
@@ -423,21 +466,35 @@ panel's ink variability.
 
 ### `euclidean` LUT
 
-For every (R, G, B) grid cell, convert to Lab and pick the palette entry with
-minimum Euclidean Lab distance. Simple, correct, fast to build.
+For every (R, G, B) grid cell, convert to CIELAB and pick the palette entry
+with minimum Euclidean CIELAB distance:
 
 ```python
 dists = ||lab_grid - PALETTE_LAB||²  # shape (32768, 6)
 lut = argmin(dists, axis=1).reshape(32, 32, 32)
 ```
 
+### `euclidean_weighted` LUT
+
+Same as `euclidean` but with a 2× weight on the L\* axis
+(`2L² + a² + b²`), reflecting that a 1-unit lightness step is perceptually
+larger than a 1-unit chroma step in CIELAB:
+
+```python
+diff = lab_grid - PALETTE_LAB          # shape (32768, 6, 3)
+dists = 2*diff[...,0]**2 + diff[...,1]**2 + diff[...,2]**2
+lut = argmin(dists, axis=1).reshape(32, 32, 32)
+```
+
+Idea credit: [mattcarter11/eink-dithering-tester](https://github.com/mattcarter11/eink-dithering-tester).
+
 ### `hue_aware` LUT
 
-Same as Euclidean, but chromatic (chroma > `neutral_chroma`) palette entries
-whose hue angle differs from the source pixel's hue by more than
-`hue_cutoff_deg` are set to `np.inf` before `argmin`. This forces the nearest
-*same-hue* palette entry to win, preventing the error-cascade hue-swaps
-described in §5a.
+Same unweighted CIELAB distance as `euclidean`, but chromatic (chroma >
+`neutral_chroma`) palette entries whose hue angle differs from the source
+pixel's hue by more than `hue_cutoff_deg` are set to `np.inf` before `argmin`.
+This forces the nearest *same-hue* palette entry to win, preventing the
+error-cascade hue-swaps described in §5a.
 
 ```python
 forbidden = (
@@ -449,9 +506,63 @@ dists = where(forbidden, inf, dists)
 lut = argmin(dists, axis=1).reshape(32, 32, 32)
 ```
 
-Both LUTs are cached with `@lru_cache`: `_cached_euclidean_lut()` (maxsize=1)
-and `_cached_hue_aware_lut(hue_cutoff_deg, neutral_chroma)` (maxsize=16).
-Build cost is ~40 ms each; subsequent calls are free.
+### `hue_aware_weighted` LUT
+
+Same as `hue_aware` but uses the `2L² + a² + b²` weighted distance instead
+of unweighted Euclidean.
+
+### `oklab` LUT
+
+For every (R, G, B) grid cell, convert to **OKLAB** and pick the nearest
+palette entry by Euclidean OKLAB distance.  OKLAB is more perceptually
+uniform than CIELAB — equal Euclidean steps correspond more consistently to
+equal perceived colour differences — so no L-axis weighting is needed:
+
+```python
+oklab_grid = rgb_to_oklab(rgb_grid)          # sRGB → linear → OKLAB
+dists = ||oklab_grid - PALETTE_OKLAB||²
+lut = argmin(dists, axis=1).reshape(32, 32, 32)
+```
+
+The conversion matrix chain is sRGB → linear RGB → LMS (cube-root) → OKLAB.
+See `dither_streaming.linear_rgb_to_oklab` for the exact coefficients.
+
+### `oklab_hue_aware` LUT
+
+Same as `oklab` but with hue gating applied in OKLAB space.  Hue and chroma
+are derived from the OKLAB a and b axes (same angular convention as CIELAB).
+The neutral-chroma threshold is fixed at 0.05 OKLAB units (calibrated so that
+our panel's Black ≈ 0.000 and White ≈ 0.011 are neutral while all coloured
+inks are ≥ 0.094).  The `hue_cutoff_deg` parameter from `DitherConfig`
+applies unchanged (degrees are degrees in any polar colour space).
+
+### `cam16ucs` LUT
+
+CAM16-UCS is the CIE-endorsed "gold standard" perceptual colour space
+(Li et al. 2017).  For every (R, G, B) grid cell, convert to CAM16-UCS and
+pick the nearest palette entry by Euclidean distance in `J'a'b'` coordinates.
+Predicts perceived colour differences more accurately than CIELAB and OKLAB,
+but the math is significantly heavier — we use the `colour-science` library
+for the conversion and only use it for **one-shot LUT building** (cached
+forever after first build).  The colour-science import takes ~6 s on first
+use; once warm, the LUT itself builds in ~15 ms.
+
+We deliberately do **not** use CAM16-UCS for per-stripe saturation or DRC
+chroma compression: (a) per-stripe overhead would be ~100 ms each direction
+on a Pi Zero 2 W, and (b) the OKLAB authors specifically note that CAM16-UCS
+chroma compression "harms blending" — OKLAB is the better fit for those
+stages anyway.
+
+### `cam16ucs_hue_aware` LUT
+
+Same as `cam16ucs` but with hue gating applied in CAM16-UCS space.  Hue and
+chroma are derived from the `a'`, `b'` axes.  The `neutral_chroma` field
+(default 8.0) is reused — CAM16-UCS chroma is on a similar scale to CIELAB
+(panel inks land 21–33, panel-white ≈ 5).
+
+All LUTs are cached with `@lru_cache`.  Build cost is ~40–80 ms for CIELAB
+and OKLAB variants, ~15 ms for CAM16-UCS once colour-science is warm (~6 s
+cold-start).  Subsequent calls are free.
 
 ---
 
@@ -749,6 +860,16 @@ docs/
 - **Atkinson (1984)** — Apple LaserWriter dither. 6/8 damping.
 - **Stucki (1981)** — two-row, 12-neighbour kernel. Used in commercial
   typesetting systems; wider diffusion than FS without the FS diagonal artefacts.
+- **Björn Ottosson, *A perceptual color space for image processing* (2020)**
+  — https://bottosson.github.io/posts/oklab/  
+  Defines the OKLAB color space used by the `oklab` and `oklab_hue_aware`
+  LUT variants. The conversion matrices in `dither_streaming.linear_rgb_to_oklab`
+  come directly from this post.
+- **mattcarter11, *eink-dithering-tester***
+  — https://github.com/mattcarter11/eink-dithering-tester  
+  Browser-based tool for comparing e-ink dithering algorithms. Source of the
+  OKLAB integration idea, the `2L² + a² + b²` weighted CIELAB distance, and
+  the concept of separating error-diffusion space from palette-lookup space.
 
 ---
 

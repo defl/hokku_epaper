@@ -8,7 +8,17 @@ from dataclasses import asdict, dataclass
 from typing import Literal
 
 AlgorithmName = Literal["floyd_steinberg", "atkinson", "stucki", "noop"]
-LutName = Literal["euclidean", "hue_aware", "bw"]
+LutName = Literal[
+    "euclidean",
+    "euclidean_weighted",
+    "hue_aware",
+    "hue_aware_weighted",
+    "bw",
+    "oklab",
+    "oklab_hue_aware",
+    "cam16ucs",
+    "cam16ucs_hue_aware",
+]
 
 
 @dataclass(frozen=True)

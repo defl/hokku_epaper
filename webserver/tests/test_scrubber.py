@@ -159,8 +159,8 @@ def test_scrub_off_keeps_old_slug_files(tmp_path, make_test_image):
         # Disable classifier so the slug tracks image_config_default cleanly.
         classifier_bw_detect_enabled=False,
         image_config_default=replace(
-            PRESET_IMAGE_CONFIGS["atkinson"],
-            dither=replace(PRESET_IMAGE_CONFIGS["atkinson"].dither, algorithm="noop"),
+            PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
+            dither=replace(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].dither, algorithm="noop"),
         ),
     )
 
@@ -205,8 +205,8 @@ def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
     cache.mkdir()
 
     base_image = replace(
-        PRESET_IMAGE_CONFIGS["atkinson"],
-        dither=replace(PRESET_IMAGE_CONFIGS["atkinson"].dither, algorithm="noop"),
+        PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
+        dither=replace(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].dither, algorithm="noop"),
     )
     base_cfg = AppConfig(
         upload_dir=str(upload),
@@ -251,8 +251,8 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
     cache.mkdir()
 
     base_image = replace(
-        PRESET_IMAGE_CONFIGS["atkinson"],
-        dither=replace(PRESET_IMAGE_CONFIGS["atkinson"].dither, algorithm="noop"),
+        PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
+        dither=replace(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].dither, algorithm="noop"),
     )
     cfg = AppConfig(
         upload_dir=str(upload),

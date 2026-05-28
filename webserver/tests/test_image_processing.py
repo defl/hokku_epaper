@@ -71,7 +71,7 @@ _NOOP_DITHER = DitherConfig(
 )
 
 _BASE_CFG: ImageConfig = replace(
-    PRESET_IMAGE_CONFIGS["atkinson"],
+    PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
     dither=_NOOP_DITHER,
 )
 
@@ -359,7 +359,7 @@ def test_color_enhance_boosts_saturation():
     img = _make_rgb(40, 30, (200, 80, 40))  # warm orange
     cfg_vivid = _cfg(
         color_enhance=2.0,
-        use_adaptive_saturate=False,
+        adaptive_saturate_space="off",
         prepare_autocontrast_cutoff=0.0,
         prepare_gamma=1.0,
         prepare_brightness=1.0,
@@ -368,7 +368,7 @@ def test_color_enhance_boosts_saturation():
     )
     cfg_flat = _cfg(
         color_enhance=1.0,
-        use_adaptive_saturate=False,
+        adaptive_saturate_space="off",
         prepare_autocontrast_cutoff=0.0,
         prepare_gamma=1.0,
         prepare_brightness=1.0,
@@ -389,7 +389,7 @@ def test_color_enhance_below_one_desaturates():
     img = _make_rgb(40, 30, (200, 80, 40))
     cfg_grey = _cfg(
         color_enhance=0.0,
-        use_adaptive_saturate=False,
+        adaptive_saturate_space="off",
         prepare_autocontrast_cutoff=0.0,
         prepare_gamma=1.0,
         prepare_brightness=1.0,
@@ -405,10 +405,10 @@ def test_color_enhance_below_one_desaturates():
 
 
 def test_adaptive_saturate_changes_output_vs_color_enhance():
-    """use_adaptive_saturate path should produce different output than color_enhance path."""
+    """adaptive_saturate_space=cielab path should produce different output than color_enhance path."""
     img = _make_gradient()
     cfg_adapt = _cfg(
-        use_adaptive_saturate=True,
+        adaptive_saturate_space="cielab",
         saturate_max_enhance=1.5,
         saturate_low_chroma_thresh=5.0,
         saturate_high_chroma_thresh=20.0,
@@ -419,7 +419,7 @@ def test_adaptive_saturate_changes_output_vs_color_enhance():
         prepare_usm_amount=0,
     )
     cfg_enhance = _cfg(
-        use_adaptive_saturate=False,
+        adaptive_saturate_space="off",
         color_enhance=1.5,
         prepare_autocontrast_cutoff=0.0,
         prepare_gamma=1.0,
@@ -492,7 +492,7 @@ _CLAHE_CFG = _cfg(
     prepare_contrast=1.0,
     prepare_usm_amount=0,
     color_enhance=1.0,
-    use_adaptive_saturate=False,
+    adaptive_saturate_space="off",
 )
 
 
@@ -713,9 +713,9 @@ def test_near_grayscale_colour_photo():
 
 
 def test_bw_safe_disables_adaptive_saturate():
-    cfg = _cfg(use_adaptive_saturate=True)
+    cfg = _cfg(adaptive_saturate_space="cielab")
     safe = _bw_safe_image_config(cfg)
-    assert not safe.use_adaptive_saturate
+    assert safe.adaptive_saturate_space == "off"
 
 
 def test_bw_safe_disables_adaptive_vivid():
@@ -911,18 +911,18 @@ _SLOW_CONFIGS: dict[str, ImageConfig] = {
     "midtone_darken": _cfg(prepare_midtone=0.7),
     "noise_light": _cfg(dither_noise=3.0),
     # ── color enhancement ──
-    "color_enhance_1.8": _cfg(color_enhance=1.8, use_adaptive_saturate=False),
-    "color_enhance_0.5": _cfg(color_enhance=0.5, use_adaptive_saturate=False),
-    "color_enhance_0": _cfg(color_enhance=0.0, use_adaptive_saturate=False),
+    "color_enhance_1.8": _cfg(color_enhance=1.8, adaptive_saturate_space="off"),
+    "color_enhance_0.5": _cfg(color_enhance=0.5, adaptive_saturate_space="off"),
+    "color_enhance_0": _cfg(color_enhance=0.0, adaptive_saturate_space="off"),
     # ── adaptive saturation ──
     "adaptive_saturate": _cfg(
-        use_adaptive_saturate=True,
+        adaptive_saturate_space="cielab",
         saturate_max_enhance=1.5,
         saturate_low_chroma_thresh=5.0,
         saturate_high_chroma_thresh=20.0,
     ),
     "adaptive_saturate_strong": _cfg(
-        use_adaptive_saturate=True,
+        adaptive_saturate_space="cielab",
         saturate_max_enhance=2.0,
         saturate_low_chroma_thresh=3.0,
         saturate_high_chroma_thresh=12.0,
@@ -945,8 +945,8 @@ _SLOW_CONFIGS: dict[str, ImageConfig] = {
         dither=_NOOP_DITHER,
     ),
     "stucki_hue_aware_noop": replace(
-        PRESET_IMAGE_CONFIGS["stucki_hue_aware"],
-        dither=_NOOP_DITHER,
+        PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
+        dither=replace(_NOOP_DITHER, lut_name="hue_aware"),
     ),
     # ── extremes ──
     "all_boost": _cfg(
@@ -955,7 +955,7 @@ _SLOW_CONFIGS: dict[str, ImageConfig] = {
         prepare_contrast=1.4,
         prepare_usm_amount=320,
         color_enhance=1.8,
-        use_adaptive_saturate=False,
+        adaptive_saturate_space="off",
         adaptive_vivid=True,
         vivid_chroma_low=5.0,
         vivid_chroma_high=15.0,
@@ -967,7 +967,7 @@ _SLOW_CONFIGS: dict[str, ImageConfig] = {
         prepare_contrast=1.0,
         prepare_usm_amount=0,
         color_enhance=1.0,
-        use_adaptive_saturate=False,
+        adaptive_saturate_space="off",
         scale_chroma=False,
         adaptive_vivid=False,
     ),

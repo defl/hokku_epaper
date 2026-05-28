@@ -39,7 +39,7 @@ def _noop_image_config() -> ImageConfig:
         prepare_contrast=1.0,
         prepare_usm_amount=0,
         color_enhance=1.0,
-        use_adaptive_saturate=False,
+        adaptive_saturate_space="off",
         adaptive_vivid=False,
         scale_chroma=False,
         dither=DitherConfig(

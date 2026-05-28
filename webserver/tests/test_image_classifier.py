@@ -178,7 +178,7 @@ def test_screen_config_slug_differs_by_dispatch_outcome(tmp_path):
         tmp_path,
         bw=True,
         image_config_default=PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
-        image_config_bw=PRESET_IMAGE_CONFIGS["floyd_steinberg"],
+        image_config_bw=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"],
     )
     clf = ImageClassifier(cfg)
 

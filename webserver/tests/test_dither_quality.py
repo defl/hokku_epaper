@@ -85,8 +85,8 @@ _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff", ".heic", ".hei
 # Noop-kernel version of atkinson — instant dither, used for structural tests
 # that only care about output format/size, not visual quality.
 _FAST_CFG: ImageConfig = replace(
-    PRESET_IMAGE_CONFIGS["atkinson"],
-    dither=replace(PRESET_IMAGE_CONFIGS["atkinson"].dither, algorithm="noop"),
+    PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
+    dither=replace(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].dither, algorithm="noop"),
 )
 
 
@@ -234,7 +234,7 @@ def test_bw_image_renders_without_error():
 def test_preset_output_is_deterministic():
     """Same inputs always produce identical bytes (no randomness in pipeline)."""
     img = _make_rgb(30, 20)
-    cfg = PRESET_IMAGE_CONFIGS["atkinson"]
+    cfg = PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
     p1 = render_preview_png(img, cfg, "landscape", max_side_px=100)
     p2 = render_preview_png(img, cfg, "landscape", max_side_px=100)
     assert p1 == p2
@@ -292,7 +292,7 @@ def test_every_preset_preview_portrait(preset_name: str):
 
 
 def test_image_config_cache_slug_is_stable():
-    cfg = PRESET_IMAGE_CONFIGS["atkinson"]
+    cfg = PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
     assert cfg.cache_slug() == cfg.cache_slug()
 
 

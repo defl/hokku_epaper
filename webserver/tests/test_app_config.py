@@ -32,7 +32,7 @@ def test_cache_slug_invariant_to_port():
 
 def test_cache_slug_changes_with_image_config_default():
     base = AppConfig()
-    other = AppConfig(image_config_default=PRESET_IMAGE_CONFIGS["floyd_steinberg"])
+    other = AppConfig(image_config_default=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"])
     assert base.cache_slug() != other.cache_slug()
 
 
@@ -98,7 +98,7 @@ def test_unversioned_config_load_writes_back(tmp_path: Path):
 def test_image_configs_roundtrip(tmp_path: Path):
     cfg = AppConfig(
         image_config_default=PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"],
-        image_config_bw=PRESET_IMAGE_CONFIGS["floyd_steinberg"],
+        image_config_bw=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"],
         classifier_bw_detect_enabled=True,
     )
     p = tmp_path / "config.json"
