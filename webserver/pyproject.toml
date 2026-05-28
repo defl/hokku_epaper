@@ -22,6 +22,7 @@ dependencies = [
     "colour-science>=0.4",
     "zstd",
     "resvg-py>=0.3",
+    "defusedxml>=0.7",
 ]
 
 [project.scripts]
