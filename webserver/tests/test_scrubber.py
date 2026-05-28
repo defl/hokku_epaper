@@ -35,8 +35,8 @@ def _images_dir(mgr: AbstractImageManager) -> Path:
 
 
 def _slug_for(mgr: AbstractImageManager, name: str) -> str:
-    """Return the global-orientation slug for a registered image."""
-    result = mgr._records[name].slug(mgr._config.orientation)
+    """Return the LANDSCAPE slug for a registered image (lifecycle primary)."""
+    result = mgr._records[name].slug(Orientation.LANDSCAPE)
     assert result is not None
     return result
 
@@ -155,7 +155,6 @@ def test_scrub_off_keeps_old_slug_files(tmp_path, make_test_image):
         cache_dir=str(cache),
         port=18080,
         poll_interval_seconds=1,
-        orientation=Orientation.LANDSCAPE,
         auto_clear_cache=False,
         # Disable classifier so the slug tracks image_config_default cleanly.
         classifier_bw_detect_enabled=False,
@@ -214,7 +213,6 @@ def test_scrub_on_removes_old_slug_files(tmp_path, make_test_image):
         cache_dir=str(cache),
         port=18080,
         poll_interval_seconds=1,
-        orientation=Orientation.LANDSCAPE,
         auto_clear_cache=True,
         # Disable classifier so the slug tracks image_config_default cleanly.
         classifier_bw_detect_enabled=False,
@@ -261,7 +259,6 @@ def test_scrub_on_keeps_thumb(tmp_path, make_test_image):
         cache_dir=str(cache),
         port=18080,
         poll_interval_seconds=1,
-        orientation=Orientation.LANDSCAPE,
         auto_clear_cache=True,
         classifier_bw_detect_enabled=False,
         image_config_default=base_image,

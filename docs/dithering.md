@@ -72,9 +72,10 @@ webserver/hokku_server/
 ### Data flow for a full render
 
 ```
-ImageClassifier.screen_config_for(path, sha1)
-    └─ returns ScreenImageConfig { image_config, orientation, crop_threshold,
-                                    clahe_keepout_bboxes }
+ImageClassifier.decision_for(path, sha1)
+    └─ returns ImageClassifierDecision { image_config, crop_threshold,
+                                     clahe_keepout_bboxes }
+        # orientation is supplied by the caller per render target
 
 ImageRenderer(NumbaStreamingDither()).render_panel_bytes(img, cfg, orientation)
     ↓
@@ -308,7 +309,7 @@ landing on a monochrome image, at the cost of pure two-tone rendering
 ## 6. Image classifier — per-image config dispatch
 
 ```
-ImageClassifier.screen_config_for(path, sha1)
+ImageClassifier.decision_for(path, sha1)
   │
   ├─ B&W detection enabled? → is_grayscale(path)?
   │      → yes → use AppConfig.image_config_bw
@@ -319,6 +320,10 @@ ImageClassifier.screen_config_for(path, sha1)
   │
   └─ otherwise → use AppConfig.image_config_default
 ```
+
+Orientation is not part of the classifier's output — the image manager
+combines the decision with each render target's orientation
+(LANDSCAPE and PORTRAIT are always rendered) at dispatch time.
 
 Detection results (`is_bw`, `face_bboxes`) are cached by sha1 of the original
 file in `<cache_dir>/image_classifier.json`. A restart doesn't re-detect;

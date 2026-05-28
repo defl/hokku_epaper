@@ -36,6 +36,7 @@ from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
 from hokku_server.image_classifier import ImageClassifier
 from hokku_server.image_quality import image_compare
 from hokku_server.image_renderer import ImageRenderer, open_image_for_render
+from hokku_server.orientation import Orientation
 from tests._helpers import is_oversize_fixture
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -154,7 +155,7 @@ def test_render_as_screen() -> None:
         "face": app_cfg.image_config_face,
     }
 
-    orientation = app_cfg.orientation
+    orientation = Orientation.LANDSCAPE
     crop_threshold = app_cfg.crop_to_fill_threshold
     dither = NumbaStreamingDither()
 

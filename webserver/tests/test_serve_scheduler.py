@@ -189,15 +189,24 @@ def test_set_screen_config_preserves_all_fields(app_config: AppConfig):
     mgr = SingleThreadedImageManager(app_config)
     sched = ServeScheduler(mgr)
 
-    cfg1 = ScreenConfig(orientation_override=Orientation.LANDSCAPE, filter_by_orientation=True)
+    cfg1 = ScreenConfig(orientation=Orientation.LANDSCAPE, filter_by_orientation=True)
     sched.set_screen_config("s1", cfg1)
 
-    # Update only orientation_override — filter_by_orientation must survive
+    # Update only orientation — filter_by_orientation must survive
     current = sched.get_screen_config("s1")
-    sched.set_screen_config("s1", replace(current, orientation_override=Orientation.PORTRAIT))
+    sched.set_screen_config("s1", replace(current, orientation=Orientation.PORTRAIT))
     updated = sched.get_screen_config("s1")
-    assert updated.orientation_override == Orientation.PORTRAIT
+    assert updated.orientation == Orientation.PORTRAIT
     assert updated.filter_by_orientation is True
+
+
+def test_unknown_screen_defaults_to_landscape(app_config: AppConfig):
+    """A never-seen screen returns ScreenConfig() with the dataclass default."""
+    mgr = SingleThreadedImageManager(app_config)
+    sched = ServeScheduler(mgr)
+    cfg = sched.get_screen_config("never-seen")
+    assert cfg.orientation == Orientation.LANDSCAPE
+    assert cfg.filter_by_orientation is False
 
 
 def test_precompute_recomputes_all_orientations_on_mark_served(

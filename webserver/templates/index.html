@@ -866,16 +866,6 @@
     <button class="btn btn-secondary btn-small" onclick="addTime()">Add</button>
   </div>
 
-  <div class="config-row">
-    <label>Orientation:</label>
-    <span class="ctrl-tip" data-tip="Landscape = wide side horizontal, portrait = tall side vertical.&#10;Changing orientation triggers a full re-conversion of all images.">
-      <select id="orientation">
-        <option value="landscape">Landscape</option>
-        <option value="portrait">Portrait</option>
-      </select>
-    </span>
-  </div>
-
   <!-- Advanced toggle -->
   <div class="config-advanced-toggle" id="cfg-advanced-toggle" onclick="toggleConfigAdvanced()">
     <span class="toggle-arrow">▶</span>
@@ -1871,7 +1861,6 @@ async function saveConfig() {
   const data = {
     refresh_image_at_time: refreshTimes,
     poll_interval_seconds: parseInt(document.getElementById('poll-interval').value) || 10,
-    orientation: document.getElementById('orientation').value,
     debug_fast_refresh: document.getElementById('debug-fast-refresh').checked,
     auto_clear_cache: document.getElementById('auto-clear-cache').checked,
     mdns_hostname: document.getElementById('mdns-enabled').checked
@@ -1929,7 +1918,8 @@ async function scrubStaleCache() {
 async function clearAllCaches() {
   if (!confirm('Clear all caches (conversions + classifier) and re-process all images?')) return;
   try {
-    await fetch('/hokku/api/clear_all_caches', {method: 'POST'});
+    await fetch('/hokku/api/classifier/clear', {method: 'POST'});
+    await fetch('/hokku/api/clear_cache', {method: 'POST'});
     showToast('Caches cleared, re-converting...');
     refreshStatus();
   } catch (e) {
@@ -2065,11 +2055,10 @@ function renderScreens(screens) {
     const lastImgThumb = s.last_served
       ? `<a href="/hokku/api/original/${encodeURIComponent(s.last_served)}" target="_blank" title="${escapeHtml(s.last_served)}" style="display:block;line-height:0;"><img src="/hokku/api/thumbnail/${encodeURIComponent(s.last_served)}" alt="${escapeHtml(s.last_served)}" style="height:32px;width:auto;border-radius:2px;border:1px solid var(--bamboo);" loading="lazy" onerror="this.style.display='none'"></a>`
       : '<span style="color:var(--bamboo)">—</span>';
-    const override = s.orientation_override;
+    const orientation = s.orientation;
     const orientationCell = `<select class="orientation-select" onchange="setScreenOrientation('${safeName}', this.value)">
-      <option value=""          ${!override              ? 'selected' : ''}>Default</option>
-      <option value="landscape" ${override==='landscape' ? 'selected' : ''}>Landscape</option>
-      <option value="portrait"  ${override==='portrait'  ? 'selected' : ''}>Portrait</option>
+      <option value="landscape" ${orientation==='landscape' ? 'selected' : ''}>Landscape</option>
+      <option value="portrait"  ${orientation==='portrait'  ? 'selected' : ''}>Portrait</option>
     </select>`;
     const filterChecked = s.filter_by_orientation ? 'checked' : '';
     const matchCell = `<label style="display:flex;flex-direction:column;align-items:center;gap:2px;">
@@ -2115,16 +2104,15 @@ async function removeScreen(name) {
 }
 
 async function setScreenOrientation(name, value) {
-  const orientation = value === '' ? null : value;
   try {
     const r = await fetch(`/hokku/api/screens/${encodeURIComponent(name)}/config`, {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({orientation}),
+      body: JSON.stringify({orientation: value}),
     });
     if (!r.ok) throw new Error(await r.text());
     // Update local state so the dropdown stays correct on the next renderScreens().
-    if (lastScreens[name]) lastScreens[name].orientation_override = orientation;
+    if (lastScreens[name]) lastScreens[name].orientation = value;
   } catch (e) {
     alert('Failed to set orientation: ' + e.message);
     renderScreens(lastScreens);
@@ -2472,7 +2460,9 @@ function showImageDetails(fname) {
   // using the same formula as _prepare_canvas() in image_abc.py.
   let fillLimitCell = null;
   if (!isVector && entry.image_width && entry.image_height) {
-    const orient = (currentConfig && currentConfig.orientation) || 'landscape';
+    // Preview/dither use the image's native orientation, so the
+    // letterbox-fill limit shown here must match.
+    const orient = entry.native_orientation || 'landscape';
     const visW = orient === 'landscape' ? lastPanelData.visual_w : lastPanelData.visual_h;
     const visH = orient === 'landscape' ? lastPanelData.visual_h : lastPanelData.visual_w;
     const scaleFit   = Math.min(visW / entry.image_width, visH / entry.image_height);
@@ -2538,7 +2528,6 @@ async function loadConfig() {
     refreshTimes = cfg.refresh_image_at_time || [];
     renderRefreshTimes();
     document.getElementById('poll-interval').value = cfg.poll_interval_seconds || 10;
-    document.getElementById('orientation').value = cfg.orientation || 'landscape';
     // Classifier toggles
     const bwOn = !!cfg.classifier_bw_detect_enabled;
     document.getElementById('bw-detect-enabled').checked = bwOn;

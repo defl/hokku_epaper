@@ -164,10 +164,7 @@ def create_app(
         frame_state = parse_frame_state(request.headers.get("X-Frame-State"))
 
         cfg = scheduler.get_screen_config(screen_name)
-        effective_orientation = scheduler.get_screen_orientation(screen_name)
-        pick_orientation = (
-            effective_orientation if cfg.filter_by_orientation else Orientation.NEUTRAL
-        )
+        pick_orientation = cfg.orientation if cfg.filter_by_orientation else Orientation.NEUTRAL
         chosen = scheduler.pick_next(orientation=pick_orientation)
         sleep_seconds = calculate_sleep_seconds(config) if chosen else _busy_retry_seconds(config)
 
@@ -191,7 +188,7 @@ def create_app(
             logger.debug("%s: %s told to retry in %ss", label, screen_name, sleep_seconds)
             return resp
 
-        binary = manager.panel_bytes_for_orientation(chosen, effective_orientation)
+        binary = manager.panel_bytes_for_orientation(chosen, cfg.orientation)
         if binary is None:
             # Cache missing (not yet rendered for this orientation) — tell screen to retry.
             sleep_seconds = _busy_retry_seconds(config)
@@ -392,18 +389,16 @@ def create_app(
 
     @app.route("/hokku/api/screens/<string:name>/config", methods=["PATCH"])
     def api_screen_config(name: str):
-        """Patch per-screen config (orientation override and/or orientation filter)."""
+        """Patch per-screen config (orientation and/or orientation filter)."""
         body = request.get_json(silent=True) or {}
         current = state.scheduler.get_screen_config(name)
         updates: dict = {}
 
         if "orientation" in body:
             raw = body.get("orientation")
-            if raw not in ("landscape", "portrait", None):
-                return jsonify(
-                    {"error": "orientation must be 'landscape', 'portrait', or null"}
-                ), 400
-            updates["orientation_override"] = Orientation(raw) if raw else None
+            if raw not in ("landscape", "portrait"):
+                return jsonify({"error": "orientation must be 'landscape' or 'portrait'"}), 400
+            updates["orientation"] = Orientation(raw)
 
         if "filter_by_orientation" in body:
             val = body.get("filter_by_orientation")
@@ -486,9 +481,7 @@ def create_app(
                 ).isoformat(timespec="seconds")
             scfg = scheduler.get_screen_config(sname)
             peek_orientation = (
-                scheduler.get_screen_orientation(sname)
-                if scfg.filter_by_orientation
-                else Orientation.NEUTRAL
+                scfg.orientation if scfg.filter_by_orientation else Orientation.NEUTRAL
             )
             screen_peek_orientations.add(peek_orientation)
             screens_payload[sname] = {
@@ -510,7 +503,7 @@ def create_app(
                 ),
                 "next_update_at": next_update_at,
                 "state": t.frame_state,
-                "orientation_override": scfg.orientation_override,
+                "orientation": scfg.orientation,
                 "filter_by_orientation": scfg.filter_by_orientation,
             }
 
@@ -631,13 +624,21 @@ def create_app(
         )
         keepout = face_bboxes_orig if (face_bboxes_orig and use_clahe_keepout) else None
 
+        # Render in the image's native orientation. NEUTRAL/unknown falls back
+        # to LANDSCAPE since the renderer needs a concrete orientation.
+        render_orientation = Orientation.LANDSCAPE
+        if record is not None and record.convert_status == ConvertStatus.OK:
+            native = record.native_orientation
+            if native != Orientation.NEUTRAL:
+                render_orientation = native
+
         logger.debug("Preview: %r", name)
         with open_image_for_render(path) as img:
             orig_w, orig_h = img.size
             png = ImageRenderer(NumbaStreamingDither()).render_preview_png(
                 img,
                 cfg,
-                state.config.orientation,
+                render_orientation,
                 clahe_keepout_bboxes_norm=keepout,
             )
         logger.debug("Preview done: %r", name)
@@ -646,7 +647,7 @@ def create_app(
             face_bboxes_orig,
             orig_w,
             orig_h,
-            state.config.orientation,
+            render_orientation,
             FULL_W,
             PANEL_H,
             state.config.crop_to_fill_threshold,

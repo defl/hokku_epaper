@@ -23,7 +23,6 @@ from hokku_server.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
 from hokku_server.filesystem import atomic_write_json
 from hokku_server.image_config import ImageConfig
 from hokku_server.image_renderer import open_image_for_render
-from hokku_server.screen_image_config import ScreenImageConfig
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +37,21 @@ class Observations:
 
     is_bw: bool | None = None
     face_bboxes: tuple[BoundingBox, ...] | None = None  # None = not yet detected
+
+
+@dataclass(frozen=True)
+class ImageClassifierDecision:
+    """The classifier's per-image output: dither pipeline, crop policy,
+    and any face keep-out bboxes.
+
+    Does NOT carry orientation — orientation is a property of the render
+    target (the screen), not of the image. The image manager combines a
+    decision with each orientation at dispatch time.
+    """
+
+    image_config: ImageConfig
+    crop_to_fill_threshold: float
+    clahe_keepout_bboxes: tuple[BoundingBox, ...] | None
 
 
 class ImageClassifier:
@@ -56,6 +70,10 @@ class ImageClassifier:
     but does NOT invalidate already-rendered panel .bin files — those are
     keyed by ``ScreenImageConfig.cache_slug()``, which is deterministic from
     the effective ImageConfig + orientation + face_bbox.
+
+    Orientation is intentionally absent from the classifier's output. The
+    image manager assembles a ``ScreenImageConfig`` per orientation when it
+    dispatches renders.
     """
 
     def __init__(self, config: AppConfig) -> None:
@@ -67,14 +85,15 @@ class ImageClassifier:
 
     # ── Public API ───────────────────────────────────────────────────────────
 
-    def screen_config_for(self, path: Path, sha1: str) -> ScreenImageConfig:
-        """Return the ScreenImageConfig to render with, including CLAHE keep-out bboxes if detected."""
+    def decision_for(self, path: Path, sha1: str) -> ImageClassifierDecision:
+        """Return the ImageClassifierDecision for this image: dither pipeline, crop
+        policy, and any face keep-out bboxes.
+        """
         cfg = self._config
         chosen, face_bboxes = self._classify(path, sha1)
         keepout = face_bboxes if cfg.classifier_face_detect_clahe_keepout else None
-        return ScreenImageConfig(
+        return ImageClassifierDecision(
             image_config=chosen,
-            orientation=cfg.orientation,
             crop_to_fill_threshold=cfg.crop_to_fill_threshold,
             clahe_keepout_bboxes=keepout,
         )

@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "refresh_image_at_time": [
     "0600",
     "1200",
@@ -10,7 +10,6 @@
   "port": 8080,
   "poll_interval_seconds": 10,
   "debug_fast_refresh": false,
-  "orientation": "landscape",
   "auto_clear_cache": false,
   "crop_to_fill_threshold": 0.1,
   "image_worker_thread_count": 0,

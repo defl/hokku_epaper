@@ -1,3 +1,10 @@
+hokku-server (3.0.1~dev.16-1) unstable; urgency=medium
+
+  * refactor: remove global orientation; orientation is now per-screen only
+  * fix: clearAllCaches button hit nonexistent endpoint
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 27 May 2026 00:00:00 +0000
+
 hokku-server (3.0.1~dev.15-1) unstable; urgency=medium
 
   * feat(ui): show minimum letterbox fill limit in image detail modal

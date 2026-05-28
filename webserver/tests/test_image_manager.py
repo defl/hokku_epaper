@@ -47,14 +47,10 @@ def test_register_and_convert(app_config: AppConfig, image_manager_factory, make
     assert all(r.original_sha1 for r in records)
     expected_slug = ScreenImageConfig(
         image_config=app_config.image_config_default,
-        orientation=app_config.orientation,
+        orientation=Orientation.LANDSCAPE,
         crop_to_fill_threshold=app_config.crop_to_fill_threshold,
     ).cache_slug()
-    orientation = app_config.orientation
-    if orientation == Orientation.LANDSCAPE:
-        assert all(r.landscape_image_config_slug == expected_slug for r in records)
-    else:
-        assert all(r.portrait_image_config_slug == expected_slug for r in records)
+    assert all(r.landscape_image_config_slug == expected_slug for r in records)
 
 
 def test_panel_bytes_after_sync(app_config: AppConfig, image_manager_factory, make_test_image):
@@ -63,7 +59,7 @@ def test_panel_bytes_after_sync(app_config: AppConfig, image_manager_factory, ma
     mgr = image_manager_factory(app_config)
     mgr.sync()
     mgr.wait_for_idle()
-    raw = mgr.panel_bytes("a.png")
+    raw = mgr.panel_bytes_for_orientation("a.png", Orientation.LANDSCAPE)
     assert raw is not None and len(raw) == TOTAL_BYTES
 
 
@@ -111,7 +107,7 @@ def test_remove_clears_cache(app_config: AppConfig, image_manager_factory, make_
     panel_path = (
         Path(app_config.cache_dir)
         / "images"
-        / f"{rec.name_hash}_{rec.slug(app_config.orientation)}_panel.bin.zst"
+        / f"{rec.name_hash}_{rec.slug(Orientation.LANDSCAPE)}_panel.bin.zst"
     )
     assert panel_path.exists()
 
@@ -195,7 +191,7 @@ def test_clear_caches_marks_pending(app_config: AppConfig, image_manager_factory
 
     mgr.clear_caches()
     assert mgr.status("a.png").convert_status == "pending"
-    assert mgr.panel_bytes("a.png") is None
+    assert mgr.panel_bytes_for_orientation("a.png", Orientation.LANDSCAPE) is None
 
     mgr.sync()
     mgr.wait_for_idle()

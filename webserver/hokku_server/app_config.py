@@ -20,12 +20,11 @@ from hokku_server.image_config import (
     ImageConfig,
     _image_config_from_dict,
 )
-from hokku_server.orientation import Orientation
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 logger = logging.getLogger(__name__)
 
-_CURRENT_VERSION = 5
+_CURRENT_VERSION = 6
 
 
 def _migrate_v1_to_v2(d: dict) -> dict:
@@ -56,12 +55,19 @@ def _migrate_v4_to_v5(d: dict) -> dict:
     return d
 
 
+def _migrate_v5_to_v6(d: dict) -> dict:
+    """Drop the global orientation — orientation is now per-screen only."""
+    d.pop("orientation", None)
+    return d
+
+
 # v(N) → v(N+1) upgrade functions. Populated as the schema evolves.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
     4: _migrate_v4_to_v5,
+    5: _migrate_v5_to_v6,
 }
 
 
@@ -86,7 +92,6 @@ class AppConfig:
     port: int = 8080
     poll_interval_seconds: int = 10
     debug_fast_refresh: bool = False
-    orientation: Orientation = Orientation.LANDSCAPE
     auto_clear_cache: bool = False
     #: Zoom up to this fraction (e.g. 0.02 = 2 %) to eliminate letterbox bands.
     #: 0.0 = always letterbox (default, safe).
@@ -125,7 +130,6 @@ class AppConfig:
             "classifier_bw_detect_enabled": self.classifier_bw_detect_enabled,
             "classifier_face_detect_enabled": self.classifier_face_detect_enabled,
             "classifier_face_detect_clahe_keepout": self.classifier_face_detect_clahe_keepout,
-            "orientation": self.orientation,
             "crop_to_fill_threshold": self.crop_to_fill_threshold,
         }
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -169,19 +173,6 @@ class AppConfig:
         rat = kwargs.get("refresh_image_at_time")
         if isinstance(rat, list):
             kwargs["refresh_image_at_time"] = tuple(rat)
-
-        if "orientation" in kwargs:
-            raw = kwargs["orientation"]
-            try:
-                kwargs["orientation"] = Orientation(raw)
-            except ValueError:
-                valid = [o.value for o in Orientation]
-                logger.error(
-                    "Config 'orientation' has invalid value %r; must be one of %s",
-                    raw,
-                    valid,
-                )
-                sys.exit(1)
 
         return cls(**kwargs)
 

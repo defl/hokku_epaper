@@ -60,12 +60,11 @@ A minimal config looks like this (the `version` field is required — without it
 
 ```json
 {
-  "version": 5,
+  "version": 6,
   "refresh_image_at_time": ["0600", "1200", "1800"],
   "upload_dir": "/var/lib/hokku/images",
   "cache_dir": "/var/lib/hokku/cache",
-  "port": 8080,
-  "orientation": "landscape"
+  "port": 8080
 }
 ```
 

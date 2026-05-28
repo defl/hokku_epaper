@@ -10,25 +10,18 @@ from pathlib import Path
 import pytest
 
 from hokku_server.app_config import _CURRENT_VERSION, AppConfig, _migrate
-from hokku_server.orientation import Orientation
 from hokku_server.presets import PRESET_IMAGE_CONFIGS
 
 
 def test_defaults():
     cfg = AppConfig()
-    assert cfg.orientation == "landscape"
     assert cfg.port == 8080
     assert cfg.version == _CURRENT_VERSION
     assert cfg.image_config_default == PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
     assert cfg.image_config_bw == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
     assert cfg.image_config_face == PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
     assert cfg.classifier_bw_detect_enabled is True
-
-
-def test_cache_slug_changes_with_orientation():
-    base = AppConfig()
-    rotated = AppConfig(orientation=Orientation.PORTRAIT)
-    assert base.cache_slug() != rotated.cache_slug()
+    assert not hasattr(cfg, "orientation")
 
 
 def test_cache_slug_invariant_to_port():
@@ -53,7 +46,6 @@ def test_save_load_roundtrip(tmp_path: Path):
     cfg = AppConfig(
         upload_dir=str(tmp_path / "uploads"),
         cache_dir=str(tmp_path / "cache"),
-        orientation=Orientation.PORTRAIT,
         port=9000,
     )
     p = tmp_path / "config.json"
@@ -87,7 +79,7 @@ def test_version_written_on_save(tmp_path: Path):
 
 def test_unversioned_config_returns_default(tmp_path: Path):
     """A valid-JSON file without 'version' → from_dict() returns a fresh default."""
-    cfg = AppConfig.from_dict({"orientation": "portrait", "port": 9999})
+    cfg = AppConfig.from_dict({"port": 9999})
     # No version → default v1 returned, ignoring the other fields.
     assert cfg == AppConfig()
 
@@ -95,7 +87,7 @@ def test_unversioned_config_returns_default(tmp_path: Path):
 def test_unversioned_config_load_writes_back(tmp_path: Path):
     """AppConfig.load() on an unversioned JSON file writes the default back."""
     p = tmp_path / "config.json"
-    p.write_text(json.dumps({"orientation": "portrait"}))
+    p.write_text(json.dumps({"port": 9999}))
     cfg = AppConfig.load(p)
     assert cfg == AppConfig()
     # File now has a version field.
@@ -235,6 +227,35 @@ def test_v4_migrates_to_v5_removes_face_detector():
     migrated = _migrate(v4_blob)
     assert migrated["version"] == _CURRENT_VERSION
     assert "face_detector" not in migrated
+
+
+def test_v5_migrates_to_v6_drops_orientation():
+    """A v5 dict loses the global orientation field in the v5→v6 migration."""
+    v5_blob = {
+        "version": 5,
+        "image_worker_thread_count": 1,
+        "mdns_hostname": "hokku",
+        "orientation": "portrait",
+    }
+    migrated = _migrate(v5_blob)
+    assert migrated["version"] == _CURRENT_VERSION
+    assert "orientation" not in migrated
+
+
+def test_v5_config_load_drops_orientation(tmp_path: Path):
+    """End-to-end: a v5 config.json with orientation loads as v6 without it."""
+    p = tmp_path / "config.json"
+    p.write_text(
+        json.dumps({"version": 5, "orientation": "portrait", "port": 9000}),
+    )
+    cfg = AppConfig.load(p)
+    assert cfg.port == 9000
+    assert not hasattr(cfg, "orientation")
+    # Re-saved config has v6 and no orientation key.
+    cfg.save(p)
+    data = json.loads(p.read_text())
+    assert data["version"] == _CURRENT_VERSION
+    assert "orientation" not in data
 
 
 def test_cache_slug_invariant_to_mdns_hostname():

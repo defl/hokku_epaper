@@ -14,8 +14,8 @@ from hokku_server.dither_config import DitherConfig
 class ImageConfig:
     """How to convert a source image to palette indices.
 
-    Orientation is *not* stored here — it lives on AppConfig and is passed
-    explicitly to the render functions.
+    Orientation is *not* stored here — it lives on the per-screen
+    ScreenConfig and is passed explicitly to the render functions.
     """
 
     dither: DitherConfig

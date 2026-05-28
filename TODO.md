@@ -5,10 +5,9 @@ work but worth picking up later.
 
 v3.1
  - screen log push to webserver in POST, UI in screen (backwards compatible protocol)
- - white border optimizer
- - linting auto-formatting etc
  - overhaul for defensive coding
  - put python and cpp in own subdirs with their own tooling?
+ - add minimum coverage
 
 v4.0 - The Appliance
  - This is a single Pi computer that can server images as well as flash

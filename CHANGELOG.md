@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.1 (dev)
+
+### Global orientation removed
+
+The server-wide Orientation setting is gone. Each screen now owns its
+own orientation; a brand-new screen defaults to landscape. The global
+`orientation` field in `config.json` is dropped (schema bumped to v6 —
+existing configs auto-migrate).
+
+Dither previews — both the cached preview shown in the image grid /
+detail modal and the on-the-fly preview in the Advanced dither panel —
+are now rendered in the image's native orientation. A landscape photo
+previews landscape, a portrait photo previews portrait, regardless of
+any screen's setting.
+
 ## 3.0 beta6
 
 ### Upgrade fix

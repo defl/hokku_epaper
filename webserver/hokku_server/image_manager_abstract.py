@@ -30,7 +30,7 @@ from PIL import Image, ImageOps
 from hokku_server.app_config import AppConfig
 from hokku_server.display import TOTAL_BYTES
 from hokku_server.filesystem import atomic_write_json
-from hokku_server.image_classifier import ImageClassifier
+from hokku_server.image_classifier import ImageClassifier, ImageClassifierDecision
 from hokku_server.image_record import (
     ConversionProgress,
     ConvertStatus,
@@ -56,13 +56,25 @@ _THUMB_QUALITY = 85
 _KNOWN_SUFFIXES = (_PANEL_SUFFIX, _PREVIEW_SUFFIX, _THUMB_SUFFIX)
 
 
+def _decision_to_screen_image_config(
+    decision: ImageClassifierDecision, orientation: Orientation
+) -> ScreenImageConfig:
+    """Combine a per-image ImageClassifierDecision with a render orientation."""
+    return ScreenImageConfig(
+        image_config=decision.image_config,
+        orientation=orientation,
+        crop_to_fill_threshold=decision.crop_to_fill_threshold,
+        clahe_keepout_bboxes=decision.clahe_keepout_bboxes,
+    )
+
+
 class AbstractImageManager(ABC):
     """Owns upload_dir, cache_dir/images/, and image_manager.json.
 
-    Conversion happens *only* inside ``sync()``. ``panel_bytes()`` and
-    ``preview_png()`` are pure cache reads (return None on miss). Outside
-    threads can read ``list()``, ``status()`` etc. without locking; writes
-    take ``_db_lock``.
+    Conversion happens *only* inside ``sync()``.
+    ``panel_bytes_for_orientation()`` and ``preview_png()`` are pure cache
+    reads (return None on miss). Outside threads can read ``list()``,
+    ``status()`` etc. without locking; writes take ``_db_lock``.
 
     Concretes implement how a render job is dispatched (inline vs threadpool)
     and report their effective worker count.
@@ -215,7 +227,7 @@ class AbstractImageManager(ABC):
 
         # Phase 2: classify every pending image while the detector is loaded.
         # Images with unreadable dimensions are skipped here and failed in phase 3.
-        screen_configs: dict[str, ScreenImageConfig] = {}
+        decisions: dict[str, ImageClassifierDecision] = {}
         for rec in pending:
             if rec.image_width is None:
                 continue
@@ -225,17 +237,15 @@ class AbstractImageManager(ABC):
             if rec_now is None:
                 continue
             try:
-                screen_configs[rec.name] = self._classifier.screen_config_for(
-                    src_path, rec_now.original_sha1
-                )
+                decisions[rec.name] = self._classifier.decision_for(src_path, rec_now.original_sha1)
             except Exception as e:
                 logger.warning("Classification failed for %r: %s", rec.name, e)
-        # Phase 3: dispatch renders with the pre-computed ScreenImageConfigs.
+        # Phase 3: dispatch renders with the pre-computed ImageClassifierDecisions.
         # Both orientations are rendered for every pending image so every screen
         # can be served in its preferred orientation without waiting for re-sync.
         for rec in pending:
             try:
-                self._submit_one(rec.name, screen_configs.get(rec.name))
+                self._submit_one(rec.name, decisions.get(rec.name))
             except Exception as e:
                 # Defensive: _submit_one() should handle its own errors, but catch
                 # any unexpected exceptions to prevent entire sync() from crashing.
@@ -297,10 +307,6 @@ class AbstractImageManager(ABC):
 
     # ── Reads (lock-free) ───────────────────────────────────────
 
-    def panel_bytes(self, name: str) -> bytes | None:
-        """Return the panel binary for *name* in the global orientation."""
-        return self.panel_bytes_for_orientation(name, self._config.orientation)
-
     def panel_bytes_for_orientation(self, name: str, orientation: Orientation) -> bytes | None:
         """Return the panel binary for *name* in a specific orientation, or None on miss."""
         rec = self._records.get(name)
@@ -340,7 +346,11 @@ class AbstractImageManager(ABC):
         rec = self._records.get(name)
         if rec is None or rec.convert_status != "ok":
             return None
-        s = rec.slug(self._config.orientation)
+        # Preview in the image's native orientation. NEUTRAL (square) images
+        # have no native render target — use LANDSCAPE for those.
+        native = rec.native_orientation
+        orientation = native if native != Orientation.NEUTRAL else Orientation.LANDSCAPE
+        s = rec.slug(orientation)
         if not s:
             return None
         path = self._preview_path(rec.name_hash, s)
@@ -688,9 +698,13 @@ class AbstractImageManager(ABC):
                     continue
 
             if existing.convert_status == "ok":
-                screen_cfg = self._classifier.screen_config_for(src_path, existing.original_sha1)
-                predicted_slug = screen_cfg.cache_slug()
-                if existing.slug(self._config.orientation) != predicted_slug:
+                decision = self._classifier.decision_for(src_path, existing.original_sha1)
+                # Compare against the LANDSCAPE slug specifically — it's the
+                # lifecycle-primary orientation, and PORTRAIT shares the same
+                # decision so its slug changes in lockstep.
+                landscape_cfg = _decision_to_screen_image_config(decision, Orientation.LANDSCAPE)
+                predicted_slug = landscape_cfg.cache_slug()
+                if existing.slug(Orientation.LANDSCAPE) != predicted_slug:
                     self._records[name] = replace(
                         existing,
                         convert_status="pending",
@@ -806,13 +820,12 @@ class AbstractImageManager(ABC):
                 )
                 self._save_db()
 
-    def _submit_one(self, name: str, screen_cfg: ScreenImageConfig | None = None) -> None:
+    def _submit_one(self, name: str, decision: ImageClassifierDecision | None = None) -> None:
         """Validate one image and hand it off to the concrete dispatcher.
 
-        ``screen_cfg`` is the pre-computed ScreenImageConfig from the classify
-        phase.  When None (e.g. classification raised), the image is treated as
-        unclassifiable and falls back to computing the config here — which also
-        handles the corrupt/unreadable case.
+        ``decision`` is the pre-computed ImageClassifierDecision from the classify
+        phase.  When None (e.g. classification raised), the decision is
+        computed here — which also handles the corrupt/unreadable case.
 
         Images whose PIL dimensions were never read (corrupt / unsupported
         format) are failed immediately without going through the dispatcher.
@@ -836,11 +849,11 @@ class AbstractImageManager(ABC):
         src_path = self._upload_dir / name
 
         try:
-            if screen_cfg is None:
+            if decision is None:
                 # Fallback: classification failed or was skipped; compute now.
                 with self._db_lock:
                     original_sha1 = self._records[name].original_sha1
-                screen_cfg = self._classifier.screen_config_for(src_path, original_sha1)
+                decision = self._classifier.decision_for(src_path, original_sha1)
 
             # _inflight was already populated by sync() under the lock, so no need
             # to add here.  The assert is a safety net during development.
@@ -848,17 +861,13 @@ class AbstractImageManager(ABC):
                 f"{name!r} missing from _inflight at dispatch"
             )  # sync() pre-populates _inflight under lock
 
-            # Dispatch primary orientation (manages lifecycle: pending → ok).
-            self._dispatch_cfg(name, screen_cfg, update_status=True)
-
-            # Dispatch every other orientation (no lifecycle side-effects).
-            for orientation in Orientation:
-                if orientation == Orientation.NEUTRAL:
-                    continue  # NEUTRAL is not a real render target
-                if orientation != screen_cfg.orientation:
-                    self._dispatch_cfg(
-                        name, replace(screen_cfg, orientation=orientation), update_status=False
-                    )
+            # Render both real orientations. LANDSCAPE is the
+            # lifecycle-tracking primary (it drives pending → ok and the
+            # progress counter) — an internal bookkeeping choice.
+            landscape_cfg = _decision_to_screen_image_config(decision, Orientation.LANDSCAPE)
+            portrait_cfg = _decision_to_screen_image_config(decision, Orientation.PORTRAIT)
+            self._dispatch_cfg(name, landscape_cfg, update_status=True)
+            self._dispatch_cfg(name, portrait_cfg, update_status=False)
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             logger.exception("Failed to submit %r: %s", name, err)

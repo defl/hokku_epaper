@@ -94,7 +94,6 @@ def main() -> None:
     logger.info("Cache dir: %s", cache_dir)
     logger.info("Refresh at: %s", list(config.refresh_image_at_time))
     logger.info("Poll interval: %ss", config.poll_interval_seconds)
-    logger.info("Orientation: %s", config.orientation)
     logger.info("Pipeline slug: %s", config.cache_slug())
     logger.info("Endpoints: GET /hokku/screen/ (panel binary), GET /hokku/ui (web GUI)")
 

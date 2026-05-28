@@ -349,14 +349,14 @@ def test_flask_config_get_returns_current_config(flask_client):
     assert resp.status_code == 200
     data = resp.get_json()
     assert "config" in data
-    assert data["config"]["orientation"] == state.config.orientation
+    assert data["config"]["port"] == state.config.port
 
 
 def test_flask_config_post_returns_ok_not_restarting(flask_client):
     client, _, _ = flask_client
     resp = client.post(
         "/hokku/api/config",
-        data=json.dumps({"orientation": "landscape"}),
+        data=json.dumps({"poll_interval_seconds": 5}),
         content_type="application/json",
     )
     assert resp.status_code == 200
@@ -432,7 +432,7 @@ def test_flask_config_post_without_config_path_returns_500(app_config: AppConfig
 
     resp = client.post(
         "/hokku/api/config",
-        data=json.dumps({"orientation": "landscape"}),
+        data=json.dumps({"poll_interval_seconds": 5}),
         content_type="application/json",
     )
     assert resp.status_code == 500

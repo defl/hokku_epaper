@@ -21,13 +21,13 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 - **Colour-accurate** — calibrated against the actual panel, not a theoretical colour profile.
 
 **Smart about frames**
-- **Multiple frames, one server** — each frame gets a name and shows up in a dashboard with battery level, WiFi signal, and when it'll next update. Each frame can be locked to its own orientation independently of the global setting.
+- **Multiple frames, one server** — each frame gets a name and shows up in a dashboard with battery level, WiFi signal, and when it'll next update. Each frame carries its own orientation, so you can mix landscape and portrait frames against the same library.
 - **Fair rotation** — every photo gets its turn. Newly uploaded photos go to the front of the queue; after that, whichever image has been shown least goes next.
 - **Battery lasts months** — the frame uses almost no power between refreshes. The web app shows a battery level for each frame and flags it red when it's getting low.
 - **Problems show up on the screen** — if something goes wrong (wrong WiFi password, server unreachable) the frame displays a plain-English explanation on the e-paper itself instead of going blank. No plugging in a laptop to debug.
 - **Late-frame warning** — if a frame misses its scheduled update by more than an hour, the web app flags it so you know to check WiFi or the battery.
 - **Scheduled updates** — set the times you want the photo to change (e.g. morning, noon, evening) and the frame wakes up on its own. No constant connection needed.
-- **Settings are on the server** — change the schedule, orientation, or anything else in the web app and every frame picks it up automatically. No restarts, no reflashing.
+- **Settings are on the server** — change the schedule or any other server setting in the web app and every frame picks it up automatically. No restarts, no reflashing.
 - **Instant refresh** — there's a button on the frame that forces an immediate update whenever you want one.
 - **Diagnostics on demand** — one click in the web app shows the frame's status without needing a cable.
 
@@ -38,13 +38,13 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 - **Progress while you wait** — a status bar shows how many photos are being converted and roughly how long it'll take.
 - **Find it on your network by name** — the server advertises itself as `hokku.local` via mDNS, so you can bookmark `http://hokku.local:8080/` and never chase a changing IP address again.
 - **Runs on basically anything, installs in minutes** — a Debian package for Linux that starts automatically, or run from source on macOS, Windows, or a Raspberry Pi. The firmware comes pre-built and the setup wizard flashes it over USB. No build tools, no command line.
-- **One-click re-convert** — changed orientation or want to try a different look? One button re-processes everything from scratch.
+- **One-click re-convert** — want to try a different look? One button re-processes everything from scratch.
 
 ## The web app
 
 <img src="images/ui.png" width="500">
 
-Three tabs: **Images** (your photo library — upload, preview, manage), **Screens** (live status of each frame — battery, WiFi, last seen, next update), and **Config** (refresh schedule, orientation, conversion settings). Everything updates live without a page reload. For a full walkthrough of every feature see the **[user manual](docs/manual.md)**.
+Three tabs: **Images** (your photo library — upload, preview, manage), **Screens** (live status of each frame — battery, WiFi, last seen, next update, per-frame orientation), and **Config** (refresh schedule and conversion settings). Everything updates live without a page reload. For a full walkthrough of every feature see the **[user manual](docs/manual.md)**.
 
 ## System Requirements
 

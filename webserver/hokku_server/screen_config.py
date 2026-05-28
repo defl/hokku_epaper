@@ -11,33 +11,33 @@ from hokku_server.orientation import Orientation
 class ScreenConfig:
     """Persistent, user-configurable settings for one connected screen.
 
-    ``orientation_override``: when set, this screen always receives images
-    rendered in the specified orientation regardless of the global server
-    setting.  ``None`` means "follow the global default".
+    ``orientation`` defaults to LANDSCAPE — this is the single canonical
+    default in the codebase for an unconfigured screen. No other module
+    carries an orientation default; everything else reads what the
+    screen actually has.
 
-    ``filter_by_orientation``: when True, only images whose native orientation
-    matches the screen's effective orientation are eligible for serving.
-    Square images (NEUTRAL) are always eligible regardless of this flag.
+    ``filter_by_orientation``: when True, only images whose native
+    orientation matches the screen's orientation are eligible for
+    serving. Square (NEUTRAL) images are always eligible regardless.
     """
 
-    orientation_override: Orientation | None = None
+    orientation: Orientation = Orientation.LANDSCAPE
     filter_by_orientation: bool = False
 
     def __post_init__(self) -> None:
-        assert self.orientation_override != Orientation.NEUTRAL, (
-            "orientation_override cannot be NEUTRAL; use None to follow the global default"
+        assert self.orientation in (Orientation.LANDSCAPE, Orientation.PORTRAIT), (
+            f"ScreenConfig.orientation must be LANDSCAPE or PORTRAIT, got {self.orientation!r}"
         )
 
     def to_dict(self) -> dict:
         return {
-            "orientation_override": self.orientation_override,
+            "orientation": self.orientation,
             "filter_by_orientation": self.filter_by_orientation,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> ScreenConfig:
-        raw = d.get("orientation_override")
         return cls(
-            orientation_override=Orientation(raw) if raw else None,
+            orientation=Orientation(d["orientation"]),
             filter_by_orientation=bool(d.get("filter_by_orientation", False)),
         )

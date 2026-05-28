@@ -275,16 +275,6 @@ class ServeScheduler:
             self._screen_configs[name] = config
             self._save()
 
-    def get_screen_orientation(self, name: str) -> Orientation:
-        """Always returns the effective orientation for a screen.
-
-        Returns the per-screen override if one is set; otherwise falls back
-        to the global server orientation from AppConfig.
-        """
-        cfg = self.get_screen_config(name)
-        override = cfg.orientation_override
-        return override if override is not None else self._manager.config.orientation
-
     # ── Internals ────────────────────────────────────────────────
 
     def _atomic_write_json(self, payload: dict) -> None:

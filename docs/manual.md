@@ -61,7 +61,7 @@ The Screens tab shows every frame that has ever connected to this server. Each e
 
 **Multiple frames** — every frame that connects is tracked independently. You can run as many frames as you like from a single server. Give each one a distinct name during setup so you can tell them apart in the dashboard. Each frame follows the same global refresh schedule and image pool.
 
-**Per-screen orientation** — each frame can be locked to its own orientation independently of the global server setting. A frame mounted in portrait can show portrait-rendered images while another in landscape shows landscape ones, both served from the same library. Set the override from the Screens tab; clear it to return to following the global orientation.
+**Per-screen orientation** — each frame carries its own orientation, set in the Screens tab. A frame mounted in portrait can show portrait-rendered images while another in landscape shows landscape ones, both served from the same library. A brand-new frame defaults to landscape until you change it.
 
 ### 1.3 Config
 
@@ -70,8 +70,6 @@ The Screens tab shows every frame that has ever connected to this server. Each e
 The Config tab controls how the server behaves and how images are converted. All changes take effect immediately — there's no save-and-restart cycle, and the frame picks up any configuration changes on its next scheduled refresh without reflashing.
 
 **Refresh times** — the list of times during the day when each frame should fetch a new image. Add times in HH:MM format; the frame wakes up on its own at these times and goes back to sleep after fetching. The server calculates the sleep duration based on your timezone (set on the server OS, not here) and sends it to the frame as part of every response. Outside of scheduled refresh times the frame draws no meaningful power — see [Sleep and power](#33-sleep-and-power).
-
-**Orientation** — landscape or portrait, matching how your frame is mounted. Changing this re-converts all images automatically. You don't need to re-upload anything.
 
 **Image workers** — how many photos the server converts in parallel. Set to Auto and the server picks based on available CPU cores and memory. Set it higher on a faster machine to convert large libraries faster; set it to 1 on very constrained hardware. Each worker uses around 50 MB of RAM during conversion.
 
@@ -91,7 +89,7 @@ The Config tab controls how the server behaves and how images are converted. All
 
 **Poll interval** — how often the web app checks the server for status updates (queue progress, new images, screen check-ins). Default is 10 seconds. Raise it if you want to reduce network chatter on a slow connection; lower it if you want near-instant updates during large uploads.
 
-**Clear Cache & Re-convert** — wipes all converted images and regenerates them from the originals using the current settings. Use this after changing orientation, dither preset, or crop-to-fill threshold. The process runs in the background; the status strip on the Images tab shows progress.
+**Clear Cache & Re-convert** — wipes all converted images and regenerates them from the originals using the current settings. Use this after changing dither preset or crop-to-fill threshold. The process runs in the background; the status strip on the Images tab shows progress.
 
 **Config file options** — a few settings can't be changed from the web app and need to be edited in the config file directly (`/var/lib/hokku/config.json` on a deb install, or `./config.json` from source). These are:
 
