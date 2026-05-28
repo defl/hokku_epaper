@@ -1,4 +1,4 @@
-hokku-server (3.0.1~dev.23-1) unstable; urgency=medium
+hokku-server (3.0.1~dev.27-1) unstable; urgency=medium
 
   * docs: refresh README, manual and dithering docs to reflect the
     9 palette LUTs (CIELAB/OKLAB/CAM16-UCS each plus weighted/hue-aware
