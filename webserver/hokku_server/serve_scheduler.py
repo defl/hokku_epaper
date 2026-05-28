@@ -60,6 +60,8 @@ class ScreenTelemetryEntry:
     battery_percent: int | None
     battery_seen_at: float | None
     frame_state: dict | None
+    last_log: str
+    last_log_at: float
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -76,6 +78,8 @@ class ScreenTelemetryEntry:
             battery_percent=d.get("battery_percent"),
             battery_seen_at=d.get("battery_seen_at"),
             frame_state=d.get("frame_state"),
+            last_log=d.get("last_log", ""),
+            last_log_at=float(d.get("last_log_at", 0.0)),
         )
 
 
@@ -197,6 +201,7 @@ class ServeScheduler:
         served_name: str | None,
         battery_mv: int | None,
         frame_state: dict | None,
+        log: str | None = None,
     ) -> None:
         with self._lock:
             now = time.time()
@@ -227,6 +232,12 @@ class ServeScheduler:
                     fs_with_meta["clk_drift_s"] = int(clk_now - now)
                 fs_with_meta["seen_at"] = now
 
+            last_log = existing.last_log if existing else ""
+            last_log_at = existing.last_log_at if existing else 0.0
+            if log:
+                last_log = log
+                last_log_at = now
+
             self._screens[screen_name] = ScreenTelemetryEntry(
                 ip=screen_ip,
                 request_count=req_count,
@@ -241,6 +252,8 @@ class ServeScheduler:
                 frame_state=fs_with_meta
                 if fs_with_meta is not None
                 else (existing.frame_state if existing else None),
+                last_log=last_log,
+                last_log_at=last_log_at,
             )
             self._save()
 

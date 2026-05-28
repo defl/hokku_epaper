@@ -2256,6 +2256,17 @@ async function showScreenDetails(name) {
     rows += `<tr><td>${k}</td><td>${formatStateValue(k, s.state[k], s.state)}</td></tr>`;
   });
   rows += '</table>';
+
+  if (s.last_log) {
+    const ts = s.last_log_at
+      ? new Date(s.last_log_at).toLocaleString(undefined, {hour12: false})
+      : '';
+    rows += `<div style="margin-top:16px">`;
+    rows += `<div style="font-weight:600;margin-bottom:4px;color:var(--ink)">Last log${ts ? ' <span style="font-weight:400;font-size:0.85em;color:var(--stone)">(' + ts + ')</span>' : ''}</div>`;
+    rows += `<pre style="margin:0;max-height:300px;overflow-y:scroll;font-size:0.78em;line-height:1.4;background:var(--paper);border:1px solid var(--bamboo);border-radius:4px;padding:8px;white-space:pre-wrap;word-break:break-all">${escapeHtml(s.last_log)}</pre>`;
+    rows += `</div>`;
+  }
+
   document.getElementById('state-body').innerHTML = rows;
 
   modal.classList.add('show');
