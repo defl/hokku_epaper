@@ -1,3 +1,14 @@
+hokku-server (3.0.1~dev.20-1) unstable; urgency=medium
+
+  * docs: refresh README, manual and dithering docs to reflect the
+    9 palette LUTs (CIELAB/OKLAB/CAM16-UCS each plus weighted/hue-aware
+    variants and a B&W-only LUT) and the per-stripe space selectors
+  * docs: trim the §4 presets table to the 3 current presets and frame
+    the rest as advanced-panel options; mark §13 historical rows clearly
+  * ui: expand the LUT dropdown's help popover to describe all 9 variants
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 27 May 2026 18:00:00 +0000
+
 hokku-server (3.0.1~dev.19-1) unstable; urgency=medium
 
   * refactor(config): use Literal types for adaptive_saturate_space and

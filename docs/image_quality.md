@@ -124,14 +124,17 @@ which sits close in L\* to the white ink) are being scattered into regions that
 the human eye reads as neutral. The result is a visible blue or green tint in
 what should be grey.
 
-Reference values from the 10-image test suite:
+Reference values from the 10-image test suite. The `atkinson` and
+`stucki_hue_aware` entries are historical (retired from the named-preset
+list but still reachable via the advanced panel by selecting the matching
+algorithm + LUT):
 
-| Preset               | neutral_leak |
-|----------------------|:------------:|
-| atkinson_hue_aware   |     6.67     |
-| atkinson             |     7.95     |
-| stucki_hue_aware     |    10.48     |
-| floyd_steinberg      |    12.10     |
+| Preset / configuration                       | neutral_leak |
+|----------------------------------------------|:------------:|
+| `atkinson_hue_aware` (current default)       |     6.67     |
+| atkinson + euclidean LUT (advanced)          |     7.95     |
+| stucki + hue_aware LUT (advanced)            |    10.48     |
+| floyd_steinberg + euclidean LUT (advanced)   |    12.10     |
 
 The hue-aware LUT variants score meaningfully better here because they
 explicitly forbid palette entries whose hue angle differs too much from the

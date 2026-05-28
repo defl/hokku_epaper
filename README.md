@@ -17,7 +17,7 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 - **Correct out of the box** — pre-set for the best results on this panel without any tweaking.
 - **Adapts to each photo** — it can tell a black-and-white photo from a colour one, and recognise faces (all done locally, nothing leaves your network), and picks the best conversion approach for each automatically.
 - **No ugly borders** — photos that are close to the right shape get a subtle crop to fill the screen cleanly instead of showing a letterbox band.
-- **Tunable to the nth degree** — three independent conversion profiles (general, black-and-white, faces), 6 presets each, per-photo overrides, and plenty of knobs if you enjoy that sort of thing. ([Details on dithering](docs/dithering.md))
+- **Tunable to the nth degree** — three independent conversion profiles (general, black-and-white, faces) with curated presets, plus an advanced panel that exposes nine palette colour-space variants (CIELAB / weighted CIELAB / OKLAB / CAM16-UCS, each with optional hue gating, plus a B&W-only LUT) and chroma-boost / dynamic-range knobs you can run in CIELAB or OKLAB independently. ([Details on dithering](docs/dithering.md))
 - **Colour-accurate** — calibrated against the actual panel, not a theoretical colour profile.
 
 **Smart about frames**

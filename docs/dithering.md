@@ -154,41 +154,58 @@ per image.
 
 ## 4. Presets
 
-Six named presets cover the three algorithms in plain (Euclidean LUT) and
-hue-aware variants. The default is `atkinson_hue_aware`.
+Three curated presets cover the common cases. They're the only entries shown
+in the main preset dropdown; everything else (algorithm variants, alternative
+LUTs, OKLAB/CAM16-UCS spaces) is reachable via the **Custom…** advanced panel.
 
-| Preset key                              | Algorithm       | LUT                  | Adaptive sat | Adaptive vivid | Default? |
-|-----------------------------------------|-----------------|----------------------|:------------:|:--------------:|:--------:|
-| `floyd_steinberg`                       | Floyd-Steinberg | euclidean            |              |                |          |
-| `floyd_steinberg_hue_aware`             | Floyd-Steinberg | hue_aware            | ✓            | ✓              |          |
-| `floyd_steinberg_euclidean_weighted`    | Floyd-Steinberg | euclidean_weighted   |              |                |          |
-| `floyd_steinberg_hue_aware_weighted`    | Floyd-Steinberg | hue_aware_weighted   | ✓            | ✓              |          |
-| `floyd_steinberg_oklab`                 | Floyd-Steinberg | oklab                |              |                |          |
-| `floyd_steinberg_oklab_hue_aware`       | Floyd-Steinberg | oklab_hue_aware      | ✓            | ✓              |          |
-| `atkinson`                              | Atkinson        | euclidean            |              |                |          |
-| `atkinson_hue_aware`                    | Atkinson        | hue_aware            | ✓            | ✓              | **Yes**  |
-| `atkinson_euclidean_weighted`           | Atkinson        | euclidean_weighted   |              |                |          |
-| `atkinson_hue_aware_weighted`           | Atkinson        | hue_aware_weighted   | ✓            | ✓              |          |
-| `atkinson_oklab`                        | Atkinson        | oklab                |              |                |          |
-| `atkinson_oklab_hue_aware`              | Atkinson        | oklab_hue_aware      | ✓            | ✓              |          |
-| `stucki`                                | Stucki          | euclidean            |              |                |          |
-| `stucki_hue_aware`                      | Stucki          | hue_aware            | ✓            | ✓              |          |
-| `stucki_euclidean_weighted`             | Stucki          | euclidean_weighted   |              |                |          |
-| `stucki_hue_aware_weighted`             | Stucki          | hue_aware_weighted   | ✓            | ✓              |          |
-| `stucki_oklab`                          | Stucki          | oklab                |              |                |          |
-| `stucki_oklab_hue_aware`               | Stucki          | oklab_hue_aware      | ✓            | ✓              |          |
+| Preset key                  | Algorithm       | LUT       | Adaptive sat | Adaptive vivid | Used for     |
+|-----------------------------|-----------------|-----------|:------------:|:--------------:|:------------:|
+| `floyd_steinberg_hue_aware` | Floyd-Steinberg | hue_aware | CIELAB       | ✓              | General      |
+| `floyd_steinberg_bw`        | Floyd-Steinberg | bw        | Off          |                | B&W detected |
+| `atkinson_hue_aware`        | Atkinson        | hue_aware | CIELAB       | ✓              | Face detected |
 
-Plain presets use `ImageEnhance.Color(1.2)` (flat PIL saturation) because they
-have no chroma-gated pipeline to protect near-neutral pixels.
-
-Hue-aware and OKLAB hue-aware presets enable `adaptive_saturate` and
-`adaptive_vivid` because the hue-constrained LUT pairs well with chroma-selective
-saturation boosting — the LUT's hue gate prevents accumulated error from escaping
-to a wrong-hue palette entry even after the saturation boost.
+The default pipeline uses `floyd_steinberg_hue_aware`; the auto-classifier
+swaps to `floyd_steinberg_bw` for near-greyscale photos and to
+`atkinson_hue_aware` when faces are detected (see §6).  All three presets
+enable hue-aware palette mapping; the B&W preset additionally turns off
+chroma boosting since there's no meaningful colour to enhance in a
+monochrome image.
 
 Presets live in `presets.py` as `PRESET_IMAGE_CONFIGS`, a plain
 `dict[str, ImageConfig]`. There are no partials; every field is spelled out so
 each preset is fully inspectable.
+
+### Advanced panel — full surface area
+
+Picking **Custom…** in the UI exposes every dial individually. The most
+visible axes:
+
+**Palette LUT** — nine variants, selected by the `lut_name` field:
+
+| LUT name             | Distance metric                                     | Hue gating |
+|----------------------|-----------------------------------------------------|:----------:|
+| `euclidean`          | Unweighted CIELAB Euclidean                         |            |
+| `euclidean_weighted` | Weighted CIELAB (`2L² + a² + b²`)                   |            |
+| `hue_aware`          | Unweighted CIELAB, gated                            | ✓          |
+| `hue_aware_weighted` | Weighted CIELAB, gated                              | ✓          |
+| `oklab`              | Euclidean OKLAB (better perceived hue/lightness)    |            |
+| `oklab_hue_aware`    | OKLAB, gated                                        | ✓          |
+| `cam16ucs`           | Euclidean CAM16-UCS (CIE gold-standard perceptual)  |            |
+| `cam16ucs_hue_aware` | CAM16-UCS, gated                                    | ✓          |
+| `bw`                 | Restricted to Black + White inks only               |            |
+
+See §8 for the math behind each.
+
+**Adaptive saturation** — 3-way selector: **Off** / **CIELAB** / **OKLAB**.
+Same algorithm in both spaces; OKLAB preserves hue more cleanly under chroma
+boost (see §5b).  Each space has its own threshold pair, exposed in the
+appropriate units (CIELAB ~5/15; OKLAB ~0.025/0.075).
+
+**Dynamic-range compression** — independent **L-compression space** and
+**chroma-scaling space** dropdowns, each CIELAB or OKLAB.  L compression in
+OKLAB tracks perceived brightness near the panel-white soft-shoulder
+markedly better than CIELAB; chroma scaling in OKLAB inherits the
+hue-stability benefit (see §5c).
 
 ---
 
@@ -769,17 +786,23 @@ Aggregate across 10 test images, `NumbaStreamingDither`, landscape,
 `crop_to_fill_threshold=0.0`. Re-run `test_dither_quality_metrics` and update
 this table whenever the pipeline changes.
 
-| Preset                    | neutral_leak | sat_hit | overall_dE |
-|---------------------------|:------------:|:-------:|:----------:|
-| **atkinson_hue_aware**    |   **6.67**   | **0.683** | **29.64** |
-| atkinson                  |     7.95     |  0.679  |   29.76    |
-| stucki_hue_aware          |    10.48     |  0.658  |   32.07    |
-| stucki                    |    11.77     |  0.653  |   32.26    |
-| floyd_steinberg_hue_aware |    10.80     |  0.650  |   32.42    |
-| floyd_steinberg           |    12.10     |  0.646  |   32.62    |
+| Preset                       | neutral_leak | sat_hit   | overall_dE |
+|------------------------------|:------------:|:---------:|:----------:|
+| **`atkinson_hue_aware`**     |   **6.67**   | **0.683** | **29.64**  |
+| `floyd_steinberg_hue_aware`  |    10.80     |   0.650   |   32.42    |
+| `floyd_steinberg_bw`         |   (B&W only — comparison would be against grey reference, not run for this table) |
 
-`atkinson_hue_aware` is the current default because it is the only preset that
-wins on both `neutral_leak` and `sat_hit` simultaneously.
+`atkinson_hue_aware` is the current default for general (and face-detected)
+photos because it wins on both `neutral_leak` and `sat_hit` simultaneously.
+`floyd_steinberg_hue_aware` is the fallback when Atkinson's bold contrast
+isn't desired.  The B&W preset is evaluated separately against monochrome
+references — colour-fidelity metrics don't meaningfully apply.
+
+Earlier branches of this project exposed `atkinson`, `stucki`, `stucki_hue_aware`
+and other algorithm/LUT combinations as named presets and benchmarked them
+here. Those combinations are still reachable via the **Custom…** advanced
+panel (pick the algorithm + LUT directly) but no longer carry preset keys.
+Historical numbers for the retired presets live in git history.
 
 ### Historical development comparison
 
