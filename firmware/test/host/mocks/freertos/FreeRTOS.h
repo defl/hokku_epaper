@@ -41,3 +41,9 @@ typedef uint32_t TickType_t;
 #define BIT1 (1u << 1)
 
 #define configASSERT(x) ((void)(x))
+
+/* FreeRTOS critical-section portability stubs (no-ops on host). */
+typedef int portMUX_TYPE;
+#define portMUX_INITIALIZER_UNLOCKED 0
+#define taskENTER_CRITICAL(mux) ((void)(mux))
+#define taskEXIT_CRITICAL(mux)  ((void)(mux))

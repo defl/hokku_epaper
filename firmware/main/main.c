@@ -23,6 +23,7 @@
  *     clock offset actually survive esp_restart.
  */
 
+#include <stdarg.h>
 #include <string.h>
 #include <stdio.h>
 #include <inttypes.h>

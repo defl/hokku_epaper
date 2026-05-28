@@ -33,6 +33,13 @@ typedef struct {
     int                   buffer_size;
 } esp_http_client_config_t;
 
+typedef enum {
+    HTTP_METHOD_GET = 0,
+    HTTP_METHOD_POST,
+    HTTP_METHOD_PUT,
+    HTTP_METHOD_DELETE,
+} esp_http_client_method_t;
+
 static inline esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *c) {
     (void)c; return (void *)1;
 }
@@ -42,3 +49,9 @@ static inline int esp_http_client_set_header(esp_http_client_handle_t c, const c
 static inline int esp_http_client_perform(esp_http_client_handle_t c) { (void)c; return -1; }
 static inline int esp_http_client_get_status_code(esp_http_client_handle_t c) { (void)c; return 0; }
 static inline int esp_http_client_cleanup(esp_http_client_handle_t c) { (void)c; return 0; }
+static inline int esp_http_client_set_method(esp_http_client_handle_t c, esp_http_client_method_t m) {
+    (void)c; (void)m; return 0;
+}
+static inline int esp_http_client_set_post_field(esp_http_client_handle_t c, const char *data, int len) {
+    (void)c; (void)data; (void)len; return 0;
+}
