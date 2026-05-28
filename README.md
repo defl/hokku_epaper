@@ -30,6 +30,7 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 - **Settings are on the server** — change the schedule or any other server setting in the web app and every frame picks it up automatically. No restarts, no reflashing.
 - **Instant refresh** — there's a button on the frame that forces an immediate update whenever you want one.
 - **Diagnostics on demand** — one click in the web app shows the frame's status without needing a cable.
+- **What happened last refresh** — after every update the frame sends a log of what it did to the server (WiFi connection, image download, display result). Open a frame's details in the web app to read it — no cable, no terminal needed.
 
 **Easy to run**
 - **Everything through the web app** — upload, browse, configure. No command line, no shared drives to set up.
