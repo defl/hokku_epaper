@@ -199,6 +199,18 @@ RTC_NOINIT_ATTR static uint8_t  last_sleep_mode;
 #define ACTION_ENTER_REGIME  2  /* skip refresh, enter regime based on USB state */
 RTC_NOINIT_ATTR static uint8_t  pending_action;
 
+/* ── Log ring buffer (6 KB, RTC slow memory — survives deep sleep) ──
+ *
+ * Captures ESP-IDF log output via log_ring_vprintf so each refresh
+ * cycle's diagnostics can be uploaded to the server. The ring is
+ * RTC_NOINIT_ATTR (same as all other RTC vars here) and is validated by
+ * the rtc_magic check: on POR both head and used are zeroed there. */
+#define LOG_RING_SIZE 6144
+RTC_NOINIT_ATTR static char     s_log_ring[LOG_RING_SIZE];
+RTC_NOINIT_ATTR static uint16_t s_log_ring_head;  /* next write position */
+RTC_NOINIT_ATTR static uint16_t s_log_ring_used;  /* bytes currently held */
+static portMUX_TYPE s_log_ring_mux = portMUX_INITIALIZER_UNLOCKED;
+
 /* ── Forward declarations ────────────────────────────────────────── */
 static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_data);
 static void split_and_display(const uint8_t *img);
@@ -1045,6 +1057,9 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
 
     esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
 
+    /* Switch to POST so the ring-buffer log can travel as the request body. */
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
+
     /* Send screen name so the server can identify this device */
     if (config.screen_name[0] != '\0') {
         esp_http_client_set_header(client, "X-Screen-Name", config.screen_name);
@@ -1057,6 +1072,31 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
                            wake_label ? wake_label : "unknown",
                            boot_time_us);
     esp_http_client_set_header(client, "X-Frame-State", frame_state);
+
+    /* Attach ring-buffer log as POST body (plain text).
+     * Snapshot head/used atomically (tiny critical section), then copy
+     * outside the lock so we don't hold interrupts off across 6 KB. */
+    char *log_body = NULL;
+    int   log_body_len = 0;
+    uint16_t snap_head, snap_used;
+    taskENTER_CRITICAL(&s_log_ring_mux);
+    snap_head = s_log_ring_head;
+    snap_used = s_log_ring_used;
+    taskEXIT_CRITICAL(&s_log_ring_mux);
+    if (snap_used > 0) {
+        log_body = malloc(snap_used);
+        if (log_body) {
+            uint16_t start = (snap_used < LOG_RING_SIZE) ? 0 : snap_head;
+            for (uint16_t i = 0; i < snap_used; i++) {
+                log_body[i] = s_log_ring[(start + i) % LOG_RING_SIZE];
+            }
+            log_body_len = (int)snap_used;
+        }
+    }
+    if (log_body) {
+        esp_http_client_set_header(client, "Content-Type", "text/plain");
+        esp_http_client_set_post_field(client, log_body, log_body_len);
+    }
 
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
@@ -1103,6 +1143,7 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
     }
 
     esp_http_client_cleanup(client);
+    free(log_body);
 
     if (err != ESP_OK || status != 200) {
         ESP_LOGE(TAG, "HTTP download failed: err=%s status=%d", esp_err_to_name(err), status);
@@ -1110,6 +1151,13 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
         heap_caps_free(buf);
         return NULL;
     }
+
+    /* Log upload succeeded with the image: reset the ring buffer so the
+     * next cycle starts fresh rather than re-uploading the same content. */
+    taskENTER_CRITICAL(&s_log_ring_mux);
+    s_log_ring_head = 0;
+    s_log_ring_used = 0;
+    taskEXIT_CRITICAL(&s_log_ring_mux);
 
     if (ctx.received != TOTAL_IMAGE_SIZE) {
         ESP_LOGE(TAG, "Image size mismatch: got %d, expected %d", (int)ctx.received, TOTAL_IMAGE_SIZE);
@@ -1356,6 +1404,31 @@ static void log_level_apply(bool usb_awake)
     esp_log_level_set("*", usb_awake ? ESP_LOG_INFO : ESP_LOG_NONE);
 }
 
+/* Dual-output vprintf hook: forwards to the original serial vprintf AND
+ * appends to the RTC ring buffer so logs survive deep sleep and can be
+ * uploaded on the next server connection. */
+static int log_ring_vprintf(const char *fmt, va_list args)
+{
+    va_list args2;
+    va_copy(args2, args);
+    int n = vprintf(fmt, args2);
+    va_end(args2);
+
+    char tmp[512];
+    int len = vsnprintf(tmp, sizeof(tmp), fmt, args);
+    if (len > 0) {
+        if (len >= (int)sizeof(tmp)) len = (int)sizeof(tmp) - 1;
+        taskENTER_CRITICAL(&s_log_ring_mux);
+        for (int i = 0; i < len; i++) {
+            s_log_ring[s_log_ring_head] = tmp[i];
+            s_log_ring_head = (s_log_ring_head + 1) % LOG_RING_SIZE;
+            if (s_log_ring_used < LOG_RING_SIZE) s_log_ring_used++;
+        }
+        taskEXIT_CRITICAL(&s_log_ring_mux);
+    }
+    return n;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  *  Deep sleep entry
  * ═══════════════════════════════════════════════════════════════════ */
@@ -1448,6 +1521,11 @@ static void enter_deep_sleep(int64_t sleep_us)
  * wake_label and caller are for the X-Frame-State JSON. */
 static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 {
+    /* Enable INFO logging for the duration of the refresh so diagnostics
+     * are captured to the ring buffer even in battery mode (where the
+     * level is otherwise ESP_LOG_NONE). Restored before returning. */
+    esp_log_level_set("*", ESP_LOG_INFO);
+
     int32_t sleep_seconds = 0;
     int64_t server_epoch = 0;
     int      http_status = 0;
@@ -1457,6 +1535,7 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
     if (!wifi_connect()) {
         ESP_LOGE(TAG, "WiFi connect failed — leaving prior image on display");
         schedule_retry_in(REFRESH_RETRY_SECONDS, "wifi_connect failed");
+        log_level_apply(usb_host_present());
         return false;
     }
     gpio_set_level(PIN_WIFI_LED, 1);
@@ -1521,6 +1600,7 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
             display_message(msg);
             schedule_retry_in(REFRESH_RETRY_SECONDS, "download failed");
         }
+        log_level_apply(usb_host_present());
         return false;
     }
 
@@ -1537,6 +1617,7 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
                       "Press button or power-cycle to recover.");
     }
 
+    log_level_apply(usb_host_present());
     return true;
 }
 
@@ -1675,10 +1756,17 @@ void app_main(void)
         consecutive_spurious_resets = 0;
         last_sleep_mode = LAST_SLEEP_MODE_NONE;
         pending_action = ACTION_NONE;
+        s_log_ring_head = 0;
+        s_log_ring_used = 0;
         struct timeval tv = {0, 0};
         settimeofday(&tv, NULL);
     }
     rtc_magic = RTC_MAGIC;  /* validate for the rest of this boot chain */
+
+    /* Install dual-output log hook: serial + RTC ring buffer. Done here,
+     * after RTC validation but before any log output, so every message
+     * from this point forward is captured. */
+    esp_log_set_vprintf(log_ring_vprintf);
 
     boot_count++;
 

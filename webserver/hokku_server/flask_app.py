@@ -152,7 +152,7 @@ def create_app(
 
     # ── Firmware-facing ────────────────────────────────────────
 
-    @app.route("/hokku/screen/", strict_slashes=False)
+    @app.route("/hokku/screen/", strict_slashes=False, methods=["GET", "POST"])
     def serve_binary():
         manager = state.manager
         scheduler = state.scheduler
@@ -162,6 +162,13 @@ def create_app(
         screen_ip = request.remote_addr or "unknown"
         battery_mv = parse_battery_header(request.headers.get("X-Battery-mV"))
         frame_state = parse_frame_state(request.headers.get("X-Frame-State"))
+
+        # POST body carries the firmware log (plain text); GET has no body.
+        screen_log: str | None = None
+        if request.method == "POST":
+            raw = request.get_data()
+            if raw:
+                screen_log = raw.decode("utf-8", errors="replace")
 
         cfg = scheduler.get_screen_config(screen_name)
         pick_orientation = cfg.orientation if cfg.filter_by_orientation else Orientation.NEUTRAL
@@ -178,6 +185,7 @@ def create_app(
                 None,
                 battery_mv,
                 frame_state,
+                log=screen_log,
             )
             if converting:
                 msg, status, label = "Converting images, try again shortly", 503, "Converting"
@@ -199,6 +207,7 @@ def create_app(
                 None,
                 battery_mv,
                 frame_state,
+                log=screen_log,
             )
             resp = make_response("Cached binary missing, try again shortly", 503)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
@@ -212,6 +221,7 @@ def create_app(
             chosen,
             battery_mv,
             frame_state,
+            log=screen_log,
         )
         logger.debug("Serving: %s to %s (sleep_seconds=%s)", chosen, screen_name, sleep_seconds)
 
@@ -505,6 +515,12 @@ def create_app(
                 "state": t.frame_state,
                 "orientation": scfg.orientation,
                 "filter_by_orientation": scfg.filter_by_orientation,
+                "last_log": t.last_log or None,
+                "last_log_at": (
+                    datetime.fromtimestamp(t.last_log_at).isoformat(timespec="seconds")
+                    if t.last_log_at
+                    else None
+                ),
             }
 
         disk = manager.cache_disk_info()
