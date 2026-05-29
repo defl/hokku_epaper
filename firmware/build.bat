@@ -3,7 +3,9 @@ setlocal EnableDelayedExpansion
 set MSYSTEM=
 set IDF_PATH=C:\esp\v5.5.3\esp-idf
 set IDF_PYTHON_ENV_PATH=C:\Espressif\tools\python\v5.5.3\venv
-set IDF_TOOLS_PATH=C:\Espressif
+set IDF_TOOLS_PATH=C:\Espressif\tools
+set ESP_ROM_ELF_DIR=C:\Espressif\tools\esp-rom-elfs\20241011
+set OPENOCD_SCRIPTS=C:\Espressif\tools\openocd-esp32\v0.12.0-esp32-20251215\openocd-esp32\share\openocd\scripts
 set PATH=C:\Espressif\tools\xtensa-esp-elf\esp-14.2.0_20251107\xtensa-esp-elf\bin;C:\Espressif\tools\ninja\1.12.1;C:\Espressif\tools\cmake\3.30.5\bin;C:\Espressif\tools\python\v5.5.3\venv\Scripts;%PATH%
 set PYTHON=C:\Espressif\tools\python\v5.5.3\venv\Scripts\python.exe
 set ESPTOOL=%PYTHON% %IDF_PATH%\components\esptool_py\esptool\esptool.py
