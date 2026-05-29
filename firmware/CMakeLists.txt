@@ -19,6 +19,7 @@ configure_file(
     "${CMAKE_BINARY_DIR}/version.h"
 )
 
+set(IDF_TARGET "esp32s3")
 set(EXTRA_COMPONENT_DIRS "")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(hokku_epaper)
