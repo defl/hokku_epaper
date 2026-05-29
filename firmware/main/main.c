@@ -235,6 +235,7 @@ static bool last_wifi_used_cache = false;
  * "boot" during early init before regime dispatch. */
 static const char *current_regime = "boot";
 
+#include "version.h"
 #include "config.h"
 #include "text_render.h"
 
@@ -1800,6 +1801,8 @@ void app_main(void)
         if (!s_log_bufs[i]) { log_bufs_ok = false; break; }
     }
     if (log_bufs_ok) esp_log_set_vprintf(log_ring_vprintf);
+
+    ESP_LOGI(TAG, "Firmware %s  built %s", FW_VERSION_STRING, FW_BUILD_TIMESTAMP);
 
     boot_count++;
 
