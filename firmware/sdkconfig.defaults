@@ -21,6 +21,13 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # Instruction cache — 32 KB (firmware binary is ~700 KB; 16 KB thrashes)
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 
+# Chip revision — firmware targets v0.2+ only; disables S32C1I SPIRAM workaround
+CONFIG_ESP32S3_REV_MIN_2=y
+
+# Run code and rodata from PSRAM — eliminates flash/PSRAM XIP cache contention
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+
 # Log level
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
