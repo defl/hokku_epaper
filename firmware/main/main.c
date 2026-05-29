@@ -1412,27 +1412,55 @@ static void log_level_apply(bool usb_awake)
 
 /* Dual-output vprintf hook: forwards to the original serial vprintf AND
  * appends to the RTC ring buffer so logs survive deep sleep and can be
- * uploaded on the next server connection. */
+ * uploaded on the next server connection.
+ *
+ * This hook runs in whatever task is logging — including the small stacks
+ * of the system-event (~2.3 KB) and lwIP (~3 KB) tasks, which log heavily
+ * during the image download. The format scratch buffer therefore lives in
+ * static storage (off-stack), not on the caller's stack. A single such
+ * buffer is shared, so it must not be clobbered by concurrent loggers: a
+ * brief critical section claims ownership via s_log_fmt_busy. The winner
+ * formats into the static buffer; any concurrent caller falls back to plain
+ * vprintf (no large buffer, its own stack). Crucially, vsnprintf/fwrite run
+ * OUTSIDE the critical section — they may block on the UART, which is
+ * illegal with interrupts disabled. */
+static char          s_log_fmt_buf[512];
+static volatile bool s_log_fmt_busy;
+
 static int log_ring_vprintf(const char *fmt, va_list args)
 {
-    va_list args2;
-    va_copy(args2, args);
-    int n = vprintf(fmt, args2);
-    va_end(args2);
+    bool owned = false;
+    taskENTER_CRITICAL(&s_log_ring_mux);
+    if (!s_log_fmt_busy) {
+        s_log_fmt_busy = true;
+        owned = true;
+    }
+    taskEXIT_CRITICAL(&s_log_ring_mux);
 
-    char tmp[512];
-    int len = vsnprintf(tmp, sizeof(tmp), fmt, args);
+    /* Lost the race for the shared buffer — serial only, on our own stack. */
+    if (!owned) {
+        return vprintf(fmt, args);
+    }
+
+    int len = vsnprintf(s_log_fmt_buf, sizeof(s_log_fmt_buf), fmt, args);
     if (len > 0) {
-        if (len >= (int)sizeof(tmp)) len = (int)sizeof(tmp) - 1;
+        if (len >= (int)sizeof(s_log_fmt_buf)) len = (int)sizeof(s_log_fmt_buf) - 1;
+
+        /* Serial output (what the default vprintf handler would have done).
+         * fwrite, not printf(): the buffer is final text and may contain '%'. */
+        fwrite(s_log_fmt_buf, 1, (size_t)len, stdout);
+
         taskENTER_CRITICAL(&s_log_ring_mux);
         for (int i = 0; i < len; i++) {
-            s_log_ring[s_log_ring_head] = tmp[i];
+            s_log_ring[s_log_ring_head] = s_log_fmt_buf[i];
             s_log_ring_head = (s_log_ring_head + 1) % LOG_RING_SIZE;
             if (s_log_ring_used < LOG_RING_SIZE) s_log_ring_used++;
         }
         taskEXIT_CRITICAL(&s_log_ring_mux);
     }
-    return n;
+
+    s_log_fmt_busy = false;
+    return len;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
