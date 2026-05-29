@@ -1,3 +1,10 @@
+hokku-server (3.1.0~alpha.1-1) unstable; urgency=medium
+
+  * Release v3.1.0-alpha1
+  * Firmware 1.2.4: frame log upload, 240 MHz / -O3 / PSRAM XIP optimisations
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 29 May 2026 05:10:00 +0000
+
 hokku-server (3.0.1~dev.31-1) unstable; urgency=medium
 
   * fix: SVG thumbnail PIL image not closed on exception; _mark_as_failed

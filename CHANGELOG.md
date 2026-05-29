@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.1.0 alpha 1
+
+### Frame log upload
+
+After every refresh the frame now sends a log of everything that happened — WiFi connection, image download, display result — to the server as part of the refresh request. The server stores the last log received per frame and shows it in the screen detail modal. No cable or serial terminal needed to see what the frame has been doing.
+
+The log buffer lives in the frame's RTC memory, so it survives deep sleep and accumulates across multiple cycles. Each upload covers the last several refresh cycles' worth of diagnostics.
+
+### Colour space improvements
+
+Two new dithering colour spaces: **OKLAB** and **CAM16-UCS**, joining the existing CIELAB variants. Each can be used independently for palette matching, adaptive saturation, and dynamic range compression. For most photos the results are similar to CIELAB; CAM16-UCS tends to hold hue accuracy better on saturated colours.
+
+### Orientation filter per screen
+
+Each screen now carries its own orientation (landscape or portrait) and the server serves only images converted for that orientation. Previously orientation was a global server setting. Multiple screens with different orientations can run from the same image library simultaneously.
+
+### Relative next-update time in Screens tab
+
+The "next update" time in the Screens tab now shows both the absolute time and a relative "in X minutes / X hours" label.
+
+### Web app housekeeping
+
+The separate "Clear cache" and "Re-convert all" buttons are merged into one. The image detail modal now shows the minimum letterbox fill threshold.
+
+### Firmware 1.2.4
+
+- **Frame log upload** — ring buffer in RTC memory captures log output across deep sleep cycles and POSTs it to the server on each refresh.
+- **Firmware version in log** — every boot logs the firmware version and build timestamp as the first line, visible both on serial and in every log dump shown in the web app.
+- **Performance** — CPU bumped to 240 MHz; compiler optimised at -O3; code and rodata execute from PSRAM (eliminating flash/PSRAM cache contention during image downloads); instruction cache doubled to 32 KB; chip revision v0.2 targeting drops a now-unnecessary silicon workaround.
+- **Build tooling** — `build.bat` sets all required environment variables; `IDF_TARGET` explicitly declared in `CMakeLists.txt`; `cppcheck` linting added to CI.
+
+---
+
 ## 3.0.1 (dev)
 
 ### Global orientation removed
