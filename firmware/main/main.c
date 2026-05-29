@@ -1414,52 +1414,45 @@ static void log_level_apply(bool usb_awake)
  * appends to the RTC ring buffer so logs survive deep sleep and can be
  * uploaded on the next server connection.
  *
- * This hook runs in whatever task is logging — including the small stacks
- * of the system-event (~2.3 KB) and lwIP (~3 KB) tasks, which log heavily
- * during the image download. The format scratch buffer therefore lives in
- * static storage (off-stack), not on the caller's stack. A single such
- * buffer is shared, so it must not be clobbered by concurrent loggers: a
- * brief critical section claims ownership via s_log_fmt_busy. The winner
- * formats into the static buffer; any concurrent caller falls back to plain
- * vprintf (no large buffer, its own stack). Crucially, vsnprintf/fwrite run
- * OUTSIDE the critical section — they may block on the UART, which is
- * illegal with interrupts disabled. */
-static char          s_log_fmt_buf[512];
-static volatile bool s_log_fmt_busy;
+ * Format buffers live in PSRAM (off the caller's stack, off DRAM). A pool
+ * of LOG_BUF_COUNT slots lets concurrent callers — typically the main task
+ * and the WiFi/lwIP system-event task — each claim their own buffer without
+ * contention. A tiny critical section claims a free slot; vsnprintf/fwrite
+ * run outside any lock; the ring write and slot release share one final
+ * critical section. If all slots are busy (requires 3+ simultaneous callers,
+ * essentially unreachable) the call falls back to serial-only vprintf. */
+#define LOG_BUF_COUNT 2
+#define LOG_BUF_SIZE  512
+
+static char         *s_log_bufs[LOG_BUF_COUNT];
+static volatile bool s_log_buf_used[LOG_BUF_COUNT];
 
 static int log_ring_vprintf(const char *fmt, va_list args)
 {
-    bool owned = false;
+    int slot = -1;
     taskENTER_CRITICAL(&s_log_ring_mux);
-    if (!s_log_fmt_busy) {
-        s_log_fmt_busy = true;
-        owned = true;
+    for (int i = 0; i < LOG_BUF_COUNT; i++) {
+        if (!s_log_buf_used[i]) { s_log_buf_used[i] = true; slot = i; break; }
     }
     taskEXIT_CRITICAL(&s_log_ring_mux);
 
-    /* Lost the race for the shared buffer — serial only, on our own stack. */
-    if (!owned) {
-        return vprintf(fmt, args);
+    if (slot < 0) return vprintf(fmt, args);  /* all slots busy — serial only */
+
+    int len = vsnprintf(s_log_bufs[slot], LOG_BUF_SIZE, fmt, args);
+    if (len < 0) len = 0;
+    if (len >= LOG_BUF_SIZE) len = LOG_BUF_SIZE - 1;
+
+    if (len > 0) fwrite(s_log_bufs[slot], 1, (size_t)len, stdout);
+
+    taskENTER_CRITICAL(&s_log_ring_mux);
+    for (int i = 0; i < len; i++) {
+        s_log_ring[s_log_ring_head] = s_log_bufs[slot][i];
+        s_log_ring_head = (s_log_ring_head + 1) % LOG_RING_SIZE;
+        if (s_log_ring_used < LOG_RING_SIZE) s_log_ring_used++;
     }
+    s_log_buf_used[slot] = false;
+    taskEXIT_CRITICAL(&s_log_ring_mux);
 
-    int len = vsnprintf(s_log_fmt_buf, sizeof(s_log_fmt_buf), fmt, args);
-    if (len > 0) {
-        if (len >= (int)sizeof(s_log_fmt_buf)) len = (int)sizeof(s_log_fmt_buf) - 1;
-
-        /* Serial output (what the default vprintf handler would have done).
-         * fwrite, not printf(): the buffer is final text and may contain '%'. */
-        fwrite(s_log_fmt_buf, 1, (size_t)len, stdout);
-
-        taskENTER_CRITICAL(&s_log_ring_mux);
-        for (int i = 0; i < len; i++) {
-            s_log_ring[s_log_ring_head] = s_log_fmt_buf[i];
-            s_log_ring_head = (s_log_ring_head + 1) % LOG_RING_SIZE;
-            if (s_log_ring_used < LOG_RING_SIZE) s_log_ring_used++;
-        }
-        taskEXIT_CRITICAL(&s_log_ring_mux);
-    }
-
-    s_log_fmt_busy = false;
     return len;
 }
 
@@ -1800,8 +1793,13 @@ void app_main(void)
 
     /* Install dual-output log hook: serial + RTC ring buffer. Done here,
      * after RTC validation but before any log output, so every message
-     * from this point forward is captured. */
-    esp_log_set_vprintf(log_ring_vprintf);
+     * from this point forward is captured. Format buffers are in PSRAM. */
+    bool log_bufs_ok = true;
+    for (int i = 0; i < LOG_BUF_COUNT; i++) {
+        s_log_bufs[i] = heap_caps_malloc(LOG_BUF_SIZE, MALLOC_CAP_SPIRAM);
+        if (!s_log_bufs[i]) { log_bufs_ok = false; break; }
+    }
+    if (log_bufs_ok) esp_log_set_vprintf(log_ring_vprintf);
 
     boot_count++;
 
