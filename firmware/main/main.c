@@ -838,9 +838,9 @@ static bool wifi_connect(void)
 
             wifi_cfg.sta.channel = 0;
             wifi_cfg.sta.bssid_set = false;
-            esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+            WIFI_TRY(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
             xEventGroupClearBits(wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
-            esp_wifi_connect();
+            WIFI_TRY(esp_wifi_connect());
 
             bits = xEventGroupWaitBits(wifi_events,
                 WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
@@ -1057,6 +1057,11 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+    if (!client) {
+        ESP_LOGE(TAG, "esp_http_client_init failed (OOM?)");
+        heap_caps_free(buf);
+        return NULL;
+    }
 
     /* Switch to POST so the ring-buffer log can travel as the request body. */
     esp_http_client_set_method(client, HTTP_METHOD_POST);
@@ -1132,10 +1137,10 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
              * it is. */
             struct tm t;
             gmtime_r(&tv.tv_sec, &t);
-            char buf[40];
-            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S UTC", &t);
+            char timestamp[40];
+            strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S UTC", &t);
             ESP_LOGI(TAG, "X-Server-Time-Epoch: %lld — system clock set to %s",
-                     epoch, buf);
+                     epoch, timestamp);
         } else {
             ESP_LOGW(TAG, "X-Server-Time-Epoch present but non-positive: '%s'", ctx.server_epoch_hdr);
         }
@@ -1732,6 +1737,7 @@ static void regime_battery_idle(int64_t boot_time_us)
  *  app_main
  * ═══════════════════════════════════════════════════════════════════ */
 
+// cppcheck-suppress unusedFunction
 void app_main(void)
 {
     int64_t boot_time = esp_timer_get_time();

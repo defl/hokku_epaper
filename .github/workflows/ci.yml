@@ -38,8 +38,30 @@ jobs:
       - name: Run tests
         run: pytest -m "not time_intensive"
 
+  lint-firmware:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y --no-install-recommends cppcheck
+
+      - name: Run cppcheck
+        run: >
+          cppcheck
+          --enable=all
+          --std=c11
+          --suppress=missingIncludeSystem
+          --suppress=missingInclude
+          --suppress=checkersReport
+          --suppress=normalCheckLevelMaxBranches
+          --inline-suppr
+          --error-exitcode=1
+          firmware/main/
+
   build-firmware:
-    needs: test-firmware
+    needs: [test-firmware, lint-firmware]
     runs-on: ubuntu-latest
 
     steps:
