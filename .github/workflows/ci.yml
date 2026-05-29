@@ -55,7 +55,6 @@ jobs:
           --suppress=missingIncludeSystem
           --suppress=missingInclude
           --suppress=checkersReport
-          --suppress=normalCheckLevelMaxBranches
           --inline-suppr
           --error-exitcode=1
           firmware/main/

@@ -100,7 +100,6 @@ static const uint8_t font5x7[][5] = {
     {0x08,0x08,0x2A,0x1C,0x08}, /* ~ */
 };
 
-// cppcheck-suppress staticFunction -- called directly from test_text_render.c
 void draw_char(uint8_t *fb, int fb_w, int fb_h, int x, int y,
                char ch, uint8_t color, int scale)
 {
