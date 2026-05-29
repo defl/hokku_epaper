@@ -31,7 +31,7 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 - **Instant refresh** — there's a button on the frame that forces an immediate update whenever you want one.
 - **Diagnostics on demand** — one click in the web app shows the frame's status without needing a cable.
 - **What happened last refresh** — after every update the frame sends a log of what it did to the server (WiFi connection, image download, display result). Open a frame's details in the web app to read it — no cable, no terminal needed.
-- **Comically over-engineered firmware** — runs at 240 MHz on a dual-core processor with the compiler's maximum optimisations turned on, code and data copied into dedicated high-speed RAM at boot, and cache tuned for the exact chip revision on your board. Completely unnecessary for a frame that wakes up once a day, downloads a picture, and goes back to sleep. We did it anyway. 🚀
+- **Comically over-engineered firmware** — runs at 240 MHz (up from the 160 MHz default) on a dual-core processor with the compiler's maximum optimisations turned on, code and data copied into dedicated high-speed RAM at boot, and cache tuned for the exact chip revision on your board. Completely unnecessary for a frame that wakes up once a day, downloads a picture, and goes back to sleep. We did it anyway. 🚀
 
 **Easy to run**
 - **Everything through the web app** — upload, browse, configure. No command line, no shared drives to set up.
