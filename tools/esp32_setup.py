@@ -92,18 +92,18 @@ def resolve_firmware_dir(interactive=False):
 
     print(f"  No hokku-firmware_*.bin in {LOCAL_FIRMWARE_DIR}. Fetching latest GitHub release...")
     try:
-        release = release_cache.get_latest_release()
+        release, asset = release_cache.find_latest_release_with_asset(_is_merged_firmware_asset)
     except Exception as e:
         print(f"  ERROR: could not reach GitHub: {e}")
         return None
 
-    tag = release.get("tag_name", "latest")
-    asset = release_cache.find_asset(release, _is_merged_firmware_asset)
-    if asset is None:
-        print(f"  ERROR: release {tag} has no hokku-firmware_*.bin asset.")
+    if release is None:
+        print("  ERROR: no GitHub release with a hokku-firmware_*.bin asset found.")
         print("  (See 'Releasing firmware' in CLAUDE.md — the release must ship")
         print("   a single merged hokku-firmware_<version>.bin file.)")
         return None
+
+    tag = release.get("tag_name", "latest")
 
     target_dir = FIRMWARE_CACHE_DIR / tag
     if release_cache.ensure_cached_asset(asset, target_dir, label=f"(release {tag})") is None:

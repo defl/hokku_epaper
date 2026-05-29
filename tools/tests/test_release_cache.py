@@ -45,6 +45,55 @@ class TestFindAsset:
         assert release_cache.find_asset({}, lambda n: True) is None
 
 
+# ---------- find_latest_release_with_asset ----------
+
+
+class TestFindLatestReleaseWithAsset:
+    def test_returns_first_release_with_matching_asset(self, monkeypatch):
+        releases = [
+            {"tag_name": "v2.0", "assets": [{"name": "other.bin"}]},
+            {
+                "tag_name": "v1.0",
+                "assets": [{"name": "hokku-firmware_v1.0.bin", "browser_download_url": "u"}],
+            },
+        ]
+        monkeypatch.setattr(release_cache, "get_all_releases", lambda: releases)
+        rel, asset = release_cache.find_latest_release_with_asset(
+            lambda n: n.startswith("hokku-firmware_")
+        )
+        assert rel is not None and asset is not None
+        assert rel["tag_name"] == "v1.0"
+        assert asset["name"] == "hokku-firmware_v1.0.bin"
+
+    def test_returns_prerelease_when_it_has_asset(self, monkeypatch):
+        releases = [
+            {
+                "tag_name": "v3.0.0",
+                "prerelease": True,
+                "assets": [{"name": "hokku-firmware_v3.0.0.bin"}],
+            },
+            {"tag_name": "v2.9.0", "prerelease": False, "assets": []},
+        ]
+        monkeypatch.setattr(release_cache, "get_all_releases", lambda: releases)
+        rel, _ = release_cache.find_latest_release_with_asset(
+            lambda n: n.startswith("hokku-firmware_")
+        )
+        assert rel is not None
+        assert rel["tag_name"] == "v3.0.0"
+
+    def test_returns_none_none_when_no_match(self, monkeypatch):
+        releases = [{"tag_name": "v1.0", "assets": [{"name": "other.bin"}]}]
+        monkeypatch.setattr(release_cache, "get_all_releases", lambda: releases)
+        rel, asset = release_cache.find_latest_release_with_asset(lambda n: False)
+        assert rel is None
+        assert asset is None
+
+    def test_returns_none_none_when_no_releases(self, monkeypatch):
+        monkeypatch.setattr(release_cache, "get_all_releases", lambda: [])
+        rel, asset = release_cache.find_latest_release_with_asset(lambda n: True)
+        assert rel is None and asset is None
+
+
 # ---------- get_latest_release memoisation ----------
 
 
@@ -190,17 +239,17 @@ class TestResolveFirmwareDir:
         monkeypatch.setattr(esp32_setup, "FIRMWARE_CACHE_DIR", cache)
         monkeypatch.setattr(esp32_setup, "FIRMWARE_DIR", None)
 
-        fake_release = {
-            "tag_name": "v9.9.9",
-            "assets": [
-                {
-                    "name": "hokku-firmware_v9.9.9.bin",
-                    "browser_download_url": "http://x/fw.bin",
-                    "size": 42,
-                },
-            ],
+        fake_asset = {
+            "name": "hokku-firmware_v9.9.9.bin",
+            "browser_download_url": "http://x/fw.bin",
+            "size": 42,
         }
-        monkeypatch.setattr(release_cache, "get_latest_release", lambda: fake_release)
+        fake_release = {"tag_name": "v9.9.9", "assets": [fake_asset]}
+        monkeypatch.setattr(
+            release_cache,
+            "find_latest_release_with_asset",
+            lambda pred: (fake_release, fake_asset),
+        )
 
         downloaded = []
 
@@ -217,22 +266,46 @@ class TestResolveFirmwareDir:
         assert result == cache / "v9.9.9"
         assert downloaded == ["hokku-firmware_v9.9.9.bin"]
 
-    def test_returns_none_when_release_has_no_merged_asset(self, tmp_path, monkeypatch):
+    def test_downloads_from_prerelease_when_newest_with_asset(self, tmp_path, monkeypatch):
+        """Firmware is fetched even if the newest release is a GitHub pre-release."""
+        local = tmp_path / "release"
+        local.mkdir()
+
+        cache = tmp_path / "firmware-cache"
+        monkeypatch.setattr(esp32_setup, "LOCAL_FIRMWARE_DIR", local)
+        monkeypatch.setattr(esp32_setup, "FIRMWARE_CACHE_DIR", cache)
+        monkeypatch.setattr(esp32_setup, "FIRMWARE_DIR", None)
+
+        fake_asset = {
+            "name": "hokku-firmware_v3.0.0.bin",
+            "browser_download_url": "http://x/fw.bin",
+            "size": 10,
+        }
+        fake_release = {"tag_name": "v3.0.0", "prerelease": True, "assets": [fake_asset]}
+        monkeypatch.setattr(
+            release_cache,
+            "find_latest_release_with_asset",
+            lambda pred: (fake_release, fake_asset),
+        )
+        monkeypatch.setattr(
+            release_cache,
+            "ensure_cached_asset",
+            lambda asset, target_dir, label="": target_dir / asset["name"],
+        )
+
+        result = esp32_setup.resolve_firmware_dir()
+        assert result == cache / "v3.0.0"
+
+    def test_returns_none_when_no_release_has_merged_asset(self, tmp_path, monkeypatch):
         local = tmp_path / "release"
         local.mkdir()
         monkeypatch.setattr(esp32_setup, "LOCAL_FIRMWARE_DIR", local)
         monkeypatch.setattr(esp32_setup, "FIRMWARE_CACHE_DIR", tmp_path / "cache")
         monkeypatch.setattr(esp32_setup, "FIRMWARE_DIR", None)
 
-        fake_release = {
-            "tag_name": "v1",
-            "assets": [  # the three legacy parts — no merged file
-                {"name": "bootloader.bin", "browser_download_url": "u1", "size": 1},
-                {"name": "partition-table.bin", "browser_download_url": "u2", "size": 1},
-                {"name": "hokku_epaper.bin", "browser_download_url": "u3", "size": 1},
-            ],
-        }
-        monkeypatch.setattr(release_cache, "get_latest_release", lambda: fake_release)
+        monkeypatch.setattr(
+            release_cache, "find_latest_release_with_asset", lambda pred: (None, None)
+        )
         assert esp32_setup.resolve_firmware_dir() is None
 
     def test_returns_none_when_github_unreachable(self, tmp_path, monkeypatch):
@@ -241,10 +314,10 @@ class TestResolveFirmwareDir:
         monkeypatch.setattr(esp32_setup, "LOCAL_FIRMWARE_DIR", local)
         monkeypatch.setattr(esp32_setup, "FIRMWARE_DIR", None)
 
-        def boom():
+        def boom(pred):
             raise OSError("network down")
 
-        monkeypatch.setattr(release_cache, "get_latest_release", boom)
+        monkeypatch.setattr(release_cache, "find_latest_release_with_asset", boom)
         assert esp32_setup.resolve_firmware_dir() is None
 
 

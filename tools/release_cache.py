@@ -58,6 +58,18 @@ def find_asset(release, name_predicate):
     return None
 
 
+def find_latest_release_with_asset(name_predicate):
+    """Search all releases (newest first, including pre-releases) and return the
+    first (release, asset) pair where an asset satisfies name_predicate.
+    Returns (None, None) if no matching release exists or the API is unreachable."""
+    releases = get_all_releases()
+    for release in releases:
+        asset = find_asset(release, name_predicate)
+        if asset is not None:
+            return release, asset
+    return None, None
+
+
 def _download_with_progress(url, dest):
     """Stream `url` to `dest`, showing a simple % indicator. Returns True on success."""
     tmp = dest.with_suffix(dest.suffix + ".part")
