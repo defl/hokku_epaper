@@ -89,6 +89,7 @@ class AbstractImageManager(ABC):
         self._db_lock = threading.RLock()
         self._records: dict[str, ImageRecord] = {}
         self._progress = ConversionProgress(current_name=None, done=0, total=0)
+        self._batch_failed: int = 0
 
         # Names of images currently being rendered. Protected by _db_lock.
         self._inflight: set[str] = set()
@@ -190,6 +191,7 @@ class AbstractImageManager(ABC):
                 and self._progress.total > 0
             ):
                 self._progress = ConversionProgress(current_name=None, done=0, total=0)
+                self._batch_failed = 0
 
             pending = [
                 r
@@ -814,10 +816,13 @@ class AbstractImageManager(ABC):
                     landscape_image_config_slug=None,
                     portrait_image_config_slug=None,
                 )
-                self._progress = replace(
-                    self._progress,
-                    done=self._progress.done + 1,
-                )
+                self._inflight.discard(name)
+                self._batch_failed += 1
+                done = self._progress.done + 1
+                total = self._progress.total
+                self._progress = replace(self._progress, done=done)
+                if done >= total and total > 0:
+                    self._log_batch_complete()
                 self._save_db()
 
     def _submit_one(self, name: str, decision: ImageClassifierDecision | None = None) -> None:
@@ -941,6 +946,7 @@ class AbstractImageManager(ABC):
                 logger.exception("Conversion failed for %r: %s", name, err)
                 with self._db_lock:
                     self._inflight.discard(name)
+                    self._batch_failed += 1
                     cur = self._records.get(name)
                     if cur is not None:
                         self._records[name] = replace(
@@ -1004,23 +1010,17 @@ class AbstractImageManager(ABC):
     def _log_batch_complete(self) -> None:
         """Log a batch-complete summary (must be called while holding _db_lock)."""
         total = self._progress.total
-        n_failed = total - sum(
-            1
-            for r in self._records.values()
-            if r.convert_status == "ok" and r.last_conversion_seconds is not None
-        )
-        if n_failed > 0:
-            logger.warning("Dithering batch complete: some images failed")
+        if self._batch_failed > 0:
+            logger.warning("Dithering batch complete: %d/%d failed", self._batch_failed, total)
         else:
             logger.info("Dithering complete: all %d image(s) done", total)
 
     def _materialize_thumbnail(self, src_path: Path, thumb_path: Path) -> None:
         thumb_path.parent.mkdir(parents=True, exist_ok=True)
         if src_path.suffix.lower() == ".svg":
-            img = open_image_for_render(src_path)  # already RGB
-            img.thumbnail((_THUMB_MAX_PX, _THUMB_MAX_PX), Image.Resampling.LANCZOS)
-            img.save(thumb_path, format="JPEG", quality=_THUMB_QUALITY)
-            img.close()
+            with open_image_for_render(src_path) as img:
+                img.thumbnail((_THUMB_MAX_PX, _THUMB_MAX_PX), Image.Resampling.LANCZOS)
+                img.save(thumb_path, format="JPEG", quality=_THUMB_QUALITY)
             return
         with Image.open(src_path) as img:
             # Ask the JPEG decoder to downsample at decode time so we never

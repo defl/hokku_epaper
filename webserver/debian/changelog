@@ -1,4 +1,9 @@
-hokku-server (3.0.1~dev.27-1) unstable; urgency=medium
+hokku-server (3.0.1~dev.31-1) unstable; urgency=medium
+
+  * fix: SVG thumbnail PIL image not closed on exception; _mark_as_failed
+    now discards from _inflight and triggers _log_batch_complete; fix
+    _log_batch_complete to use per-batch failure counter instead of
+    all-time ok count; atomic_write_json cleans up .tmp on any exception
 
   * docs: refresh README, manual and dithering docs to reflect the
     9 palette LUTs (CIELAB/OKLAB/CAM16-UCS each plus weighted/hue-aware

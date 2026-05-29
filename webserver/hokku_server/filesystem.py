@@ -22,13 +22,20 @@ def atomic_write_json(path: Path, payload: dict) -> None:
     window; re-raises on the fifth failure.
     """
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w") as f:
-        json.dump(payload, f, indent=2)
-    for attempt in range(5):
+    try:
+        with open(tmp, "w") as f:
+            json.dump(payload, f, indent=2)
+        for attempt in range(5):
+            try:
+                _replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                _sleep(0.05 * (2**attempt))
+    except Exception:
         try:
-            _replace(tmp, path)
-            return
-        except PermissionError:
-            if attempt == 4:
-                raise
-            _sleep(0.05 * (2**attempt))
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
