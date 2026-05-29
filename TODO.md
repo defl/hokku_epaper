@@ -3,9 +3,6 @@
 Items captured during development that aren't urgent enough to block current
 work but worth picking up later.
 
-v3.1
- - screen log push to webserver in POST, UI in screen (backwards compatible protocol)
-
 v4.0 - The Appliance
  - This is a single Pi computer that can server images as well as flash
  - This has a access point mode that people can connect to and configure and then it boots up in client mode
@@ -15,3 +12,6 @@ v4.0 - The Appliance
  
  v4.1
  - Gift mode, installer choice multi wifi use
+
+v5.0
+- Bigme F7 screen supprt ($89 7.3" screen)
