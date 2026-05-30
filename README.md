@@ -21,6 +21,8 @@ Everything you'd want from a photo frame: accurate colours, full privacy, a clea
 - **Colour-accurate** — calibrated against the actual panel, not a theoretical colour profile.
 
 **Smart about frames**
+- **Over-the-air firmware updates** — update the firmware on any frame wirelessly from the web app. Open a frame's Details, toggle "Update firmware on next refresh", and the frame downloads and installs the new firmware on its own — no USB, no cable, no terminal. The old firmware stays in a second slot and is automatically restored if the new one can't reach the server. First-time setup still needs a USB flash to activate OTA; after that, all future updates are wireless.
+- **Flash frames from the web app** — if you're running the server on the same machine you use for setup (the appliance scenario), connect a frame via USB and use "Flash a screen" in the web app directly, without running any setup wizard separately.
 - **Multiple frames, one server** — each frame gets a name and shows up in a dashboard with battery level, WiFi signal, and when it'll next update. Each frame carries its own orientation, so you can mix landscape and portrait frames against the same library.
 - **Fair rotation** — every photo gets its turn. Newly uploaded photos go to the front of the queue; after that, whichever image has been shown least goes next.
 - **Battery lasts months** — the frame uses almost no power between refreshes. The web app shows a battery level for each frame and flags it red when it's getting low.
