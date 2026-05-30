@@ -19,8 +19,6 @@ Usage:
 import argparse
 import json
 import os
-import struct
-import subprocess
 import sys
 import tempfile
 from datetime import datetime
@@ -33,16 +31,25 @@ try:
 except ImportError:
     _esptool = None  # type: ignore[assignment]
 
-# ESP32-S3 USB Serial/JTAG VID:PID
-ESP32S3_VID = 0x303A
-ESP32S3_PID = 0x1001
+# The shared screen library lives under python/ in the repo. When running from a
+# source checkout (not installed), add that dir to sys.path so ``hokku`` imports.
+try:
+    import hokku.screens.epf1301  # noqa: F401 — probe importability
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
-# NVS partition location (from partitions.csv)
-NVS_OFFSET = 0x9000
-NVS_SIZE = 0x6000  # 24KB
-
-# NVS namespace used by firmware
-NVS_NAMESPACE = "hokku"
+# Constants + NVS read/build come from the shared epf1301 library (single source
+# of truth, no ESP-IDF dependency). CONFIG_VERSION is re-exported for esp32_setup.
+from hokku.screens.epf1301.constants import (
+    CONFIG_VERSION,  # noqa: F401 — re-exported for esp32_setup.py
+    ESP32S3_PID,
+    ESP32S3_VID,
+    NVS_OFFSET,
+    NVS_SIZE,
+    PAGE_ACTIVE,  # noqa: F401 — re-exported for tools tests
+)
+from hokku.screens.epf1301.nvs import build_nvs_binary as _build_nvs_binary
+from hokku.screens.epf1301.nvs import read_nvs as _read_nvs
 
 
 def find_esp32_port():
@@ -52,172 +59,6 @@ def find_esp32_port():
         if port.vid == ESP32S3_VID and port.pid == ESP32S3_PID:
             return port.device
     return None
-
-
-# ── NVS partition binary generation ────────────────────────────────
-# NVS partition format constants
-NVS_PAGE_SIZE = 4096
-NVS_ENTRY_SIZE = 32
-
-# Entry types (ESP-IDF NVS)
-# Note: uint8 (0x01) and namespace share the same type code.
-# Namespace entries have ns_idx=0; data entries have ns_idx>0.
-U8_TYPE = 0x01  # uint8 (also used for namespace entries)
-STR_TYPE = 0x21  # String
-
-# Config version — increment every time NVS config fields change.
-# Must match firmware's CONFIG_VERSION. Source of truth is CLAUDE.md.
-CONFIG_VERSION = 2
-
-# Page states
-PAGE_ACTIVE = 0xFFFFFFFE  # Active page
-
-
-def _find_nvs_partition_gen():
-    """Find ESP-IDF's nvs_partition_gen.py tool."""
-    # Check common ESP-IDF installation paths
-    candidates = [
-        Path(os.environ.get("IDF_PATH", ""))
-        / "components"
-        / "nvs_flash"
-        / "nvs_partition_generator"
-        / "nvs_partition_gen.py",
-        Path(
-            "C:/esp/v5.5.3/esp-idf/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"
-        ),
-        Path("/opt/esp-idf/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"),
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    return None
-
-
-def _find_idf_python():
-    """Find the ESP-IDF Python venv interpreter."""
-    candidates = [
-        Path(os.environ.get("IDF_PYTHON_ENV_PATH", "")) / "Scripts" / "python.exe",
-        Path(os.environ.get("IDF_PYTHON_ENV_PATH", "")) / "bin" / "python",
-        Path("C:/Espressif/tools/python/v5.5.3/venv/Scripts/python.exe"),
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    return None
-
-
-def _build_nvs_binary(config_dict):
-    """Build an NVS partition binary using ESP-IDF's nvs_partition_gen.py.
-
-    Creates a CSV with the config values and calls the ESP-IDF tool to
-    generate a properly formatted NVS partition binary.
-    """
-    nvs_gen = _find_nvs_partition_gen()
-    idf_python = _find_idf_python()
-
-    if nvs_gen is None:
-        raise RuntimeError(
-            "Cannot find ESP-IDF nvs_partition_gen.py. "
-            "Set IDF_PATH environment variable or install ESP-IDF."
-        )
-    if idf_python is None:
-        raise RuntimeError(
-            "Cannot find ESP-IDF Python environment. Set IDF_PYTHON_ENV_PATH or install ESP-IDF."
-        )
-
-    # Build CSV: key,type,encoding,value
-    csv_lines = ["key,type,encoding,value"]
-    csv_lines.append(f"{NVS_NAMESPACE},namespace,,")
-    csv_lines.append(f"cfg_ver,data,u8,{CONFIG_VERSION}")
-    wifi_order = int(config_dict.get("wifi_order", 0))
-    csv_lines.append(f"wifi_order,data,u8,{wifi_order}")
-    for key, value in config_dict.items():
-        if not isinstance(value, str):
-            continue  # u8 fields (cfg_ver, wifi_order) are handled above
-        escaped = value.replace('"', '""')
-        csv_lines.append(f'{key},data,string,"{escaped}"')
-
-    csv_content = "\n".join(csv_lines) + "\n"
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-        f.write(csv_content)
-        csv_path = f.name
-
-    bin_path = csv_path.replace(".csv", ".bin")
-
-    try:
-        result = subprocess.run(
-            [str(idf_python), str(nvs_gen), "generate", csv_path, bin_path, hex(NVS_SIZE)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"nvs_partition_gen.py failed: {result.stderr}")
-
-        with open(bin_path, "rb") as f:
-            return f.read()
-    finally:
-        for p in [csv_path, bin_path]:
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
-
-
-def _read_nvs(partition_data):
-    """Read entries from an NVS partition binary (ESP-IDF format).
-
-    Returns dict of key-value pairs from the 'hokku' namespace.
-    String values are returned as str, uint8 values as int.
-    """
-    result = {}
-    if len(partition_data) < NVS_PAGE_SIZE:
-        return result
-
-    page = partition_data[:NVS_PAGE_SIZE]
-
-    # Check page state
-    state = struct.unpack_from("<I", page, 0)[0]
-    if state not in (PAGE_ACTIVE, 0xFFFFFFFC):  # ACTIVE or FULL
-        return result
-
-    # Read entries starting at offset 64 (after 32-byte header + 32-byte bitmap)
-    offset = 64
-    ns_map = {}  # ns_index -> ns_name
-
-    while offset + NVS_ENTRY_SIZE <= NVS_PAGE_SIZE:
-        entry = page[offset : offset + NVS_ENTRY_SIZE]
-        ns_idx = entry[0]
-        entry_type = entry[1]
-        span = entry[2]
-
-        if entry_type == 0xFF or span == 0:  # empty or corrupt
-            break
-
-        # Read key (bytes 8-23, null-terminated)
-        key_raw = entry[8:24]
-        null_pos = key_raw.find(b"\x00")
-        if null_pos >= 0:
-            key = key_raw[:null_pos].decode("utf-8", errors="replace")
-        else:
-            key = key_raw.decode("utf-8", errors="replace").rstrip("\xff")
-
-        if entry_type == U8_TYPE and ns_idx == 0:
-            # Namespace entry: ns_idx=0, type=0x01, value is the namespace index
-            ns_map[entry[24]] = key
-        elif entry_type == U8_TYPE and ns_map.get(ns_idx) == NVS_NAMESPACE:
-            result[key] = entry[24]  # uint8 value
-        elif entry_type == STR_TYPE and ns_map.get(ns_idx) == NVS_NAMESPACE:
-            str_len = struct.unpack_from("<H", entry, 24)[0]
-            # String data is in subsequent entries
-            data_offset = offset + NVS_ENTRY_SIZE
-            data_bytes = page[data_offset : data_offset + str_len - 1]  # exclude null
-            result[key] = data_bytes.decode("utf-8", errors="replace")
-
-        offset += span * NVS_ENTRY_SIZE
-
-    return result
 
 
 # ── esptool integration ────────────────────────────────────────────

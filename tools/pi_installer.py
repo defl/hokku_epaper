@@ -1155,7 +1155,7 @@ def locate_deb_package_interactive():
     print()
     print("  Could not obtain a .deb. Options:")
     print("    - Check your internet connection and retry")
-    print("    - Build locally: cd webserver && bash build-deb.sh  (needs Linux/Docker)")
+    print("    - Build locally: cd python && bash build-deb.sh  (needs Linux/Docker)")
     return None
 
 

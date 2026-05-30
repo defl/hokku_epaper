@@ -1,0 +1,10 @@
+hokku/webserver/config/config.json /usr/share/hokku-server/
+hokku/webserver/templates/index.html /usr/share/hokku-server/templates/
+hokku/webserver/static/logo.png /usr/share/hokku-server/static/
+hokku/webserver/static/paper.png /usr/share/hokku-server/static/
+hokku/webserver/static/line_seg_1.png /usr/share/hokku-server/static/
+hokku/webserver/static/line_seg_2.png /usr/share/hokku-server/static/
+hokku/webserver/static/line_seg_3.png /usr/share/hokku-server/static/
+hokku/webserver/static/line_seg_4.png /usr/share/hokku-server/static/
+hokku/webserver/static/line_seg_5.png /usr/share/hokku-server/static/
+firmware/release/hokku-firmware_*.bin /usr/share/hokku-server/firmware/

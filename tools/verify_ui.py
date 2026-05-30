@@ -10,7 +10,7 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 ROOT = Path(__file__).resolve().parent
-WEBSERVER_DIR = ROOT / "webserver"
+WEBSERVER_DIR = ROOT / "python"  # cwd from which `-m hokku.webserver` runs
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 CONFIG = ROOT / "test_server" / "config.json"
 
@@ -43,9 +43,9 @@ async def main():
         else:
             sys.exit("Could not free port 8080.")
 
-    print("Starting fresh hokku_server with latest source...")
+    print("Starting fresh hokku.webserver with latest source...")
     server = subprocess.Popen(
-        [str(PYTHON), "-m", "hokku_server", str(CONFIG)],
+        [str(PYTHON), "-m", "hokku.webserver", str(CONFIG)],
         cwd=str(WEBSERVER_DIR),
     )
 

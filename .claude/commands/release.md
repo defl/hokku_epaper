@@ -40,8 +40,8 @@ Key areas to audit:
 - Feature lists and capability descriptions in README.md
 - Installation steps in `docs/install.md` and `docs/manual.md`
 - Any version-specific version numbers embedded in docs
-- Pipeline or algorithm descriptions in `docs/dithering.md` — compare against `webserver/hokku_server/` code
-- Metric definitions in `docs/image_quality.md` — compare against `webserver/hokku_server/image_quality.py`
+- Pipeline or algorithm descriptions in `docs/dithering.md` — compare against `python/hokku/webserver/` code
+- Metric definitions in `docs/image_quality.md` — compare against `python/hokku/webserver/image_quality.py`
 
 For each proposed change, show the user the before/after diff and wait for confirmation before applying it. If no changes are needed, say so and continue.
 
@@ -67,8 +67,8 @@ From the user's answer, derive all format variants and display them for confirma
 | Format | Example |
 |--------|---------|
 | Git tag (as entered) | `v3.0.2` |
-| PEP 440 — `webserver/pyproject.toml` | `3.0.2` |
-| Debian — `webserver/debian/changelog` | `3.0.2-1` |
+| PEP 440 — `python/pyproject.toml` | `3.0.2` |
+| Debian — `python/debian/changelog` | `3.0.2-1` |
 | CHANGELOG.md heading | `3.0.2` |
 
 Conversion rules:
@@ -107,9 +107,9 @@ Present the draft CHANGELOG section to the user for review and editing before sa
 
 ## Step 5 — Update version files
 
-Edit **`webserver/pyproject.toml`**: change the `version = "..."` line to the PEP 440 form.
+Edit **`python/pyproject.toml`**: change the `version = "..."` line to the PEP 440 form.
 
-Edit **`webserver/debian/changelog`**: prepend a new entry at the top in Debian RFC 822 format:
+Edit **`python/debian/changelog`**: prepend a new entry at the top in Debian RFC 822 format:
 
 ```
 hokku-server (<debian-version>) unstable; urgency=medium
@@ -130,8 +130,8 @@ If the firmware version changed since the last release, note it in the changelog
 ## Step 6 — Commit the release changes
 
 Stage exactly these files (and only these):
-- `webserver/pyproject.toml`
-- `webserver/debian/changelog`
+- `python/pyproject.toml`
+- `python/debian/changelog`
 - `CHANGELOG.md`
 - Any `README.md` or `docs/*.md` files that were modified in Step 2
 

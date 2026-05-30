@@ -1,6 +1,6 @@
 # Agent rules for hokku_epaper
 
-Sub-directory rules: [firmware/AGENTS.md](firmware/AGENTS.md) | [webserver/AGENTS.md](webserver/AGENTS.md)
+Sub-directory rules: [firmware/AGENTS.md](firmware/AGENTS.md) | [python/AGENTS.md](python/AGENTS.md)
 
 ## Python environment
 - Venv: `.venv/` at repo root
@@ -37,8 +37,8 @@ PEP_VER   = MAJOR.MINOR.ODD_PATCH.devN    (PEP 440, e.g. 3.0.1.dev47)
 
 Before every `git push`, agents MUST:
 1. Compute the dev version using the formula above
-2. Update `webserver/pyproject.toml` `version = "..."` to `PEP_VER`
-3. Update `webserver/debian/changelog` first entry version to `DEB_VER`
+2. Update `python/pyproject.toml` `version = "..."` to `PEP_VER`
+3. Update `python/debian/changelog` first entry version to `DEB_VER`
 4. Include these version file changes in the same commit as the code change
 
 Agents MUST NOT use even PATCH — that is exclusively the release track (see `/release`).

@@ -1,12 +1,12 @@
 [tool.ruff]
 line-length = 100
 target-version = "py39"
-src = ["webserver", "tools"]
+src = ["python", "tools"]
 exclude = [
     ".venv",
-    "webserver/build",
-    "webserver/.pybuild",
-    "webserver/debian",
+    "python/build",
+    "python/.pybuild",
+    "python/debian",
 ]
 
 [tool.ruff.lint]
@@ -23,13 +23,13 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"webserver/tests/conftest.py" = ["E402"]        # sys.path setup must precede local imports
+"python/tests/conftest.py" = ["E402"]           # sys.path setup must precede local imports
 "**/test_*.py" = ["S101", "S106"]               # assert and test credentials are normal in pytest
 "tools/tests/*.py" = ["S101", "S106"]           # same for tools test suite
-"webserver/tests/_*.py" = ["S101"]              # test helpers (not prefixed test_)
+"python/tests/_*.py" = ["S101"]                 # test helpers (not prefixed test_)
 
 [tool.ruff.lint.isort]
-known-first-party = ["hokku_server", "hokku_config", "hokku_setup"]
+known-first-party = ["hokku", "hokku_config", "hokku_setup"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -38,24 +38,25 @@ quote-style = "double"
 pythonVersion = "3.11"
 venvPath = "."
 venv = ".venv"
+extraPaths = ["python"]
 include = [
-    "webserver/hokku_server",
-    "webserver/tests",
+    "python/hokku",
+    "python/tests",
     "tools",
 ]
 exclude = [
     ".venv",
-    "webserver/build",
-    "webserver/.pybuild",
-    "webserver/debian",
+    "python/build",
+    "python/.pybuild",
+    "python/debian",
 ]
 typeCheckingMode = "basic"
 
 [tool.coverage.run]
-source = ["webserver/hokku_server"]
+source = ["python/hokku"]
 omit = [
-    "webserver/hokku_server/dither_unconstrained_numba.py",
-    "webserver/hokku_server/dither_streaming_numba.py",
+    "python/hokku/webserver/dither_unconstrained_numba.py",
+    "python/hokku/webserver/dither_streaming_numba.py",
 ]
 
 [tool.coverage.report]

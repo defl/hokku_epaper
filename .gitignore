@@ -18,16 +18,17 @@ test_server/
 *.buildinfo
 *.changes
 *.log
-webserver/.pybuild/
-webserver/build/
-webserver/dist/
-webserver/hokku_server.egg-info/
-webserver/debian/hokku-server/
-webserver/debian/.debhelper/
-webserver/debian/debhelper-build-stamp
-webserver/debian/files
-webserver/debian/*.debhelper
-webserver/debian/*.substvars
+python/.pybuild/
+python/build/
+python/dist/
+python/firmware/
+python/*.egg-info/
+python/debian/hokku-server/
+python/debian/.debhelper/
+python/debian/debhelper-build-stamp
+python/debian/files
+python/debian/*.debhelper
+python/debian/*.substvars
 
 # Releases
 firmware/release/

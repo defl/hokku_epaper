@@ -33,7 +33,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e "webserver/[test]"
+        run: pip install -e "python/[test]"
 
       - name: Run tests
         run: pytest -m "not time_intensive"
@@ -80,7 +80,7 @@ jobs:
           path: firmware/release/hokku-firmware_*.bin
 
   build-webserver-deb:
-    needs: test-webserver
+    needs: [test-webserver, build-firmware]
     runs-on: ubuntu-latest
 
     steps:
@@ -92,8 +92,17 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential debhelper dh-python python3-setuptools pybuild-plugin-pyproject
 
+      # The "Flash a screen" feature ships the merged firmware inside the .deb.
+      # debian/install picks it up from python/firmware/release/, so place the
+      # firmware built by the build-firmware job there before building.
+      - name: Download firmware artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: hokku-firmware
+          path: python/firmware/release
+
       - name: Build .deb
-        working-directory: webserver
+        working-directory: python
         run: dpkg-buildpackage -us -uc -b
 
       - name: Collect artifacts

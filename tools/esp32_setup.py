@@ -5,11 +5,9 @@ the Pi-install phase and the ESP32 phase as separate stages.
 """
 
 import logging
-import os
 import socket
 import struct
 import sys
-import tempfile
 import threading
 import time
 import urllib.error
@@ -17,20 +15,21 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
-import esptool
 import serial
 import serial.tools.list_ports
 
 import release_cache
-from hokku_config import (
-    CONFIG_VERSION,
-    ESP32S3_PID,
-    ESP32S3_VID,
-    NVS_OFFSET,
-    NVS_SIZE,
-    _build_nvs_binary,
-    _read_nvs,
-)
+
+# Shared screen library lives under python/ in the repo. When running from a
+# source checkout (not installed), add that dir to sys.path so ``hokku`` imports.
+try:
+    import hokku.screens.epf1301  # noqa: F401 — probe importability
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
+
+# Device detection, NVS, and flashing are delegated to the shared epf1301 lib.
+from hokku.screens import epf1301
+from hokku.screens.epf1301.constants import ESP32S3_PID, ESP32S3_VID
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +52,7 @@ APP_OFFSET = 0x10000
 
 def _merged_firmware_file(directory):
     """Return the merged hokku-firmware_<version>.bin in `directory`, or None."""
-    if directory is None or not directory.exists():
-        return None
-    matches = sorted(directory.glob("hokku-firmware_*.bin"))
-    return matches[-1] if matches else None
+    return epf1301.merged_firmware_file(directory)
 
 
 def _is_merged_firmware_asset(name):
@@ -157,94 +153,16 @@ def scan_devices():
 
 def read_device_flash(port):
     """One esptool read covering NVS partition + app header. Returns (nvs, header) or (None, None)."""
-    read_start = NVS_OFFSET
-    read_end = APP_OFFSET + 256
-    read_size = read_end - read_start
-
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-        tmp_path = f.name
-
-    try:
-        old_stdout = sys.stdout
-        sys.stdout = open(os.devnull, "w")
-        try:
-            esptool.main(
-                [
-                    "--chip",
-                    "esp32s3",
-                    "--port",
-                    port,
-                    "--baud",
-                    "921600",
-                    "read-flash",
-                    hex(read_start),
-                    hex(read_size),
-                    tmp_path,
-                ]
-            )
-        finally:
-            sys.stdout.close()
-            sys.stdout = old_stdout
-
-        with open(tmp_path, "rb") as f:
-            data = f.read()
-        nvs_data = data[:NVS_SIZE]
-        app_header = data[APP_OFFSET - NVS_OFFSET :][:256]
-        return nvs_data, app_header
-    except Exception:
-        return None, None
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    return epf1301.read_device_flash(port)
 
 
 def parse_device_state(nvs_data, app_header):
-    """Parse firmware presence, version, config from raw flash bytes."""
-    result = {
-        "config": None,
-        "has_hokku_firmware": False,
-        "config_version_ok": False,
-        "firmware_current": None,
-        "device_version": None,
-        "release_version": None,
-    }
+    """Parse firmware presence, version, config from raw flash bytes.
 
-    if app_header and b"hokku_epaper" in app_header:
-        result["has_hokku_firmware"] = True
-
-    if app_header and len(app_header) >= 80:
-        ver = app_header[48:80].split(b"\x00")[0].decode("ascii", errors="replace")
-        if ver:
-            result["device_version"] = ver
-
-    release_header = _release_app_header()
-    if release_header:
-        if len(release_header) >= 80:
-            ver = release_header[48:80].split(b"\x00")[0].decode("ascii", errors="replace")
-            if ver:
-                result["release_version"] = ver
-        if app_header and len(app_header) >= 256 and len(release_header) >= 256:
-            # Skip first 24 bytes (esp_image_header_t changed by esptool at flash)
-            if app_header[24:] == release_header[24:]:
-                result["firmware_current"] = True
-            else:
-                # Bytes differ — compare version strings (YYYYMMDDHHMMSSZ timestamps
-                # sort lexicographically, so > means device is ahead of the release).
-                dv = result.get("device_version") or ""
-                rv = result.get("release_version") or ""
-                result["firmware_current"] = "newer" if dv > rv else False
-
-    if nvs_data:
-        config = _read_nvs(nvs_data)
-        if config and config.get("cfg_ver") == CONFIG_VERSION:
-            result["config"] = config
-            result["config_version_ok"] = True
-        elif config and "cfg_ver" in config:
-            result["config_version_ok"] = False
-
-    return result
+    Uses this tool's resolved firmware (FIRMWARE_DIR, which may be a GitHub
+    download) as the release reference, rather than only the bundled image.
+    """
+    return epf1301.parse_device_state(nvs_data, app_header, release_header=_release_app_header())
 
 
 # -------- device selection UI --------
@@ -639,45 +557,14 @@ def _pi_config_mismatch(existing_config, pi_credentials):
 
 def write_config(port, config):
     print("  Writing configuration...", end=" ", flush=True)
-    nvs_binary = _build_nvs_binary(config)
-
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-        f.write(nvs_binary)
-        tmp_path = f.name
-
     try:
-        old_stdout = sys.stdout
-        sys.stdout = open(os.devnull, "w")
-        try:
-            esptool.main(
-                [
-                    "--chip",
-                    "esp32s3",
-                    "--port",
-                    port,
-                    "--baud",
-                    "921600",
-                    "write-flash",
-                    "--flash-mode",
-                    "dio",
-                    hex(NVS_OFFSET),
-                    tmp_path,
-                ]
-            )
-        finally:
-            sys.stdout.close()
-            sys.stdout = old_stdout
+        epf1301.write_config(port, config)  # on_line defaults to noop — keep CLI quiet
         print("done.")
         return True
     except Exception as e:
         print("FAILED")
         print(f"  Error: {e}")
         return False
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
 
 
 def flash_firmware(port):
@@ -689,27 +576,8 @@ def flash_firmware(port):
         print("   single merged firmware file.)")
         return False
 
-    print(f"  Flashing {merged.name} (~30s)...")
     try:
-        esptool.main(
-            [
-                "--chip",
-                "esp32s3",
-                "--port",
-                port,
-                "--baud",
-                "921600",
-                "write-flash",
-                "--flash-mode",
-                "dio",
-                "--flash-freq",
-                "80m",
-                "--flash-size",
-                "16MB",
-                hex(BOOTLOADER_OFFSET),
-                str(merged),
-            ]
-        )
+        epf1301.flash_firmware(port, merged, on_line=lambda ln: print(f"    {ln}"))
         print("  Firmware flashed successfully.")
         return True
     except Exception as e:

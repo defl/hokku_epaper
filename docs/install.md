@@ -12,7 +12,7 @@
 
 ---
 
-> **All commands in this guide assume you are in the project root directory** — the folder that contains `hokku_setup.bat`, `requirements.txt`, and the `tools/` and `webserver/` subdirectories. Open your terminal there before running anything.
+> **All commands in this guide assume you are in the project root directory** — the folder that contains `hokku_setup.bat`, `requirements.txt`, and the `tools/` and `python/` subdirectories. Open your terminal there before running anything.
 
 ## Contents
 
@@ -79,11 +79,11 @@ python -m venv .venv
 source .venv/bin/activate   # Linux / macOS
 .venv\Scripts\activate      # Windows
 pip install -r requirements.txt
-cd webserver
-python -m hokku_server
+cd python
+python -m hokku.webserver
 ```
 
-The `cd webserver` step is required — the server package lives there. On first start without a config file it writes a fresh default (including `upload_dir`, which defaults to `/var/lib/hokku/images` — change this in the config to a local path if you're not running on Linux). Web GUI at `http://<your-server>:8080/`.
+The `cd python` step is required — the server package lives there. On first start without a config file it writes a fresh default (including `upload_dir`, which defaults to `/var/lib/hokku/images` — change this in the config to a local path if you're not running on Linux). Web GUI at `http://<your-server>:8080/`.
 
 ---
 
