@@ -731,8 +731,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         xEventGroupSetBits(wifi_events, WIFI_FAIL_BIT);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
-        ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&e->ip_info.ip));
+        /* Set the bit BEFORE logging: fwrite in log_ring_vprintf can block if
+         * the USB CDC TX buffer is full, which would prevent the bit from ever
+         * being set and make wifi_connect() time out even though we have an IP. */
         xEventGroupSetBits(wifi_events, WIFI_CONNECTED_BIT);
+        ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&e->ip_info.ip));
     }
 }
 
@@ -1025,7 +1028,8 @@ static void build_frame_state_json(char *buf, size_t buflen,
         last_sleep_str, rssi, (unsigned)(free_heap / 1024u),
         (unsigned)consecutive_spurious_resets,
         (unsigned)config.cfg_ver, (long long)clk_now,
-        (long long)next_refresh_epoch,
+        /* negative = tick-based retry pending; report 0 (unscheduled) to server */
+        (long long)(next_refresh_epoch > 0 ? next_refresh_epoch : 0LL),
         sleep_err_buf,
         last_wifi_used_cache ? "true" : "false");
 }
@@ -1364,14 +1368,20 @@ static time_t now_epoch(void)
 }
 
 /* True if the scheduled next-refresh moment has passed (or isn't set).
- * "Not set" counts as due because the only safe behavior when we don't
- * know when to refresh next is to refresh now — server tells us when
- * next on each response. */
+ *
+ * next_refresh_epoch encoding:
+ *   0         → not scheduled; always due (first boot, no server contact yet)
+ *   positive  → absolute server-epoch seconds; compare against time(NULL)
+ *   negative  → tick-based deadline: esp_timer_get_time() µs stored negated.
+ *               Used when the clock was unset at schedule_retry_in() time.
+ *               esp_timer_get_time() is monotonic across esp_restart(). */
 static bool refresh_due(void)
 {
-    time_t now = now_epoch();
-    if (now == 0) return true;            /* no clock — fetch to sync */
     if (next_refresh_epoch == 0) return true;
+    if (next_refresh_epoch < 0)
+        return esp_timer_get_time() >= -next_refresh_epoch;
+    time_t now = now_epoch();
+    if (now == 0) return false;           /* epoch-based delay set, but clock not yet synced */
     return now >= next_refresh_epoch;
 }
 
@@ -1385,13 +1395,12 @@ static void schedule_retry_in(int seconds, const char *reason)
     if (now > 0) {
         next_refresh_epoch = (int64_t)now + seconds;
     } else {
-        /* No clock yet — we can't anchor to an absolute epoch. Leave
-         * next_refresh_epoch as-is; refresh_due() will return true
-         * immediately because now==0, but the regime loops will just
-         * try again next poll tick. In USB this is fine (we want
-         * tight retries until the clock syncs); in battery we'll
-         * already have dropped into deep sleep before hitting this. */
-        next_refresh_epoch = 0;
+        /* No epoch clock yet. Encode a tick-based deadline as a negative
+         * value so refresh_due() can honour the delay without needing the
+         * clock. esp_timer_get_time() is monotonic across esp_restart().
+         * Negative values are unambiguous: real epochs are ~1.7e9, tick
+         * deadlines for any plausible uptime fit in ~1e12 µs (11 days). */
+        next_refresh_epoch = -(esp_timer_get_time() + (int64_t)seconds * 1000000LL);
     }
     /* No fresh pre_sleep_server_epoch either — clear it so the next
      * boot doesn't log a bogus sleep_err_s. */
@@ -1561,7 +1570,16 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
     uint8_t *img = NULL;
 
     if (!wifi_connect()) {
-        ESP_LOGE(TAG, "WiFi connect failed — leaving prior image on display");
+        ESP_LOGE(TAG, "WiFi connect failed");
+        char wifi_err_msg[256];
+        snprintf(wifi_err_msg, sizeof(wifi_err_msg),
+                 "WiFi connect failed.\n"
+                 "\n"
+                 "Will retry in %d s.\n"
+                 "Press button to\n"
+                 "try again now.",
+                 REFRESH_RETRY_SECONDS);
+        display_message(wifi_err_msg);
         schedule_retry_in(REFRESH_RETRY_SECONDS, "wifi_connect failed");
         log_level_apply(usb_host_present());
         return false;
