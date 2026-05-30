@@ -23,6 +23,7 @@ class ScreenConfig:
 
     orientation: Orientation = Orientation.LANDSCAPE
     filter_by_orientation: bool = False
+    server_url_override: str = ""
 
     def __post_init__(self) -> None:
         assert self.orientation in (Orientation.LANDSCAPE, Orientation.PORTRAIT), (
@@ -33,6 +34,7 @@ class ScreenConfig:
         return {
             "orientation": self.orientation,
             "filter_by_orientation": self.filter_by_orientation,
+            "server_url_override": self.server_url_override,
         }
 
     @classmethod
@@ -40,4 +42,5 @@ class ScreenConfig:
         return cls(
             orientation=Orientation(d["orientation"]),
             filter_by_orientation=bool(d.get("filter_by_orientation", False)),
+            server_url_override=str(d.get("server_url_override", "")),
         )

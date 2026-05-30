@@ -2507,6 +2507,20 @@ async function setScreenFilterByOrientation(name, value) {
   }
 }
 
+async function setScreenUrlOverride(name, value) {
+  try {
+    const r = await fetch(`/hokku/api/screens/${encodeURIComponent(name)}/config`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({server_url_override: value.trim()}),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    if (lastScreens[name]) lastScreens[name].server_url_override = value.trim();
+  } catch (e) {
+    alert('Failed to set URL override: ' + e.message);
+  }
+}
+
 // Toggle the one-shot "update firmware on next refresh" flag for a screen.
 // The device performs the OTA the next time it polls (if it is OTA-capable).
 async function setScreenOtaPending(name, enabled) {
@@ -2605,6 +2619,16 @@ function showScreenConfig(name) {
       <label>Match orientation</label>
       <input type="checkbox" ${filterChecked} onchange="setScreenFilterByOrientation('${safeName}', this.checked)">
     </div>`;
+
+  const urlOverride = s.server_url_override || '';
+  body += `<div class="fw-section">`;
+  body += `<h4>Server URL override</h4>`;
+  body += `<div style="font-size:0.85em;color:var(--stone);margin-bottom:8px">Applied to the screen's NVS config on next OTA update. Leave blank to keep the screen's current URL.</div>`;
+  body += `<input type="url" id="url-override-input" value="${escapeHtml(urlOverride)}"
+      placeholder="https://other-server.local/hokku/…"
+      style="width:100%;box-sizing:border-box;font-size:0.9em;"
+      onchange="setScreenUrlOverride('${safeName}', this.value)">`;
+  body += `</div>`;
 
   if (lastBundledFirmwareVersion) {
     const curFw = (s.state && s.state.fw) || s.firmware_version || 'unknown';

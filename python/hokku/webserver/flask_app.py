@@ -317,6 +317,11 @@ def create_app(
             state.scheduler.record_ota_error(screen_name, msg)
             return make_response(msg, 422)
 
+        url_override = state.scheduler.get_screen_config(screen_name).server_url_override
+        if url_override:
+            migrated["image_url"] = url_override
+            logger.info("Applying server URL override for %s: %s", screen_name, url_override)
+
         try:
             nvs_image = epf1301.build_nvs_binary(migrated)
         except epf1301.NvsToolUnavailable as e:
@@ -528,6 +533,12 @@ def create_app(
                 return jsonify({"error": "filter_by_orientation must be a boolean"}), 400
             updates["filter_by_orientation"] = val
 
+        if "server_url_override" in body:
+            val = body.get("server_url_override")
+            if not isinstance(val, str):
+                return jsonify({"error": "server_url_override must be a string"}), 400
+            updates["server_url_override"] = val.strip()
+
         if updates:
             state.scheduler.set_screen_config(name, replace(current, **updates))
             state.manager.sync()
@@ -643,6 +654,7 @@ def create_app(
                 "state": t.frame_state,
                 "orientation": scfg.orientation,
                 "filter_by_orientation": scfg.filter_by_orientation,
+                "server_url_override": scfg.server_url_override,
                 "last_log": t.last_log or None,
                 "last_log_at": (
                     datetime.fromtimestamp(t.last_log_at).isoformat(timespec="seconds")
