@@ -740,6 +740,19 @@
   .config-advanced-body { display: none; padding-top: 12px; }
   .config-advanced-body.open { display: block; }
 
+  /* Admin collapsible section */
+  .admin-section { margin-bottom: 28px; }
+  .admin-toggle {
+    display: flex; align-items: center; gap: 10px;
+    cursor: pointer; padding: 6px 2px 10px;
+    user-select: none;
+  }
+  .admin-toggle h2 { margin: 0; }
+  .admin-toggle .toggle-arrow { font-size: 0.75em; color: var(--stone); transition: transform 0.2s; }
+  .admin-toggle.open .toggle-arrow { transform: rotate(90deg); }
+  .admin-body { display: none; }
+  .admin-body.open { display: block; }
+
   /* Per-image details modal */
   .img-detail-modal { max-width: 460px; }
   .detail-thumb-wrap {
@@ -867,6 +880,14 @@
   </div>
 </section>
 
+<!-- Admin section (Flash + Configuration — not needed during normal use) -->
+<div id="sec-admin" class="admin-section">
+<div class="admin-toggle" id="admin-toggle" onclick="toggleAdmin()">
+  <span class="toggle-arrow">▶</span>
+  <h2>Admin</h2>
+</div>
+<div class="admin-body" id="admin-body">
+
 <!-- Flash a screen -->
 <section id="sec-flash" class="config-section">
   <h2>Flash a screen</h2>
@@ -931,26 +952,11 @@
   </div>
 </section>
 
-<!-- Configuration -->
-<section id="sec-config" class="config-section">
-  <h2>Configuration</h2>
-<div class="section-card">
+<!-- Image rendering -->
+<section id="sec-image-rendering" class="config-section">
+  <h2>Image rendering</h2>
+  <div class="section-card">
 
-  <div class="config-row">
-    <label>Refresh times:</label>
-    <div id="refresh-times"></div>
-    <input type="text" id="add-time-input" placeholder="HHMM">
-    <button class="btn btn-secondary btn-small" onclick="addTime()">Add</button>
-  </div>
-
-  <!-- Advanced toggle -->
-  <div class="config-advanced-toggle" id="cfg-advanced-toggle" onclick="toggleConfigAdvanced()">
-    <span class="toggle-arrow">▶</span>
-    <span class="toggle-label">Advanced</span>
-  </div>
-  <div class="config-advanced-body" id="cfg-advanced-body">
-
-    <!-- Dither pipelines -->
     <p class="config-section-label">Image rendering pipeline</p>
     <div class="config-row" style="position: relative;">
       <label>Default dither preset:</label>
@@ -1112,47 +1118,6 @@
     </div>
 
     <div class="config-row">
-      <button type="button" class="btn btn-secondary" onclick="resetPipelineToDefault()"
-              title="Reset all image rendering pipeline settings to software defaults">Reset to Default</button>
-    </div>
-
-    <p class="config-section-label">Server behaviour</p>
-    <div class="config-row">
-      <label>Poll interval:</label>
-      <span class="ctrl-tip" data-tip="How often (in seconds) the server checks the upload directory for new or removed images.&#10;Lower = faster reaction to new uploads. Higher = less disk activity.&#10;10–60 s is typical for normal use.">
-        <input type="number" id="poll-interval" min="1" max="3600">
-      </span>
-    </div>
-
-    <div class="config-row">
-      <label>Debug screen:</label>
-      <label class="toggle" data-tip="Forces every screen to refresh every 180 s regardless of schedule.&#10;Useful when iterating on images or dither settings without waiting hours.&#10;Downside: drains battery fast and wears the e-paper. Turn off for normal use.">
-        <input type="checkbox" id="debug-fast-refresh">
-        <span id="debug-fast-refresh-label">Off</span>
-      </label>
-    </div>
-
-    <div class="config-row">
-      <label>Auto-clear cache:</label>
-      <label class="toggle" data-tip="When enabled, automatically deletes old cached dither output when disk space runs low.&#10;The originals are never deleted — only the processed copies, which are re-generated on demand.">
-        <input type="checkbox" id="auto-clear-cache">
-        <span id="auto-clear-cache-label">Off</span>
-      </label>
-      <span class="info" id="cache-disk-info" style="font-variant-numeric: tabular-nums;"></span>
-    </div>
-
-    <div class="config-row">
-      <label>mDNS / Bonjour:</label>
-      <span class="ctrl-tip" data-tip="Advertise this server on the local network so you can reach it at &lt;hostname&gt;.local without knowing its IP address.&#10;&#10;The hostname is the part before .local — e.g. 'hokku-server' makes it reachable at hokku-server.local.&#10;&#10;Uncheck to disable mDNS advertisement entirely (useful if you have conflicts with another device using the same name, or if your router handles local DNS itself).&#10;&#10;Note: changing the hostname only takes effect after a server restart.">
-        <input type="checkbox" id="mdns-enabled" onchange="onMdnsToggle()">
-      </span>
-      <span id="mdns-hostname-wrap" style="display:inline-flex; align-items:center; gap:4px; margin-left:6px;">
-        <input type="text" id="mdns-hostname" placeholder="hokku" style="width:160px;">
-        <span style="color:var(--stone); font-size:0.92em;">.local</span>
-      </span>
-    </div>
-
-    <div class="config-row">
       <label>Image workers:</label>
       <span class="ctrl-tip" data-tip="Auto: uses all CPU cores minus 1, capped by free memory (~50 MB per worker).&#10;Single threaded: serial processing — safest, lowest memory.&#10;Custom: enter an exact worker count (1–1000).&#10;More workers = faster batch conversion but more RAM and CPU.">
         <select id="image-worker-mode" onchange="onWorkerModeChange()">
@@ -1170,11 +1135,66 @@
     </div>
 
     <div class="config-row">
-      <label></label>
+      <button type="button" class="btn btn-secondary" onclick="resetPipelineToDefault()"
+              title="Reset all image rendering pipeline settings to software defaults">Reset to Default</button>
       <button class="btn btn-danger" onclick="clearAllCaches()">Clear caches and reconvert</button>
     </div>
 
-  </div><!-- /cfg-advanced-body -->
+    <div class="config-row" style="margin-top:12px;">
+      <label></label>
+      <button class="btn btn-primary" onclick="saveConfig()">Save</button>
+    </div>
+
+  </div><!-- /section-card -->
+</section><!-- /sec-image-rendering -->
+
+<!-- Configuration -->
+<section id="sec-config" class="config-section">
+  <h2>Configuration</h2>
+<div class="section-card">
+
+  <div class="config-row">
+    <label>Refresh times:</label>
+    <div id="refresh-times"></div>
+    <input type="text" id="add-time-input" placeholder="HHMM">
+    <button class="btn btn-secondary btn-small" onclick="addTime()">Add</button>
+  </div>
+
+  <p class="config-section-label">Server behaviour</p>
+  <div class="config-row">
+    <label>Poll interval:</label>
+    <span class="ctrl-tip" data-tip="How often (in seconds) the server checks the upload directory for new or removed images.&#10;Lower = faster reaction to new uploads. Higher = less disk activity.&#10;10–60 s is typical for normal use.">
+      <input type="number" id="poll-interval" min="1" max="3600">
+    </span>
+  </div>
+
+  <div class="config-row">
+    <label>Debug screen:</label>
+    <label class="toggle" data-tip="Forces every screen to refresh every 180 s regardless of schedule.&#10;Useful when iterating on images or dither settings without waiting hours.&#10;Downside: drains battery fast and wears the e-paper. Turn off for normal use.">
+      <input type="checkbox" id="debug-fast-refresh">
+      <span id="debug-fast-refresh-label">Off</span>
+    </label>
+  </div>
+
+  <div class="config-row">
+    <label>Auto-clear cache:</label>
+    <label class="toggle" data-tip="When enabled, automatically deletes old cached dither output when disk space runs low.&#10;The originals are never deleted — only the processed copies, which are re-generated on demand.">
+      <input type="checkbox" id="auto-clear-cache">
+      <span id="auto-clear-cache-label">Off</span>
+    </label>
+    <span class="info" id="cache-disk-info" style="font-variant-numeric: tabular-nums;"></span>
+  </div>
+
+  <div class="config-row">
+    <label>mDNS / Bonjour:</label>
+    <span class="ctrl-tip" data-tip="Advertise this server on the local network so you can reach it at &lt;hostname&gt;.local without knowing its IP address.&#10;&#10;The hostname is the part before .local — e.g. 'hokku-server' makes it reachable at hokku-server.local.&#10;&#10;Uncheck to disable mDNS advertisement entirely (useful if you have conflicts with another device using the same name, or if your router handles local DNS itself).&#10;&#10;Note: changing the hostname only takes effect after a server restart.">
+      <input type="checkbox" id="mdns-enabled" onchange="onMdnsToggle()">
+    </span>
+    <span id="mdns-hostname-wrap" style="display:inline-flex; align-items:center; gap:4px; margin-left:6px;">
+      <input type="text" id="mdns-hostname" placeholder="hokku" style="width:160px;">
+      <span style="color:var(--stone); font-size:0.92em;">.local</span>
+    </span>
+  </div>
 
   <div class="config-row" style="margin-top:12px;">
     <label></label>
@@ -1182,6 +1202,9 @@
   </div>
 </div><!-- /section-card -->
 </section><!-- /sec-config -->
+
+</div><!-- /admin-body -->
+</div><!-- /sec-admin -->
 
 
 </main>
@@ -1247,10 +1270,10 @@
 let currentConfig = {};
 let refreshTimes = [];
 
-// Toggle the Advanced config section open/closed.
-function toggleConfigAdvanced() {
-  const toggle = document.getElementById('cfg-advanced-toggle');
-  const body   = document.getElementById('cfg-advanced-body');
+// Toggle the Admin section open/closed.
+function toggleAdmin() {
+  const toggle = document.getElementById('admin-toggle');
+  const body   = document.getElementById('admin-body');
   const open   = body.classList.toggle('open');
   toggle.classList.toggle('open', open);
 }
