@@ -1082,7 +1082,9 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
 
     /* Firmware version and build timestamp so the server can show update
      * warnings in the dashboard without needing to read the device's flash. */
-    esp_http_client_set_header(client, "X-Firmware-Version", fw);
+    const esp_app_desc_t *_app = esp_app_get_description();
+    const char *_fw_ver = (_app && _app->version[0]) ? _app->version : "unknown";
+    esp_http_client_set_header(client, "X-Firmware-Version", _fw_ver);
     esp_http_client_set_header(client, "X-Firmware-Build", FW_BUILD_TIMESTAMP);
 
     /* Attach ring-buffer log as POST body (plain text).
