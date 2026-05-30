@@ -62,6 +62,8 @@ class ScreenTelemetryEntry:
     frame_state: dict | None
     last_log: str
     last_log_at: float
+    firmware_version: str | None
+    firmware_build: str | None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -80,6 +82,8 @@ class ScreenTelemetryEntry:
             frame_state=d.get("frame_state"),
             last_log=d.get("last_log", ""),
             last_log_at=float(d.get("last_log_at", 0.0)),
+            firmware_version=d.get("firmware_version"),
+            firmware_build=d.get("firmware_build"),
         )
 
 
@@ -203,6 +207,8 @@ class ServeScheduler:
         battery_mv: int | None,
         frame_state: dict | None,
         log: str | None = None,
+        firmware_version: str | None = None,
+        firmware_build: str | None = None,
     ) -> None:
         with self._lock:
             now = time.time()
@@ -255,6 +261,9 @@ class ServeScheduler:
                 else (existing.frame_state if existing else None),
                 last_log=last_log,
                 last_log_at=last_log_at,
+                firmware_version=firmware_version
+                or (existing.firmware_version if existing else None),
+                firmware_build=firmware_build or (existing.firmware_build if existing else None),
             )
             self._save()
 

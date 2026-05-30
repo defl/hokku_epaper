@@ -1080,6 +1080,11 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
                            boot_time_us);
     esp_http_client_set_header(client, "X-Frame-State", frame_state);
 
+    /* Firmware version and build timestamp so the server can show update
+     * warnings in the dashboard without needing to read the device's flash. */
+    esp_http_client_set_header(client, "X-Firmware-Version", fw);
+    esp_http_client_set_header(client, "X-Firmware-Build", FW_BUILD_TIMESTAMP);
+
     /* Attach ring-buffer log as POST body (plain text).
      * Snapshot head/used atomically (tiny critical section), then copy
      * outside the lock so we don't hold interrupts off across 6 KB. */

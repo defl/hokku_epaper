@@ -55,7 +55,12 @@ from hokku.webserver.image_renderer import (
 from hokku.webserver.mdns import _get_local_ip
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS, PRESET_META
-from hokku.webserver.screen_headers import parse_battery_header, parse_frame_state
+from hokku.webserver.screen_headers import (
+    parse_battery_header,
+    parse_firmware_build,
+    parse_firmware_version,
+    parse_frame_state,
+)
 from hokku.webserver.time_utils import calculate_sleep_seconds, format_duration_human
 
 logger = logging.getLogger(__name__)
@@ -155,6 +160,12 @@ def create_app(
     git_describe, git_hash = _read_git_describe()
     # Bundled merged firmware for the "Flash a screen" feature (None if absent).
     firmware_path = epf1301.merged_firmware_file()
+    _fw_hdr = epf1301.release_app_header()
+    bundled_firmware_version: str | None = (
+        _fw_hdr[48:80].split(b"\x00")[0].decode("ascii", errors="replace").strip()
+        if _fw_hdr
+        else None
+    ) or None
 
     # ── Firmware-facing ────────────────────────────────────────
 
@@ -168,6 +179,8 @@ def create_app(
         screen_ip = request.remote_addr or "unknown"
         battery_mv = parse_battery_header(request.headers.get("X-Battery-mV"))
         frame_state = parse_frame_state(request.headers.get("X-Frame-State"))
+        fw_version = parse_firmware_version(request.headers.get("X-Firmware-Version"))
+        fw_build = parse_firmware_build(request.headers.get("X-Firmware-Build"))
 
         # POST body carries the firmware log (plain text); GET has no body.
         screen_log: str | None = None
@@ -192,6 +205,8 @@ def create_app(
                 battery_mv,
                 frame_state,
                 log=screen_log,
+                firmware_version=fw_version,
+                firmware_build=fw_build,
             )
             if converting:
                 msg, status, label = "Converting images, try again shortly", 503, "Converting"
@@ -214,6 +229,8 @@ def create_app(
                 battery_mv,
                 frame_state,
                 log=screen_log,
+                firmware_version=fw_version,
+                firmware_build=fw_build,
             )
             resp = make_response("Cached binary missing, try again shortly", 503)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
@@ -228,6 +245,8 @@ def create_app(
             battery_mv,
             frame_state,
             log=screen_log,
+            firmware_version=fw_version,
+            firmware_build=fw_build,
         )
         logger.debug("Serving: %s to %s (sleep_seconds=%s)", chosen, screen_name, sleep_seconds)
 
@@ -538,6 +557,8 @@ def create_app(
                     if t.last_log_at
                     else None
                 ),
+                "firmware_version": t.firmware_version,
+                "firmware_build": t.firmware_build,
             }
 
         disk = manager.cache_disk_info()
@@ -567,6 +588,7 @@ def create_app(
                 "image_worker_count_resolved": state.manager.resolved_worker_count,
                 "cpu_cores": os.cpu_count(),
                 "memory_available_gb": round(psutil.virtual_memory().available / 1e9, 1),
+                "bundled_firmware_version": bundled_firmware_version,
             }
         )
 

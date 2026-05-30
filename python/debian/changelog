@@ -1,3 +1,11 @@
+hokku-server (4.0.1~dev.2-1) unstable; urgency=medium
+
+  * feat(firmware): send X-Firmware-Version and X-Firmware-Build headers on every request; bump to 1.2.7
+  * feat(webserver): store firmware_version/firmware_build in screen telemetry
+  * feat(ui): Firmware column in Connected Screens table with outdated warning (⚠); warning banner for screens needing a firmware update
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 30 May 2026 19:00:00 +0000
+
 hokku-server (4.0.1~dev.1-1) unstable; urgency=medium
 
   * feat(flash): show firmware version + update status in device note; pre-fill WiFi/screen from device NVS

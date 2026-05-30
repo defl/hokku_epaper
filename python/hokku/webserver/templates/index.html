@@ -2316,7 +2316,7 @@ function formatBattery(s) {
   return `<span style="color:${colour};font-weight:600" title="${volts} V (${s.battery_mv} mV)">${pct}%</span>`;
 }
 
-function renderScreens(screens) {
+function renderScreens(screens, bundledFirmwareVersion) {
   const container = document.getElementById('screens-container');
   const names = Object.keys(screens || {});
   if (names.length === 0) {
@@ -2330,6 +2330,11 @@ function renderScreens(screens) {
   const overdue = names
     .map(n => ({name: n, late: overdueMinutes(screens[n]), battery_mv: screens[n].battery_mv, battery_percent: screens[n].battery_percent}))
     .filter(s => s.late > 0);
+
+  // Collect screens with outdated firmware.
+  const outdated = bundledFirmwareVersion
+    ? names.filter(n => screens[n].firmware_version && screens[n].firmware_version !== bundledFirmwareVersion)
+    : [];
 
   let html = '';
   if (overdue.length > 0) {
@@ -2349,7 +2354,18 @@ function renderScreens(screens) {
     html += '</ul></div>';
   }
 
-  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Requests</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th>Orientation</th><th>Match orient.</th><th></th></tr>';
+  if (outdated.length > 0) {
+    html += '<div class="screen-warning">';
+    html += '<strong>⚠ Screen' + (outdated.length > 1 ? 's have' : ' has') + ' outdated firmware.</strong> ';
+    html += `New version available: <strong>${bundledFirmwareVersion}</strong>. Use "Flash a screen" to update.`;
+    html += '<ul>';
+    outdated.forEach(n => {
+      html += `<li><strong>${n}</strong> — firmware ${screens[n].firmware_version}</li>`;
+    });
+    html += '</ul></div>';
+  }
+
+  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Firmware</th><th>Requests</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th>Orientation</th><th>Match orient.</th><th></th></tr>';
   names.forEach(name => {
     const s = screens[name];
     const late = overdueMinutes(s);
@@ -2373,10 +2389,18 @@ function renderScreens(screens) {
     const matchCell = `<label style="display:flex;flex-direction:column;align-items:center;gap:2px;">
       <input type="checkbox" ${filterChecked} onchange="setScreenFilterByOrientation('${safeName}', this.checked)">
     </label>`;
+    const fwCell = (() => {
+      if (!s.firmware_version) return '<span style="color:#999">-</span>';
+      const isOld = bundledFirmwareVersion && s.firmware_version !== bundledFirmwareVersion;
+      const title = s.firmware_build ? ` title="Built: ${s.firmware_build}"` : '';
+      if (isOld) return `<span style="color:#a33;font-weight:600"${title}>${s.firmware_version} ⚠</span>`;
+      return `<span${title}>${s.firmware_version}</span>`;
+    })();
     html += `<tr${rowClass}>
       <td>${name}</td>
       <td>${s.ip || '-'}</td>
       <td>${formatBattery(s)}</td>
+      <td>${fwCell}</td>
       <td>${s.request_count || 0}</td>
       <td>${s.last_seen || '-'}</td>
       <td>${formatNextUpdate(s.next_update_at)}</td>
@@ -2393,6 +2417,7 @@ function renderScreens(screens) {
 // Keep the most recent /hokku/api/status screens object around so the
 // Details modal can read from it without another round-trip.
 let lastScreens = {};
+let lastBundledFirmwareVersion = null;
 
 async function removeScreen(name) {
   const ok = await showConfirm({
@@ -2406,7 +2431,7 @@ async function removeScreen(name) {
     if (!r.ok) throw new Error(await r.text());
     // Remove the row immediately without waiting for the next poll.
     delete lastScreens[name];
-    renderScreens(lastScreens);
+    renderScreens(lastScreens, lastBundledFirmwareVersion);
   } catch (e) {
     alert('Failed to remove screen: ' + e.message);
   }
@@ -2424,7 +2449,7 @@ async function setScreenOrientation(name, value) {
     if (lastScreens[name]) lastScreens[name].orientation = value;
   } catch (e) {
     alert('Failed to set orientation: ' + e.message);
-    renderScreens(lastScreens);
+    renderScreens(lastScreens, lastBundledFirmwareVersion);
   }
 }
 
@@ -2439,7 +2464,7 @@ async function setScreenFilterByOrientation(name, value) {
     if (lastScreens[name]) lastScreens[name].filter_by_orientation = value;
   } catch (e) {
     alert('Failed to set orientation filter: ' + e.message);
-    renderScreens(lastScreens);
+    renderScreens(lastScreens, lastBundledFirmwareVersion);
   }
 }
 
@@ -2976,7 +3001,8 @@ async function refreshStatus() {
 
     // Screens
     lastScreens = data.screens || {};
-    renderScreens(data.screens);
+    lastBundledFirmwareVersion = data.bundled_firmware_version || null;
+    renderScreens(data.screens, lastBundledFirmwareVersion);
 
     // Image worker system info (cores + RAM) + resolved count
     const sysInfoEl = document.getElementById('image-worker-system-info');

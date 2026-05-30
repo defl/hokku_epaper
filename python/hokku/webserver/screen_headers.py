@@ -30,6 +30,22 @@ def parse_battery_header(raw: str | None) -> int | None:
     return v
 
 
+def parse_firmware_version(raw: str | None) -> str | None:
+    """Parse X-Firmware-Version header — returns the stripped string or None."""
+    if not raw:
+        return None
+    v = str(raw).strip()
+    return v if v else None
+
+
+def parse_firmware_build(raw: str | None) -> str | None:
+    """Parse X-Firmware-Build header — returns the stripped timestamp or None."""
+    if not raw:
+        return None
+    v = str(raw).strip()
+    return v if v else None
+
+
 def parse_frame_state(raw: str | None) -> dict | None:
     if not raw:
         return None
