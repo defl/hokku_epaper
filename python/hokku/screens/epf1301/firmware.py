@@ -8,6 +8,7 @@ is searched for in:
 
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
 from .constants import APP_OFFSET
@@ -52,18 +53,53 @@ def release_app_header(directory: Path | None = None) -> bytes | None:
         return f.read(256)
 
 
+def _esp_app_image_size(data: bytes) -> int | None:
+    """Parse an ESP-IDF app image header to determine the image's exact byte length.
+
+    An ESP image is structured as:
+      - 24-byte ``esp_image_header_t`` (``segment_count`` at [1], ``hash_appended`` at [23])
+      - ``segment_count`` × (8-byte segment header + ``data_len`` bytes of payload)
+      - 1-byte XOR checksum
+      - 32-byte SHA256 digest if ``hash_appended == 1``
+
+    Returns None when the data does not look like a valid ESP image.
+    This is needed because the merged firmware binary includes 0xFF padding and
+    the ``ota_data_initial.bin`` after the app, which must not be served for OTA
+    (the OTA partition is only 3 MB; writing the full tail overflows it).
+    """
+    if len(data) < 24 or data[0] != 0xE9:
+        return None
+    segment_count = data[1]
+    hash_appended = data[23]
+    pos = 24  # after esp_image_header_t
+    for _ in range(segment_count):
+        if pos + 8 > len(data):
+            return None
+        data_len = struct.unpack_from("<I", data, pos + 4)[0]
+        pos += 8 + data_len
+    # IDF aligns the checksum byte so that it falls on a 16-byte boundary:
+    # pad with (15 - pos % 16) bytes, then 1 checksum byte.
+    pad = (15 - pos % 16) % 16
+    pos += pad + 1  # padding + XOR checksum byte
+    if hash_appended:
+        pos += 32  # SHA256 digest
+    return pos
+
+
 def release_app_image(directory: Path | None = None) -> bytes | None:
     """Return the OTA-flashable **app-only** image from the bundled merged firmware.
 
-    The merge recipe lays the merged image out as bootloader@0x0,
-    partition-table@0x8000, app@APP_OFFSET — with the app last. So the bytes from
-    ``APP_OFFSET`` to EOF are exactly the application image an ESP-IDF OTA writes
-    into an ``ota_*`` partition (it begins with the 0xE9 image magic and contains
-    the app descriptor read by ``release_app_header``). Returns None if no bundled
-    firmware is present."""
+    Parses the ESP image header at ``APP_OFFSET`` to determine the exact app
+    byte length and returns only those bytes — not the 0xFF padding or
+    ``ota_data_initial.bin`` that follow the app in the merged file. Returns
+    None if no bundled firmware is present or the image cannot be parsed."""
     merged = merged_firmware_file(directory)
     if not merged:
         return None
     with open(merged, "rb") as f:
         f.seek(APP_OFFSET)
-        return f.read()
+        app_data = f.read()
+    size = _esp_app_image_size(app_data)
+    if size is None:
+        return None
+    return app_data[:size]

@@ -71,8 +71,16 @@ def _client(state: AppState, tmp_path: Path):
 
 
 def test_release_app_image_slices_app_section(tmp_path):
-    app_bytes = b"APPSTART" + bytes(range(50))
-    merged = b"\x00" * APP_OFFSET + app_bytes
+    # Build a minimal valid ESP image (magic=0xE9, 0 segments, no hash).
+    # Structure: 24-byte header, 0 segments, pad to 16-byte checksum alignment, 1 checksum byte.
+    # After 24-byte header, pos=24, pad=(15-24%16)%16=(15-8)%16=7, total=24+7+1=32 bytes.
+    header = bytearray(24)
+    header[0] = 0xE9  # magic
+    header[1] = 0  # segment_count = 0
+    header[23] = 0  # hash_appended = 0
+    app_bytes = bytes(header) + b"\x00" * 8  # pad(7) + checksum(1) = 8 bytes
+    assert len(app_bytes) == 32
+    merged = b"\x00" * APP_OFFSET + app_bytes + b"\xff" * 100  # trailing junk
     (tmp_path / "hokku-firmware_1.2.8.bin").write_bytes(merged)
     assert epf1301.release_app_image(tmp_path) == app_bytes
 
