@@ -503,6 +503,12 @@
   .screen-warning ul { margin: 6px 0 0 20px; padding: 0; }
 
   /* ── State details modal ──────────────────────────────────── */
+  .screen-config-modal { max-width: 420px; }
+  .screen-config-modal .config-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--bamboo-soft); }
+  .screen-config-modal .config-row:last-child { border-bottom: none; }
+  .screen-config-modal .config-row label:first-child { min-width: 140px; font-weight: 500; color: var(--stone); flex-shrink: 0; }
+  .screen-config-modal .fw-section { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--bamboo); }
+  .screen-config-modal .fw-section h4 { margin: 0 0 8px; font-size: 0.95em; font-weight: 600; color: var(--ink); font-family: var(--font-serif); }
   .state-modal { max-width: 560px; }
   .state-modal table { width: 100%; border-collapse: collapse; font-size: 0.85em; font-family: var(--font-mono); margin-top: 4px; }
   .state-modal td { padding: 5px 8px; border-bottom: 1px solid var(--bamboo-soft); }
@@ -1252,6 +1258,16 @@
     <div class="modal-actions">
       <button class="btn btn-secondary" id="confirm-cancel">Cancel</button>
       <button class="btn btn-danger" id="confirm-ok">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="screen-config-modal">
+  <div class="modal screen-config-modal">
+    <h3 id="screen-config-title">Screen Config</h3>
+    <div id="screen-config-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="screen-config-close">Close</button>
     </div>
   </div>
 </div>
@@ -2382,7 +2398,7 @@ function renderScreens(screens, bundledFirmwareVersion) {
   if (outdated.length > 0) {
     html += '<div class="screen-warning">';
     html += '<strong>⚠ Screen' + (outdated.length > 1 ? 's have' : ' has') + ' outdated firmware.</strong> ';
-    html += `New version available: <strong>${bundledFirmwareVersion}</strong>. Open a screen's <em>Details</em> to update over-the-air, or use "Flash a screen" via USB.`;
+    html += `New version available: <strong>${bundledFirmwareVersion}</strong>. Open a screen's <em>Config</em> to update over-the-air, or use "Flash a screen" via USB.`;
     html += '<ul>';
     outdated.forEach(n => {
       html += `<li><strong>${n}</strong> — firmware ${screenFwVersion(n)}</li>`;
@@ -2404,12 +2420,13 @@ function renderScreens(screens, bundledFirmwareVersion) {
     html += '</ul></div>';
   }
 
-  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th>Orientation</th><th>Match orient.</th><th></th></tr>';
+  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th></th></tr>';
   names.forEach(name => {
     const s = screens[name];
     const late = overdueMinutes(s);
     const rowClass = late > 0 ? ' class="overdue"' : '';
     const safeName = name.replace(/'/g, "\\'");
+    const configBtn = `<button class="btn btn-secondary" onclick="showScreenConfig('${safeName}')">Config</button>`;
     const detailsBtn = s.state
       ? `<button class="btn btn-secondary" onclick="showScreenDetails('${safeName}')">Details</button>`
       : '';
@@ -2419,15 +2436,6 @@ function renderScreens(screens, bundledFirmwareVersion) {
     const lastImgThumb = s.last_served
       ? `<a href="/hokku/api/original/${encodeURIComponent(s.last_served)}" target="_blank" title="${escapeHtml(s.last_served)}" style="display:block;line-height:0;"><img src="/hokku/api/thumbnail/${encodeURIComponent(s.last_served)}" alt="${escapeHtml(s.last_served)}" style="height:32px;width:auto;border-radius:2px;border:1px solid var(--bamboo);" loading="lazy" onerror="this.style.display='none'"></a>`
       : '<span style="color:var(--bamboo)">—</span>';
-    const orientation = s.orientation;
-    const orientationCell = `<select class="orientation-select" onchange="setScreenOrientation('${safeName}', this.value)">
-      <option value="landscape" ${orientation==='landscape' ? 'selected' : ''}>Landscape</option>
-      <option value="portrait"  ${orientation==='portrait'  ? 'selected' : ''}>Portrait</option>
-    </select>`;
-    const filterChecked = s.filter_by_orientation ? 'checked' : '';
-    const matchCell = `<label style="display:flex;flex-direction:column;align-items:center;gap:2px;">
-      <input type="checkbox" ${filterChecked} onchange="setScreenFilterByOrientation('${safeName}', this.checked)">
-    </label>`;
     let nameBadges = '';
     if (s.ota_error) nameBadges += ' <span title="Firmware update error" style="color:#a33;font-weight:700">⛔</span>';
     else if (s.ota_pending) nameBadges += ' <span title="Firmware update scheduled for next refresh" style="color:var(--accent,#2a6);font-weight:700">⟳</span>';
@@ -2438,9 +2446,7 @@ function renderScreens(screens, bundledFirmwareVersion) {
       <td>${s.last_seen || '-'}</td>
       <td>${formatNextUpdate(s.next_update_at)}</td>
       <td>${lastImgThumb}</td>
-      <td>${orientationCell}</td>
-      <td>${matchCell}</td>
-      <td><div style="display:flex;gap:6px;align-items:center;">${detailsBtn}${removeBtn}</div></td>
+      <td><div style="display:flex;gap:6px;align-items:center;">${configBtn}${detailsBtn}${removeBtn}</div></td>
     </tr>`;
   });
   html += '</table>';
@@ -2579,6 +2585,71 @@ function formatStateValue(key, v, state) {
   return String(v);
 }
 
+function showScreenConfig(name) {
+  const s = lastScreens[name];
+  if (!s) return;
+  const safeName = name.replace(/'/g, "\\'");
+
+  const orientLandscape = s.orientation === 'landscape' ? 'selected' : '';
+  const orientPortrait  = s.orientation === 'portrait'  ? 'selected' : '';
+  const filterChecked   = s.filter_by_orientation ? 'checked' : '';
+
+  let body = `<div class="config-row">
+      <label>Orientation</label>
+      <select onchange="setScreenOrientation('${safeName}', this.value)">
+        <option value="landscape" ${orientLandscape}>Landscape</option>
+        <option value="portrait"  ${orientPortrait}>Portrait</option>
+      </select>
+    </div>
+    <div class="config-row">
+      <label>Match orientation</label>
+      <label style="cursor:pointer;display:flex;align-items:center;gap:6px;">
+        <input type="checkbox" ${filterChecked} onchange="setScreenFilterByOrientation('${safeName}', this.checked)">
+        <span>Only show matching images</span>
+      </label>
+    </div>`;
+
+  if (lastBundledFirmwareVersion) {
+    const curFw = (s.state && s.state.fw) || s.firmware_version || 'unknown';
+    const upToDate = curFw === lastBundledFirmwareVersion;
+    body += `<div class="fw-section">`;
+    body += `<h4>Firmware update</h4>`;
+    if (s.ota_error) {
+      const at = s.ota_error_at ? ` (${s.ota_error_at})` : '';
+      body += `<div style="background:#fdecec;border:1px solid #a33;color:#7a1f1f;border-radius:4px;padding:8px;margin-bottom:8px;font-size:0.85em">⛔ Last update attempt failed: ${escapeHtml(s.ota_error)}${at}. This should never happen — please report it.</div>`;
+    }
+    body += `<div style="font-size:0.85em;color:var(--stone);margin-bottom:8px">Installed: <strong>${escapeHtml(curFw)}</strong> · Available: <strong>${escapeHtml(lastBundledFirmwareVersion)}</strong>${upToDate ? ' (up to date)' : ''}</div>`;
+    if (s.ota_capable) {
+      const checked = s.ota_pending ? 'checked' : '';
+      body += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" ${checked} onchange="setScreenOtaPending('${safeName}', this.checked)">
+        <span>Update firmware on next refresh${upToDate ? ' (re-flash current version)' : ''}</span>
+      </label>`;
+      body += `<div id="ota-pending-status" style="font-size:0.85em;color:var(--stone);margin-top:4px">${s.ota_pending ? 'Will update on next refresh.' : 'Not scheduled to update.'}</div>`;
+    } else {
+      body += `<div style="font-size:0.85em;color:#a33">This screen's firmware predates over-the-air updates — connect USB and use "Flash a screen" to enable them.</div>`;
+    }
+    body += `</div>`;
+  }
+
+  document.getElementById('screen-config-title').textContent = `Config — ${name}`;
+  document.getElementById('screen-config-body').innerHTML = body;
+
+  const modal = document.getElementById('screen-config-modal');
+  modal.classList.add('show');
+  const close = () => {
+    modal.classList.remove('show');
+    document.getElementById('screen-config-close').removeEventListener('click', close);
+    modal.removeEventListener('click', onBackdrop);
+    document.removeEventListener('keydown', onKey);
+  };
+  const onBackdrop = e => { if (e.target === modal) close(); };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  document.getElementById('screen-config-close').addEventListener('click', close);
+  modal.addEventListener('click', onBackdrop);
+  document.addEventListener('keydown', onKey);
+}
+
 async function showScreenDetails(name) {
   const s = lastScreens[name];
   if (!s || !s.state) {
@@ -2617,30 +2688,6 @@ async function showScreenDetails(name) {
     rows += `<tr><td>${k}</td><td>${val}</td></tr>`;
   });
   rows += '</table>';
-
-  // Firmware update (OTA) section — only when the server has firmware to ship.
-  if (lastBundledFirmwareVersion) {
-    const curFw = s.state.fw || s.firmware_version || 'unknown';
-    const upToDate = curFw === lastBundledFirmwareVersion;
-    rows += `<div style="margin-top:16px">`;
-    rows += `<div style="font-weight:600;margin-bottom:4px;color:var(--ink)">Firmware update</div>`;
-    if (s.ota_error) {
-      const at = s.ota_error_at ? ` (${s.ota_error_at})` : '';
-      rows += `<div style="background:#fdecec;border:1px solid #a33;color:#7a1f1f;border-radius:4px;padding:8px;margin-bottom:6px;font-size:0.85em">⛔ Last update attempt failed: ${escapeHtml(s.ota_error)}${at}. This should never happen — please report it.</div>`;
-    }
-    rows += `<div style="font-size:0.85em;color:var(--stone);margin-bottom:6px">Installed: <strong>${escapeHtml(curFw)}</strong> · Available: <strong>${escapeHtml(lastBundledFirmwareVersion)}</strong>${upToDate ? ' (up to date)' : ''}</div>`;
-    if (s.ota_capable) {
-      const checked = s.ota_pending ? 'checked' : '';
-      rows += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-        <input type="checkbox" ${checked} onchange="setScreenOtaPending('${safeName}', this.checked)">
-        <span>Update firmware on next refresh${upToDate ? ' (re-flash current version)' : ''}</span>
-      </label>`;
-      rows += `<div id="ota-pending-status" style="font-size:0.85em;color:var(--stone);margin-top:4px">${s.ota_pending ? 'Will update on next refresh.' : 'Not scheduled to update.'}</div>`;
-    } else {
-      rows += `<div style="font-size:0.85em;color:#a33">This screen's firmware predates over-the-air updates — connect USB and use "Flash a screen" to enable them.</div>`;
-    }
-    rows += `</div>`;
-  }
 
   if (s.last_log) {
     const ts = s.last_log_at
