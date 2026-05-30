@@ -2365,15 +2365,15 @@ function renderScreens(screens, bundledFirmwareVersion) {
     html += '</ul></div>';
   }
 
-  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Firmware</th><th>Requests</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th>Orientation</th><th>Match orient.</th><th></th></tr>';
+  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th>Orientation</th><th>Match orient.</th><th></th></tr>';
   names.forEach(name => {
     const s = screens[name];
     const late = overdueMinutes(s);
     const rowClass = late > 0 ? ' class="overdue"' : '';
     const safeName = name.replace(/'/g, "\\'");
     const detailsBtn = s.state
-      ? `<button class="btn btn-secondary btn-small" onclick="showScreenDetails('${safeName}')">Details</button>`
-      : '<span style="color:#ccc;font-size:0.8em">no state yet</span>';
+      ? `<button class="btn btn-secondary" onclick="showScreenDetails('${safeName}')">Details</button>`
+      : '';
     const removeBtn = `<button class="btn-icon-danger" onclick="removeScreen('${safeName}')" title="Remove screen record" aria-label="Remove ${name}">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
     </button>`;
@@ -2389,19 +2389,10 @@ function renderScreens(screens, bundledFirmwareVersion) {
     const matchCell = `<label style="display:flex;flex-direction:column;align-items:center;gap:2px;">
       <input type="checkbox" ${filterChecked} onchange="setScreenFilterByOrientation('${safeName}', this.checked)">
     </label>`;
-    const fwCell = (() => {
-      if (!s.firmware_version) return '<span style="color:#999">-</span>';
-      const isOld = bundledFirmwareVersion && s.firmware_version !== bundledFirmwareVersion;
-      const title = s.firmware_build ? ` title="Built: ${s.firmware_build}"` : '';
-      if (isOld) return `<span style="color:#a33;font-weight:600"${title}>${s.firmware_version} ⚠</span>`;
-      return `<span${title}>${s.firmware_version}</span>`;
-    })();
     html += `<tr${rowClass}>
       <td>${name}</td>
       <td>${s.ip || '-'}</td>
       <td>${formatBattery(s)}</td>
-      <td>${fwCell}</td>
-      <td>${s.request_count || 0}</td>
       <td>${s.last_seen || '-'}</td>
       <td>${formatNextUpdate(s.next_update_at)}</td>
       <td>${lastImgThumb}</td>

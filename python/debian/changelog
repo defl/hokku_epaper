@@ -1,3 +1,10 @@
+hokku-server (4.0.1~dev.3-1) unstable; urgency=medium
+
+  * feat(ui): remove Firmware and Requests columns from Connected Screens table (moved to Details)
+  * fix(ui): Details button uses standard size
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 30 May 2026 19:30:00 +0000
+
 hokku-server (4.0.1~dev.2-1) unstable; urgency=medium
 
   * feat(firmware): send X-Firmware-Version and X-Firmware-Build headers on every request; bump to 1.2.7
