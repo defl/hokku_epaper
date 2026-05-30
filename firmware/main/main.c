@@ -51,6 +51,8 @@
 #include "nvs_flash.h"
 #include "esp_timer.h"
 #include "esp_app_desc.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 
 /* Private IDF API — µs since last power-on, spanning deep sleep and
  * esp_restart(). No public replacement exists in current IDF. */
@@ -898,6 +900,9 @@ typedef struct {
      * capturing directly from the event stream. */
     char     sleep_seconds_hdr[32];
     char     server_epoch_hdr[32];
+    /* X-Firmware-Update: <version> — present when the server wants this device
+     * to perform an OTA update. The body (image) is ignored when set. */
+    char     fw_update_hdr[48];
 } http_download_ctx_t;
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
@@ -914,6 +919,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             ctx->received = 0;
             ctx->sleep_seconds_hdr[0] = '\0';
             ctx->server_epoch_hdr[0]  = '\0';
+            ctx->fw_update_hdr[0]     = '\0';
             break;
         case HTTP_EVENT_ON_HEADER:
             if (evt->header_key && evt->header_value) {
@@ -925,6 +931,10 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
                     strncpy(ctx->server_epoch_hdr, evt->header_value,
                             sizeof(ctx->server_epoch_hdr) - 1);
                     ctx->server_epoch_hdr[sizeof(ctx->server_epoch_hdr) - 1] = '\0';
+                } else if (strcasecmp(evt->header_key, "X-Firmware-Update") == 0) {
+                    strncpy(ctx->fw_update_hdr, evt->header_value,
+                            sizeof(ctx->fw_update_hdr) - 1);
+                    ctx->fw_update_hdr[sizeof(ctx->fw_update_hdr) - 1] = '\0';
                 }
             }
             break;
@@ -1019,7 +1029,8 @@ static void build_frame_state_json(char *buf, size_t buflen,
         "\"uptime_s\":%lld,\"bat_mv\":%d,\"usb\":\"%s\","
         "\"last_sleep\":\"%s\",\"rssi\":%d,\"heap_kb\":%u,"
         "\"spurious\":%u,\"cfg_ver\":%u,\"clk_now\":%lld,"
-        "\"next_ep\":%lld,\"sleep_err_s\":%s,\"wifi_cached\":%s}",
+        "\"next_ep\":%lld,\"sleep_err_s\":%s,\"wifi_cached\":%s,"
+        "\"ota\":1}",
         fw, (unsigned)boot_count, wake_label, current_regime,
         (long long)uptime_s, (int)last_battery_mv, usb,
         last_sleep_str, rssi, (unsigned)(free_heap / 1024u),
@@ -1038,6 +1049,7 @@ static void build_frame_state_json(char *buf, size_t buflen,
  * current_regime global; see header comment on build_frame_state_json). */
 static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_epoch,
                                int *out_http_status,
+                               char *out_fw_update, size_t fw_update_buflen,
                                const char *wake_label,
                                int64_t boot_time_us)
 {
@@ -1154,6 +1166,17 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
         }
     } else {
         ESP_LOGW(TAG, "X-Server-Time-Epoch header missing from response (status=%d)", status);
+    }
+
+    /* Surface any OTA-update request the server attached. Captured regardless
+     * of status (the server only sends it on the 200 image response). */
+    if (out_fw_update && fw_update_buflen > 0) {
+        out_fw_update[0] = '\0';
+        if (ctx.fw_update_hdr[0] != '\0') {
+            strncpy(out_fw_update, ctx.fw_update_hdr, fw_update_buflen - 1);
+            out_fw_update[fw_update_buflen - 1] = '\0';
+            ESP_LOGI(TAG, "X-Firmware-Update: %s (server requested OTA)", out_fw_update);
+        }
     }
 
     esp_http_client_cleanup(client);
@@ -1554,6 +1577,279 @@ static void enter_deep_sleep(int64_t sleep_us)
  * the prior image in place).
  *
  * wake_label and caller are for the X-Frame-State JSON. */
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  OTA firmware update
+ *
+ *  Triggered when the server attaches an X-Firmware-Update header to a
+ *  poll response (set manually per-screen from the dashboard). Flow:
+ *    1. fetch a migrated NVS config image (GET .../firmware-config)
+ *    2. stream the app image into the inactive OTA slot (GET .../firmware.bin)
+ *    3. flash the NVS partition with the migrated config
+ *    4. flip the boot partition and restart into the new slot
+ *  Any failure aborts safely: the running slot + NVS are left intact.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Derive a sibling endpoint URL from config.image_url (".../hokku/screen[/]"),
+ * e.g. leaf="firmware.bin" -> ".../hokku/firmware.bin". */
+static void build_firmware_url(char *out, size_t outlen, const char *leaf)
+{
+    char base[sizeof(config.image_url)];
+    strncpy(base, config.image_url, sizeof(base) - 1);
+    base[sizeof(base) - 1] = '\0';
+    size_t n = strlen(base);
+    while (n > 0 && base[n - 1] == '/') base[--n] = '\0';       /* trailing '/' */
+    while (n > 0 && base[n - 1] != '/') base[--n] = '\0';       /* last segment */
+    snprintf(out, outlen, "%s%s", base, leaf);
+}
+
+/* Minimal JSON string-escaper: handles '"' and '\\', drops control chars. */
+static void json_escape(char *dst, size_t dstlen, const char *src)
+{
+    size_t j = 0;
+    for (size_t i = 0; src[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)src[i];
+        if (c == '"' || c == '\\') {
+            if (j + 2 >= dstlen) break;
+            dst[j++] = '\\';
+            dst[j++] = (char)c;
+        } else if (c < 0x20) {
+            continue;
+        } else {
+            if (j + 1 >= dstlen) break;
+            dst[j++] = (char)c;
+        }
+    }
+    dst[j] = '\0';
+}
+
+/* Build the X-Config-State header: the device's current NVS config as JSON so
+ * the server can migrate it forward into the new firmware's schema. */
+static void build_config_state_json(char *out, size_t outlen)
+{
+    char s1[2 * 33], p1[2 * 65], s2[2 * 33], p2[2 * 65], url[2 * 257], name[2 * 65];
+    json_escape(s1,   sizeof(s1),   config.wifi_ssid[0]);
+    json_escape(p1,   sizeof(p1),   config.wifi_pass[0]);
+    json_escape(s2,   sizeof(s2),   config.wifi_ssid[1]);
+    json_escape(p2,   sizeof(p2),   config.wifi_pass[1]);
+    json_escape(url,  sizeof(url),  config.image_url);
+    json_escape(name, sizeof(name), config.screen_name);
+    snprintf(out, outlen,
+        "{\"wifi_ssid1\":\"%s\",\"wifi_pass1\":\"%s\","
+        "\"wifi_ssid2\":\"%s\",\"wifi_pass2\":\"%s\","
+        "\"image_url\":\"%s\",\"screen_name\":\"%s\","
+        "\"wifi_order\":%u,\"cfg_ver\":%u}",
+        s1, p1, s2, p2, url, name,
+        (unsigned)config.wifi_order, (unsigned)config.cfg_ver);
+}
+
+/* ── fetch migrated NVS config image into a RAM buffer ── */
+typedef struct { uint8_t *buf; size_t len; size_t cap; bool ok; } ota_buf_ctx_t;
+
+static esp_err_t ota_buf_event_handler(esp_http_client_event_t *evt)
+{
+    ota_buf_ctx_t *ctx = (ota_buf_ctx_t *)evt->user_data;
+    if (!ctx) return ESP_OK;
+    if (evt->event_id == HTTP_EVENT_ON_CONNECTED) {
+        ctx->len = 0;  /* reset on (re)connect so a redirect doesn't accumulate */
+    } else if (evt->event_id == HTTP_EVENT_ON_DATA && evt->data_len > 0) {
+        if (ctx->len + (size_t)evt->data_len > ctx->cap) { ctx->ok = false; return ESP_FAIL; }
+        memcpy(ctx->buf + ctx->len, evt->data, evt->data_len);
+        ctx->len += evt->data_len;
+    }
+    return ESP_OK;
+}
+
+static bool ota_fetch_config(uint8_t **out, size_t *out_len)
+{
+    char url[sizeof(config.image_url) + 32];
+    build_firmware_url(url, sizeof(url), "firmware-config");
+    char cfgstate[1280];
+    build_config_state_json(cfgstate, sizeof(cfgstate));
+
+    size_t cap = 64 * 1024;
+    uint8_t *buf = malloc(cap);
+    if (!buf) { ESP_LOGE(TAG, "OTA: config buffer OOM"); return false; }
+    ota_buf_ctx_t ctx = { .buf = buf, .len = 0, .cap = cap, .ok = true };
+
+    esp_http_client_config_t cfg = {
+        .url = url, .event_handler = ota_buf_event_handler, .user_data = &ctx,
+        .timeout_ms = HTTP_TIMEOUT_MS, .buffer_size = 4096,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) { free(buf); return false; }
+    if (config.screen_name[0] != '\0') {
+        esp_http_client_set_header(client, "X-Screen-Name", config.screen_name);
+    }
+    esp_http_client_set_header(client, "X-Config-State", cfgstate);
+
+    esp_err_t perr = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (perr != ESP_OK || status != 200 || !ctx.ok || ctx.len == 0) {
+        ESP_LOGE(TAG, "OTA config fetch failed: err=%s status=%d ok=%d len=%u",
+                 esp_err_to_name(perr), status, (int)ctx.ok, (unsigned)ctx.len);
+        free(buf);
+        return false;
+    }
+    ESP_LOGI(TAG, "OTA migrated config received: %u bytes", (unsigned)ctx.len);
+    *out = buf;
+    *out_len = ctx.len;
+    return true;
+}
+
+/* ── stream the app image into the inactive OTA slot ── */
+typedef struct { esp_ota_handle_t handle; size_t written; bool ok; } ota_write_ctx_t;
+
+static esp_err_t ota_app_event_handler(esp_http_client_event_t *evt)
+{
+    ota_write_ctx_t *ctx = (ota_write_ctx_t *)evt->user_data;
+    if (!ctx) return ESP_OK;
+    if (evt->event_id == HTTP_EVENT_ON_DATA && ctx->ok && evt->data_len > 0) {
+        esp_err_t e = esp_ota_write(ctx->handle, evt->data, evt->data_len);
+        if (e != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(e));
+            ctx->ok = false;
+            return e;
+        }
+        ctx->written += evt->data_len;
+    }
+    return ESP_OK;
+}
+
+/* Download + write + validate the app image into the next OTA partition.
+ * Does NOT set the boot partition — that happens after the NVS flash. */
+static bool ota_write_app(void)
+{
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    const esp_partition_t *update  = esp_ota_get_next_update_partition(NULL);
+    if (!update) { ESP_LOGE(TAG, "OTA: no next update partition"); return false; }
+    ESP_LOGI(TAG, "OTA target: %s @ 0x%lx (running: %s)",
+             update->label, (unsigned long)update->address,
+             running ? running->label : "?");
+
+    esp_ota_handle_t handle = 0;
+    esp_err_t e = esp_ota_begin(update, OTA_SIZE_UNKNOWN, &handle);
+    if (e != ESP_OK) { ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(e)); return false; }
+
+    char url[sizeof(config.image_url) + 32];
+    build_firmware_url(url, sizeof(url), "firmware.bin");
+    ota_write_ctx_t ctx = { .handle = handle, .written = 0, .ok = true };
+    esp_http_client_config_t cfg = {
+        .url = url, .event_handler = ota_app_event_handler, .user_data = &ctx,
+        .timeout_ms = HTTP_TIMEOUT_MS, .buffer_size = 4096,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) { esp_ota_abort(handle); return false; }
+    esp_err_t perr = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (perr != ESP_OK || status != 200 || !ctx.ok) {
+        ESP_LOGE(TAG, "OTA app download failed: err=%s status=%d ok=%d written=%u",
+                 esp_err_to_name(perr), status, (int)ctx.ok, (unsigned)ctx.written);
+        esp_ota_abort(handle);
+        return false;
+    }
+    e = esp_ota_end(handle);  /* validates the image (magic, checksum, signature) */
+    if (e != ESP_OK) { ESP_LOGE(TAG, "esp_ota_end (validate): %s", esp_err_to_name(e)); return false; }
+    ESP_LOGI(TAG, "OTA app written + validated: %u bytes", (unsigned)ctx.written);
+    return true;
+}
+
+/* Rewrite the NVS partition with a server-provided partition image (same bytes
+ * the USB setup path flashes). NVS is released first; we restart right after. */
+static bool ota_flash_nvs(const uint8_t *img, size_t len)
+{
+    const esp_partition_t *nvs_part =
+        esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, NULL);
+    if (!nvs_part) { ESP_LOGE(TAG, "OTA: NVS partition not found"); return false; }
+    if (len == 0 || len > nvs_part->size) {
+        ESP_LOGE(TAG, "OTA: NVS image size %u invalid (partition %u)",
+                 (unsigned)len, (unsigned)nvs_part->size);
+        return false;
+    }
+    nvs_flash_deinit();  /* release before raw rewrite; ignore error if not init'd */
+    esp_err_t e = esp_partition_erase_range(nvs_part, 0, nvs_part->size);
+    if (e != ESP_OK) { ESP_LOGE(TAG, "OTA: NVS erase: %s", esp_err_to_name(e)); return false; }
+    e = esp_partition_write(nvs_part, 0, img, len);
+    if (e != ESP_OK) { ESP_LOGE(TAG, "OTA: NVS write: %s", esp_err_to_name(e)); return false; }
+
+    uint8_t *check = malloc(len);
+    if (check) {
+        bool match = (esp_partition_read(nvs_part, 0, check, len) == ESP_OK)
+                     && (memcmp(check, img, len) == 0);
+        free(check);
+        if (!match) { ESP_LOGE(TAG, "OTA: NVS verify mismatch"); return false; }
+    }
+    ESP_LOGI(TAG, "OTA: NVS partition rewritten (%u bytes)", (unsigned)len);
+    return true;
+}
+
+/* Perform the full OTA. Assumes WiFi is up. On success, reboots into the new
+ * slot and never returns. On failure, returns false (caller schedules a retry).
+ * target_version is informational (the server picks the actual bytes). */
+static bool perform_ota(const char *target_version)
+{
+    ESP_LOGI(TAG, "OTA starting -> %s", target_version);
+    display_message("Updating firmware...\n\nDo not unplug.\nThe screen will\nrestart itself.");
+
+    /* 1. Migrated NVS config (held in RAM; flashed only after the app image is
+     *    downloaded + validated, so a failed download never touches NVS). */
+    uint8_t *nvs_img = NULL;
+    size_t   nvs_len = 0;
+    if (!ota_fetch_config(&nvs_img, &nvs_len)) {
+        display_message("Firmware update\nfailed.\n\n(config migration)\n\nWill retry later.");
+        return false;
+    }
+
+    /* 2. App image -> inactive slot (validated by esp_ota_end). */
+    if (!ota_write_app()) {
+        free(nvs_img);
+        display_message("Firmware update\nfailed.\n\n(download)\n\nWill retry later.");
+        return false;
+    }
+
+    /* 3. Rewrite NVS with the migrated config. */
+    if (!ota_flash_nvs(nvs_img, nvs_len)) {
+        free(nvs_img);
+        display_message("Firmware update\nfailed.\n\n(config write)\n\nWill retry later.");
+        return false;
+    }
+    free(nvs_img);
+
+    /* 4. Flip the boot partition and restart into the new slot. */
+    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+    esp_err_t e = esp_ota_set_boot_partition(next);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition: %s", esp_err_to_name(e));
+        display_message("Firmware update\nfailed.\n\n(commit)\n\nWill retry later.");
+        return false;
+    }
+    ESP_LOGI(TAG, "OTA complete — rebooting into %s", next ? next->label : "new slot");
+    display_message("Update complete.\n\nRestarting...");
+    vTaskDelay(pdMS_TO_TICKS(800));
+    esp_restart();
+    return true;  /* unreachable */
+}
+
+/* If this boot is a freshly-OTA'd app awaiting verification, confirm it (cancels
+ * the bootloader's pending rollback). Called only after a successful refresh —
+ * i.e. once we've proven the new firmware can reach the server and display. */
+static void ota_mark_valid_if_pending(void)
+{
+#ifdef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t st;
+    if (running && esp_ota_get_state_partition(running, &st) == ESP_OK
+        && st == ESP_OTA_IMG_PENDING_VERIFY) {
+        esp_err_t e = esp_ota_mark_app_valid_cancel_rollback();
+        ESP_LOGI(TAG, "OTA pending-verify confirmed -> mark valid: %s", esp_err_to_name(e));
+    }
+#endif
+}
+
 static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 {
     /* Enable INFO logging for the duration of the refresh so diagnostics
@@ -1575,8 +1871,25 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
     }
     gpio_set_level(PIN_WIFI_LED, 1);
 
-    img = download_image(&sleep_seconds, &server_epoch, &http_status, wake_label, boot_time_us);
+    char fw_update_ver[48] = {0};
+    img = download_image(&sleep_seconds, &server_epoch, &http_status,
+                         fw_update_ver, sizeof(fw_update_ver), wake_label, boot_time_us);
     local_time_at_download_us = esp_timer_get_time();
+
+    /* OTA path: the server asked this screen to update. The image body (if any)
+     * is ignored. perform_ota needs WiFi, so do it before wifi_shutdown(); on
+     * success it reboots into the new slot and never returns. */
+    if (fw_update_ver[0] != '\0') {
+        if (img) { heap_caps_free(img); img = NULL; }
+        bool ota_ok = perform_ota(fw_update_ver);  /* returns only on failure */
+        wifi_shutdown();
+        gpio_set_level(PIN_WIFI_LED, 0);
+        if (!ota_ok) {
+            schedule_retry_in(REFRESH_RETRY_SECONDS, "ota failed");
+        }
+        log_level_apply(usb_host_present());
+        return ota_ok;
+    }
 
     wifi_shutdown();
     gpio_set_level(PIN_WIFI_LED, 0);
@@ -1962,7 +2275,13 @@ void app_main(void)
         int64_t prior_sleep_entry_epoch = pre_sleep_server_epoch;
         int32_t prior_sleep_duration    = last_sleep_seconds;
 
-        perform_refresh(label, boot_time);
+        bool refreshed = perform_refresh(label, boot_time);
+        /* A successful refresh proves a freshly-OTA'd app can reach the server
+         * and drive the display — confirm it so the bootloader stops watching
+         * for a rollback. No-op on a normally-booted (non-pending) app. */
+        if (refreshed) {
+            ota_mark_valid_if_pending();
+        }
 
         /* Sleep-error diagnostic: only meaningful on timer wakes. */
         if (last_sleep_mode == LAST_SLEEP_MODE_TIMER_WAKE &&

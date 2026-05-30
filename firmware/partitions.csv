@@ -1,4 +1,10 @@
-# Name,   Type, SubType, Offset,  Size, Flags
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 0x200000,
+# Name,   Type, SubType, Offset,    Size, Flags
+# OTA layout (16 MB flash). nvs/phy_init keep their original offsets so the
+# setup tool's NVS-config write offset is unchanged; the app stays at 0x10000 so
+# the merge-bin recipe (bootloader@0x0, parttable@0x8000, app@0x10000) still
+# lands in ota_0. A blank otadata makes the bootloader boot ota_0.
+nvs,      data, nvs,     0x9000,    0x6000,
+phy_init, data, phy,     0xf000,    0x1000,
+ota_0,    app,  ota_0,   0x10000,   0x300000,
+ota_1,    app,  ota_1,   0x310000,  0x300000,
+otadata,  data, ota,     0x610000,  0x2000,

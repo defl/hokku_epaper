@@ -57,6 +57,7 @@ from hokku.webserver.orientation import Orientation
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS, PRESET_META
 from hokku.webserver.screen_headers import (
     parse_battery_header,
+    parse_config_state,
     parse_firmware_build,
     parse_firmware_version,
     parse_frame_state,
@@ -182,6 +183,15 @@ def create_app(
         fw_version = parse_firmware_version(request.headers.get("X-Firmware-Version"))
         fw_build = parse_firmware_build(request.headers.get("X-Firmware-Build"))
 
+        # A device that reports the bundled version has finished any update —
+        # drop a stale OTA-migration error if one was recorded.
+        if fw_version and fw_version == bundled_firmware_version:
+            scheduler.clear_ota_error(screen_name)
+        # OTA capability is advertised in the frame-state JSON ("ota":1). Only
+        # OTA-capable firmware understands X-Firmware-Update + config migration,
+        # so we never signal an update to a pre-OTA screen (would be a no-op).
+        ota_capable = bool(frame_state and frame_state.get("ota"))
+
         # POST body carries the firmware log (plain text); GET has no body.
         screen_log: str | None = None
         if request.method == "POST":
@@ -255,7 +265,73 @@ def create_app(
         response.headers["X-Sleep-Seconds"] = str(sleep_seconds)
         response.headers["X-Server-Time-Epoch"] = str(int(_time.time()))
         response.headers["Content-Disposition"] = "attachment; filename=hokku.bin"
+
+        # Manual OTA: if the user toggled "update on next refresh" for this screen
+        # and it is OTA-capable and we actually have firmware to ship, tell it to
+        # update (it will ignore this image body and fetch firmware/config). The
+        # flag is consumed one-shot here so the device gets exactly one signal.
+        if (
+            ota_capable
+            and bundled_firmware_version
+            and scheduler.is_ota_pending(screen_name)
+            and scheduler.take_ota_pending(screen_name)
+        ):
+            response.headers["X-Firmware-Update"] = bundled_firmware_version
+            logger.info("Signalling OTA to %s (-> %s)", screen_name, bundled_firmware_version)
         return response
+
+    @app.route("/hokku/firmware.bin", methods=["GET"])
+    def serve_firmware_image():
+        """Serve the OTA-flashable app image (sliced from the bundled merged bin).
+
+        The device streams this straight into its inactive OTA slot."""
+        app_image = epf1301.release_app_image()
+        if not app_image:
+            logger.error("OTA firmware.bin requested but no bundled firmware found")
+            abort(404)
+        resp = make_response(app_image)
+        resp.headers["Content-Type"] = "application/octet-stream"
+        resp.headers["Content-Disposition"] = "attachment; filename=hokku-app.bin"
+        return resp
+
+    @app.route("/hokku/firmware-config", methods=["GET"])
+    def serve_firmware_config():
+        """Return a flashable NVS partition image for the OTA target firmware.
+
+        The device sends its current config as an X-Config-State JSON header; we
+        map it forward into the new firmware's NVS schema (``migrate_config``) and
+        build the partition image with the same ``build_nvs_binary`` the USB setup
+        path uses. A migration refusal is a should-never-happen bug: we record it
+        on the screen and return 422 so the device aborts and stays put."""
+        screen_name = request.headers.get("X-Screen-Name")
+        current = parse_config_state(request.headers.get("X-Config-State"))
+        if not screen_name:
+            screen_name = (current or {}).get("screen_name") or "unnamed"
+        if current is None:
+            logger.error("firmware-config from %s: missing/invalid X-Config-State", screen_name)
+            return make_response("missing X-Config-State", 400)
+
+        migrated = epf1301.migrate_config(current)
+        if migrated is None:
+            msg = f"cannot migrate config to schema v{epf1301.CONFIG_VERSION}"
+            state.scheduler.record_ota_error(screen_name, msg)
+            return make_response(msg, 422)
+
+        try:
+            nvs_image = epf1301.build_nvs_binary(migrated)
+        except epf1301.NvsToolUnavailable as e:
+            logger.error("firmware-config: NVS generator unavailable: %s", e)
+            return make_response("NVS generator unavailable on server", 503)
+        except (RuntimeError, OSError) as e:
+            msg = f"failed to build NVS image: {e}"
+            state.scheduler.record_ota_error(screen_name, msg)
+            return make_response(msg, 500)
+
+        resp = make_response(nvs_image)
+        resp.headers["Content-Type"] = "application/octet-stream"
+        resp.headers["Content-Disposition"] = "attachment; filename=hokku-nvs.bin"
+        logger.info("Served migrated NVS image to %s (%d bytes)", screen_name, len(nvs_image))
+        return resp
 
     # ── Web GUI ────────────────────────────────────────────────
 
@@ -457,6 +533,22 @@ def create_app(
             state.manager.sync()
         return jsonify({"ok": True})
 
+    @app.route("/hokku/api/screens/<string:name>/update", methods=["POST"])
+    def api_screen_update(name: str):
+        """Toggle the one-shot 'update firmware on next refresh' flag for a screen.
+
+        Body: {"enabled": bool}. The actual OTA is signalled to the device on its
+        next poll (only if it is OTA-capable). Available regardless of version so
+        the user can also re-flash the same firmware."""
+        if not bundled_firmware_version:
+            return jsonify({"error": "no bundled firmware available on the server"}), 409
+        body = request.get_json(silent=True) or {}
+        enabled = body.get("enabled", True)
+        if not isinstance(enabled, bool):
+            return jsonify({"error": "enabled must be a boolean"}), 400
+        state.scheduler.set_ota_pending(name, enabled)
+        return jsonify({"ok": True, "ota_pending": enabled})
+
     @app.route("/hokku/api/scrub", methods=["POST"])
     def api_scrub():
         """Remove stale-slug panel/preview files immediately (preserves thumbs)."""
@@ -559,6 +651,14 @@ def create_app(
                 ),
                 "firmware_version": t.firmware_version,
                 "firmware_build": t.firmware_build,
+                "ota_pending": scheduler.is_ota_pending(sname),
+                "ota_capable": bool(t.frame_state and t.frame_state.get("ota")),
+                "ota_error": t.ota_error,
+                "ota_error_at": (
+                    datetime.fromtimestamp(t.ota_error_at).isoformat(timespec="seconds")
+                    if t.ota_error_at
+                    else None
+                ),
             }
 
         disk = manager.cache_disk_info()

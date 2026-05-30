@@ -58,3 +58,20 @@ def parse_frame_state(raw: str | None) -> dict | None:
         logger.warning("X-Frame-State is not a JSON object: %s", str(raw)[:120])
         return None
     return data
+
+
+def parse_config_state(raw: str | None) -> dict | None:
+    """Parse the X-Config-State header a device sends during OTA: a JSON object of
+    its current NVS config (wifi creds, image_url, screen_name, wifi_order,
+    cfg_ver). Returns the dict, or None if absent/malformed."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError) as e:
+        logger.warning("X-Config-State not valid JSON (%s): %s", e, str(raw)[:120])
+        return None
+    if not isinstance(data, dict):
+        logger.warning("X-Config-State is not a JSON object: %s", str(raw)[:120])
+        return None
+    return data

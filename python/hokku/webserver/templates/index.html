@@ -2359,10 +2359,24 @@ function renderScreens(screens, bundledFirmwareVersion) {
   if (outdated.length > 0) {
     html += '<div class="screen-warning">';
     html += '<strong>⚠ Screen' + (outdated.length > 1 ? 's have' : ' has') + ' outdated firmware.</strong> ';
-    html += `New version available: <strong>${bundledFirmwareVersion}</strong>. Use "Flash a screen" to update.`;
+    html += `New version available: <strong>${bundledFirmwareVersion}</strong>. Open a screen's <em>Details</em> to update over-the-air, or use "Flash a screen" via USB.`;
     html += '<ul>';
     outdated.forEach(n => {
       html += `<li><strong>${n}</strong> — firmware ${screenFwVersion(n)}</li>`;
+    });
+    html += '</ul></div>';
+  }
+
+  // OTA config-migration errors — a should-never-happen bug; surface loudly.
+  const otaErrors = names.filter(n => screens[n].ota_error);
+  if (otaErrors.length > 0) {
+    html += '<div class="screen-warning" style="border-color:#a33;background:#fdecec;color:#7a1f1f;">';
+    html += '<strong>⛔ Firmware update error.</strong> ';
+    html += 'A config migration failed — this should never happen and likely indicates a bug; please report it.';
+    html += '<ul>';
+    otaErrors.forEach(n => {
+      const at = screens[n].ota_error_at ? ` (${screens[n].ota_error_at})` : '';
+      html += `<li><strong>${n}</strong> — ${escapeHtml(screens[n].ota_error)}${at}</li>`;
     });
     html += '</ul></div>';
   }
@@ -2391,8 +2405,11 @@ function renderScreens(screens, bundledFirmwareVersion) {
     const matchCell = `<label style="display:flex;flex-direction:column;align-items:center;gap:2px;">
       <input type="checkbox" ${filterChecked} onchange="setScreenFilterByOrientation('${safeName}', this.checked)">
     </label>`;
+    let nameBadges = '';
+    if (s.ota_error) nameBadges += ' <span title="Firmware update error" style="color:#a33;font-weight:700">⛔</span>';
+    else if (s.ota_pending) nameBadges += ' <span title="Firmware update scheduled for next refresh" style="color:var(--accent,#2a6);font-weight:700">⟳</span>';
     html += `<tr${rowClass}>
-      <td>${name}</td>
+      <td>${name}${nameBadges}</td>
       <td>${s.ip || '-'}</td>
       <td>${formatBattery(s)}</td>
       <td>${s.last_seen || '-'}</td>
@@ -2461,6 +2478,26 @@ async function setScreenFilterByOrientation(name, value) {
   }
 }
 
+// Toggle the one-shot "update firmware on next refresh" flag for a screen.
+// The device performs the OTA the next time it polls (if it is OTA-capable).
+async function setScreenOtaPending(name, enabled) {
+  try {
+    const r = await fetch(`/hokku/api/screens/${encodeURIComponent(name)}/update`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled}),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    if (lastScreens[name]) lastScreens[name].ota_pending = enabled;
+    const statusEl = document.getElementById('ota-pending-status');
+    if (statusEl) statusEl.textContent = enabled
+      ? 'Will update on next refresh.'
+      : 'Not scheduled to update.';
+  } catch (e) {
+    alert('Failed to schedule firmware update: ' + e.message);
+  }
+}
+
 // Pretty-print a single state value.
 // `state` is the containing state object, used so next_ep can reference
 // clk_now from the same capture rather than the viewer's wall clock.
@@ -2525,6 +2562,7 @@ async function showScreenDetails(name) {
     showToast(`No state yet for "${name}" — has it called in since upgrade?`);
     return;
   }
+  const safeName = name.replace(/'/g, "\\'");
   // Show keys in a deterministic, readable order. Any key we don't
   // recognise still appears, at the end, so new firmware fields auto-surface.
   const ordered = ['fw','boot','wake','regime','uptime_s','bat_mv','usb',
@@ -2556,6 +2594,30 @@ async function showScreenDetails(name) {
     rows += `<tr><td>${k}</td><td>${val}</td></tr>`;
   });
   rows += '</table>';
+
+  // Firmware update (OTA) section — only when the server has firmware to ship.
+  if (lastBundledFirmwareVersion) {
+    const curFw = s.state.fw || s.firmware_version || 'unknown';
+    const upToDate = curFw === lastBundledFirmwareVersion;
+    rows += `<div style="margin-top:16px">`;
+    rows += `<div style="font-weight:600;margin-bottom:4px;color:var(--ink)">Firmware update</div>`;
+    if (s.ota_error) {
+      const at = s.ota_error_at ? ` (${s.ota_error_at})` : '';
+      rows += `<div style="background:#fdecec;border:1px solid #a33;color:#7a1f1f;border-radius:4px;padding:8px;margin-bottom:6px;font-size:0.85em">⛔ Last update attempt failed: ${escapeHtml(s.ota_error)}${at}. This should never happen — please report it.</div>`;
+    }
+    rows += `<div style="font-size:0.85em;color:var(--stone);margin-bottom:6px">Installed: <strong>${escapeHtml(curFw)}</strong> · Available: <strong>${escapeHtml(lastBundledFirmwareVersion)}</strong>${upToDate ? ' (up to date)' : ''}</div>`;
+    if (s.ota_capable) {
+      const checked = s.ota_pending ? 'checked' : '';
+      rows += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" ${checked} onchange="setScreenOtaPending('${safeName}', this.checked)">
+        <span>Update firmware on next refresh${upToDate ? ' (re-flash current version)' : ''}</span>
+      </label>`;
+      rows += `<div id="ota-pending-status" style="font-size:0.85em;color:var(--stone);margin-top:4px">${s.ota_pending ? 'Will update on next refresh.' : 'Not scheduled to update.'}</div>`;
+    } else {
+      rows += `<div style="font-size:0.85em;color:#a33">This screen's firmware predates over-the-air updates — connect USB and use "Flash a screen" to enable them.</div>`;
+    }
+    rows += `</div>`;
+  }
 
   if (s.last_log) {
     const ts = s.last_log_at

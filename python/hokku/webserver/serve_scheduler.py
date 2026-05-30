@@ -64,6 +64,12 @@ class ScreenTelemetryEntry:
     last_log_at: float
     firmware_version: str | None
     firmware_build: str | None
+    # Last OTA config-migration failure for this screen. A non-None value signals
+    # a should-never-happen bug (the server could not build a config for the new
+    # firmware schema); surfaced prominently in the dashboard. Cleared once the
+    # screen successfully reports the bundled firmware version.
+    ota_error: str | None = None
+    ota_error_at: float | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -84,6 +90,8 @@ class ScreenTelemetryEntry:
             last_log_at=float(d.get("last_log_at", 0.0)),
             firmware_version=d.get("firmware_version"),
             firmware_build=d.get("firmware_build"),
+            ota_error=d.get("ota_error"),
+            ota_error_at=d.get("ota_error_at"),
         )
 
 
@@ -97,6 +105,10 @@ class ServeScheduler:
         self._stats: dict[str, ServeStats] = {}
         self._screens: dict[str, ScreenTelemetryEntry] = {}
         self._screen_configs: dict[str, ScreenConfig] = {}
+        # Screens whose user has toggled "update firmware on next refresh" ON.
+        # One-shot: consumed (and removed) by take_ota_pending when the device
+        # next polls. Persisted so a pending request survives a server restart.
+        self._ota_pending: set[str] = set()
         self._last_served: tuple[str, float] | None = None
         self._next_for: dict[Orientation, str | None] = dict.fromkeys(Orientation, None)
         self._load()
@@ -264,12 +276,82 @@ class ServeScheduler:
                 firmware_version=firmware_version
                 or (existing.firmware_version if existing else None),
                 firmware_build=firmware_build or (existing.firmware_build if existing else None),
+                # OTA error is sticky across normal polls; cleared explicitly via
+                # clear_ota_error (e.g. once the screen reports the new version).
+                ota_error=existing.ota_error if existing else None,
+                ota_error_at=existing.ota_error_at if existing else None,
             )
             self._save()
 
     def screens(self) -> dict[str, ScreenTelemetryEntry]:
         with self._lock:
             return dict(self._screens)
+
+    # ── OTA: per-screen update request + migration errors ─────────
+
+    def set_ota_pending(self, name: str, enabled: bool) -> None:
+        """Set/clear the one-shot 'update firmware on next refresh' flag."""
+        logger.info("OTA pending for %r -> %s", name, enabled)
+        with self._lock:
+            if enabled:
+                self._ota_pending.add(name)
+            else:
+                self._ota_pending.discard(name)
+            self._save()
+
+    def is_ota_pending(self, name: str) -> bool:
+        """Whether the screen is flagged to update on its next refresh (no consume)."""
+        with self._lock:
+            return name in self._ota_pending
+
+    def take_ota_pending(self, name: str) -> bool:
+        """Consume the pending flag: returns True once, then clears it (one-shot)."""
+        with self._lock:
+            if name in self._ota_pending:
+                self._ota_pending.discard(name)
+                self._save()
+                return True
+            return False
+
+    def record_ota_error(self, name: str, msg: str) -> None:
+        """Record an OTA config-migration failure on the screen's record.
+
+        Creates a minimal entry if the screen is otherwise unknown so the error
+        is never lost. A non-None ``ota_error`` signals a should-never-happen bug.
+        """
+        logger.error("OTA config migration failed for %r: %s", name, msg)
+        with self._lock:
+            now = time.time()
+            existing = self._screens.get(name)
+            if existing is not None:
+                self._screens[name] = replace(existing, ota_error=msg, ota_error_at=now)
+            else:
+                self._screens[name] = ScreenTelemetryEntry(
+                    ip="unknown",
+                    request_count=0,
+                    last_seen_at=now,
+                    last_sleep_seconds=None,
+                    last_served=None,
+                    battery_mv=None,
+                    battery_percent=None,
+                    battery_seen_at=None,
+                    frame_state=None,
+                    last_log="",
+                    last_log_at=0.0,
+                    firmware_version=None,
+                    firmware_build=None,
+                    ota_error=msg,
+                    ota_error_at=now,
+                )
+            self._save()
+
+    def clear_ota_error(self, name: str) -> None:
+        """Clear any recorded OTA error for the screen (idempotent)."""
+        with self._lock:
+            existing = self._screens.get(name)
+            if existing is not None and existing.ota_error is not None:
+                self._screens[name] = replace(existing, ota_error=None, ota_error_at=None)
+                self._save()
 
     def remove_screen(self, name: str) -> None:
         """Remove a screen's telemetry, serve-stats, and config records.
@@ -282,6 +364,7 @@ class ServeScheduler:
             self._screens.pop(name, None)
             self._stats.pop(name, None)
             self._screen_configs.pop(name, None)
+            self._ota_pending.discard(name)
             if self._last_served and self._last_served[0] == name:
                 self._last_served = None
             self._save()
@@ -380,6 +463,9 @@ class ServeScheduler:
                 self._screen_configs[name] = ScreenConfig.from_dict(blob)
             except (KeyError, TypeError, ValueError) as e:
                 logger.warning("Skipping malformed screen config for %r: %s", name, e)
+        pending = data.get("ota_pending")
+        if isinstance(pending, list):
+            self._ota_pending = {n for n in pending if isinstance(n, str)}
         ls = data.get("last_served")
         if isinstance(ls, dict) and "name" in ls and "served_at" in ls:
             try:
@@ -409,5 +495,6 @@ class ServeScheduler:
             "by_name": {n: s.to_dict() for n, s in self._stats.items()},
             "screens": {n: t.to_dict() for n, t in self._screens.items()},
             "screen_configs": {n: c.to_dict() for n, c in self._screen_configs.items()},
+            "ota_pending": sorted(self._ota_pending),
         }
         self._atomic_write_json(payload)

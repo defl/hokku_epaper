@@ -34,6 +34,61 @@ class NvsToolUnavailable(RuntimeError):
     """Raised when the NVS partition generator package is not installed."""
 
 
+# Config keys carried forward verbatim across schema versions. ``cfg_ver`` and
+# ``wifi_order`` are stamped/handled by build_nvs_binary, so they are not listed.
+_CONFIG_STRING_KEYS = (
+    "wifi_ssid1",
+    "wifi_pass1",
+    "wifi_ssid2",
+    "wifi_pass2",
+    "image_url",
+    "screen_name",
+)
+
+
+def migrate_config(current: dict, target_cfg_ver: int = CONFIG_VERSION) -> dict | None:
+    """Map a device's *current* config dict forward into the target NVS schema.
+
+    Used by the OTA path: a device hands over its current config, and this builds
+    the config dict for the new firmware's schema. The result is fed to
+    :func:`build_nvs_binary` (which stamps ``cfg_ver``).
+
+    Returns ``None`` when the config cannot be migrated (a required field of the
+    new schema cannot be derived) — the caller treats this as a should-never-happen
+    bug: it records the failure on the screen and refuses the OTA rather than
+    bricking the device.
+
+    Today every shipped schema (``cfg_ver`` up to ``CONFIG_VERSION``) shares the
+    same fields, so this is a forward-compatible identity that preserves known
+    keys and drops unknown ones. When a future schema adds/renames a field, add
+    the mapping here and return ``None`` for the inputs it cannot satisfy.
+    """
+    if not isinstance(current, dict):
+        return None
+
+    # Minimum viable config for the firmware to operate at all (mirrors the
+    # firmware's config_is_valid(): a primary SSID and a server URL).
+    if not str(current.get("wifi_ssid1", "")).strip():
+        return None
+    if not str(current.get("image_url", "")).strip():
+        return None
+
+    migrated: dict = {}
+    for key in _CONFIG_STRING_KEYS:
+        val = current.get(key)
+        if isinstance(val, str) and val != "":
+            migrated[key] = val
+    try:
+        migrated["wifi_order"] = int(current.get("wifi_order", 0))
+    except (TypeError, ValueError):
+        migrated["wifi_order"] = 0
+
+    # target_cfg_ver is accepted for future per-version branching; build_nvs_binary
+    # stamps the actual cfg_ver from CONFIG_VERSION (kept in lockstep with it).
+    _ = target_cfg_ver
+    return migrated
+
+
 def nvs_tool_available() -> bool:
     """True if the standalone NVS generator package is importable."""
     return importlib.util.find_spec(_NVS_GEN_MODULE) is not None

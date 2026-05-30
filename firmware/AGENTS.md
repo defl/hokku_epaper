@@ -1,16 +1,19 @@
 # Agent rules — firmware
 
 ## Packaging
-- Every build MUST produce `hokku-firmware_<version>.bin` (merged: bootloader + partition table + app)
+- Every build MUST produce `hokku-firmware_<version>.bin` (merged: bootloader + partition table + app + otadata)
 - Do NOT commit/release individual `bootloader.bin` / `partition-table.bin` / `hokku_epaper.bin`
-- Merge command:
+- Merge command (run from repo root; note underscore args and `ota_data_initial.bin`):
   ```
-  esptool --chip esp32s3 merge-bin --output firmware/release/hokku-firmware_<version>.bin \
-      --flash-mode dio --flash-freq 80m --flash-size 16MB \
+  esptool.py --chip esp32s3 merge_bin --output firmware/release/hokku-firmware_<version>.bin \
+      --flash_mode dio --flash_freq 80m --flash_size 16MB \
       0x0      firmware/build/bootloader/bootloader.bin \
       0x8000   firmware/build/partition_table/partition-table.bin \
-      0x10000  firmware/build/hokku_epaper.bin
+      0x10000  firmware/build/hokku_epaper.bin \
+      0x610000 firmware/build/ota_data_initial.bin
   ```
+  The `ota_data_initial.bin` is required so the bootloader boots `ota_0` on a
+  fresh flash; it is generated automatically by `idf.py build`.
 - GitHub release must attach the merged file as the single firmware asset
 - Setup tool aborts if no `hokku-firmware_*.bin` asset is found
 

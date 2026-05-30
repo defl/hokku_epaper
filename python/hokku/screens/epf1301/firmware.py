@@ -50,3 +50,20 @@ def release_app_header(directory: Path | None = None) -> bytes | None:
     with open(merged, "rb") as f:
         f.seek(APP_OFFSET)
         return f.read(256)
+
+
+def release_app_image(directory: Path | None = None) -> bytes | None:
+    """Return the OTA-flashable **app-only** image from the bundled merged firmware.
+
+    The merge recipe lays the merged image out as bootloader@0x0,
+    partition-table@0x8000, app@APP_OFFSET — with the app last. So the bytes from
+    ``APP_OFFSET`` to EOF are exactly the application image an ESP-IDF OTA writes
+    into an ``ota_*`` partition (it begins with the 0xE9 image magic and contains
+    the app descriptor read by ``release_app_header``). Returns None if no bundled
+    firmware is present."""
+    merged = merged_firmware_file(directory)
+    if not merged:
+        return None
+    with open(merged, "rb") as f:
+        f.seek(APP_OFFSET)
+        return f.read()

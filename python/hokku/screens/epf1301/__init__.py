@@ -24,6 +24,7 @@ from .device import (
 from .firmware import (
     merged_firmware_file,
     release_app_header,
+    release_app_image,
     resolve_firmware_dir,
 )
 from .flasher import (
@@ -35,6 +36,7 @@ from .flasher import (
 from .nvs import (
     NvsToolUnavailable,
     build_nvs_binary,
+    migrate_config,
     nvs_tool_available,
     read_nvs,
 )
@@ -53,11 +55,13 @@ __all__ = [
     "flash_firmware",
     "list_serial_ports",
     "merged_firmware_file",
+    "migrate_config",
     "nvs_tool_available",
     "parse_device_state",
     "read_device_flash",
     "read_nvs",
     "release_app_header",
+    "release_app_image",
     "resolve_firmware_dir",
     "scan_devices",
     "write_config",
