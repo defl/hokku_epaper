@@ -2332,8 +2332,10 @@ function renderScreens(screens, bundledFirmwareVersion) {
     .filter(s => s.late > 0);
 
   // Collect screens with outdated firmware.
+  // frame_state.fw has carried the version string since early firmware; use it as source of truth.
+  const screenFwVersion = n => (screens[n].state && screens[n].state.fw) || screens[n].firmware_version;
   const outdated = bundledFirmwareVersion
-    ? names.filter(n => screens[n].firmware_version && screens[n].firmware_version !== bundledFirmwareVersion)
+    ? names.filter(n => { const v = screenFwVersion(n); return v && v !== bundledFirmwareVersion; })
     : [];
 
   let html = '';
@@ -2360,7 +2362,7 @@ function renderScreens(screens, bundledFirmwareVersion) {
     html += `New version available: <strong>${bundledFirmwareVersion}</strong>. Use "Flash a screen" to update.`;
     html += '<ul>';
     outdated.forEach(n => {
-      html += `<li><strong>${n}</strong> — firmware ${screens[n].firmware_version}</li>`;
+      html += `<li><strong>${n}</strong> — firmware ${screenFwVersion(n)}</li>`;
     });
     html += '</ul></div>';
   }
@@ -2547,7 +2549,11 @@ async function showScreenDetails(name) {
     rows += `<tr><td></td><td style="word-break:break-all;font-size:0.85em;color:var(--stone);padding-top:2px;">${escapeHtml(s.last_served)}</td></tr>`;
   }
   keys.forEach(k => {
-    rows += `<tr><td>${k}</td><td>${formatStateValue(k, s.state[k], s.state)}</td></tr>`;
+    let val = formatStateValue(k, s.state[k], s.state);
+    if (k === 'fw' && lastBundledFirmwareVersion && s.state[k] !== lastBundledFirmwareVersion) {
+      val += ` <span style="color:#a33;font-weight:600">→ new version available: ${lastBundledFirmwareVersion}</span>`;
+    }
+    rows += `<tr><td>${k}</td><td>${val}</td></tr>`;
   });
   rows += '</table>';
 

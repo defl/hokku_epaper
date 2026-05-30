@@ -1,3 +1,10 @@
+hokku-server (4.0.1~dev.7-1) unstable; urgency=medium
+
+  * fix(ui): firmware outdated check uses frame_state.fw (available since early firmware, no reflash needed)
+  * fix(ui): Details modal shows "new version available: X" next to fw field when outdated
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 30 May 2026 20:00:00 +0000
+
 hokku-server (4.0.1~dev.3-1) unstable; urgency=medium
 
   * feat(ui): remove Firmware and Requests columns from Connected Screens table (moved to Details)
