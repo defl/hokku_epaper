@@ -507,7 +507,7 @@
   .screen-config-modal .config-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--bamboo-soft); }
   .screen-config-modal .config-row:last-child { border-bottom: none; }
   .screen-config-modal .config-row label:first-child { min-width: 140px; font-weight: 500; color: var(--stone); flex-shrink: 0; }
-  .screen-config-modal .fw-section { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--bamboo); }
+  .screen-config-modal .fw-section { margin-top: 8px; padding-top: 8px; }
   .screen-config-modal .fw-section h4 { margin: 0 0 8px; font-size: 0.95em; font-weight: 600; color: var(--ink); font-family: var(--font-serif); }
   .state-modal { max-width: 560px; }
   .state-modal table { width: 100%; border-collapse: collapse; font-size: 0.85em; font-family: var(--font-mono); margin-top: 4px; }
@@ -2603,10 +2603,7 @@ function showScreenConfig(name) {
     </div>
     <div class="config-row">
       <label>Match orientation</label>
-      <label style="cursor:pointer;display:flex;align-items:center;gap:6px;">
-        <input type="checkbox" ${filterChecked} onchange="setScreenFilterByOrientation('${safeName}', this.checked)">
-        <span>Only show matching images</span>
-      </label>
+      <input type="checkbox" ${filterChecked} onchange="setScreenFilterByOrientation('${safeName}', this.checked)">
     </div>`;
 
   if (lastBundledFirmwareVersion) {
