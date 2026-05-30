@@ -89,6 +89,7 @@ class AppState:
         Raises:
             ValueError: if upload_dir or cache_dir in *new_config* is missing.
         """
+        logger.info("Reloading config")
         upload_dir = Path(new_config.upload_dir)
         cache_dir = Path(new_config.cache_dir)
         if not upload_dir.is_dir():

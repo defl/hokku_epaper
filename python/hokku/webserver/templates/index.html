@@ -918,7 +918,7 @@
       <div class="config-row">
         <label>Server URL:</label>
         <input type="text" id="flash-url" readonly>
-        <span class="flash-hint">Auto-detected for this server</span>
+        <span class="flash-hint" id="flash-url-hint">Auto-detected for this server</span>
       </div>
 
       <div class="config-row">
@@ -1922,13 +1922,7 @@ let flashPollTimer = null;
 function flashDeviceLabel(d) {
   if (!d.is_esp32) return `${d.port} — ${d.description} (not an ESP32-S3)`;
   let s = `${d.port} — ESP32-S3`;
-  if (d.has_hokku_firmware) {
-    s += ' · Hokku firmware';
-    if (d.config && d.config.screen_name) s += ` "${d.config.screen_name}"`;
-    if (d.firmware_current === false) s += ' · update available';
-  } else {
-    s += ' · no Hokku firmware';
-  }
+  if (d.config && d.config.screen_name) s += ` · "${d.config.screen_name}"`;
   return s;
 }
 
@@ -1976,19 +1970,43 @@ function onFlashDeviceChange() {
   const port = sel.value;
   const dev = flashDevices.find(d => d.port === port);
   form.hidden = !port;
-  if (port && dev) {
-    if (!dev.is_esp32) {
-      note.textContent = 'Warning: this port is not an ESP32-S3. Flashing will likely fail.';
-    } else if (dev.config && dev.config.screen_name) {
-      note.textContent = `Currently configured as "${dev.config.screen_name}". Flashing overwrites this.`;
-      const n = document.getElementById('flash-name');
-      if (!n.value) n.value = dev.config.screen_name;
-      if (dev.config.wifi_ssid1) {
-        const s = document.getElementById('flash-ssid');
-        if (!s.value) s.value = dev.config.wifi_ssid1;
-      }
-    } else {
-      note.textContent = '';
+  if (!port || !dev) { note.textContent = ''; return; }
+
+  if (!dev.is_esp32) {
+    note.textContent = 'Warning: this port is not an ESP32-S3. Flashing will likely fail.';
+    return;
+  }
+
+  // Build the note line.
+  const parts = [];
+  if (!dev.has_hokku_firmware) {
+    parts.push('No Hokku firmware detected — will be flashed fresh.');
+  } else if (dev.device_version) {
+    let fw = `Firmware: ${dev.device_version}`;
+    if (dev.firmware_current === false && dev.release_version)
+      fw += ` — new version available: ${dev.release_version}`;
+    else if (dev.firmware_current === true)
+      fw += ' (up to date)';
+    parts.push(fw);
+  }
+  note.textContent = parts.join(' · ');
+
+  // Pre-fill form fields from on-device config, but only if not already filled.
+  const cfg = dev.config;
+  if (cfg) {
+    const nameEl  = document.getElementById('flash-name');
+    const ssid1El = document.getElementById('flash-ssid');
+    const pass1El = document.getElementById('flash-pass');
+    const ssid2El = document.getElementById('flash-ssid2');
+    const pass2El = document.getElementById('flash-pass2');
+    if (nameEl  && !nameEl.value  && cfg.screen_name) nameEl.value  = cfg.screen_name;
+    if (ssid1El && !ssid1El.value && cfg.wifi_ssid1)  ssid1El.value = cfg.wifi_ssid1;
+    if (pass1El && !pass1El.value && cfg.wifi_pass1)  pass1El.value = cfg.wifi_pass1;
+    if (ssid2El && !ssid2El.value && cfg.wifi_ssid2)  ssid2El.value = cfg.wifi_ssid2;
+    if (pass2El && !pass2El.value && cfg.wifi_pass2)  pass2El.value = cfg.wifi_pass2;
+    if (ssid2El && ssid2El.value) {
+      const body2 = document.getElementById('flash-second-body');
+      if (body2) body2.hidden = false;
     }
   }
 }
@@ -2035,6 +2053,7 @@ async function startFlash() {
   const log = document.getElementById('flash-log');
   log.hidden = false; log.textContent = '';
   setFlashControlsDisabled(true);
+  document.getElementById('flash-go-btn').textContent = 'Flashing…';
   try {
     const r = await fetch('/hokku/api/flash/start', {
       method: 'POST',
@@ -2042,12 +2061,13 @@ async function startFlash() {
       body: JSON.stringify(body),
     });
     const j = await r.json().catch(() => ({}));
-    if (r.status === 409) { showToast('A flash is already in progress'); setFlashControlsDisabled(false); return; }
-    if (!r.ok) { setFlashStatus(j.error || 'Failed to start', 'err'); setFlashControlsDisabled(false); return; }
+    if (r.status === 409) { showToast('A flash is already in progress'); setFlashControlsDisabled(false); document.getElementById('flash-go-btn').textContent = 'Flash screen'; return; }
+    if (!r.ok) { setFlashStatus(j.error || 'Failed to start', 'err'); setFlashControlsDisabled(false); document.getElementById('flash-go-btn').textContent = 'Flash screen'; return; }
     pollFlashStatus();
   } catch (e) {
     setFlashStatus('Failed to start: ' + e, 'err');
     setFlashControlsDisabled(false);
+    document.getElementById('flash-go-btn').textContent = 'Flash screen';
   }
 }
 
@@ -2064,11 +2084,13 @@ function pollFlashStatus() {
       clearInterval(flashPollTimer); flashPollTimer = null;
       setFlashStatus('Done — screen flashed and configured.', 'ok');
       setFlashControlsDisabled(false);
+      document.getElementById('flash-go-btn').textContent = 'Flash screen';
       showToast('Screen flashed successfully');
     } else if (j.state === 'error') {
       clearInterval(flashPollTimer); flashPollTimer = null;
       setFlashStatus(j.error ? 'Failed: ' + j.error : 'Flash failed', 'err');
       setFlashControlsDisabled(false);
+      document.getElementById('flash-go-btn').textContent = 'Flash screen';
     }
   }, 1000);
 }
@@ -2078,7 +2100,12 @@ document.addEventListener('DOMContentLoaded', () => {
   if (sel) sel.addEventListener('change', onFlashDeviceChange);
   fetch('/hokku/api/flash/server_url')
     .then(r => r.json())
-    .then(j => { const u = document.getElementById('flash-url'); if (u && j.url) u.value = j.url; })
+    .then(j => {
+      const u = document.getElementById('flash-url');
+      const h = document.getElementById('flash-url-hint');
+      if (u && j.url) u.value = j.url;
+      if (h) h.textContent = j.via === 'mdns' ? `mDNS: ${j.address}` : `IP: ${j.address}`;
+    })
     .catch(() => {});
 });
 
@@ -2167,6 +2194,13 @@ async function saveConfig() {
       // Update the debug banner immediately from the saved checkbox value.
       const debugOn = document.getElementById('debug-fast-refresh').checked;
       document.getElementById('debug-active-banner').style.display = debugOn ? 'block' : 'none';
+      // Re-derive the flash server URL — mDNS hostname may have changed.
+      fetch('/hokku/api/flash/server_url').then(r => r.json()).then(j => {
+        const u = document.getElementById('flash-url');
+        const h = document.getElementById('flash-url-hint');
+        if (u && j.url) u.value = j.url;
+        if (h) h.textContent = j.via === 'mdns' ? `mDNS: ${j.address}` : `IP: ${j.address}`;
+      }).catch(() => {});
       // Only refresh the volatile status (queue / screens) — DON'T reload the
       // form from the server, since the server now reflects exactly what the
       // user just submitted.
@@ -2884,6 +2918,20 @@ async function loadConfig() {
     renderDitherPanel('default');
     renderDitherPanel('bw');
     renderDitherPanel('face');
+
+    // Pre-fill flash form WiFi fields from remembered credentials.
+    const s1 = document.getElementById('flash-ssid');
+    const p1 = document.getElementById('flash-pass');
+    const s2 = document.getElementById('flash-ssid2');
+    const p2 = document.getElementById('flash-pass2');
+    if (s1 && !s1.value) s1.value = cfg.flash_wifi_ssid || '';
+    if (p1 && !p1.value) p1.value = cfg.flash_wifi_pass || '';
+    if (s2 && !s2.value) s2.value = cfg.flash_wifi_ssid2 || '';
+    if (p2 && !p2.value) p2.value = cfg.flash_wifi_pass2 || '';
+    if (s2 && s2.value) {
+      const body2 = document.getElementById('flash-second-body');
+      if (body2) body2.hidden = false;
+    }
 
     currentConfig = cfg;
   } catch (e) {

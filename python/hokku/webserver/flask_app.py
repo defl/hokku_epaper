@@ -34,6 +34,7 @@ from flask import (
 )
 from PIL import Image, UnidentifiedImageError
 from pillow_heif import register_heif_opener
+from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 from hokku.screens import epf1301
@@ -288,6 +289,7 @@ def create_app(
         manager = state.manager
         files = request.files.getlist("file") or request.files.getlist("files")
         if not files:
+            logger.info("Upload rejected: no files in request")
             return jsonify({"error": "No files in upload"}), 400
         saved, skipped = [], []
         for f in files:
@@ -321,7 +323,7 @@ def create_app(
                     )
                     continue
                 except (UnidentifiedImageError, OSError) as e:
-                    logger.exception("Upload error for %r: %s: %s", name, type(e).__name__, e)
+                    logger.error("Unreadable image %r: %s: %s", name, type(e).__name__, e)
                     skipped.append({"name": name, "reason": "unreadable image"})
                     continue
             if w * h > MAX_UPLOAD_PIXELS:
@@ -338,7 +340,7 @@ def create_app(
             except FileExistsError:
                 skipped.append({"name": name, "reason": "already exists; remove to replace"})
             except (OSError, ValueError) as e:
-                logger.exception("Error adding %r: %s: %s", name, type(e).__name__, e)
+                logger.error("Error adding %r: %s: %s", name, type(e).__name__, e)
                 skipped.append({"name": name, "reason": str(e)})
         return jsonify({"saved": saved, "skipped": skipped})
 
@@ -347,8 +349,10 @@ def create_app(
         try:
             state.manager.remove(name)
         except FileNotFoundError:
+            logger.info("Delete: image %r not found", name)
             return jsonify({"error": f"image {name!r} not found"}), 404
         except OSError as e:
+            logger.error("Delete failed for %r: %s", name, e)
             return jsonify({"error": str(e)}), 500
         return jsonify({"ok": True})
 
@@ -357,6 +361,7 @@ def create_app(
         try:
             state.manager.retry(name)
         except FileNotFoundError:
+            logger.info("Retry: image %r not found", name)
             return jsonify({"error": f"image {name!r} not found"}), 404
         return jsonify({"ok": True})
 
@@ -364,14 +369,17 @@ def create_app(
     def api_show_next(name: str):
         rec = state.manager.status(name)
         if rec is None:
+            logger.info("Show next: image %r not found", name)
             return jsonify({"error": f"image {name!r} not found"}), 404
         if rec.convert_status != ConvertStatus.OK:
+            logger.warning("Show next: image %r not ready (status: %s)", name, rec.convert_status)
             return jsonify(
                 {"error": f"image {name!r} is not ready (status: {rec.convert_status})"}
             ), 409
         try:
             state.scheduler.set_next(name)
         except ValueError as e:
+            logger.warning("Show next: scheduler rejected %r: %s", name, e)
             return jsonify({"error": str(e)}), 409
         return jsonify({"ok": True, "next_image": name})
 
@@ -412,12 +420,16 @@ def create_app(
         if "orientation" in body:
             raw = body.get("orientation")
             if raw not in ("landscape", "portrait"):
+                logger.info("Screen config %r: invalid orientation %r", name, raw)
                 return jsonify({"error": "orientation must be 'landscape' or 'portrait'"}), 400
             updates["orientation"] = Orientation(raw)
 
         if "filter_by_orientation" in body:
             val = body.get("filter_by_orientation")
             if not isinstance(val, bool):
+                logger.info(
+                    "Screen config %r: filter_by_orientation must be bool, got %r", name, val
+                )
                 return jsonify({"error": "filter_by_orientation must be a boolean"}), 400
             updates["filter_by_orientation"] = val
 
@@ -584,24 +596,28 @@ def create_app(
     @app.route("/hokku/api/config", methods=["POST"])
     def api_config_post():
         if config_path is None:
+            logger.error("Config save attempted but server has no config_path")
             return jsonify({"error": "server started without a config_path; cannot save"}), 500
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
+            logger.info("Config save: expected JSON object, got %r", type(body).__name__)
             return jsonify({"error": "expected JSON object"}), 400
         try:
             merged = {**state.config.to_dict(), **body}
             new_cfg = AppConfig.from_dict(merged)
         except (TypeError, ValueError) as e:
+            logger.info("Config save: invalid config: %s", e)
             return jsonify({"error": f"invalid config: {e}"}), 400
         try:
             new_cfg.save(config_path)
         except OSError as e:
+            logger.error("Failed to write config to %s: %s", config_path, e)
             return jsonify({"error": f"failed to write config: {e}"}), 500
         try:
             state.reload(new_cfg)
         except ValueError as e:
+            logger.error("Config reload failed after save: %s", e)
             return jsonify({"error": f"reload failed: {e}"}), 400
-        logger.info("Config saved and reloaded in-process")
         return jsonify({"ok": True, "restarting": False})
 
     @app.route("/hokku/api/dither/preview", methods=["POST"])
@@ -616,18 +632,22 @@ def create_app(
         """
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
+            logger.info("Dither preview: expected JSON object, got %r", type(body).__name__)
             return jsonify({"error": "expected JSON object"}), 400
         name = body.get("name")
         image_blob = body.get("image")
         if not name or not isinstance(image_blob, dict):
+            logger.info("Dither preview: missing name or image in body")
             return jsonify({"error": "expected {name, image}"}), 400
         try:
             path = state.manager.original_path(name)
         except FileNotFoundError:
+            logger.info("Dither preview: image %r not found", name)
             return jsonify({"error": f"image {name!r} not found"}), 404
         try:
             cfg = _image_config_from_dict(image_blob)
         except (TypeError, ValueError) as e:
+            logger.info("Dither preview: invalid image config: %s", e)
             return jsonify({"error": f"invalid image config: {e}"}), 400
 
         # Look up cached face bboxes (original-image normalised) so we can map
@@ -688,24 +708,40 @@ def create_app(
         and contends for the serial port.
         """
         if firmware_path is None:
+            logger.error("Flash scan requested but no bundled firmware available")
             return jsonify({"error": "no bundled firmware available on this server"}), 503
         if state.flash_jobs.is_busy():
+            logger.warning("Flash scan rejected: a flash is already in progress")
             return jsonify({"error": "a flash is in progress", "busy": True}), 409
         return jsonify({"devices": epf1301.scan_devices(), "busy": False})
 
     @app.route("/hokku/api/flash/server_url")
     def api_flash_server_url():
-        """The image-server URL a freshly-flashed screen should poll: this Pi."""
-        ip = _get_local_ip()
+        """The image-server URL a freshly-flashed screen should poll: this Pi.
+
+        Prefers the mDNS hostname (``<name>.local``) when mDNS is enabled —
+        the URL stays valid even if the Pi's IP address changes.
+        """
         port = state.config.port
-        return jsonify({"ip": ip, "port": port, "url": f"http://{ip}:{port}/hokku/screen/"})
+        hostname = state.config.mdns_hostname
+        if hostname:
+            url = f"http://{hostname}.local:{port}/hokku/screen/"
+            return jsonify(
+                {"address": f"{hostname}.local", "via": "mdns", "port": port, "url": url}
+            )
+        ip = _get_local_ip()
+        return jsonify(
+            {"address": ip, "via": "ip", "port": port, "url": f"http://{ip}:{port}/hokku/screen/"}
+        )
 
     @app.route("/hokku/api/flash/start", methods=["POST"])
     def api_flash_start():
         """Begin flashing firmware + NVS config to a connected screen."""
         if firmware_path is None:
+            logger.error("Flash start requested but no bundled firmware available")
             return jsonify({"error": "no bundled firmware available on this server"}), 503
         if not epf1301.nvs_tool_available():
+            logger.error("Flash start requested but esp-idf-nvs-partition-gen is not installed")
             return jsonify(
                 {"error": "NVS generator not installed (esp-idf-nvs-partition-gen)"}
             ), 503
@@ -715,10 +751,19 @@ def create_app(
         wifi_ssid1 = (body.get("wifi_ssid1") or "").strip()
         image_url = (body.get("image_url") or "").strip()
         if not port or not wifi_ssid1 or not image_url:
+            logger.info(
+                "Flash start: missing required fields (port=%r ssid=%r url=%r)",
+                port,
+                wifi_ssid1,
+                image_url,
+            )
             return jsonify({"error": "port, wifi_ssid1 and image_url are required"}), 400
 
         screen_name = (body.get("screen_name") or "").strip()
         if len(screen_name.encode("utf-8")) > 64:
+            logger.info(
+                "Flash start: screen_name too long (%d bytes)", len(screen_name.encode("utf-8"))
+            )
             return jsonify({"error": "screen_name must be <= 64 bytes"}), 400
 
         config: dict = {
@@ -736,13 +781,47 @@ def create_app(
 
         job_id = state.flash_jobs.start(port, config, firmware_path)
         if job_id is None:
+            logger.warning("Flash start rejected: a flash is already in progress")
             return jsonify({"error": "a flash is already in progress"}), 409
+
+        # Persist WiFi credentials so the form pre-fills next time.
+        wifi_pass1 = body.get("wifi_pass1") or ""
+        wifi_pass2 = body.get("wifi_pass2") or ""
+        if config_path:
+            cfg = state.config
+            if (
+                wifi_ssid1 != cfg.flash_wifi_ssid
+                or wifi_pass1 != cfg.flash_wifi_pass
+                or ssid2 != cfg.flash_wifi_ssid2
+                or wifi_pass2 != cfg.flash_wifi_pass2
+            ):
+                try:
+                    new_cfg = replace(
+                        cfg,
+                        flash_wifi_ssid=wifi_ssid1,
+                        flash_wifi_pass=wifi_pass1,
+                        flash_wifi_ssid2=ssid2,
+                        flash_wifi_pass2=wifi_pass2,
+                    )
+                    new_cfg.save(config_path)
+                    with state._lock:
+                        state.config = new_cfg
+                except Exception as e:
+                    logger.warning("Could not persist WiFi credentials to config: %s", e)
+
         return jsonify({"job_id": job_id})
 
     @app.route("/hokku/api/flash/status")
     def api_flash_status():
         """Poll the current/last flash job (progress log + state)."""
         return jsonify(state.flash_jobs.status() or {"state": "idle"})
+
+    @app.errorhandler(Exception)
+    def _unhandled_exception(exc: Exception):
+        if isinstance(exc, HTTPException):
+            return exc
+        logger.error("Unhandled exception in %s %s", request.method, request.path, exc_info=True)
+        return jsonify({"error": "internal server error"}), 500
 
     return app
 

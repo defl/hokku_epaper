@@ -105,6 +105,7 @@ class ImageClassifier:
 
     def clear_cache(self) -> None:
         """Wipe all cached observations (JSON deleted on disk, empty in memory)."""
+        logger.info("Clearing classifier cache")
         with self._lock:
             self._cache = {}
             try:

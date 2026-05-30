@@ -6,6 +6,7 @@ which mutates global ``sys.stdout`` and is unsafe in a threaded web server).
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -24,6 +25,8 @@ from .constants import (
 )
 from .firmware import release_app_header
 from .nvs import read_nvs
+
+logger = logging.getLogger(__name__)
 
 # esptool read covering the NVS partition through the app header in one shot.
 _READ_SIZE = (APP_OFFSET + 256) - NVS_OFFSET
@@ -154,9 +157,16 @@ def scan_devices() -> list[dict]:
     Each ESP32-S3 device is read (which resets it), so only call this when no
     flash is in progress. Returns a list of dicts (one per serial port).
     """
+    all_ports = list_serial_ports()
+    logger.info(
+        "Scanning for screens: found %d serial port(s): %s",
+        len(all_ports),
+        [p["port"] for p in all_ports] or "none",
+    )
+
     release_header = release_app_header()
     devices = []
-    for dev in list_serial_ports():
+    for dev in all_ports:
         dev.update(
             {
                 "config": None,
@@ -170,5 +180,22 @@ def scan_devices() -> list[dict]:
         if dev["is_esp32"]:
             nvs_data, app_header = read_device_flash(dev["port"])
             dev.update(parse_device_state(nvs_data, app_header, release_header))
+            state = dev
+            logger.info(
+                "  %s: hokku_firmware=%s version=%s firmware_current=%s screen_name=%r",
+                dev["port"],
+                state["has_hokku_firmware"],
+                state["device_version"] or "unknown",
+                state["firmware_current"],
+                (state["config"] or {}).get("screen_name", ""),
+            )
+        else:
+            logger.info("  %s: %s (not an ESP32-S3)", dev["port"], dev["description"])
         devices.append(dev)
+
+    esp32s = [d for d in devices if d["is_esp32"]]
+    if not esp32s:
+        logger.info("Scan complete: no ESP32-S3 screens found")
+    else:
+        logger.info("Scan complete: %d ESP32-S3 screen(s) found", len(esp32s))
     return devices

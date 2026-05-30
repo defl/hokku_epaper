@@ -24,7 +24,7 @@ from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 
 logger = logging.getLogger(__name__)
 
-_CURRENT_VERSION = 6
+_CURRENT_VERSION = 7
 
 
 def _migrate_v1_to_v2(d: dict) -> dict:
@@ -61,6 +61,15 @@ def _migrate_v5_to_v6(d: dict) -> dict:
     return d
 
 
+def _migrate_v6_to_v7(d: dict) -> dict:
+    """Add flash_wifi_ssid/pass + ssid2/pass2 (remembered credentials for screen flashing)."""
+    d.setdefault("flash_wifi_ssid", "")
+    d.setdefault("flash_wifi_pass", "")
+    d.setdefault("flash_wifi_ssid2", "")
+    d.setdefault("flash_wifi_pass2", "")
+    return d
+
+
 # v(N) → v(N+1) upgrade functions. Populated as the schema evolves.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     1: _migrate_v1_to_v2,
@@ -68,6 +77,7 @@ _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     3: _migrate_v3_to_v4,
     4: _migrate_v4_to_v5,
     5: _migrate_v5_to_v6,
+    6: _migrate_v6_to_v7,
 }
 
 
@@ -120,6 +130,13 @@ class AppConfig:
     #: The server advertises itself as ``<mdns_hostname>.local`` on the LAN.
     #: Empty string disables mDNS advertisement entirely.
     mdns_hostname: str = "hokku"
+
+    #: Remembered WiFi credentials for the "Flash a screen" feature.
+    #: Stored in plaintext — acceptable for a local-network appliance.
+    flash_wifi_ssid: str = ""
+    flash_wifi_pass: str = ""
+    flash_wifi_ssid2: str = ""
+    flash_wifi_pass2: str = ""
 
     def cache_slug(self) -> str:
         """Path-safe fingerprint of fields that affect cached panel output."""

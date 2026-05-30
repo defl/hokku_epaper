@@ -11,9 +11,10 @@ from pathlib import Path
 
 import psutil as _psutil
 
+from hokku.screens import epf1301
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
-from hokku.webserver.flask_app import create_app
+from hokku.webserver.flask_app import _read_git_describe, create_app
 from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.mdns import start_mdns
 from hokku.webserver.serve_scheduler import ServeScheduler
@@ -89,7 +90,21 @@ def main() -> None:
     state.watcher = watcher
     app = create_app(state, config_path=config_path)
 
-    logger.info("Hokku image server starting")
+    version, _ = _read_git_describe()
+    logger.info("Hokku image server starting — version %s", version)
+
+    fw_bin = epf1301.merged_firmware_file()
+    if fw_bin:
+        hdr = epf1301.release_app_header()
+        fw_ver = (
+            hdr[48:80].split(b"\x00")[0].decode("ascii", errors="replace").strip()
+            if hdr
+            else "unknown"
+        )
+        logger.info("Bundled firmware: %s (version %s)", fw_bin.name, fw_ver)
+    else:
+        logger.info("Bundled firmware: none found")
+
     logger.info("Upload dir: %s", upload_dir)
     logger.info("Cache dir: %s", cache_dir)
     logger.info("Refresh at: %s", list(config.refresh_image_at_time))

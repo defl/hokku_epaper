@@ -199,6 +199,11 @@ class AbstractImageManager(ABC):
                 if r.convert_status == "pending" and r.name not in self._inflight
             ]
             if pending:
+                logger.info(
+                    "Sync: %d image(s) queued for conversion: %s",
+                    len(pending),
+                    [r.name for r in pending],
+                )
                 self._progress = ConversionProgress(
                     current_name=None,
                     done=self._progress.done,
@@ -262,6 +267,7 @@ class AbstractImageManager(ABC):
         """Write to upload_dir and register. Raises FileExistsError if name exists."""
         if not name or "/" in name or "\\" in name:
             raise ValueError(f"Invalid image name: {name!r}")
+        logger.info("Adding image: %r (%d bytes)", name, len(src_bytes))
         target = self._upload_dir / name
         with self._db_lock:
             if name in self._records or target.exists():
@@ -273,6 +279,7 @@ class AbstractImageManager(ABC):
 
     def remove(self, name: str) -> None:
         """Delete original + cached artifacts + db entry. Raises FileNotFoundError if absent."""
+        logger.info("Removing image: %r", name)
         with self._db_lock:
             rec = self._records.get(name)
             if rec is None:
@@ -291,6 +298,7 @@ class AbstractImageManager(ABC):
         Images that PIL couldn't open (image_width is None) are never retried —
         the file is corrupt/unsupported and won't open on a second attempt.
         """
+        logger.info("Retrying image: %r", name)
         with self._db_lock:
             rec = self._records.get(name)
             if rec is None:
@@ -453,6 +461,7 @@ class AbstractImageManager(ABC):
         """Wipe ALL cached files (panel, preview, thumbnail) and mark every
         record pending. The next sync() rebuilds everything from scratch.
         """
+        logger.info("Clearing all image caches")
         with self._db_lock:
             if self._images_dir.exists():
                 for f in list(self._images_dir.iterdir()):
@@ -480,7 +489,6 @@ class AbstractImageManager(ABC):
             self._progress = ConversionProgress(current_name=None, done=0, total=0)
             self._inflight.clear()
             self._save_db()
-            logger.info("Cache cleared")
 
     def cache_disk_info(self) -> dict[str, int]:
         """Return cache directory size and partition free space in bytes."""
@@ -502,6 +510,7 @@ class AbstractImageManager(ABC):
         """Remove stale-slug panel/preview files for registered images now,
         regardless of the auto_clear_cache config setting.
         """
+        logger.info("Scrubbing stale cache files")
         with self._db_lock:
             self._scrub_orphan_cache_files(force_auto_clear=True)
 

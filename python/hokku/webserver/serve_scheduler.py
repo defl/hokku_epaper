@@ -181,6 +181,7 @@ class ServeScheduler:
 
         Raises ValueError if the image is not currently ready to serve.
         """
+        logger.info("Pinning next image: %r", name)
         with self._lock:
             ready = {r.name for r in self._manager.list() if r.convert_status == ConvertStatus.OK}
             if name not in ready:
@@ -267,6 +268,7 @@ class ServeScheduler:
         Idempotent — silently does nothing if the name is not known.
         The screen can re-register itself the next time it connects.
         """
+        logger.info("Removing screen telemetry: %r", name)
         with self._lock:
             self._screens.pop(name, None)
             self._stats.pop(name, None)

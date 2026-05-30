@@ -1,3 +1,13 @@
+hokku-server (4.0.1~dev.1-1) unstable; urgency=medium
+
+  * feat(flash): show firmware version + update status in device note; pre-fill WiFi/screen from device NVS
+  * feat(flash): remember WiFi credentials (all four fields) in config; mDNS server URL; disable Flash button during job
+  * feat(webserver): log firmware version at startup; comprehensive INFO/WARN/ERROR logging throughout
+  * feat(webserver): Windows dev support for flash feature (esp-idf-nvs-partition-gen in requirements.txt)
+  * feat(config): AppConfig v7 adds flash_wifi_ssid/pass/ssid2/pass2
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 30 May 2026 17:30:00 +0000
+
 hokku-server (3.1.1~dev.1-1) unstable; urgency=medium
 
   * refactor: rename webserver/ → python/, introduce hokku package (hokku.webserver, hokku.screens.epf1301)

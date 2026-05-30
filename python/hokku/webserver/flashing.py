@@ -52,6 +52,15 @@ class FlashJobManager:
                 "finished_at": None,
             }
             job = self._job
+        logger.info(
+            "Flash job #%d starting: port=%s firmware=%s screen_name=%r ssid=%r url=%s",
+            job_id,
+            port,
+            Path(firmware_path).name,
+            config.get("screen_name", ""),
+            config.get("wifi_ssid1", ""),
+            config.get("image_url", ""),
+        )
         self._thread = threading.Thread(
             target=self._run,
             args=(job, port, config, firmware_path),
@@ -70,12 +79,23 @@ class FlashJobManager:
             result = epf1301.flash_device(
                 port, config, firmware_path, on_line=lambda ln: self._append(job, ln)
             )
+            duration = time.time() - job["started_at"]
             with self._lock:
                 job["result"] = result
                 job["state"] = "done"
                 job["finished_at"] = time.time()
+            firmware_ok = (result or {}).get("firmware_current")
+            config_ok = (result or {}).get("config_version_ok")
+            logger.info(
+                "Flash job #%d done in %.0fs: firmware_current=%s config_ok=%s",
+                job["id"],
+                duration,
+                firmware_ok,
+                config_ok,
+            )
         except Exception as exc:
-            logger.warning("flash job %s failed: %s", job["id"], exc)
+            duration = time.time() - job["started_at"]
+            logger.error("Flash job #%d failed after %.0fs: %s", job["id"], duration, exc)
             with self._lock:
                 job["error"] = str(exc)
                 job["state"] = "error"
