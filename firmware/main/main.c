@@ -794,9 +794,16 @@ static bool wifi_connect(void)
         if (config.wifi_ssid[idx][0] == '\0') continue;
 
         /* WIFI_AUTH_OPEN accepts any auth level the AP advertises. Previously
-         * hard-coded WPA2_PSK which silently failed on WPA3-only APs. */
+         * hard-coded WPA2_PSK which silently failed on WPA3-only APs.
+         * pmf_cfg.capable=true is required for WPA3-SAE: without it the GTK
+         * broadcast key is not set up and DHCP DISCOVER (broadcast) is
+         * silently dropped by the AP even though L2 association succeeds.
+         * required=false keeps WPA2-only AP compatibility. */
         wifi_config_t wifi_cfg = {
-            .sta = { .threshold.authmode = WIFI_AUTH_OPEN },
+            .sta = {
+                .threshold.authmode = WIFI_AUTH_OPEN,
+                .pmf_cfg = { .capable = true, .required = false },
+            },
         };
         /* strncpy with n == sizeof(dst) leaves the last byte unwritten for a
          * source of exactly that length — force NUL so the WiFi stack never
