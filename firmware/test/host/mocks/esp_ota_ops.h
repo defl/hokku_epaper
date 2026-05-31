@@ -2,7 +2,8 @@
 /* Minimal stub of esp_ota_ops.h for host-side unit tests. */
 
 #include <stddef.h>
-#include "esp_err.h"
+/* esp_err_t / ESP_OK / ESP_FAIL come from freertos/FreeRTOS.h which is
+   always included before this header in the firmware translation units. */
 #include "esp_partition.h"
 
 typedef int esp_ota_handle_t;

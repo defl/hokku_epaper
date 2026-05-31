@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -185,9 +186,18 @@ def flash_client(app_config):
     return app.test_client()
 
 
-def test_server_url_uses_local_ip(flash_client, monkeypatch):
+def test_server_url_uses_local_ip(app_config, monkeypatch):
+    # Force IP path: no mDNS configured, so endpoint falls back to local IP.
+    cfg = replace(app_config, mdns_hostname="")
+    clf = ImageClassifier(cfg)
+    mgr = build_manager(cfg, clf)
+    state = AppState(cfg, clf, mgr, ServeScheduler(mgr))
+    app = create_app(state)
+    app.config["TESTING"] = True
+    client = app.test_client()
+
     monkeypatch.setattr("hokku.webserver.flask_app._get_local_ip", lambda: "10.1.2.3")
-    r = flash_client.get("/hokku/api/flash/server_url")
+    r = client.get("/hokku/api/flash/server_url")
     assert r.status_code == 200
     j = r.get_json()
     assert j["address"] == "10.1.2.3"
