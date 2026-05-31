@@ -41,8 +41,10 @@ echo "hokku-installer: $DEB_INSTALLER"
 PIGEN_DIR="${PIGEN_DIR:-$REPO_ROOT/.pigen}"
 
 if [ ! -d "$PIGEN_DIR/.git" ]; then
-    echo "Cloning pi-gen to $PIGEN_DIR ..."
-    git clone --depth 1 https://github.com/RPi-Distro/pi-gen.git "$PIGEN_DIR"
+    echo "Cloning pi-gen (arm64 branch) to $PIGEN_DIR ..."
+    # Use the arm64 branch — purpose-built for 64-bit Pi OS. It handles the
+    # raspberrypi-archive keyring and ARCH correctly, unlike master (armhf).
+    git clone --depth 1 --branch arm64 https://github.com/RPi-Distro/pi-gen.git "$PIGEN_DIR"
 else
     echo "Using existing pi-gen at $PIGEN_DIR"
 fi
@@ -83,19 +85,6 @@ touch "$PIGEN_DIR/stage2/SKIP_IMAGES"
 
 # Mark stage-hokku as the export point.
 touch "$STAGE_DIR/EXPORT_IMAGE"
-
-# ── patch build-docker.sh to forward our extra config vars ───────────────────
-# pi-gen's build-docker.sh has a fixed list of -e flags passed to 'docker run'.
-# Variables like ARCH and DEBOOTSTRAP_FLAGS are not in that list, so they never
-# reach the debootstrap call inside the container. Append them before the image.
-
-if grep -q 'STAGE_LIST' "$PIGEN_DIR/build-docker.sh"; then
-    sed -i 's/-e "STAGE_LIST=\${STAGE_LIST}"/-e "STAGE_LIST=${STAGE_LIST}" \\\n        -e "ARCH=${ARCH:-arm64}" \\\n        -e "DEBOOTSTRAP_FLAGS=${DEBOOTSTRAP_FLAGS}"/' \
-        "$PIGEN_DIR/build-docker.sh"
-    echo "Patched build-docker.sh to forward ARCH and DEBOOTSTRAP_FLAGS"
-else
-    echo "WARNING: Could not find STAGE_LIST in build-docker.sh — patch skipped"
-fi
 
 # ── build ────────────────────────────────────────────────────────────────────
 
