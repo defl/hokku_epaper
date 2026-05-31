@@ -71,14 +71,19 @@ jobs:
 
       # ── build the image ────────────────────────────────────────────────────
 
-      - name: Install host dependencies
+      # Set up QEMU binfmt_misc entries via the standard Docker action.
+      # pi-gen's build-docker.sh also calls update-binfmts on the host,
+      # so we need binfmt-support installed AND the binfmts pre-registered
+      # so update-binfmts sees them as already enabled (idempotent, exits 0).
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm,arm64
+
+      - name: Install host build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            qemu-user-static qemu-user binfmt-support
-          # docker is pre-installed on ubuntu-latest (containerd.io); don't reinstall
-          # pi-gen's build-docker.sh checks for 'qemu-arm' (non-static name); symlink it
-          sudo ln -sf /usr/bin/qemu-arm-static /usr/local/bin/qemu-arm
+          sudo apt-get install -y --no-install-recommends binfmt-support
 
       - name: Build appliance image
         run: bash image/build-image.sh
