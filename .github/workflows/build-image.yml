@@ -80,9 +80,7 @@ jobs:
 
       - name: Build appliance image
         run: bash image/build-image.sh
-        env:
-          DEB_SERVER: "${{ github.workspace }}/build/hokku-server_${{ steps.find-run.outputs.run_id }}_all.deb"
-          # Wildcards don't expand in env vars; build-image.sh finds debs via glob.
+        # build-image.sh locates the .debs via glob in build/ — no env override needed.
 
       - name: Find built image
         id: find-image
