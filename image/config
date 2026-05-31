@@ -2,6 +2,13 @@ IMG_NAME="hokku"
 RELEASE="bookworm"
 TARGET_HOSTNAME="hokku"
 
+# Build 64-bit image for Pi Zero 2 W, Pi 4, etc.
+ARCH="arm64"
+
+# Skip GPG verification of the Pi OS archive — keyring not available in the
+# debootstrap environment during CI builds.
+DEBOOTSTRAP_FLAGS="--no-check-gpg"
+
 # SSH disabled at image level — installer enables it only if user requests.
 ENABLE_SSH=0
 
