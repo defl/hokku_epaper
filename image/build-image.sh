@@ -94,19 +94,30 @@ touch "$STAGE_DIR/EXPORT_IMAGE"
 mkdir -p "$PIGEN_DIR/stage0/00-aaa-fix-keys"
 cat > "$PIGEN_DIR/stage0/00-aaa-fix-keys/00-run.sh" << 'FIX_KEYS_EOF'
 #!/bin/bash -e
-# Copy Debian archive keyrings from the build host into the bootstrapped rootfs.
-# Modern apt uses signed-by= referencing /usr/share/keyrings/; copy there AND
-# to trusted.gpg.d/ as a legacy fallback.
-mkdir -p "${ROOTFS_DIR}/usr/share/keyrings"
-mkdir -p "${ROOTFS_DIR}/etc/apt/trusted.gpg.d"
-for keyfile in /usr/share/keyrings/debian-archive-*.gpg; do
-    if [ -f "$keyfile" ]; then
-        cp "$keyfile" "${ROOTFS_DIR}/usr/share/keyrings/"
-        cp "$keyfile" "${ROOTFS_DIR}/etc/apt/trusted.gpg.d/"
-    fi
-done
-n=$(ls "${ROOTFS_DIR}/usr/share/keyrings/debian-archive-"*.gpg 2>/dev/null | wc -l)
-echo "[fix-keys] Copied ${n} Debian keyring file(s) to rootfs"
+source /common.sh
+
+# The debootstrap installed debian-archive-keyring but its post-install
+# may not have registered keys correctly in the minimal chroot environment.
+# Reinstall inside the chroot so gpg key registration runs properly,
+# then also copy the combined keyring from the host as a belt-and-suspenders.
+
+# 1. Reinstall debian-archive-keyring inside the chroot.
+on_chroot << 'CHROOT'
+DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall --no-install-recommends \
+    debian-archive-keyring 2>/dev/null || true
+CHROOT
+
+# 2. Also copy the host's combined debian-archive-keyring.gpg to both locations.
+#    The host (Debian Trixie) ships all recent Debian keys in this file.
+if [ -f /usr/share/keyrings/debian-archive-keyring.gpg ]; then
+    mkdir -p "${ROOTFS_DIR}/usr/share/keyrings"
+    mkdir -p "${ROOTFS_DIR}/etc/apt/trusted.gpg.d"
+    cp /usr/share/keyrings/debian-archive-keyring.gpg \
+       "${ROOTFS_DIR}/usr/share/keyrings/debian-archive-keyring.gpg"
+    cp /usr/share/keyrings/debian-archive-keyring.gpg \
+       "${ROOTFS_DIR}/etc/apt/trusted.gpg.d/debian-archive-keyring.gpg"
+    echo "[fix-keys] debian-archive-keyring.gpg copied from host"
+fi
 FIX_KEYS_EOF
 chmod +x "$PIGEN_DIR/stage0/00-aaa-fix-keys/00-run.sh"
 
