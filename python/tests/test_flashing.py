@@ -190,7 +190,7 @@ def test_server_url_uses_local_ip(flash_client, monkeypatch):
     r = flash_client.get("/hokku/api/flash/server_url")
     assert r.status_code == 200
     j = r.get_json()
-    assert j["ip"] == "10.1.2.3"
+    assert j["address"] == "10.1.2.3"
     assert j["url"] == f"http://10.1.2.3:{j['port']}/hokku/screen/"
 
 
