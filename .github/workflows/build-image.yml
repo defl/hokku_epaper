@@ -5,8 +5,12 @@ name: Build Appliance Image
 on:
   workflow_dispatch:
     inputs:
+      build_ref:
+        description: "Branch/ref that contains image/ and installer/ (default: defl/v4; change to main after PR merge)"
+        required: false
+        default: "defl/v4"
       server_run_id:
-        description: "CI run ID to fetch hokku-server-deb from (leave blank for latest from this workflow's ci.yml run)"
+        description: "CI run ID to fetch hokku-server-deb from (leave blank for latest successful ci.yml run)"
         required: false
       installer_run_id:
         description: "CI run ID to fetch hokku-installer-deb from (leave blank = same as above)"
@@ -20,6 +24,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.build_ref || 'defl/v4' }}
 
       # ── fetch the pre-built .deb packages ─────────────────────────────────
       # Download the most recent successful deb artifacts from the ci.yml workflow.
