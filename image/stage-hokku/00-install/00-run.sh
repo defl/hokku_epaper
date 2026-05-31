@@ -5,9 +5,9 @@
 # guards see the packages as already present and skip their pip installs — meaning
 # first boot requires no internet access.
 
-# SCRIPT_DIR = current substage dir (stage-hokku/00-install); files/ lives there.
-WHEELS_SRC="${SCRIPT_DIR}/files/wheels"
-DEBS_SRC="${SCRIPT_DIR}/files"
+# pi-gen cd's into the script's directory before running it, so relative paths work.
+WHEELS_SRC="files/wheels"
+DEBS_SRC="files"
 
 # Copy .debs and wheel directory into rootfs so on_chroot can reach them.
 mkdir -p "${ROOTFS_DIR}/tmp/hokku-stage"
