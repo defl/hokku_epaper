@@ -94,12 +94,19 @@ touch "$STAGE_DIR/EXPORT_IMAGE"
 mkdir -p "$PIGEN_DIR/stage0/00-aaa-fix-keys"
 cat > "$PIGEN_DIR/stage0/00-aaa-fix-keys/00-run.sh" << 'FIX_KEYS_EOF'
 #!/bin/bash -e
-
+# Copy Debian archive keyrings from the build host into the bootstrapped rootfs.
+# Modern apt uses signed-by= referencing /usr/share/keyrings/; copy there AND
+# to trusted.gpg.d/ as a legacy fallback.
+mkdir -p "${ROOTFS_DIR}/usr/share/keyrings"
 mkdir -p "${ROOTFS_DIR}/etc/apt/trusted.gpg.d"
 for keyfile in /usr/share/keyrings/debian-archive-*.gpg; do
-    [ -f "$keyfile" ] && cp "$keyfile" "${ROOTFS_DIR}/etc/apt/trusted.gpg.d/"
+    if [ -f "$keyfile" ]; then
+        cp "$keyfile" "${ROOTFS_DIR}/usr/share/keyrings/"
+        cp "$keyfile" "${ROOTFS_DIR}/etc/apt/trusted.gpg.d/"
+    fi
 done
-echo "[fix-keys] Copied $(ls "${ROOTFS_DIR}/etc/apt/trusted.gpg.d/" | wc -l) keyring file(s)"
+n=$(ls "${ROOTFS_DIR}/usr/share/keyrings/debian-archive-"*.gpg 2>/dev/null | wc -l)
+echo "[fix-keys] Copied ${n} Debian keyring file(s) to rootfs"
 FIX_KEYS_EOF
 chmod +x "$PIGEN_DIR/stage0/00-aaa-fix-keys/00-run.sh"
 
