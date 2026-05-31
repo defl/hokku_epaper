@@ -53,19 +53,20 @@ fi
 
 STAGE_DIR="$PIGEN_DIR/stage-hokku"
 rm -rf "$STAGE_DIR"
-mkdir -p "$STAGE_DIR/files"
 
-# Copy stage scripts from our source tree.
+# Copy stage scripts from our source tree (maintains subdirectory structure).
 cp -r "$SCRIPT_DIR/stage-hokku/." "$STAGE_DIR/"
-chmod +x "$STAGE_DIR/"*.sh 2>/dev/null || true
+chmod +x "$STAGE_DIR/prerun.sh" 2>/dev/null || true
+find "$STAGE_DIR" -name "*.sh" -exec chmod +x {} \;
 
-# Copy the .deb packages into the stage files directory.
-cp "$DEB_SERVER"    "$STAGE_DIR/files/"
-cp "$DEB_INSTALLER" "$STAGE_DIR/files/"
+# .deb packages go in 00-install/files/ where 00-install/00-run.sh can find them.
+mkdir -p "$STAGE_DIR/00-install/files"
+cp "$DEB_SERVER"    "$STAGE_DIR/00-install/files/"
+cp "$DEB_INSTALLER" "$STAGE_DIR/00-install/files/"
 
 # ── arm64 wheels ─────────────────────────────────────────────────────────────
 
-WHEELS_DIR="$STAGE_DIR/files/wheels"
+WHEELS_DIR="$STAGE_DIR/00-install/files/wheels"
 
 if [ "${SKIP_WHEELS:-0}" = "1" ] && [ -d "$WHEELS_DIR" ] && [ "$(ls -A "$WHEELS_DIR" 2>/dev/null)" ]; then
     echo "Skipping wheel download (SKIP_WHEELS=1, using existing $WHEELS_DIR)"
