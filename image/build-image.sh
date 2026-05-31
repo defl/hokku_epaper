@@ -85,9 +85,10 @@ touch "$PIGEN_DIR/stage2/SKIP_IMAGES"
 
 # Remove packages from stage2 that don't exist in the Pi OS Bookworm archive
 # (these were added to pi-gen's arm64 branch after the archive version we target).
-# We disable swap in stage-hokku anyway; USB gadget is not needed for a server.
 sed -i '/rpi-swap\|rpi-loop-utils\|rpi-usb-gadget/d' \
     "$PIGEN_DIR/stage2/01-sys-tweaks/00-packages" 2>/dev/null || true
+sed -i '/rpi-cloud-init-mods/d' \
+    "$PIGEN_DIR/stage2/04-cloud-init/00-packages" 2>/dev/null || true
 
 # Remove systemctl enables for rpi-*.service units that don't exist in the
 # Pi OS Bookworm archive. Deleting the line is simpler than sed substitution.
