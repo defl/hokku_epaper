@@ -84,6 +84,19 @@ touch "$PIGEN_DIR/stage2/SKIP_IMAGES"
 # Mark stage-hokku as the export point.
 touch "$STAGE_DIR/EXPORT_IMAGE"
 
+# ── patch build-docker.sh to forward our extra config vars ───────────────────
+# pi-gen's build-docker.sh has a fixed list of -e flags passed to 'docker run'.
+# Variables like ARCH and DEBOOTSTRAP_FLAGS are not in that list, so they never
+# reach the debootstrap call inside the container. Append them before the image.
+
+if grep -q 'STAGE_LIST' "$PIGEN_DIR/build-docker.sh"; then
+    sed -i 's/-e "STAGE_LIST=\${STAGE_LIST}"/-e "STAGE_LIST=${STAGE_LIST}" \\\n        -e "ARCH=${ARCH:-arm64}" \\\n        -e "DEBOOTSTRAP_FLAGS=${DEBOOTSTRAP_FLAGS}"/' \
+        "$PIGEN_DIR/build-docker.sh"
+    echo "Patched build-docker.sh to forward ARCH and DEBOOTSTRAP_FLAGS"
+else
+    echo "WARNING: Could not find STAGE_LIST in build-docker.sh — patch skipped"
+fi
+
 # ── build ────────────────────────────────────────────────────────────────────
 
 echo ""
