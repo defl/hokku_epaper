@@ -86,6 +86,23 @@ touch "$PIGEN_DIR/stage2/SKIP_IMAGES"
 # Mark stage-hokku as the export point.
 touch "$STAGE_DIR/EXPORT_IMAGE"
 
+# ── inject Debian keyring into stage0 ────────────────────────────────────────
+# stage0's 00-configure-apt runs apt-get update which needs the Debian Bookworm
+# signing keys. Copy them from the build host (Debian Trixie container) into
+# the rootfs's trusted.gpg.d before configure-apt runs.
+# "00-aaa" sorts before "00-configure-apt" alphabetically, so it runs first.
+mkdir -p "$PIGEN_DIR/stage0/00-aaa-fix-keys"
+cat > "$PIGEN_DIR/stage0/00-aaa-fix-keys/00-run.sh" << 'FIX_KEYS_EOF'
+#!/bin/bash -e
+
+mkdir -p "${ROOTFS_DIR}/etc/apt/trusted.gpg.d"
+for keyfile in /usr/share/keyrings/debian-archive-*.gpg; do
+    [ -f "$keyfile" ] && cp "$keyfile" "${ROOTFS_DIR}/etc/apt/trusted.gpg.d/"
+done
+echo "[fix-keys] Copied $(ls "${ROOTFS_DIR}/etc/apt/trusted.gpg.d/" | wc -l) keyring file(s)"
+FIX_KEYS_EOF
+chmod +x "$PIGEN_DIR/stage0/00-aaa-fix-keys/00-run.sh"
+
 # ── build ────────────────────────────────────────────────────────────────────
 
 echo ""

@@ -5,12 +5,6 @@ TARGET_HOSTNAME="hokku"
 # Build 64-bit image for Pi Zero 2 W, Pi 4, etc.
 ARCH="arm64"
 
-# Skip GPG verification of the Pi OS archive for the initial debootstrap —
-# the raspberrypi-archive keyring is not in the build container.
-# Include debian-archive-keyring so the bootstrapped system can verify
-# subsequent apt operations in stage0/00-configure-apt.
-DEBOOTSTRAP_FLAGS="--no-check-gpg --include=debian-archive-keyring"
-
 # SSH disabled at image level — installer enables it only if user requests.
 ENABLE_SSH=0
 
