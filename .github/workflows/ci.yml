@@ -115,8 +115,28 @@ jobs:
           name: hokku-server-deb
           path: build/hokku-server_*.deb
 
+  test-installer:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e "installer/"
+
+      - name: Import check
+        run: |
+          python -c "import hokku.installer"
+          python -c "from hokku.installer.validators import validate_ssid, validate_wifi_password, validate_mdns_hostname"
+          python -c "from hokku.installer.flask_app import create_app"
+
   build-installer-deb:
-    needs: [test-webserver]
+    needs: [test-installer]
     runs-on: ubuntu-latest
 
     steps:
