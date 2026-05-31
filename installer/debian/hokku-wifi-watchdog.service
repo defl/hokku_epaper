@@ -1,0 +1,17 @@
+[Unit]
+Description=Hokku WiFi Connection Watchdog
+# Only run after setup has been completed (sentinel exists).
+ConditionPathExists=/var/lib/hokku-installer/setup_complete
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/lib/hokku-installer/wifi-watchdog.sh
+# Give the system time to come up before the watchdog fires.
+ExecStartPre=/bin/sleep 90
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

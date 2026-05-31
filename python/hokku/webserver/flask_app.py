@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time as _time
 from dataclasses import asdict, replace
 from datetime import datetime
@@ -724,6 +725,9 @@ def create_app(
                 "git_describe": git_describe,
                 "commit_url": f"{_REPO_URL}/commit/{git_hash}" if git_hash else None,
                 "repo_url": _REPO_URL,
+                # True only on appliance images where hokku-installer is installed.
+                # The UI uses this to show/hide the "Reset to installer" button.
+                "installer_available": Path("/var/lib/hokku-installer").is_dir(),
             }
         )
 
@@ -949,6 +953,28 @@ def create_app(
     def api_flash_status():
         """Poll the current/last flash job (progress log + state)."""
         return jsonify(state.flash_jobs.status() or {"state": "idle"})
+
+    @app.route("/hokku/api/reset-to-installer", methods=["POST"])
+    def api_reset_to_installer():
+        """Re-enter the first-boot installer AP mode.
+
+        Only available on appliance images (hokku-installer installed).
+        Removes the setup sentinel and schedules a system reboot.
+        """
+        installer_dir = Path("/var/lib/hokku-installer")
+        if not installer_dir.is_dir():
+            return jsonify({"error": "hokku-installer is not installed on this system"}), 404
+
+        sentinel = installer_dir / "setup_complete"
+        try:
+            sentinel.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.error("Could not remove installer sentinel: %s", exc)
+            return jsonify({"error": f"could not remove sentinel: {exc}"}), 500
+
+        logger.info("Installer sentinel removed — rebooting into installer AP mode")
+        threading.Timer(2.0, lambda: subprocess.run(["systemctl", "reboot"], check=False)).start()  # noqa: S607
+        return jsonify({"status": "rebooting"})
 
     @app.errorhandler(Exception)
     def _unhandled_exception(exc: Exception):

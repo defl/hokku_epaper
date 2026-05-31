@@ -1206,6 +1206,17 @@
     <label></label>
     <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
   </div>
+
+  <!-- Only shown on appliance images where hokku-installer is installed -->
+  <div id="installer-reset-row" class="config-row" style="display:none; margin-top:20px; padding-top:16px; border-top:1px solid var(--border);">
+    <label style="color:var(--vermilion);">Setup wizard</label>
+    <div>
+      <button class="btn btn-danger" onclick="resetToInstaller()">Reset to Setup Wizard…</button>
+      <div style="font-size:0.82em; color:var(--stone); margin-top:5px;">
+        Reboots into AP mode so you can reconfigure WiFi, hostname, and services.
+      </div>
+    </div>
+  </div>
 </div><!-- /section-card -->
 </section><!-- /sec-config -->
 
@@ -3110,9 +3121,37 @@ async function loadConfig() {
     }
 
     currentConfig = cfg;
+
+    // Show "Reset to Setup Wizard" only on appliance images where
+    // hokku-installer is installed.
+    const installerRow = document.getElementById('installer-reset-row');
+    if (installerRow) {
+      installerRow.style.display = data.installer_available ? '' : 'none';
+    }
   } catch (e) {
     console.error('Config load failed:', e);
     showToast('Failed to load configuration');
+  }
+}
+
+async function resetToInstaller() {
+  const ok = await showConfirm({
+    title: 'Reset to Setup Wizard?',
+    message: 'This will reboot the device into the "Hokku Setup" WiFi access point. ' +
+             'You will need to reconnect to that network and go through the setup form again.',
+    okLabel: 'Reboot',
+  });
+  if (!ok) return;
+  try {
+    const resp = await fetch('/hokku/api/reset-to-installer', { method: 'POST' });
+    if (resp.ok) {
+      showToast('Rebooting into setup wizard…');
+    } else {
+      const d = await resp.json();
+      showToast('Failed: ' + (d.error || resp.status));
+    }
+  } catch (e) {
+    showToast('Request failed: ' + e);
   }
 }
 

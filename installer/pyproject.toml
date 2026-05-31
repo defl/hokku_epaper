@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hokku-installer"
+version = "4.0.1.dev17"
+description = "First-boot setup wizard for Hokku appliance images"
+requires-python = ">=3.9"
+license = {text = "GPL-3.0 (non-commercial)"}
+dependencies = [
+    "flask>=2.0",
+]
+
+[project.scripts]
+hokku-installer = "hokku.installer:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hokku*"]
+
+[tool.setuptools.package-data]
+"hokku.installer" = ["templates/*.html", "static/*"]

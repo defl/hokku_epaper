@@ -285,27 +285,28 @@ def action_clear_cache():
 def _menu_default(status):
     """Pick a sensible default option based on device state."""
     if status is None or "device" not in status:
-        return "1"  # no device → full Pi install likely
+        return "1"  # no device → appliance image is the most common starting point
     dev = status["device"]
     if not dev.get("has_hokku_firmware"):
-        return "3"  # configure + flash
+        return "4"  # configure + flash ESP32
     if not dev.get("config_version_ok"):
-        return "4"  # has firmware, needs config
+        return "5"  # has firmware, needs config
     if dev.get("firmware_current") is False:
-        return "5"  # firmware update
+        return "6"  # firmware update
     return "1"
 
 
 def _print_menu(default):
     print("  What would you like to do?")
     options = [
-        ("1", "Full install — image SD card, then configure + flash ESP32"),
-        ("2", "Server only — image SD card with hokku-server, skip ESP32"),
-        ("3", "ESP32: configure + flash firmware"),
-        ("4", "ESP32: configure only (keep existing firmware)"),
-        ("5", "ESP32: flash firmware only (keep existing config)"),
-        ("6", "Advanced — install settings, cache management"),
-        ("7", "Exit"),
+        ("1", "Appliance image — flash Hokku appliance image (captive-portal setup on Pi)"),
+        ("2", "Full install — image SD card, configure on this PC, then flash ESP32"),
+        ("3", "Server only — image SD card with hokku-server (configure on this PC)"),
+        ("4", "ESP32: configure + flash firmware"),
+        ("5", "ESP32: configure only (keep existing firmware)"),
+        ("6", "ESP32: flash firmware only (keep existing config)"),
+        ("7", "Advanced — install settings, cache management"),
+        ("8", "Exit"),
     ]
     for num, label in options:
         marker = "  <-- default" if num == default else ""
@@ -416,6 +417,15 @@ def _dispatch(choice):
     """Run the chosen action. Returns ('continue', rc) to re-display the menu,
     or ('exit', rc) to quit."""
     if choice == "1":
+        # Appliance image: just flash the pre-built image, no PC-side config needed.
+        result = pi_installer.run_appliance()
+        if result is None:
+            return "continue", 1
+        print()
+        print("  Appliance image flashed. Follow the on-screen instructions above.")
+        print("  Once the Pi is on your network, flash the ESP32 screen here:")
+        return "continue", esp32_setup.run(pi_credentials=None, pi_install_ran=False)
+    if choice == "2":
         # Full install: Pi OS SD, then ESP32 config+flash with pre-fill.
         result = pi_installer.run()
         pi_install_ran = result is not None
@@ -435,7 +445,7 @@ def _dispatch(choice):
         return "continue", esp32_setup.run(
             pi_credentials=pi_credentials, pi_install_ran=pi_install_ran
         )
-    if choice == "2":
+    if choice == "3":
         # Server only: image the SD card, run through mDNS/HTTP wait, then stop.
         result = pi_installer.run()
         if result is None:
@@ -451,15 +461,15 @@ def _dispatch(choice):
         else:
             print("  Server install submitted but HTTP probe timed out — check the Pi directly.")
         return "continue", 0
-    if choice == "3":
-        return "continue", esp32_setup.run_configure_and_flash()
     if choice == "4":
-        return "continue", esp32_setup.run_configure_only()
+        return "continue", esp32_setup.run_configure_and_flash()
     if choice == "5":
-        return "continue", esp32_setup.run_flash_only()
+        return "continue", esp32_setup.run_configure_only()
     if choice == "6":
-        return "continue", action_advanced()
+        return "continue", esp32_setup.run_flash_only()
     if choice == "7":
+        return "continue", action_advanced()
+    if choice == "8":
         print("  Bye!")
         return "exit", 0
     print(f"  Unknown choice {choice!r}.")

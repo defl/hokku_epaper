@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+# Create the installer data directory.
+mkdir -p /var/lib/hokku-installer
+chmod 700 /var/lib/hokku-installer
+
+# Ensure shell scripts are executable.
+chmod +x /usr/lib/hokku-installer/wifi-watchdog.sh 2>/dev/null || true
+chmod +x /usr/lib/hokku-installer/reset.sh         2>/dev/null || true
+
+#DEBHELPER#

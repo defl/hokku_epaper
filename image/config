@@ -1,0 +1,27 @@
+IMG_NAME="hokku"
+RELEASE="bookworm"
+TARGET_HOSTNAME="hokku"
+
+# SSH disabled at image level — installer enables it only if user requests.
+ENABLE_SSH=0
+
+LOCALE_DEFAULT="en_GB.UTF-8"
+KEYBOARD_LAYOUT="gb"
+KEYBOARD_MODEL="pc105"
+TIMEZONE_DEFAULT="UTC"
+
+# Default user: hokku / hokku — installer warns if SSH is enabled without changing this.
+FIRST_USER_NAME="hokku"
+FIRST_USER_PASS="$(openssl passwd -6 hokku)"
+
+# No WiFi baked in — installer collects SSID/password via captive portal.
+WPA_ESSID=""
+WPA_PASSWORD=""
+WPA_COUNTRY=""
+
+# Only build through stage-hokku; stages 0/1/2 produce no standalone images
+# (SKIP_IMAGES is added to stage2 by build-image.sh).
+STAGE_LIST="stage0 stage1 stage2 stage-hokku"
+
+DEPLOY_COMPRESSION="xz"
+COMPRESSION_LEVEL=6

@@ -1,5 +1,11 @@
 [Unit]
 Description=Hokku Server
+# On appliance images, wait until the installer has finished (sentinel exists).
+# On standard apt installs the /var/lib/hokku-installer dir is absent, so the
+# second OR-condition fires and the server starts normally.
+# Syntax: multiple ConditionPathExists with | prefix = OR logic in systemd.
+ConditionPathExists=|/var/lib/hokku-installer/setup_complete
+ConditionPathExists=|!/var/lib/hokku-installer
 After=network.target
 # avahi-daemon conflicts with the Python zeroconf library — both compete for
 # the mDNS multicast group on port 5353, causing NonUniqueNameException on

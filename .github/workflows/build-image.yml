@@ -1,0 +1,94 @@
+name: Build Appliance Image
+
+# Manual trigger only — image builds take 20-60 minutes and are only needed
+# for releases. Use this when you want a fresh .img.xz for flashing.
+on:
+  workflow_dispatch:
+    inputs:
+      server_run_id:
+        description: "CI run ID to fetch hokku-server-deb from (leave blank for latest from this workflow's ci.yml run)"
+        required: false
+      installer_run_id:
+        description: "CI run ID to fetch hokku-installer-deb from (leave blank = same as above)"
+        required: false
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    # Image builds are long; increase timeout beyond the default 6 hours if needed.
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # ── fetch the pre-built .deb packages ─────────────────────────────────
+      # Download the most recent successful deb artifacts from the ci.yml workflow.
+
+      - name: Find latest successful CI run with deb artifacts
+        id: find-run
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: runs } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ci.yml',
+              status: 'success',
+              per_page: 5
+            });
+            if (!runs.workflow_runs.length) {
+              core.setFailed('No successful ci.yml runs found');
+              return;
+            }
+            const runId = runs.workflow_runs[0].id;
+            core.setOutput('run_id', runId);
+            console.log(`Using CI run ID: ${runId}`);
+
+      - name: Download hokku-server-deb
+        uses: actions/download-artifact@v7
+        with:
+          name: hokku-server-deb
+          run-id: ${{ steps.find-run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: build/
+
+      - name: Download hokku-installer-deb
+        uses: actions/download-artifact@v7
+        with:
+          name: hokku-installer-deb
+          run-id: ${{ steps.find-run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: build/
+
+      - name: Show downloaded .debs
+        run: ls -lh build/*.deb
+
+      # ── build the image ────────────────────────────────────────────────────
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git docker.io python3-pip qemu-user-static binfmt-support
+
+      - name: Build appliance image
+        run: bash image/build-image.sh
+        env:
+          DEB_SERVER: "${{ github.workspace }}/build/hokku-server_${{ steps.find-run.outputs.run_id }}_all.deb"
+          # Wildcards don't expand in env vars; build-image.sh finds debs via glob.
+
+      - name: Find built image
+        id: find-image
+        run: |
+          img=$(ls build/*.img.xz | head -1)
+          echo "path=$img" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$img")" >> "$GITHUB_OUTPUT"
+          du -sh "$img"
+
+      # ── upload as artifact and (optionally) attach to a release ───────────
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hokku-appliance-image
+          path: build/*.img.xz
+          retention-days: 14

@@ -1,0 +1,18 @@
+Source: hokku-installer
+Section: net
+Priority: optional
+Maintainer: Dennis Fleurbaaij <mail@dennisfleurbaaij.com>
+Build-Depends: debhelper-compat (= 13), python3, dh-python, python3-setuptools, pybuild-plugin-pyproject
+Standards-Version: 4.6.0
+
+Package: hokku-installer
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends},
+ python3-flask,
+ dnsmasq,
+ network-manager
+Description: First-boot setup wizard for Hokku appliance images
+ Starts an open WiFi access point ("Hokku Setup") on first boot and serves
+ a captive-portal setup page at 192.168.11.1. The user connects from their
+ phone and configures WiFi, hostname, SSH, Samba, and mDNS. After setup the
+ service disables itself and hokku-server takes over.

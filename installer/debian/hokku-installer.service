@@ -1,0 +1,18 @@
+[Unit]
+Description=Hokku First-Boot Setup Wizard
+# Only run if setup has NOT been completed yet.
+ConditionPathExists=!/var/lib/hokku-installer/setup_complete
+After=network.target
+# Don't fight with hokku-server over the network interface.
+Conflicts=hokku-server.service
+
+[Service]
+Type=simple
+# Needs root to run nmcli, hostnamectl, timedatectl, systemctl, chpasswd.
+User=root
+ExecStart=/usr/bin/hokku-installer
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

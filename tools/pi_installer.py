@@ -1649,6 +1649,139 @@ def _apply_mdns_config(host, mdns_hostname):
         print(f"  WARNING: could not apply Bonjour config: {e}")
 
 
+# ---------- Appliance image flow ----------
+
+
+def _appliance_image_matches(name):
+    """True for a Hokku appliance image release asset (hokku*.img.xz)."""
+    n = name.lower()
+    return n.endswith(".img.xz") and n.startswith("hokku")
+
+
+def fetch_latest_appliance_image() -> "Path | None":
+    """Download the latest Hokku appliance image from GitHub releases."""
+    try:
+        rel = release_cache.get_latest_release()
+    except Exception as e:
+        print(f"  Could not fetch latest release from GitHub: {e}")
+        return None
+    tag = rel.get("tag_name", "?")
+    asset = release_cache.find_asset(rel, _appliance_image_matches)
+    if asset is None:
+        print(f"  No appliance image (.img.xz) found in release {tag}.")
+        print("  Build one with:  bash image/build-image.sh")
+        return None
+    return release_cache.ensure_cached_asset(asset, CACHE_DIR, label=f"(release {tag})")
+
+
+def prompt_appliance_image_path() -> "Path | None":
+    """Step 1: find or download the appliance .img.xz. Returns a Path or None."""
+    print()
+    print("  Step 1 of 2: Hokku appliance image")
+    print("  -----------------------------------")
+    ensure_cache_dir()
+
+    cached = sorted(CACHE_DIR.glob("hokku*.img.xz"))
+    if cached:
+        print(f"  Cached image: {cached[-1].name}")
+        print("  Press Enter to use it, or paste a path to a different .img.xz file.")
+    else:
+        print("  No cached appliance image found.")
+        print("  Press Enter to download from GitHub releases,")
+        print("  or paste a path to a local .img.xz file.")
+
+    path_str = input("  > ").strip().strip('"').strip("'")
+    if path_str:
+        p = Path(path_str)
+        if not p.exists():
+            print(f"  ERROR: {p} not found.")
+            return None
+        return p
+
+    if cached:
+        print(f"  Using cached image: {cached[-1]}")
+        return cached[-1]
+
+    print()
+    print("  Downloading Hokku appliance image from GitHub releases...")
+    return fetch_latest_appliance_image()
+
+
+def run_appliance() -> "dict | None":
+    """Flash the Hokku appliance image to an SD card.
+
+    No WiFi/hostname configuration is needed on the PC — the user
+    fills all of that in via the on-device setup wizard on first boot.
+    Returns {"mode": "appliance"} on success or None if aborted/failed.
+    """
+    if sys.platform != "win32":
+        print("  ERROR: Pi installer currently only supports Windows.")
+        return None
+    if not is_admin():
+        print("  ERROR: Administrator privileges are required to write to the SD card.")
+        print("  Launch via hokku_setup.bat (it auto-elevates) rather than python directly.")
+        return None
+
+    print()
+    print("  Hokku Appliance Image")
+    print("  =====================")
+    print("  Flash a ready-to-use Hokku image. On first boot the Pi creates")
+    print("  a WiFi network called 'Hokku Setup'; connect to it and follow the")
+    print("  captive portal to set up your WiFi credentials and preferences.")
+    print()
+
+    # Step 1 — SD card
+    drive = prompt_sd_drive()
+    if not drive:
+        print("  Aborted: no drive selected.")
+        return None
+
+    # Step 2 — appliance image
+    image = prompt_appliance_image_path()
+    if not image:
+        return None
+
+    # Confirm wipe + write
+    print()
+    print("  Step 2 of 2: Write image")
+    print("  -------------------------")
+    print()
+    print("  !! ALL DATA ON THE FOLLOWING DEVICE WILL BE ERASED !!")
+    drive["letters"] = list_drive_letters_for(drive["index"])
+    print(f"    {fmt_drive_id(drive)}  {drive['model']}  {fmt_gb(drive['size_bytes'])}")
+    print()
+    if input("  Type 'YES' to proceed: ").strip() != "YES":
+        print("  Aborted.")
+        return None
+
+    if not write_image_to_disk(image, drive):
+        return None
+
+    print()
+    print("  SD card ready. Safely eject it before removing.")
+    print()
+    print("  ╔════════════════════════════════════════════════════════════╗")
+    print("  ║                                                            ║")
+    print("  ║   INSERT SD CARD INTO PI AND POWER IT ON                   ║")
+    print("  ║                                                            ║")
+    print("  ║   On first boot (~30 s) the Pi creates a WiFi network:     ║")
+    print("  ║                                                            ║")
+    print("  ║       Network name:  Hokku Setup                           ║")
+    print("  ║       Password:      (none — open network)                 ║")
+    print("  ║                                                            ║")
+    print("  ║   Connect to it, then open in your browser:                ║")
+    print("  ║       http://192.168.11.1                                  ║")
+    print("  ║   (or wait for the captive portal pop-up)                  ║")
+    print("  ║                                                            ║")
+    print("  ║   Fill in your WiFi details and preferences.               ║")
+    print("  ║   The Pi reboots and joins your network.                   ║")
+    print("  ║   Then open Hokku at http://hokku.local:8080               ║")
+    print("  ║                                                            ║")
+    print("  ╚════════════════════════════════════════════════════════════╝")
+    print()
+    return {"mode": "appliance"}
+
+
 def run():
     """Run the full Pi OS install flow. Returns dict with install config
     (wifi_ssid, wifi_pass, server_ip) or None if aborted/failed."""
