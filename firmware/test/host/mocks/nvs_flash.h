@@ -24,8 +24,9 @@ static char    _mock_nvs_wifi_pass[2][65]   = {{0}, {0}};
 static char    _mock_nvs_image_url[257]     = {0};
 static char    _mock_nvs_screen_name[65]    = {0};
 
-static inline int nvs_flash_init(void)  { return 0; }
-static inline int nvs_flash_erase(void) { return 0; }
+static inline int nvs_flash_init(void)   { return 0; }
+static inline int nvs_flash_erase(void)  { return 0; }
+static inline int nvs_flash_deinit(void) { return 0; }
 
 static inline int nvs_open(const char *ns, nvs_open_mode_t m, nvs_handle_t *h) {
     (void)ns; (void)m;
