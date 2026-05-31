@@ -83,6 +83,12 @@ cp "$SCRIPT_DIR/config" "$PIGEN_DIR/config"
 # We only want one image — from stage-hokku.
 touch "$PIGEN_DIR/stage2/SKIP_IMAGES"
 
+# Remove packages from stage2 that don't exist in the Pi OS Bookworm archive
+# (these were added to pi-gen's arm64 branch after the archive version we target).
+# We disable swap in stage-hokku anyway; USB gadget is not needed for a server.
+sed -i '/rpi-swap\|rpi-loop-utils\|rpi-usb-gadget/d' \
+    "$PIGEN_DIR/stage2/01-sys-tweaks/00-packages" 2>/dev/null || true
+
 # Mark stage-hokku as the export point.
 touch "$STAGE_DIR/EXPORT_IMAGE"
 
