@@ -89,12 +89,15 @@ touch "$PIGEN_DIR/stage2/SKIP_IMAGES"
 sed -i '/rpi-swap\|rpi-loop-utils\|rpi-usb-gadget/d' \
     "$PIGEN_DIR/stage2/01-sys-tweaks/00-packages" 2>/dev/null || true
 
-# Make stage2/01-sys-tweaks/01-run.sh tolerant of missing Pi OS services.
-# rpi-resize.service may not exist if the relevant package wasn't installed.
-for script in "$PIGEN_DIR"/stage2/*/01-run.sh "$PIGEN_DIR"/stage2/01-sys-tweaks/01-run.sh; do
-    [ -f "$script" ] && \
-    sed -i 's/systemctl enable \(rpi-[^ ]*\.service\)/systemctl enable \1 2>\/dev\/null || true/g' "$script" || true
-done
+# Remove systemctl enables for rpi-*.service units that don't exist in the
+# Pi OS Bookworm archive. Deleting the line is simpler than sed substitution.
+SYS_TWEAKS_RUN="$PIGEN_DIR/stage2/01-sys-tweaks/01-run.sh"
+if [ -f "$SYS_TWEAKS_RUN" ]; then
+    sed -i '/systemctl enable rpi-resize/d' "$SYS_TWEAKS_RUN"
+    sed -i '/systemctl enable rpi-loop/d'   "$SYS_TWEAKS_RUN"
+    sed -i '/systemctl enable rpi-usb/d'    "$SYS_TWEAKS_RUN"
+    echo "Patched stage2/01-sys-tweaks/01-run.sh to remove missing rpi service enables"
+fi
 
 # Mark stage-hokku as the export point.
 touch "$STAGE_DIR/EXPORT_IMAGE"
