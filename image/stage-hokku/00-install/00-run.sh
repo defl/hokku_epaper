@@ -32,10 +32,10 @@ else
 fi
 
 echo "[hokku-stage] Installing hokku-installer..."
-dpkg -i --force-depends "${STAGE}"/hokku-installer_*.deb
+dpkg -i --force-depends --force-overwrite "${STAGE}"/hokku-installer_*.deb
 
 echo "[hokku-stage] Installing hokku-server..."
-dpkg -i --force-depends "${STAGE}"/hokku-server_*.deb
+dpkg -i --force-depends --force-overwrite "${STAGE}"/hokku-server_*.deb
 
 apt-get install -f -y
 EOF
