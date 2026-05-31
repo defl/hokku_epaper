@@ -75,8 +75,10 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            qemu-user-static binfmt-support
+            qemu-user-static qemu-user binfmt-support
           # docker is pre-installed on ubuntu-latest (containerd.io); don't reinstall
+          # pi-gen's build-docker.sh checks for 'qemu-arm' (non-static name); symlink it
+          sudo ln -sf /usr/bin/qemu-arm-static /usr/local/bin/qemu-arm
 
       - name: Build appliance image
         run: bash image/build-image.sh
