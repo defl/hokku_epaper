@@ -5,8 +5,9 @@
 # guards see the packages as already present and skip their pip installs — meaning
 # first boot requires no internet access.
 
-WHEELS_SRC="${STAGE_DIR}/files/wheels"
-DEBS_SRC="${STAGE_DIR}/files"
+# SCRIPT_DIR = current substage dir (stage-hokku/00-install); files/ lives there.
+WHEELS_SRC="${SCRIPT_DIR}/files/wheels"
+DEBS_SRC="${SCRIPT_DIR}/files"
 
 # Copy .debs and wheel directory into rootfs so on_chroot can reach them.
 mkdir -p "${ROOTFS_DIR}/tmp/hokku-stage"
