@@ -9,8 +9,7 @@ ARCH="arm64"
 # the raspberrypi-archive keyring is not in the build container.
 # Include debian-archive-keyring so the bootstrapped system can verify
 # subsequent apt operations in stage0/00-configure-apt.
-DEBOOTSTRAP_FLAGS="--no-check-gpg"
-DEBOOTSTRAP_INCLUDES="debian-archive-keyring"
+DEBOOTSTRAP_FLAGS="--no-check-gpg --include=debian-archive-keyring"
 
 # SSH disabled at image level — installer enables it only if user requests.
 ENABLE_SSH=0
