@@ -89,6 +89,13 @@ touch "$PIGEN_DIR/stage2/SKIP_IMAGES"
 sed -i '/rpi-swap\|rpi-loop-utils\|rpi-usb-gadget/d' \
     "$PIGEN_DIR/stage2/01-sys-tweaks/00-packages" 2>/dev/null || true
 
+# Make stage2/01-sys-tweaks/01-run.sh tolerant of missing Pi OS services.
+# rpi-resize.service may not exist if the relevant package wasn't installed.
+for script in "$PIGEN_DIR"/stage2/*/01-run.sh "$PIGEN_DIR"/stage2/01-sys-tweaks/01-run.sh; do
+    [ -f "$script" ] && \
+    sed -i 's/systemctl enable \(rpi-[^ ]*\.service\)/systemctl enable \1 2>\/dev\/null || true/g' "$script" || true
+done
+
 # Mark stage-hokku as the export point.
 touch "$STAGE_DIR/EXPORT_IMAGE"
 
