@@ -2621,11 +2621,12 @@ function showScreenConfig(name) {
     </div>`;
 
   const urlOverride = s.server_url_override || '';
+  const thisServerUrl = document.getElementById('flash-url')?.value || '';
   body += `<div class="fw-section">`;
   body += `<h4>Server URL override</h4>`;
   body += `<div style="font-size:0.85em;color:var(--stone);margin-bottom:8px">Applied to the screen's NVS config on next OTA update. Leave blank to keep the screen's current URL.</div>`;
   body += `<input type="url" id="url-override-input" value="${escapeHtml(urlOverride)}"
-      placeholder="https://other-server.local/hokku/…"
+      placeholder="${escapeHtml(thisServerUrl || 'http://server/hokku/screen/')}"
       style="width:100%;box-sizing:border-box;font-size:0.9em;"
       onchange="setScreenUrlOverride('${safeName}', this.value)">`;
   body += `</div>`;
