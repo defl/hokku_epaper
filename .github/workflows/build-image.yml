@@ -84,9 +84,11 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends binfmt-support qemu-user-static
-          # pi-gen/build-docker.sh checks 'which qemu-arm' on the host.
-          # qemu-user-static ships qemu-arm-static; symlink it to the expected name.
-          sudo ln -sf /usr/bin/qemu-arm-static /usr/local/bin/qemu-arm
+          # pi-gen/build-docker.sh checks 'which qemu-arm' (master) or
+          # 'which qemu-aarch64' (arm64 branch) on the host.
+          # qemu-user-static ships the -static variants; symlink both.
+          sudo ln -sf /usr/bin/qemu-arm-static     /usr/local/bin/qemu-arm
+          sudo ln -sf /usr/bin/qemu-aarch64-static  /usr/local/bin/qemu-aarch64
 
       - name: Build appliance image
         run: bash image/build-image.sh
