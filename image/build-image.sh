@@ -86,38 +86,24 @@ touch "$PIGEN_DIR/stage2/SKIP_IMAGES"
 # Mark stage-hokku as the export point.
 touch "$STAGE_DIR/EXPORT_IMAGE"
 
-# ── inject Debian keyring into stage0 ────────────────────────────────────────
-# stage0's 00-configure-apt runs apt-get update which needs the Debian Bookworm
-# signing keys. Copy them from the build host (Debian Trixie container) into
-# the rootfs's trusted.gpg.d before configure-apt runs.
-# "00-aaa" sorts before "00-configure-apt" alphabetically, so it runs first.
+# ── allow insecure apt repos during build ────────────────────────────────────
+# Stage0's 00-configure-apt runs apt-get update against deb.debian.org but the
+# bootstrapped rootfs doesn't yet have working Debian archive keys. Allow
+# unauthenticated repos for the duration of the pi-gen build. This config is
+# removed in our stage-hokku (before image export) so the final image is clean.
 mkdir -p "$PIGEN_DIR/stage0/00-aaa-fix-keys"
 cat > "$PIGEN_DIR/stage0/00-aaa-fix-keys/00-run.sh" << 'FIX_KEYS_EOF'
 #!/bin/bash -e
-source /common.sh
-
-# The debootstrap installed debian-archive-keyring but its post-install
-# may not have registered keys correctly in the minimal chroot environment.
-# Reinstall inside the chroot so gpg key registration runs properly,
-# then also copy the combined keyring from the host as a belt-and-suspenders.
-
-# 1. Reinstall debian-archive-keyring inside the chroot.
-on_chroot << 'CHROOT'
-DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall --no-install-recommends \
-    debian-archive-keyring 2>/dev/null || true
-CHROOT
-
-# 2. Also copy the host's combined debian-archive-keyring.gpg to both locations.
-#    The host (Debian Trixie) ships all recent Debian keys in this file.
-if [ -f /usr/share/keyrings/debian-archive-keyring.gpg ]; then
-    mkdir -p "${ROOTFS_DIR}/usr/share/keyrings"
-    mkdir -p "${ROOTFS_DIR}/etc/apt/trusted.gpg.d"
-    cp /usr/share/keyrings/debian-archive-keyring.gpg \
-       "${ROOTFS_DIR}/usr/share/keyrings/debian-archive-keyring.gpg"
-    cp /usr/share/keyrings/debian-archive-keyring.gpg \
-       "${ROOTFS_DIR}/etc/apt/trusted.gpg.d/debian-archive-keyring.gpg"
-    echo "[fix-keys] debian-archive-keyring.gpg copied from host"
-fi
+# Write an apt config that allows unauthenticated repositories during build.
+# Removed by stage-hokku/00-run-chroot.sh before image export.
+mkdir -p "${ROOTFS_DIR}/etc/apt/apt.conf.d"
+cat > "${ROOTFS_DIR}/etc/apt/apt.conf.d/00-build-insecure" << 'APTEOF'
+// Allow unsigned repos during pi-gen build — removed by stage-hokku before export
+Acquire::AllowInsecureRepositories "true";
+Acquire::AllowDowngradeToInsecureRepositories "true";
+APT::Get::AllowUnauthenticated "true";
+APTEOF
+echo "[fix-keys] apt configured to allow unauthenticated repos for build"
 FIX_KEYS_EOF
 chmod +x "$PIGEN_DIR/stage0/00-aaa-fix-keys/00-run.sh"
 
