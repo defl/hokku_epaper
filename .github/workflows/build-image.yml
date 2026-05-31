@@ -69,7 +69,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            git docker.io python3-pip qemu-user-static binfmt-support
+            qemu-user-static binfmt-support
+          # docker is pre-installed on ubuntu-latest (containerd.io); don't reinstall
 
       - name: Build appliance image
         run: bash image/build-image.sh
