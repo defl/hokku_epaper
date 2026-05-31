@@ -17,10 +17,10 @@ TIMEZONE_DEFAULT="UTC"
 FIRST_USER_NAME="hokku"
 FIRST_USER_PASS="$(openssl passwd -6 hokku)"
 
-# No WiFi baked in — installer collects SSID/password via captive portal.
-WPA_ESSID=""
-WPA_PASSWORD=""
-WPA_COUNTRY=""
+# WiFi NOT baked in — installer collects SSID/password/country via captive portal.
+# WPA_COUNTRY must NOT be set (even to empty): pi-gen's 02-net-tweaks/01-run.sh
+# calls 'raspi-config nonint do_wifi_country ""' when the variable is set,
+# which fails on an empty value. Unset = pi-gen uses NetworkManager default.
 
 # Only build through stage-hokku; stages 0/1/2 produce no standalone images
 # (SKIP_IMAGES is added to stage2 by build-image.sh).
