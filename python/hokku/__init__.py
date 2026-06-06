@@ -2,5 +2,5 @@
 
 Subpackages:
 - ``hokku.webserver`` — the Flask image server (the ``hokku-server`` app).
-- ``hokku.screens`` — per-screen support libraries (e.g. ``hokku.screens.epf1301``).
+- ``hokku.screens`` — per-screen support libraries (e.g. ``hokku.screens.huessen_epf1301``).
 """

@@ -38,7 +38,7 @@ from pillow_heif import register_heif_opener
 from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
-from hokku.screens import epf1301
+from hokku.screens import huessen_epf1301
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState
 from hokku.webserver.display import FULL_W, PANEL_H, TOTAL_BYTES, VISUAL_H, VISUAL_W
@@ -161,8 +161,8 @@ def create_app(
     static_root = _resolve_static_folder()
     git_describe, git_hash = _read_git_describe()
     # Bundled merged firmware for the "Flash a screen" feature (None if absent).
-    firmware_path = epf1301.merged_firmware_file()
-    _fw_hdr = epf1301.release_app_header()
+    firmware_path = huessen_epf1301.merged_firmware_file()
+    _fw_hdr = huessen_epf1301.release_app_header()
     bundled_firmware_version: str | None = (
         _fw_hdr[48:80].split(b"\x00")[0].decode("ascii", errors="replace").strip()
         if _fw_hdr
@@ -286,7 +286,7 @@ def create_app(
         """Serve the OTA-flashable app image (sliced from the bundled merged bin).
 
         The device streams this straight into its inactive OTA slot."""
-        app_image = epf1301.release_app_image()
+        app_image = huessen_epf1301.release_app_image()
         if not app_image:
             logger.error("OTA firmware.bin requested but no bundled firmware found")
             abort(404)
@@ -312,9 +312,9 @@ def create_app(
             logger.error("firmware-config from %s: missing/invalid X-Config-State", screen_name)
             return make_response("missing X-Config-State", 400)
 
-        migrated = epf1301.migrate_config(current)
+        migrated = huessen_epf1301.migrate_config(current)
         if migrated is None:
-            msg = f"cannot migrate config to schema v{epf1301.CONFIG_VERSION}"
+            msg = f"cannot migrate config to schema v{huessen_epf1301.CONFIG_VERSION}"
             state.scheduler.record_ota_error(screen_name, msg)
             return make_response(msg, 422)
 
@@ -324,8 +324,8 @@ def create_app(
             logger.info("Applying server URL override for %s: %s", screen_name, url_override)
 
         try:
-            nvs_image = epf1301.build_nvs_binary(migrated)
-        except epf1301.NvsToolUnavailable as e:
+            nvs_image = huessen_epf1301.build_nvs_binary(migrated)
+        except huessen_epf1301.NvsToolUnavailable as e:
             logger.error("firmware-config: NVS generator unavailable: %s", e)
             return make_response("NVS generator unavailable on server", 503)
         except (RuntimeError, OSError) as e:
@@ -851,7 +851,7 @@ def create_app(
         if state.flash_jobs.is_busy():
             logger.warning("Flash scan rejected: a flash is already in progress")
             return jsonify({"error": "a flash is in progress", "busy": True}), 409
-        return jsonify({"devices": epf1301.scan_devices(), "busy": False})
+        return jsonify({"devices": huessen_epf1301.scan_devices(), "busy": False})
 
     @app.route("/hokku/api/flash/server_url")
     def api_flash_server_url():
@@ -878,7 +878,7 @@ def create_app(
         if firmware_path is None:
             logger.error("Flash start requested but no bundled firmware available")
             return jsonify({"error": "no bundled firmware available on this server"}), 503
-        if not epf1301.nvs_tool_available():
+        if not huessen_epf1301.nvs_tool_available():
             logger.error("Flash start requested but esp-idf-nvs-partition-gen is not installed")
             return jsonify(
                 {"error": "NVS generator not installed (esp-idf-nvs-partition-gen)"}

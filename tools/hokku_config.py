@@ -34,13 +34,13 @@ except ImportError:
 # The shared screen library lives under python/ in the repo. When running from a
 # source checkout (not installed), add that dir to sys.path so ``hokku`` imports.
 try:
-    import hokku.screens.epf1301  # noqa: F401 — probe importability
+    import hokku.screens.huessen_epf1301  # noqa: F401 — probe importability
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
-# Constants + NVS read/build come from the shared epf1301 library (single source
+# Constants + NVS read/build come from the shared huessen_epf1301 library (single source
 # of truth, no ESP-IDF dependency). CONFIG_VERSION is re-exported for esp32_setup.
-from hokku.screens.epf1301.constants import (
+from hokku.screens.huessen_epf1301.constants import (
     CONFIG_VERSION,  # noqa: F401 — re-exported for esp32_setup.py
     ESP32S3_PID,
     ESP32S3_VID,
@@ -48,8 +48,8 @@ from hokku.screens.epf1301.constants import (
     NVS_SIZE,
     PAGE_ACTIVE,  # noqa: F401 — re-exported for tools tests
 )
-from hokku.screens.epf1301.nvs import build_nvs_binary as _build_nvs_binary
-from hokku.screens.epf1301.nvs import read_nvs as _read_nvs
+from hokku.screens.huessen_epf1301.nvs import build_nvs_binary as _build_nvs_binary
+from hokku.screens.huessen_epf1301.nvs import read_nvs as _read_nvs
 
 
 def find_esp32_port():

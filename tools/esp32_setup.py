@@ -23,13 +23,13 @@ import release_cache
 # Shared screen library lives under python/ in the repo. When running from a
 # source checkout (not installed), add that dir to sys.path so ``hokku`` imports.
 try:
-    import hokku.screens.epf1301  # noqa: F401 — probe importability
+    import hokku.screens.huessen_epf1301  # noqa: F401 — probe importability
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
-# Device detection, NVS, and flashing are delegated to the shared epf1301 lib.
-from hokku.screens import epf1301
-from hokku.screens.epf1301.constants import ESP32S3_PID, ESP32S3_VID
+# Device detection, NVS, and flashing are delegated to the shared huessen_epf1301 lib.
+from hokku.screens import huessen_epf1301
+from hokku.screens.huessen_epf1301.constants import ESP32S3_PID, ESP32S3_VID
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ APP_OFFSET = 0x10000
 
 def _merged_firmware_file(directory):
     """Return the merged hokku-firmware_<version>.bin in `directory`, or None."""
-    return epf1301.merged_firmware_file(directory)
+    return huessen_epf1301.merged_firmware_file(directory)
 
 
 def _is_merged_firmware_asset(name):
@@ -153,7 +153,7 @@ def scan_devices():
 
 def read_device_flash(port):
     """One esptool read covering NVS partition + app header. Returns (nvs, header) or (None, None)."""
-    return epf1301.read_device_flash(port)
+    return huessen_epf1301.read_device_flash(port)
 
 
 def parse_device_state(nvs_data, app_header):
@@ -162,7 +162,9 @@ def parse_device_state(nvs_data, app_header):
     Uses this tool's resolved firmware (FIRMWARE_DIR, which may be a GitHub
     download) as the release reference, rather than only the bundled image.
     """
-    return epf1301.parse_device_state(nvs_data, app_header, release_header=_release_app_header())
+    return huessen_epf1301.parse_device_state(
+        nvs_data, app_header, release_header=_release_app_header()
+    )
 
 
 # -------- device selection UI --------
@@ -558,7 +560,7 @@ def _pi_config_mismatch(existing_config, pi_credentials):
 def write_config(port, config):
     print("  Writing configuration...", end=" ", flush=True)
     try:
-        epf1301.write_config(port, config)  # on_line defaults to noop — keep CLI quiet
+        huessen_epf1301.write_config(port, config)  # on_line defaults to noop — keep CLI quiet
         print("done.")
         return True
     except Exception as e:
@@ -577,7 +579,7 @@ def flash_firmware(port):
         return False
 
     try:
-        epf1301.flash_firmware(port, merged, on_line=lambda ln: print(f"    {ln}"))
+        huessen_epf1301.flash_firmware(port, merged, on_line=lambda ln: print(f"    {ln}"))
         print("  Firmware flashed successfully.")
         return True
     except Exception as e:

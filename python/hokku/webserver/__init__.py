@@ -11,7 +11,7 @@ from pathlib import Path
 
 import psutil as _psutil
 
-from hokku.screens import epf1301
+from hokku.screens import huessen_epf1301
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
 from hokku.webserver.flask_app import _read_git_describe, create_app
@@ -93,9 +93,9 @@ def main() -> None:
     version, _ = _read_git_describe()
     logger.info("Hokku image server starting — version %s", version)
 
-    fw_bin = epf1301.merged_firmware_file()
+    fw_bin = huessen_epf1301.merged_firmware_file()
     if fw_bin:
-        hdr = epf1301.release_app_header()
+        hdr = huessen_epf1301.release_app_header()
         fw_ver = (
             hdr[48:80].split(b"\x00")[0].decode("ascii", errors="replace").strip()
             if hdr

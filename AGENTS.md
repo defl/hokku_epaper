@@ -1,4 +1,4 @@
-# Agent rules for hokku_epaper
+﻿# Agent rules for hokku_epaper
 
 Sub-directory rules: [firmware/AGENTS.md](firmware/AGENTS.md) | [python/AGENTS.md](python/AGENTS.md)
 
@@ -54,12 +54,16 @@ Firmware uses `PROTOCOL.CONFIG.N` versioning stored in `firmware/VERSION`:
 - All standalone Python helper/dev scripts belong in `tools/`
 - Do not create or leave `.py` files in the repo root
 
+## Screen naming
+
+**Rule**: Screen IDs always use `brand_model` format (e.g. `huessen_epf1301`, `bigme_f7`). This applies to directory names under `docs/screens/`, `images/screens/`, `.private/screens/`, and `python/hokku/screens/`.
+
 ## Hardware
 
 **Rule**: `hardware_facts.md` contains ONLY empirically confirmed or definitively documented information (chip markings, measured values, official spec sheets). Inferences, SDK defaults, estimates, and unknowns belong in `hardware_guesses.md` in the same directory. Never mix the two.
 
-- EPF1301 (Hokku 13.3"): `docs/screens/epf1301/hardware_facts.md`
-- Bigme F7 (7.3" ACeP): `docs/screens/bigme_f7/hardware_facts.md` + `hardware_guesses.md` — XR872AT SoC, firmware not yet dumped
+- `huessen_epf1301` (Hokku/Huessen 13.3"): `docs/screens/huessen_epf1301/hardware_facts.md`
+- `bigme_f7` (Bigme F7 7.3" ACeP): `docs/screens/bigme_f7/hardware_facts.md` + `hardware_guesses.md` — XR872AT SoC, firmware not yet dumped
 
 ## Repository
 - GitHub: `https://github.com/defl/hokku_epaper`

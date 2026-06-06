@@ -1,4 +1,4 @@
-"""Locate the bundled merged firmware image for the EPF1301 frame.
+"""Locate the bundled merged firmware image for the huessen_epf1301 frame.
 
 The merged ``hokku-firmware_<version>.bin`` (bootloader + partition table + app)
 is searched for in:
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .constants import APP_OFFSET
 
-# python/hokku/screens/epf1301/firmware.py -> repo root is parents[4]
+# python/hokku/screens/huessen_epf1301/firmware.py -> repo root is parents[4]
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _DEV_FIRMWARE_DIR = _REPO_ROOT / "firmware" / "release"
 _INSTALLED_FIRMWARE_DIR = Path("/usr/share/hokku-server/firmware")

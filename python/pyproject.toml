@@ -1,4 +1,4 @@
-[build-system]
+﻿[build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
@@ -23,7 +23,7 @@ dependencies = [
     "zstd",
     "resvg-py>=0.3",
     "defusedxml>=0.7",
-    # Screen flashing (hokku.screens.epf1301). esptool / esp-idf-nvs-partition-gen
+    # Screen flashing (hokku.screens.huessen_epf1301). esptool / esp-idf-nvs-partition-gen
     # are invoked as subprocesses; on the Debian package they are pip-installed by
     # postinst (not packaged), and python3-serial provides pyserial.
     "pyserial>=3.5",

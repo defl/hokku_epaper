@@ -1,8 +1,8 @@
 """Tests for the manual OTA firmware-update feature (server side).
 
 Covers:
-  epf1301.release_app_image       — app-only slice of the merged firmware
-  epf1301.migrate_config          — forward config migration + refusal
+  huessen_epf1301.release_app_image       — app-only slice of the merged firmware
+  huessen_epf1301.migrate_config          — forward config migration + refusal
   ServeScheduler OTA pending/error — one-shot toggle, persistence, sticky error
   GET  /hokku/firmware.bin        — app image / 404
   GET  /hokku/firmware-config     — migrated NVS image / 400 / 422 + recorded error
@@ -19,9 +19,9 @@ from pathlib import Path
 
 import pytest
 
-from hokku.screens import epf1301
-from hokku.screens.epf1301.constants import APP_OFFSET
-from hokku.screens.epf1301.nvs import migrate_config
+from hokku.screens import huessen_epf1301
+from hokku.screens.huessen_epf1301.constants import APP_OFFSET
+from hokku.screens.huessen_epf1301.nvs import migrate_config
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
 from hokku.webserver.flask_app import create_app
@@ -82,11 +82,11 @@ def test_release_app_image_slices_app_section(tmp_path):
     assert len(app_bytes) == 32
     merged = b"\x00" * APP_OFFSET + app_bytes + b"\xff" * 100  # trailing junk
     (tmp_path / "hokku-firmware_1.2.8.bin").write_bytes(merged)
-    assert epf1301.release_app_image(tmp_path) == app_bytes
+    assert huessen_epf1301.release_app_image(tmp_path) == app_bytes
 
 
 def test_release_app_image_none_when_no_firmware(tmp_path):
-    assert epf1301.release_app_image(tmp_path) is None
+    assert huessen_epf1301.release_app_image(tmp_path) is None
 
 
 # ── migrate_config ────────────────────────────────────────────────────────────
@@ -178,7 +178,7 @@ def test_ota_error_persists_across_reload(app_config):
 
 
 def test_firmware_bin_served(app_config, tmp_path, monkeypatch):
-    monkeypatch.setattr(epf1301, "release_app_image", lambda *a, **k: b"APPDATA")
+    monkeypatch.setattr(huessen_epf1301, "release_app_image", lambda *a, **k: b"APPDATA")
     client = _client(_bare_state(app_config), tmp_path)
     r = client.get("/hokku/firmware.bin")
     assert r.status_code == 200
@@ -187,7 +187,7 @@ def test_firmware_bin_served(app_config, tmp_path, monkeypatch):
 
 
 def test_firmware_bin_404_when_absent(app_config, tmp_path, monkeypatch):
-    monkeypatch.setattr(epf1301, "release_app_image", lambda *a, **k: None)
+    monkeypatch.setattr(huessen_epf1301, "release_app_image", lambda *a, **k: None)
     client = _client(_bare_state(app_config), tmp_path)
     assert client.get("/hokku/firmware.bin").status_code == 404
 
@@ -217,7 +217,7 @@ def test_firmware_config_refusal_records_error_422(app_config, tmp_path):
 
 
 @pytest.mark.skipif(
-    not epf1301.nvs_tool_available(), reason="esp-idf-nvs-partition-gen not installed"
+    not huessen_epf1301.nvs_tool_available(), reason="esp-idf-nvs-partition-gen not installed"
 )
 def test_firmware_config_returns_migrated_nvs_image(app_config, tmp_path):
     client = _client(_bare_state(app_config), tmp_path)
@@ -233,9 +233,9 @@ def test_firmware_config_returns_migrated_nvs_image(app_config, tmp_path):
         headers={"X-Screen-Name": "Den", "X-Config-State": json.dumps(cfg)},
     )
     assert r.status_code == 200
-    assert len(r.data) == epf1301.NVS_SIZE
-    back = epf1301.read_nvs(r.data)
-    assert back["cfg_ver"] == epf1301.CONFIG_VERSION
+    assert len(r.data) == huessen_epf1301.NVS_SIZE
+    back = huessen_epf1301.read_nvs(r.data)
+    assert back["cfg_ver"] == huessen_epf1301.CONFIG_VERSION
     assert back["screen_name"] == "Den"
     assert back["image_url"] == cfg["image_url"]
     assert back["wifi_order"] == 1
@@ -245,7 +245,7 @@ def test_firmware_config_returns_migrated_nvs_image(app_config, tmp_path):
 
 
 def test_update_toggle_requires_bundled_firmware(app_config, tmp_path, monkeypatch):
-    monkeypatch.setattr(epf1301, "release_app_header", lambda *a, **k: None)
+    monkeypatch.setattr(huessen_epf1301, "release_app_header", lambda *a, **k: None)
     client = _client(_bare_state(app_config), tmp_path)
     r = client.post("/hokku/api/screens/frame-1/update", json={"enabled": True})
     assert r.status_code == 409
@@ -254,7 +254,9 @@ def test_update_toggle_requires_bundled_firmware(app_config, tmp_path, monkeypat
 def test_serve_binary_signals_ota_once_when_capable_and_pending(
     app_config, make_test_image, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(epf1301, "release_app_header", lambda *a, **k: _make_app_header(b"9.9.9"))
+    monkeypatch.setattr(
+        huessen_epf1301, "release_app_header", lambda *a, **k: _make_app_header(b"9.9.9")
+    )
     state = _state_with_image(app_config, make_test_image)
     client = _client(state, tmp_path)
 
@@ -275,7 +277,9 @@ def test_serve_binary_signals_ota_once_when_capable_and_pending(
 def test_serve_binary_no_signal_when_not_capable(
     app_config, make_test_image, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(epf1301, "release_app_header", lambda *a, **k: _make_app_header(b"9.9.9"))
+    monkeypatch.setattr(
+        huessen_epf1301, "release_app_header", lambda *a, **k: _make_app_header(b"9.9.9")
+    )
     state = _state_with_image(app_config, make_test_image)
     client = _client(state, tmp_path)
     client.post("/hokku/api/screens/frame-1/update", json={"enabled": True})
@@ -291,7 +295,9 @@ def test_serve_binary_no_signal_when_not_capable(
 def test_serve_binary_no_signal_when_not_pending(
     app_config, make_test_image, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(epf1301, "release_app_header", lambda *a, **k: _make_app_header(b"9.9.9"))
+    monkeypatch.setattr(
+        huessen_epf1301, "release_app_header", lambda *a, **k: _make_app_header(b"9.9.9")
+    )
     state = _state_with_image(app_config, make_test_image)
     client = _client(state, tmp_path)
     headers = {"X-Screen-Name": "frame-1", "X-Frame-State": json.dumps({"fw": "1.0.0", "ota": 1})}

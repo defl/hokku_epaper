@@ -1,6 +1,6 @@
 """Background flash-job orchestration for the web UI.
 
-Wraps :mod:`hokku.screens.epf1301` (the pure flash ops) in a single-slot,
+Wraps :mod:`hokku.screens.huessen_epf1301` (the pure flash ops) in a single-slot,
 thread-backed job so a long (~30-60s) flash can run while the browser polls a
 status endpoint. Only one flash may run at a time; scanning is refused while a
 flash is in progress (the serial port can only be driven by one esptool at a
@@ -15,7 +15,7 @@ import threading
 import time
 from pathlib import Path
 
-from hokku.screens import epf1301
+from hokku.screens import huessen_epf1301
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ class FlashJobManager:
 
     def _run(self, job: dict, port: str, config: dict, firmware_path: Path) -> None:
         try:
-            result = epf1301.flash_device(
+            result = huessen_epf1301.flash_device(
                 port, config, firmware_path, on_line=lambda ln: self._append(job, ln)
             )
             duration = time.time() - job["started_at"]
