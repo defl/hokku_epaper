@@ -57,6 +57,7 @@ Firmware uses `PROTOCOL.CONFIG.N` versioning stored in `firmware/VERSION`:
 ## Hardware
 - Per-screen hardware facts live under `docs/screens/<screen_id>/hardware_facts.md` (may be inaccurate — treat with caution)
 - EPF1301 (Hokku 13.3"): `docs/screens/epf1301/hardware_facts.md`
+- Bigme F7 (7.3" ACeP): `docs/screens/bigme_f7/hardware_facts.md` — XR872AT SoC, firmware not yet dumped
 
 ## Repository
 - GitHub: `https://github.com/defl/hokku_epaper`
