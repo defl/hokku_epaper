@@ -1,5 +1,7 @@
 # Hokku 13.3" WiFi E-Paper Frame — Hardware Facts
 
+Only confirmed information lives here. Inferences and unverified items belong in [`hardware_guesses.md`](hardware_guesses.md).
+
 ## Platform
 - **SoC**: ESP32-S3 (QFN56), revision v0.2
 - **Crystal**: 40 MHz
@@ -47,29 +49,26 @@
 
 ## Confirmed GPIO Map
 
-| GPIO | Function | Confidence | Notes |
-|------|----------|------------|-------|
-| 0 | SPI HW CS | CONFIRMED | Directly connected to SPI peripheral, NOT connected to display |
-| 1 | BUTTON_1 | CONFIRMED | Active LOW, wakeup capable (RTC GPIO), "power off" in original FW |
-| 2 | WORK_LED | CONFIRMED | Active HIGH |
-| 3 | EPAPER_PWR_EN | LIKELY | Active HIGH — needs verification |
-| 5 | BATT_ADC | CONFIRMED | ADC1_CH4, divider ratio 3.34:1 |
-| 6 | EPAPER_RST | CONFIRMED | Active LOW (pull LOW to reset display) |
-| 7 | EPAPER_BUSY | CONFIRMED | Active LOW (LOW = display busy) |
-| 8 | CTRL2 | CONFIRMED | Display CS for right panel — held LOW during SPI |
-| 9 | EPAPER_SCLK | CONFIRMED | SPI clock |
-| 12 | PWR_BUTTON | CONFIRMED | Active LOW, wakeup capable (RTC GPIO). **Also tracks USB-host plug events** — see "USB Detection" below. Don't trust GPIO 12 LOW as a button press without checking GPIO 14 isn't transitioning at the same instant. |
-| 17 | SYS_POWER | CONFIRMED | Active HIGH — controls main power rail |
-| 18 | CTRL1 | CONFIRMED | Display CS for left panel — held LOW during SPI |
-| 19 | USB D- | DO NOT TOUCH | USB-Serial/JTAG |
-| 20 | USB D+ | DO NOT TOUCH | USB-Serial/JTAG |
-| 4 | CHG_EN1 | LIKELY | Charger enable, active LOW |
-| 13 | CHG_EN2 | LIKELY | Charger enable, active LOW |
-| 14 | USB_HOST_DETECT | CONFIRMED | LOW = USB host (computer) connected. HIGH = no USB host. **NOT a pure VBUS-detect** — wall chargers / USB battery banks (no USB-data signaling) leave it HIGH even with VBUS present. Likely tied to charger IC's USB-BC (Battery Charging spec) "host detected" output. RTC-capable, usable as EXT1 wake source for "computer plug" events. (Was named CHG_STATUS pre-2026-04-19 — name was misleading; behavior is host-detect, not charge-active.) |
-| 38 | WIFI_LED | CONFIRMED | Uses LEDC PWM for fade effects |
-| 39 | BUTTON_3 | CONFIRMED | "restart wifi" in original FW, NOT RTC-capable |
-| 40 | BUTTON_2 | CONFIRMED | "switch photo" in original FW, NOT RTC-capable, external pull-up on PCB |
-| 41 | EPAPER_MOSI | CONFIRMED | SPI data out |
+| GPIO | Function | Notes |
+|------|----------|-------|
+| 0 | SPI HW CS | Directly connected to SPI peripheral, NOT connected to display |
+| 1 | BUTTON_1 | Active LOW, wakeup capable (RTC GPIO), "power off" in original FW |
+| 2 | WORK_LED | Active HIGH |
+| 5 | BATT_ADC | ADC1_CH4, divider ratio 3.34:1 |
+| 6 | EPAPER_RST | Active LOW (pull LOW to reset display) |
+| 7 | EPAPER_BUSY | Active LOW (LOW = display busy) |
+| 8 | CTRL2 | Display CS for right panel — held LOW during SPI |
+| 9 | EPAPER_SCLK | SPI clock |
+| 12 | PWR_BUTTON | Active LOW, wakeup capable (RTC GPIO). Also tracks USB-host plug events — see USB Detection below. Don't trust GPIO 12 LOW as a button press without checking GPIO 14 isn't transitioning at the same instant. |
+| 14 | USB_HOST_DETECT | LOW = USB host (computer) connected. HIGH = no USB host. NOT a pure VBUS-detect — wall chargers / USB battery banks (no USB-data signaling) leave it HIGH even with VBUS present. RTC-capable, usable as EXT1 wake source for "computer plug" events. (Was named CHG_STATUS pre-2026-04-19 — name was misleading; behavior is host-detect, not charge-active.) |
+| 17 | SYS_POWER | Active HIGH — controls main power rail |
+| 18 | CTRL1 | Display CS for left panel — held LOW during SPI |
+| 19 | USB D- | DO NOT TOUCH — USB-Serial/JTAG |
+| 20 | USB D+ | DO NOT TOUCH — USB-Serial/JTAG |
+| 38 | WIFI_LED | Uses LEDC PWM for fade effects |
+| 39 | BUTTON_3 | "restart wifi" in original FW, NOT RTC-capable |
+| 40 | BUTTON_2 | "switch photo" in original FW, NOT RTC-capable, external pull-up on PCB |
+| 41 | EPAPER_MOSI | SPI data out |
 
 ## SPI Configuration
 - **Host**: SPI2_HOST
@@ -115,10 +114,8 @@
 
 ## Power Architecture
 - **SYS_POWER (GPIO17)**: controls main power rail, must stay HIGH for system to run
-- **EPAPER_PWR_EN (GPIO3)**: likely controls display power supply
 - **Battery**: Li-ion, monitored via ADC on GPIO5. **Battery is REQUIRED for display** — display controller is powered from battery rail, not USB
 - **Battery ADC**: ADC1_CH4, ADC_ATTEN_DB_6, voltage divider ratio = **3.34** (calibrated: ADC reads ~1230mV at pin when battery is 4.1V)
-- **USB**: provides 5V power, may not be sufficient for display refresh without battery
 - **Brownout risk**: gpio_reset_pin() on SYS_POWER briefly cuts power — must handle SYS_POWER separately in init, set HIGH immediately
 - **RTC GPIO isolation**: persists across chip resets (not power-on resets). Must call rtc_gpio_hold_dis() + rtc_gpio_deinit() before gpio_reset_pin()
 
@@ -151,22 +148,6 @@ charger (high-power laptop charger) → unplug → battery → replug computer.
 - This means: **firmware cannot distinguish wall-charger-plugged-in from
   battery-only operation.** Both look the same.
 
-### Why GPIO 14 behaves this way (best inference, not schematic-confirmed)
-
-GPIO 14 is wired to a charger-IC pin that asserts only after USB-BC (Battery
-Charging Specification 1.2) detection determines the source is a Standard
-Downstream Port (SDP) or similar data-capable host. Pure-power sources
-(Dedicated Charging Port / wall warts / battery banks) don't trigger BC
-detection because there's no data signaling on D+/D-, so the pin stays
-de-asserted (HIGH).
-
-This is *more* useful than pure VBUS-detect for our use case, because:
-- A user only ever needs the device "awake on USB" when there's a host they
-  could be reflashing/monitoring from. A wall charger has no such use case.
-- On wall charger, normal battery-mode behaviour (deep sleep, refresh on
-  schedule, no LED, no logging) is exactly what we want — the charger keeps
-  the battery topped up in the background regardless.
-
 ### GPIO 12 + GPIO 14 are paired, not independent
 
 Tests show GPIO 12 (PWR_BUTTON) transitions *simultaneously* with GPIO 14 on
@@ -183,7 +164,6 @@ Consequence for the current firmware's design choices is documented in
 - **RTC-capable GPIOs**: only GPIO0–21 on ESP32-S3. GPIO39 / GPIO40 cannot wake from deep sleep.
 - **Original FW ext1 bitmask**: 0x1002 = GPIO1 | GPIO12 (factory firmware predates our USB-detect-on-14 finding).
 - **USB-Serial/JTAG disconnects during deep sleep**: this causes the USB host to reset the chip, which appears as a fresh boot (wakeup cause UNDEFINED). Firmware detects this via an RTC memory flag to avoid re-displaying / looping — see [`firmware_design.md`](firmware_design.md).
-- **Target sleep current**: ~8µA with RTC GPIO isolation.
 
 ## Boot Hazards
 - **CTRL pins LOW at boot**: gpio_config() defaults output to 0 (LOW = CS active). Display sees garbage during SPI bus init. Must set CTRL HIGH before spi_bus_initialize()
@@ -205,4 +185,3 @@ Consequence for the current firmware's design choices is documented in
 - helper_spi_cmd: 0x4200BEC8
 - helper_spi_bulk: 0x4200BDE0
 - spi_device_polling_transmit: 0x420554E0
-
