@@ -6,10 +6,8 @@ Confirmed findings get moved to [`hardware_facts.md`](hardware_facts.md).
 ## Platform
 
 - **OS**: Bare-metal RTOS, likely XR Skylark SDK (FreeRTOS-based) — inferred from SoC identity; no Android/Linux on Cortex-M4
-- **External flash**: QSPI NOR flash, separate SOP-8 or WSON-8 chip near the XR872AT — required by XR872AT architecture (no internal flash)
-  - Size: likely 2–4 MB; exact part unknown (GD25Qxx or W25Qxx family typical for this SoC)
-  - Encryption: likely absent — no known consumer XR872AT product ships with flash encryption
-- **USB port**: confirmed present with CH340 USB-to-serial (VID 1A86:7523, COM6); exposes UART0 at 115200 baud — confirmed working for boot log capture. Whether it's usable for PhoenixMC firmware dump at 921600 baud is untested.
+- **External flash**: QSPI NOR flash — **confirmed 4 MB Zbit JEDEC 0x5E4016** (moved to facts). Boot partition code also contains drivers for Puya P25QXXH and XTX XT25WXXB flash chips — inferred that the same firmware binary supports multiple hardware variants.
+- **USB port**: confirmed present with CH340 USB-to-serial (VID 1A86:7523, COM6); exposes UART0 at 115200 baud — confirmed working for boot log capture.
 
 ## GPIO Map
 
@@ -49,22 +47,12 @@ From XR872AT datasheet — not verified on this device:
 
 Almost certainly disabled. Consumer picture frame, no public evidence of signed firmware requirement. eFuse state unknown until device is accessed.
 
-## Flash Layout
-
-From XR872AT SDK `image.cfg` — not verified against this device's flash dump:
-
-| Offset | Expected Content |
-|--------|-----------------|
-| 0 KB | Stage-1 bootloader, magic `0xa5ff5a00` |
-| 32 KB | Application image, `AWIH` header / magic `0xa5fe5a01` |
-| ~980 KB | WLAN bootloader |
-| ~985 KB | WLAN firmware |
-| ~1017 KB | WLAN SDD config |
-| ~1024 KB | OTA partition |
-
 ## Display
 
-- **Controller**: Unknown — to be determined from firmware analysis. Candidates: IT8951, UC8179, or custom
-- **Pixel format**: Unknown — likely 4bpp but 7-color nibble mapping differs from EPF1301's 6-color Spectra 6
-- **Refresh time**: ~20–30 seconds estimated for ACeP
+Flash partition layout is now confirmed — see [`hardware_facts.md`](hardware_facts.md).
+
+- **Controller**: Unknown. The binary has no controller name string. Driver is SRAM-loaded (boot partition). Candidates: UC8159, UC8179, or proprietary Bigme/E Ink controller. The `check_busy_high` pattern (polling a BUSY pin high before sending commands) is consistent with E Ink ACeP controllers.
+- **Pixel format**: Unknown. No image format strings (`jpeg`, `bmp`, `png`, `raw`) found anywhere in the 4 MB dump. The XR872AT has a hardware JPEG decoder (used for its camera interface) — likely used here so no software JPEG library is needed.
+- **Inferred image format**: JPEG at 800×480. Hardware decode → 7-color quantisation → EPD SPI stream. This would explain why there are no JPEG library strings. **Not confirmed** — needs network traffic capture.
+- **Refresh time**: ~20–30 seconds estimated for ACeP full refresh
 - **Panel part number**: Likely GDEP073E01 or equivalent 7.3" Spectra 6 module — not confirmed

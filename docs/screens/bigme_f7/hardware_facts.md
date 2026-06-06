@@ -30,8 +30,10 @@ Manufacturer: Bigme Cloud Literacy Technology Co., Ltd. / xrztech.com
 ## Firmware
 
 Source: UART boot log captured 2026-06-06, full log at `.private/screens/bigme_f7/uart_log_20260606_104615.txt`
+Binary analysis of flash dump performed 2026-06-06; partition files in `.private/screens/bigme_f7/partitions/`.
 
 - **SDK**: XRADIO Skylark SDK 1.2.3
+- **App firmware version**: **1.2.7** (string literal `1.2.7` at boot payload offset 0x84B1)
 - **Build date**: Aug 7 2025 15:44:24
 - **WLAN firmware version**: R-XR_C10.08.52.64_01.80 (built Jul 6 2019)
 - **WLAN driver version**: XR_V02.06.28
@@ -40,6 +42,35 @@ Source: UART boot log captured 2026-06-06, full log at `.private/screens/bigme_f
 - **BROM version**: 2 (confirmed via PhoenixMC flash ID dialog)
 - **Dump procedure**: [`firmware_dump_procedure.md`](firmware_dump_procedure.md)
 - **MAC address (efuse)**: 18:9e:2d:f9:87:54
+
+## Flash Partition Layout
+
+Confirmed from AWIH header analysis of flash dump. Each partition image has its own 64-byte AWIH header.
+
+| Flash offset | Size | Name | Load | Payload size |
+|---|---|---|---|---|
+| 0x000000 | 32 KB | Main image table | — | 10 KB (partition table) |
+| 0x008000 | 128 KB | Boot / app | SRAM 0x20201000, EP 0x20201100 | 48 KB |
+| 0x028000 | 819 KB | App XIP | XIP (runs from flash) | 757 KB |
+| 0x0F4C00 | 4 KB | WLAN bootloader | XIP | 2 KB |
+| 0x0F5C00 | 35 KB | WLAN firmware | XIP | 34 KB |
+| 0x0FE800 | ~3 MB | WLAN SDD data | — | 1 KB |
+
+The EPD display driver lives in the **Boot partition** (SRAM-loaded). Confirmed EPD functions found:
+`check_busy_high`, `epd_test` (with sub-steps 1, 11, 2, 3).
+
+## Cloud Connectivity
+
+Source: string literals extracted from boot partition binary, 2026-06-06. Full protocol in [`cloud_protocol.md`](cloud_protocol.md).
+
+- **Cloud server**: `http://ereader.bigme.vip:8086`
+- **MQTT broker**: `120.76.40.178:1883`
+- **MQTT credentials**: user `mqt_user`, password `xrz86112763`
+- **MQTT topics**: `iot/device/<deviceId>`, `iot/device/willTopic`, `iot/device/sever_topic`
+- **Device ID format**: `BIGME_<MAC>` (e.g. `BIGME_189E2DF98754`)
+- **Setup AP SSID**: `BigmeFrameRouter`, password `88888888`
+- **Operational AP SSID**: `XRZ_<MAC>` (used during WiFi provisioning)
+- **Default timezone**: UTC+8 (`TZ=GMT-8` is the POSIX convention for Asia/Shanghai)
 
 ## Antenna
 
