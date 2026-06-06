@@ -9,8 +9,7 @@ Confirmed findings get moved to [`hardware_facts.md`](hardware_facts.md).
 - **External flash**: QSPI NOR flash, separate SOP-8 or WSON-8 chip near the XR872AT — required by XR872AT architecture (no internal flash)
   - Size: likely 2–4 MB; exact part unknown (GD25Qxx or W25Qxx family typical for this SoC)
   - Encryption: likely absent — no known consumer XR872AT product ships with flash encryption
-- **Crystal frequency**: visible in FCC photo 12 but not readable; likely 24 MHz or 40 MHz (both supported by XR872AT SDK)
-- **USB port**: present for charging; may also expose UART0 via USB-to-serial IC — unknown
+- **USB port**: confirmed present with CH340 USB-to-serial (VID 1A86:7523, COM6); exposes UART0 at 115200 baud — confirmed working for boot log capture. Whether it's usable for PhoenixMC firmware dump at 921600 baud is untested.
 
 ## GPIO Map
 

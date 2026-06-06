@@ -22,6 +22,21 @@ Manufacturer: Bigme Cloud Literacy Technology Co., Ltd. / xrztech.com
 - **Boot ROM**: 160 KB (from datasheet)
 - **WiFi**: 2.4 GHz 802.11b/g/n, integrated (from datasheet)
 - **NOT an ESP32** — esptool does not work; see [`hardware_guesses.md`](hardware_guesses.md) for tooling
+- **Crystal**: 40 MHz (confirmed from boot log: `HF clock 40000000 Hz`)
+- **CPU clock in use**: 240 MHz (confirmed from boot log: `cpu clock 240000000 Hz`; max is 384 MHz per datasheet)
+- **XIP**: enabled (confirmed from boot log: `XIP: enable`)
+- **SRAM heap available**: 332,156 bytes at [0x21ca84, 0x26dc00) (confirmed from boot log)
+
+## Firmware
+
+Source: UART boot log captured 2026-06-06, full log at `.private/screens/bigme_f7/uart_log_20260606_104615.txt`
+
+- **SDK**: XRADIO Skylark SDK 1.2.3
+- **Build date**: Aug 7 2025 15:44:24
+- **WLAN firmware version**: R-XR_C10.08.52.64_01.80 (built Jul 6 2019)
+- **WLAN driver version**: XR_V02.06.28
+- **Flash JEDEC ID**: 0x0 (chip does not respond to standard JEDEC probe — non-standard or internally-mapped flash)
+- **MAC address (efuse)**: 18:9e:2d:f9:87:54
 
 ## Antenna
 
@@ -32,6 +47,7 @@ PCB trace antenna, labeled "Antenna" with arrow in FCC internal photo 12.
 - **Shape**: L-shaped, wraps along bottom and one side of the display (FCC photos 10/11)
 - **Display connector**: Wide FPC/ZIF connector at the bottom edge (FCC photos 10/11)
 - **Button**: Single power button on the bottom of the frame (product description + FCC external photos)
+- **USB-to-serial**: CH340 bridge (USB VID 1A86:7523), exposes XR872AT UART0 at 115200 baud (confirmed 2026-06-06)
 
 ## Battery
 
