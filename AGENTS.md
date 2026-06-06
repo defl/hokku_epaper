@@ -55,7 +55,8 @@ Firmware uses `PROTOCOL.CONFIG.N` versioning stored in `firmware/VERSION`:
 - Do not create or leave `.py` files in the repo root
 
 ## Hardware
-- Known facts: `docs/hardware_facts.md` (may be inaccurate — treat with caution)
+- Per-screen hardware facts live under `docs/screens/<screen_id>/hardware_facts.md` (may be inaccurate — treat with caution)
+- EPF1301 (Hokku 13.3"): `docs/screens/epf1301/hardware_facts.md`
 
 ## Repository
 - GitHub: `https://github.com/defl/hokku_epaper`
