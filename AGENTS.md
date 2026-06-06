@@ -55,9 +55,11 @@ Firmware uses `PROTOCOL.CONFIG.N` versioning stored in `firmware/VERSION`:
 - Do not create or leave `.py` files in the repo root
 
 ## Hardware
-- Per-screen hardware facts live under `docs/screens/<screen_id>/hardware_facts.md` (may be inaccurate — treat with caution)
+
+**Rule**: `hardware_facts.md` contains ONLY empirically confirmed or definitively documented information (chip markings, measured values, official spec sheets). Inferences, SDK defaults, estimates, and unknowns belong in `hardware_guesses.md` in the same directory. Never mix the two.
+
 - EPF1301 (Hokku 13.3"): `docs/screens/epf1301/hardware_facts.md`
-- Bigme F7 (7.3" ACeP): `docs/screens/bigme_f7/hardware_facts.md` — XR872AT SoC, firmware not yet dumped
+- Bigme F7 (7.3" ACeP): `docs/screens/bigme_f7/hardware_facts.md` + `hardware_guesses.md` — XR872AT SoC, firmware not yet dumped
 
 ## Repository
 - GitHub: `https://github.com/defl/hokku_epaper`
