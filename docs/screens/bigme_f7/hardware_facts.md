@@ -35,7 +35,10 @@ Source: UART boot log captured 2026-06-06, full log at `.private/screens/bigme_f
 - **Build date**: Aug 7 2025 15:44:24
 - **WLAN firmware version**: R-XR_C10.08.52.64_01.80 (built Jul 6 2019)
 - **WLAN driver version**: XR_V02.06.28
-- **Flash JEDEC ID**: 0x0 (chip does not respond to standard JEDEC probe — non-standard or internally-mapped flash)
+- **Flash chip**: Zbit Semiconductor SPI NOR, **4 MB**, JEDEC ID `0x5E4016`
+- **Flash dump**: `.private/screens/bigme_f7/flash_dump.bin` (4,194,304 bytes, `AWIH` magic, captured 2026-06-06)
+- **BROM version**: 2 (confirmed via PhoenixMC flash ID dialog)
+- **Dump procedure**: [`firmware_dump_procedure.md`](firmware_dump_procedure.md)
 - **MAC address (efuse)**: 18:9e:2d:f9:87:54
 
 ## Antenna
