@@ -21,15 +21,22 @@ Confirmed from functions at 0x0020707A (send_cmd) and 0x002070F2 (send_data).
 **Protocol**: 9-bit frames — first bit = D/C, next 8 bits = data, MSB first.
 CS is asserted (LOW) around each byte.
 
-| XR872AT GPIO | EPD pin | Active level |
+| XR872AT GPIO | EPD function | Notes |
 |---|---|---|
-| PA9  (0x09) | BUSY | HIGH = ready |
-| PA19 (0x13) | MOSI / D/C | — |
-| PA21 (0x15) | SCLK | rising edge |
-| PA22 (0x16) | CS | LOW = asserted |
+| PA8  (0x08) | Static LOW output | Purpose unknown; never toggled after init |
+| PA9  (0x09) | BUSY input | Pull-up; HIGH = controller ready |
+| PA13 (0x0D) | RST, active LOW | Double-pulse on init (see RST sequence below) |
+| PA15 (0x0F) | Static LOW output | Purpose unknown; never toggled after init |
+| PA16 (0x10) | Static HIGH output | Purpose unknown; never toggled after init |
+| PA19 (0x13) | MOSI / D/C | 9-bit SPI: first bit = D/C flag, then 8 data bits |
+| PA21 (0x15) | SCLK | Idle LOW; data sampled on rising edge |
+| PA22 (0x16) | CS | Active LOW; asserted around each 9-bit byte |
+| PB17 (0x11) | POWER_EN | Active HIGH; set on at init, stays on during session |
 
-Additional pins set during hardware init (exact functions not yet confirmed):
-PA8, PA13, PA15, PA16, PA17 — likely RST and power-enable signals.
+PA8/PA15/PA16 are confirmed static via disassembly — they appear in `EpaperIO_Init`
+and `epd_step1` but are never touched again in the entire EPD cycle including shutdown.
+They likely control board-level power rails or panel mode selection; the EPD works with
+these values so match them exactly.
 
 ### Bit-bang implementation
 
@@ -88,26 +95,86 @@ Matches EK79655 / Waveshare 7in3f. Commands used in the firmware:
 | 0x84 | (custom) | Unknown |
 | 0xE3 | PWS | Power saving |
 
-## Initialization Sequence
+## Full Init Call Graph
 
-Called at epd_test step 2 (function `EPD_step2` at 0x00207228):
+Confirmed from disassembly of `epd_init_parent` at 0x002073D8:
 
 ```
-wait BUSY HIGH           ; controller must be ready before init
+epd_init_parent(image_ptr)
+  EpaperIO_Init (0x00206F94)     ← configure all GPIO directions/drive/pull
+  epd_step1     (0x00207024)     ← set initial pin states
+  EPD_step2     (0x00207228)     ← RST pulse + wait busy + command sequence
+  send_image_data(image_ptr)     ← DTM + PON + DRF + POF
+  PB17 = LOW                     ← power off after image sent
+```
+
+## Initialization Sequence
+
+### GPIO init (EpaperIO_Init, 0x00206F94)
+
+Sets mode, drive strength, pull for every EPD pin.
+Order matches the disassembly exactly:
+
+```
+PA8  → OUTPUT, drive=1, pull=NONE
+PA13 → OUTPUT, drive=1, pull=NONE   (RST)
+PA22 → OUTPUT, drive=1, pull=NONE   (CS)
+PA21 → OUTPUT, drive=1, pull=NONE   (SCLK)
+PA19 → OUTPUT, drive=1, pull=NONE   (MOSI/DC)
+PA16 → OUTPUT, drive=1, pull=NONE
+PA15 → OUTPUT, drive=1, pull=NONE
+PA9  → INPUT,  drive=1, pull=UP     (BUSY)
+PB17 → OUTPUT, drive=3, pull=UP     (POWER_EN, high drive strength)
+```
+
+### Initial pin states (epd_step1, 0x00207024)
+
+```
+PA21 (SCLK)  = 0   (idle LOW)
+PA19 (MOSI)  = 1   (HIGH)
+PA22 (CS)    = 1   (deasserted)
+PA16         = 1
+PA15         = 0
+PA8          = 0
+PA13 (RST)   = 1   (deasserted)
+PB17 (POWER) = 1   (power on)
+```
+
+### RST double-pulse (RST_pulse fn, 0x002071E8)
+
+Called at the **start** of EPD_step2, before wait_busy. Confirmed from disassembly:
+
+```
+PA13 = 0 (assert RST)
+OS_MSleep(100 ms)
+PA13 = 1 (deassert RST)
+OS_MSleep(100 ms)
+PA13 = 0 (assert RST again)
+OS_MSleep(100 ms)
+PA13 = 1 (deassert RST, final)
+← no trailing delay; next instruction is wait_busy_high
+```
+
+### EK79655 command sequence (EPD_step2 continued, 0x00207228)
+
+After the RST pulse:
+
+```
+wait BUSY HIGH           ; wait for controller ready after RST
 
 CMD 0xAA, DATA: 49 55 20 08 09 18   ; CMDH: enable register writes
 CMD 0x01, DATA: 3F                   ; PWR
-CMD 0x00, DATA: 5F 69                ; PSR
-CMD 0x05, DATA: 40 1F 1F 2C          ; booster
-CMD 0x08, DATA: 6F 1F 1F 22          ; booster
-CMD 0x06, DATA: 6F 1F 17 17          ; BTST
-CMD 0x03, DATA: 00 54 00 44          ; (unknown booster)
-CMD 0x60, DATA: 02 00                ; TCON
-CMD 0x30, DATA: 08                   ; PLL
-CMD 0x50, DATA: 3F                   ; CDI (VCOM)
-CMD 0x61, DATA: 03 20 01 E0          ; TRES: 0x0320=800 × 0x01E0=480 pixels
-CMD 0xE3, DATA: 2F                   ; PWS
-CMD 0x84, DATA: 01                   ; (custom)
+CMD 0x00, DATA: 5F 69               ; PSR
+CMD 0x05, DATA: 40 1F 1F 2C         ; POFS (power-off sequence)
+CMD 0x08, DATA: 6F 1F 1F 22         ; BTST1 (booster soft-start 1)
+CMD 0x06, DATA: 6F 1F 17 17         ; BTST2 (booster soft-start 2)
+CMD 0x03, DATA: 00 54 00 44         ; BTST_N (negative booster)
+CMD 0x60, DATA: 02 00               ; TCON
+CMD 0x30, DATA: 08                  ; PLL (frame rate)
+CMD 0x50, DATA: 3F                  ; CDI (VCOM and data interval)
+CMD 0x61, DATA: 03 20 01 E0         ; TRES: 0x0320=800 × 0x01E0=480 pixels
+CMD 0xE3, DATA: 2F                  ; PWS (power saving)
+CMD 0x84, DATA: 01                  ; vendor-specific
 ```
 
 ## Image Update Sequence
