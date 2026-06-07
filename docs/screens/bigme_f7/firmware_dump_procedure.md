@@ -1,4 +1,4 @@
-# Bigme F7 — Firmware Dump Procedure
+# Bigme F7 — Firmware Dump and Flash Procedure
 
 Full 4 MB flash dump successfully obtained 2026-06-06 (repeated 2026-06-06 to verify automation).
 Dumps stored at `.private/screens/bigme_f7/flash_dump.bin` and `flash_dump_20260606.bin` (4,194,304 bytes each, `AWIH` magic — valid XR872AT images).
@@ -105,3 +105,37 @@ Scripts: `tools/phoenixmc_open.py`, `tools/phoenixmc_read.py`
   remote pointer. See `remote_lv_setstate()` in `phoenixmc_open.py`.
 - All button clicks use `SendMessageW(hwnd, BM_CLICK, 0, 0)` directly on the handle
 - Dialog title varies by version: `"flash operation"` or `"phoenixMC"` (both handled)
+
+## Flashing Custom Firmware
+
+To write `firmware_bigme_f7/image/xr872/xr_system.img` back to the device:
+
+### Automated Procedure (preferred)
+
+```
+python tools/phoenixmc_open.py
+```
+
+When `Open comm OK!` appears, run:
+
+```
+python tools/phoenixmc_flash.py
+```
+
+This clicks FLASH 写入, handles the file-open dialog (injects the image path, clicks Open),
+and monitors for `Write OK!`. Takes ~2 minutes. Status changes to `Write OK!` on success.
+
+### Manual Procedure (fallback)
+
+1. Follow steps 1–5 of the Manual Read Procedure to open the debug dialog and connect.
+2. In the FLASH section, ensure **地址** is `00000000`.
+3. Click **写入** in the FLASH row. A file-open dialog appears.
+4. Navigate to `firmware_bigme_f7/image/xr872/xr_system.img` and click Open.
+5. Status changes to `Writing flash data...N%`, then `Write OK!` when done.
+6. Click **reboot** in the SYSTEM section (or power-cycle the device).
+
+### After Flashing
+
+- Click **reboot** in the SYSTEM section, or long-press the power button to restart.
+- The device will boot the new firmware and attempt WiFi connection.
+- Provision WiFi via UART console: `net sta config <ssid> <password>` then `net sta enable`.
