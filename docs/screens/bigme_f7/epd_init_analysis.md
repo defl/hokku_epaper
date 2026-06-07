@@ -25,10 +25,9 @@ The app note and Waveshare driver contradict each other (double vs single pulse,
 Bigme OEM follows the app note's double-pulse pattern with more conservative 100ms timing.
 Our firmware matches the OEM exactly.
 
-The 30ms post-BUSY delay present in the Waveshare driver is absent in both OEM and our
-firmware. OEM works on real hardware without it, so this is intentional. If the display
-proves unreliable on first boot, add `OS_MSleep(30)` after `epd_wait_busy()` in
-`epd_run_init_sequence()` as the first thing to try.
+The 30ms post-BUSY delay present in the Waveshare driver is absent in the OEM firmware.
+Our firmware adds it (`OS_MSleep(30)` after `epd_wait_busy()` in `epd_run_init_sequence`)
+as a conservative measure — it has no user-visible cost and matches the app note intent.
 
 ## Init Command Sequence
 

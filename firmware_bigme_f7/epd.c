@@ -173,6 +173,7 @@ static void epd_run_init_sequence(void)
 {
     epd_rst_pulse();    /* must come first, before wait_busy */
     epd_wait_busy();
+    OS_MSleep(30);      /* per Waveshare app note: settle before first command */
 
     epd_send_cmd(0xAA);
     epd_send_data(0x49); epd_send_data(0x55); epd_send_data(0x20);

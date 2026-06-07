@@ -65,5 +65,13 @@ Firmware uses `PROTOCOL.CONFIG.N` versioning stored in `firmware/VERSION`:
 - `huessen_epf1301` (Hokku/Huessen 13.3"): `docs/screens/huessen_epf1301/hardware_facts.md`
 - `bigme_f7` (Bigme F7 7.3" ACeP): `docs/screens/bigme_f7/hardware_facts.md` + `hardware_guesses.md` — XR872AT SoC, firmware not yet dumped
 
+## Datasheets
+
+`docs/datasheets/` is a repository of third-party reference documents (PDFs).
+
+**Rule**: Every file added to `docs/datasheets/` MUST have a corresponding entry in
+`docs/datasheets/ATTRIBUTION.md` listing: filename, source URL, license/terms, and
+reason for inclusion. Add the entry in the same commit as the file.
+
 ## Repository
 - GitHub: `https://github.com/defl/hokku_epaper`
