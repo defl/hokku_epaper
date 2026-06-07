@@ -78,7 +78,15 @@ booster pre-conditioning step the manufacturer added for their specific panel.
 
 ## Verdict
 
-Our firmware is a faithful match to the Bigme F7 OEM. Every command, parameter, the double
-RST pulse, and the BTST re-send before DRF all match the disassembly. The deviations from
-the Waveshare reference driver are the Bigme manufacturer's deliberate tuning choices, not
-bugs.
+Our firmware closely matches the Bigme F7 OEM with two deliberate improvements over it:
+
+1. **20ms VDD→RST delay** (added in commit `3775984`): specified in app note Figure 10;
+   OEM skips it but it costs nothing and ensures power rails are stable before the first RST edge.
+
+2. **30ms post-BUSY delay** (after `epd_wait_busy()` in `epd_run_init_sequence`): present in
+   the Waveshare driver; absent in OEM; added as a conservative settle margin.
+
+All commands, parameters, the double RST pulse, and the BTST re-send before DRF match the
+OEM disassembly exactly. One known deviation from the app note remains intentional: the app
+note v0.31 says the full double-pulse reset process should be done twice (4 RST edges); the
+OEM does it once and our firmware follows the OEM.
