@@ -25,8 +25,14 @@ def wins():
     ]
 
 
+# Dialog title is "flash operation" on some versions, "phoenixMC" on others
 dlg = next(
-    (w for w in wins() if w.window_text() == "flash operation" and len(w.children()) > 5), None
+    (
+        w
+        for w in wins()
+        if w.window_text() in ("flash operation", "phoenixMC") and len(w.children()) > 5
+    ),
+    None,
 )
 if not dlg:
     print("ERROR: flash operation dialog not found")
@@ -81,7 +87,7 @@ candidates = [
     PHOENIXMC_DIR / "flash_A_0x0_L_0x200000.bin",
 ]
 print("Waiting for dump file to grow...")
-deadline = time.monotonic() + 120
+deadline = time.monotonic() + 420  # 7 min — 4 MB at 115200 baud takes ~5 min
 last_sz = -1
 while time.monotonic() < deadline:
     time.sleep(1)
@@ -92,7 +98,7 @@ while time.monotonic() < deadline:
                 pct = sz * 100 // 0x400000
                 print(f"  {f.name}: {sz:,} bytes ({pct}%)")
                 last_sz = sz
-            if sz >= 0x200000:
+            if sz >= 0x400000:
                 print(f"\nDone! {f}  ({sz:,} bytes)")
                 sys.exit(0)
         except FileNotFoundError:

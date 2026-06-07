@@ -1,7 +1,7 @@
 # Bigme F7 — Firmware Dump Procedure
 
-Full 4 MB flash dump successfully obtained 2026-06-06.
-Dump stored at `.private/screens/bigme_f7/flash_dump.bin` (4,194,304 bytes, `AWIH` magic — valid XR872AT image).
+Full 4 MB flash dump successfully obtained 2026-06-06 (repeated 2026-06-06 to verify automation).
+Dumps stored at `.private/screens/bigme_f7/flash_dump.bin` and `flash_dump_20260606.bin` (4,194,304 bytes each, `AWIH` magic — valid XR872AT images).
 
 ## Hardware Setup
 
@@ -41,7 +41,24 @@ bFlashCompat = 1
 bUseNewBrom = 1         ; correct for BROM version 2
 ```
 
-## Step-by-Step Procedure
+## Automated Procedure (preferred)
+
+```
+python tools/phoenixmc_open.py
+```
+
+This launches PhoenixMC, checks the COM6 listview, and opens the debug dialog automatically.
+When it prints `Long-press the F7 power button...`, do so to enter BROM mode.
+When the dialog shows `Open comm OK!`, run:
+
+```
+python tools/phoenixmc_read.py
+```
+
+This sets FLASH length to 4 MB, clicks 读取, and monitors progress. Takes ~5 minutes.
+Output: `flash_A_0x0_L_0x400000.bin` in the PhoenixMC directory (~5 min, progress logged).
+
+## Manual Procedure (fallback)
 
 1. Plug the device in via USB-C. It will enumerate as COM6.
 2. Launch `phoenixMC.exe` from `phoenixmc_v3.1.240901a/`.
@@ -77,10 +94,14 @@ bUseNewBrom = 1         ; correct for BROM version 2
 
 ## Automation Notes
 
-Python automation via `pywinauto` works for the dialog interaction once the dialog is open:
-- Use `set_edit_text()` + `SendMessageW(handle, BM_CLICK, 0, 0)` for all dialog actions
-- Do NOT use `click_input()` — it moves the real mouse
-- Scripts: `tools/phoenixmc_open.py`, `tools/phoenixmc_read.py`
+Scripts: `tools/phoenixmc_open.py`, `tools/phoenixmc_read.py`
 
-The COM6 listview checkbox and main window button must be clicked manually — automated
-approaches caused PhoenixMC instability in testing.
+**Key constraints for automation:**
+- Do NOT use `click_input()` — it moves the real mouse
+- Do NOT use `ctypes.byref()` to pass struct pointers to PhoenixMC via `SendMessageW` —
+  PhoenixMC.exe is **32-bit**; from 64-bit Python the pointer is truncated by WOW64, crashing it
+- For `LVM_SETITEMSTATE` (listview checkbox): use `VirtualAllocEx` + `WriteProcessMemory` to
+  write the `LVITEM` struct into the target process's own 32-bit address space, then pass that
+  remote pointer. See `remote_lv_setstate()` in `phoenixmc_open.py`.
+- All button clicks use `SendMessageW(hwnd, BM_CLICK, 0, 0)` directly on the handle
+- Dialog title varies by version: `"flash operation"` or `"phoenixMC"` (both handled)

@@ -67,3 +67,8 @@ include $(PRJ_MAKE_RULES)
 
 # Override IMAGE_TOOL now that MKIMAGE is defined (set in gcc.mk above).
 IMAGE_TOOL := $(ROOT_PATH)/tools/$(MKIMAGE)
+
+# Strip debug info — DWARF is stripped by objcopy anyway (not in .bin),
+# but removing it speeds up compilation and shrinks intermediate artifacts.
+# DBG_FLAG uses recursive (=) assignment in gcc.mk so overriding here works.
+DBG_FLAG :=
