@@ -69,9 +69,10 @@ Firmware uses `PROTOCOL.CONFIG.N` versioning stored in `firmware/VERSION`:
 
 `docs/datasheets/` is a repository of third-party reference documents (PDFs).
 
-**Rule**: Every file added to `docs/datasheets/` MUST have a corresponding entry in
-`docs/datasheets/ATTRIBUTION.md` listing: filename, source URL, license/terms, and
-reason for inclusion. Add the entry in the same commit as the file.
+**Rule**: PDF files are NOT committed (`.gitignore` covers `*.pdf`). Add the download
+URL and notes to `docs/datasheets/ATTRIBUTION.md` and a `dl` line to
+`docs/datasheets/download.sh` instead. Both files are committed; the PDFs are not.
+Do this in the same commit as any other change that references the datasheet.
 
 ## Repository
 - GitHub: `https://github.com/defl/hokku_epaper`
