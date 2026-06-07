@@ -50,7 +50,7 @@ Confirmed from AWIH header analysis of flash dump. Each partition image has its 
 | Flash offset | Size | Name | Load | Payload size |
 |---|---|---|---|---|
 | 0x000000 | 32 KB | Main image table | — | 10 KB (partition table) |
-| 0x008000 | 128 KB | Boot / app | SRAM 0x20201000, EP 0x20201100 | 48 KB |
+| 0x008000 | 128 KB | Boot / app | SRAM 0x00201000, EP 0x00201100 | 48 KB |
 | 0x028000 | 819 KB | App XIP | XIP (runs from flash) | 757 KB |
 | 0x0F4C00 | 4 KB | WLAN bootloader | XIP | 2 KB |
 | 0x0F5C00 | 35 KB | WLAN firmware | XIP | 34 KB |
@@ -98,14 +98,22 @@ Source: label visible in FCC internal photo 9.
 
 ## Display
 
-Source: Bigme official product description and E Ink Spectra 6 panel specification.
+Source: product description + E Ink Spectra 6 spec + disassembly of boot partition (2026-06-06).
+Full driver analysis: [`display_driver.md`](display_driver.md)
 
 - **Technology**: E Ink Spectra 6 (ACeP)
 - **Size**: 7.3 inch
-- **Resolution**: 800×480 pixels
+- **Resolution**: 800×480 pixels (confirmed by TRES command 0x61 params 0x0320, 0x01E0 in firmware)
 - **PPI**: 127.8
 - **Colors**: 7 (black, white, red, green, blue, yellow, orange)
 - **No backlight**
+- **Controller**: EK79655 or direct compatible — initialization sequence is byte-for-byte identical to
+  Waveshare EPD_7in3f open source driver; confirmed from boot partition disassembly
+- **Image format**: 192,000 bytes raw, 4 bits per pixel, 2 pixels per byte (upper nibble = left pixel)
+  Color encoding: 0=Black, 1=White, 2=Green, 3=Blue, 4=Red, 5=Yellow, 6=Orange
+- **SPI interface**: bit-banged, 9-bit frames (1 D/C bit + 8 data bits), MSB first
+  PA19=MOSI/DC, PA21=SCLK, PA22=CS (active low), PA9=BUSY input (HIGH = ready)
+- **Refresh time**: ~20–30 seconds for full ACeP refresh
 
 ## Key References
 

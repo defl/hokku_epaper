@@ -24,7 +24,9 @@ All pin assignments below are XR872AT SDK defaults. The device vendor may use an
 | PB6 | FLASH_CS | XR872AT hardware-fixed |
 | PB7 | FLASH_CLK | XR872AT hardware-fixed |
 
-Display SPI CS, RST, BUSY, PWR pins: entirely unknown — to be determined from firmware analysis.
+Display SPI pins — confirmed from boot partition disassembly 2026-06-06 (moved to facts):
+PA9=BUSY (input), PA19=MOSI/DC, PA21=SCLK, PA22=CS (active low).
+Remaining unknown: which of PA8, PA13, PA15, PA16, PA17 is RST vs power-enable.
 
 ## UART / Boot Protocol
 
@@ -49,10 +51,9 @@ Almost certainly disabled. Consumer picture frame, no public evidence of signed 
 
 ## Display
 
-Flash partition layout is now confirmed — see [`hardware_facts.md`](hardware_facts.md).
+Controller, image format, and SPI pins are now fully confirmed — see [`hardware_facts.md`](hardware_facts.md) and [`display_driver.md`](display_driver.md).
 
-- **Controller**: Unknown. The binary has no controller name string. Driver is SRAM-loaded (boot partition). Candidates: UC8159, UC8179, or proprietary Bigme/E Ink controller. The `check_busy_high` pattern (polling a BUSY pin high before sending commands) is consistent with E Ink ACeP controllers.
-- **Pixel format**: Unknown. No image format strings (`jpeg`, `bmp`, `png`, `raw`) found anywhere in the 4 MB dump. The XR872AT has a hardware JPEG decoder (used for its camera interface) — likely used here so no software JPEG library is needed.
-- **Inferred image format**: JPEG at 800×480. Hardware decode → 7-color quantisation → EPD SPI stream. This would explain why there are no JPEG library strings. **Not confirmed** — needs network traffic capture.
-- **Refresh time**: ~20–30 seconds estimated for ACeP full refresh
+Remaining unknowns:
 - **Panel part number**: Likely GDEP073E01 or equivalent 7.3" Spectra 6 module — not confirmed
+- **RST pin**: PA15 is set LOW during GPIO init (EPD_init_2) suggesting active-low reset, but not conclusively confirmed vs PA8/PA13/PA16/PA17
+- **Image transfer**: Confirmed 192000 raw bytes sent over SPI. Whether the `pictureUrl` HTTP response is also raw 4bpp or JPEG (hardware-decoded first) is still unknown — needs traffic capture to confirm
