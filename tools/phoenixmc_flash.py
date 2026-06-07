@@ -1,6 +1,9 @@
 """Step 2: Flash xr_system.img to the Bigme F7 via the open PhoenixMC debug dialog.
 No mouse used — all via Windows messages.
 
+The FLASH 写入 button opens a Windows file-open dialog; this script handles that
+dialog by injecting the path into the filename field and clicking Open.
+
 Usage (after phoenixmc_open.py has connected the device):
     python tools/phoenixmc_flash.py
 """
@@ -14,10 +17,6 @@ import time
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 from pywinauto import Desktop
-
-PHOENIXMC_DIR = (
-    pathlib.Path(__file__).parents[1] / ".private/screens/bigme_f7/tools/phoenixmc_v3.1.240901a"
-)
 
 IMAGE_PATH = (
     pathlib.Path(__file__).parents[1] / "firmware_bigme_f7/image/xr872/xr_system.img"
@@ -33,6 +32,10 @@ def wins():
     ]
 
 
+def win_handles():
+    return {w.handle for w in wins()}
+
+
 # ── Find flash dialog ──────────────────────────────────────────────────────────
 
 dlg = next(
@@ -46,101 +49,21 @@ dlg = next(
 if not dlg:
     print("ERROR: flash operation dialog not found — run phoenixmc_open.py first")
     sys.exit(1)
+print(f"Flash dialog: {dlg.window_text()!r}")
 
-# ── Dump all controls for diagnosis ───────────────────────────────────────────
-
-print(f"\nDialog: {dlg.window_text()!r}  ({len(dlg.children())} controls)")
-print(f"{'#':<4} {'Class':<22} {'Text':<40} {'Rect'}")
-print("-" * 100)
-children = sorted(dlg.children(), key=lambda c: c.rectangle().top)
-for i, c in enumerate(children):
-    try:
-        txt = repr(c.window_text())
-    except Exception:
-        txt = "?"
-    try:
-        cls = c.class_name()
-    except Exception:
-        cls = "?"
-    try:
-        r = c.rectangle()
-        rect_str = f"({r.left},{r.top})-({r.right},{r.bottom})"
-    except Exception:
-        rect_str = "?"
-    print(f"{i:<4} {cls:<22} {txt:<40} {rect_str}")
-
-# ── Find FLASH 写入 (write/burn) button ────────────────────────────────────────
-
-write_btns = sorted(
-    [
-        (c.rectangle().top, c)
-        for c in dlg.children()
-        if c.class_name() == "Button" and ("写入" in c.window_text() or "烧录" in c.window_text())
-    ],
-    key=lambda x: x[0],
-)
-print(f"\n{len(write_btns)} write button(s):")
-for y, c in write_btns:
-    print(f"  y={y}  {c.window_text()!r}  handle={c.handle}")
-
-if not write_btns:
-    print("\nERROR: no 写入/烧录 button found — check control dump above")
-    sys.exit(1)
-
-# FLASH 写入 is the second from top (below MEMORY 写入), same pattern as read
-write_btn = write_btns[1][1] if len(write_btns) > 1 else write_btns[0][1]
-print(f"\nUsing write button: {write_btn.window_text()!r} (y={write_btn.rectangle().top})")
-
-# ── Find the file path Edit field ─────────────────────────────────────────────
-# PhoenixMC puts a file path field near the write button.
-# Strategy: find Edit fields that look like file paths (contain '\\' or '.bin' or '.img'),
-# or the Edit field closest to (and above) the write button.
-
-write_btn_y = write_btn.rectangle().top
-
-file_edits = []
-for c in dlg.children():
-    try:
-        if c.class_name() != "Edit":
-            continue
-        t = c.window_text()
-        ry = c.rectangle().top
-        # Prefer fields that contain file path indicators or are close above the write btn
-        if "\\" in t or ".bin" in t or ".img" in t or ".BIN" in t or ".IMG" in t:
-            file_edits.append((abs(ry - write_btn_y), c))
-        elif ry < write_btn_y and ry > write_btn_y - 200:
-            file_edits.append((abs(ry - write_btn_y), c))
-    except Exception:
-        pass
-
-file_edits.sort(key=lambda x: x[0])
-print(f"\n{len(file_edits)} file edit candidate(s):")
-for dist, c in file_edits:
-    print(f"  dist={dist}  val={c.window_text()!r}  y={c.rectangle().top}")
-
-if not file_edits:
-    print("\nERROR: no file path Edit field found — check control dump above")
-    sys.exit(1)
-
-file_edit = file_edits[0][1]
-print(f"\nImage: {IMAGE_PATH}")
+# ── Sanity-check image ─────────────────────────────────────────────────────────
 
 if not IMAGE_PATH.exists():
     print(f"ERROR: image not found: {IMAGE_PATH}")
     sys.exit(1)
-
-# Set file path via WM_SETTEXT (works even on read-only-styled edits)
-img_str = str(IMAGE_PATH)
-ctypes.windll.user32.SendMessageW(file_edit.handle, WM_SETTEXT, 0, img_str)
-time.sleep(0.1)
-actual = file_edit.window_text()
-print(f"File field set to: {actual!r}")
-if IMAGE_PATH.name not in actual and str(IMAGE_PATH) not in actual:
-    print("WARNING: field text doesn't match — trying set_edit_text()")
-    file_edit.set_edit_text(img_str)
-    print(f"  After set_edit_text: {file_edit.window_text()!r}")
+print(f"Image: {IMAGE_PATH}  ({IMAGE_PATH.stat().st_size:,} bytes)")
 
 # ── Set FLASH address to 0x00000000 ───────────────────────────────────────────
+# Hex edit fields sorted top-to-bottom:
+#   [0] MEMORY length   (top ~y190)
+#   [1] MEMORY address  (top ~y190)
+#   [2] FLASH length    (top ~y280)
+#   [3] FLASH address   (top ~y280)
 
 hex_edits = sorted(
     [
@@ -152,64 +75,203 @@ hex_edits = sorted(
     ],
     key=lambda x: x[0],
 )
-print("\nHex edit fields:")
+print("Hex edit fields:")
 for i, (y, c) in enumerate(hex_edits):
     print(f"  [{i}] y={y}  {c.window_text()!r}")
 
-# FLASH addr field is typically index [3] (after MEMORY len, FLASH len, FLASH addr)
-# Set it to 0 to be safe
 if len(hex_edits) >= 4:
     hex_edits[3][1].set_edit_text("00000000")
     print(f"FLASH addr -> {hex_edits[3][1].window_text()!r}")
+else:
+    print("WARNING: expected 4 hex fields, found fewer — addr not set")
 
-# ── Click FLASH 写入 ───────────────────────────────────────────────────────────
+# ── Find FLASH 写入 button (second one by Y — below MEMORY 写入) ──────────────
 
-print("\nSending BM_CLICK to FLASH 写入 (no mouse)...")
+write_btns = sorted(
+    [
+        (c.rectangle().top, c)
+        for c in dlg.children()
+        if c.class_name() == "Button" and "写入" in c.window_text()
+    ],
+    key=lambda x: x[0],
+)
+print(f"\n{len(write_btns)} 写入 button(s):")
+for y, c in write_btns:
+    print(f"  y={y}  {c.window_text()!r}")
+
+if not write_btns:
+    print("ERROR: no 写入 button found")
+    sys.exit(1)
+
+write_btn = write_btns[1][1] if len(write_btns) > 1 else write_btns[0][1]
+print(f"Using FLASH 写入 at y={write_btn.rectangle().top}")
+
+# ── Click 写入 — expect a file-open dialog to appear ──────────────────────────
+
+before = win_handles()
+print("\nClicking FLASH 写入 (expecting file-open dialog)...")
 ctypes.windll.user32.SendMessageW(write_btn.handle, BM_CLICK, 0, 0)
 
-# ── Monitor status ─────────────────────────────────────────────────────────────
+# Wait for the file-open dialog (class #32770, common dialog)
+file_dlg = None
+deadline = time.monotonic() + 8
+while time.monotonic() < deadline:
+    for w in wins():
+        if w.handle in before:
+            continue
+        try:
+            cls = w.class_name()
+            txt = w.window_text()
+            # Common file dialog is #32770; also check for Explorer-style dialog
+            if cls in ("#32770", "NativeHWNDHost") or any(
+                kw in txt.lower() for kw in ("open", "打开", "select", "选择", "file")
+            ):
+                file_dlg = w
+                print(f"File dialog: {txt!r}  class={cls}")
+                break
+        except Exception:
+            pass
+    if file_dlg:
+        break
+    time.sleep(0.1)
 
-print("Monitoring status (up to 10 min)...")
+if not file_dlg:
+    print("ERROR: file-open dialog did not appear — PhoenixMC may have rejected the click")
+    sys.exit(1)
+
+# ── Inject file path into filename field ──────────────────────────────────────
+# The common dialog filename field is an Edit or ComboBoxEx32/ComboBox child.
+# WM_SETTEXT on the Edit handle is the most reliable approach.
+
+time.sleep(0.3)  # let dialog fully render
+
+filename_edit = None
+for c in file_dlg.children():
+    try:
+        cls = c.class_name()
+        if cls == "Edit":
+            filename_edit = c
+            break
+        if cls in ("ComboBoxEx32", "ComboBox"):
+            # Find the Edit inside the combo
+            for cc in c.children():
+                if cc.class_name() == "Edit":
+                    filename_edit = cc
+                    break
+            if filename_edit:
+                break
+    except Exception:
+        pass
+
+# If not found as direct child, search one level deeper
+if not filename_edit:
+    for c in file_dlg.children():
+        try:
+            for cc in c.children():
+                if cc.class_name() == "Edit":
+                    filename_edit = cc
+                    break
+        except Exception:
+            pass
+        if filename_edit:
+            break
+
+if not filename_edit:
+    print("ERROR: no filename Edit field found in file dialog — dump of controls:")
+    for c in file_dlg.children():
+        try:
+            print(f"  {c.class_name():<22} {c.window_text()!r}")
+        except Exception:
+            pass
+    sys.exit(1)
+
+img_str = str(IMAGE_PATH)
+ctypes.windll.user32.SendMessageW(filename_edit.handle, WM_SETTEXT, 0, img_str)
+time.sleep(0.1)
+print(f"Filename field: {filename_edit.window_text()!r}")
+
+# ── Click Open/OK ──────────────────────────────────────────────────────────────
+
+open_btn = None
+for c in file_dlg.children():
+    try:
+        t = c.window_text()
+        if c.class_name() == "Button" and t in ("&Open", "Open", "打开", "&OK", "OK", "确定"):
+            open_btn = c
+            break
+    except Exception:
+        pass
+
+if not open_btn:
+    # Fallback: first Button with non-empty text that isn't Cancel
+    for c in file_dlg.children():
+        try:
+            if (
+                c.class_name() == "Button"
+                and c.window_text()
+                and "cancel" not in c.window_text().lower()
+                and "取消" not in c.window_text()
+            ):
+                open_btn = c
+                break
+        except Exception:
+            pass
+
+if not open_btn:
+    print("ERROR: Open button not found — dialog controls:")
+    for c in file_dlg.children():
+        try:
+            print(f"  {c.class_name():<22} {c.window_text()!r}")
+        except Exception:
+            pass
+    sys.exit(1)
+
+print(f"Clicking Open: {open_btn.window_text()!r}")
+ctypes.windll.user32.SendMessageW(open_btn.handle, BM_CLICK, 0, 0)
+
+# ── Monitor flash progress ─────────────────────────────────────────────────────
+
+print("\nMonitoring flash progress (up to 10 min)...")
 deadline = time.monotonic() + 600
 last_status = ""
 while time.monotonic() < deadline:
     time.sleep(1)
-    for c in dlg.children():
-        try:
-            t = c.window_text().strip()
-            if not t or t == last_status:
-                continue
-            # Status label changes during flash
-            if any(
-                kw in t.lower()
-                for kw in (
-                    "writing",
-                    "flashing",
-                    "success",
-                    "ok",
-                    "error",
-                    "fail",
-                    "complete",
-                    "finish",
-                    "%",
-                    "写入",
-                    "成功",
-                    "失败",
-                    "完成",
-                )
-            ):
-                print(f"  {t!r}")
-                last_status = t
+    try:
+        for c in dlg.children():
+            try:
+                t = c.window_text().strip()
+                if not t or t == last_status:
+                    continue
                 if any(
                     kw in t.lower()
-                    for kw in ("success", "ok", "complete", "finish", "成功", "完成")
+                    for kw in (
+                        "writing",
+                        "flashing",
+                        "success",
+                        "error",
+                        "fail",
+                        "complete",
+                        "finish",
+                        "%",
+                        "写入",
+                        "成功",
+                        "失败",
+                        "完成",
+                    )
                 ):
-                    print("\nDone! Flash appears successful.")
-                    sys.exit(0)
-                if any(kw in t.lower() for kw in ("error", "fail", "失败")):
-                    print("\nERROR: Flash failed.")
-                    sys.exit(1)
-        except Exception:
-            pass
+                    print(f"  {t!r}")
+                    last_status = t
+                    if any(
+                        kw in t.lower() for kw in ("success", "complete", "finish", "成功", "完成")
+                    ):
+                        print("\nDone! Flash successful.")
+                        sys.exit(0)
+                    if any(kw in t.lower() for kw in ("error", "fail", "失败")):
+                        print("\nERROR: Flash failed.")
+                        sys.exit(1)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 print("Timed out — check PhoenixMC status manually.")
