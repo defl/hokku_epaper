@@ -46,6 +46,7 @@ else
     echo "  skipped: ESP32-S3_technical_reference_manual.pdf (~18 MB) — run with --full to include"
 fi
 
-# EL133UF1 has no public datasheet PDF — see ATTRIBUTION.md
+# ED2208-NCA_(EL133UF1)_Simple_Spec_v1_20240620.pdf — request via E Ink contact form at
+# https://www.eink.com/product/detail/EL133UF1 — no direct download URL available
 
 echo "done."
