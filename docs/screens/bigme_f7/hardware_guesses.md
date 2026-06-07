@@ -56,4 +56,4 @@ Controller, image format, and SPI pins are now fully confirmed — see [`hardwar
 Remaining unknowns:
 - **Panel part number**: Likely GDEP073E01 or equivalent 7.3" Spectra 6 module — not confirmed
 - **RST pin**: PA15 is set LOW during GPIO init (EPD_init_2) suggesting active-low reset, but not conclusively confirmed vs PA8/PA13/PA16/PA17
-- **Image transfer**: Confirmed 192000 raw bytes sent over SPI. Whether the `pictureUrl` HTTP response is also raw 4bpp or JPEG (hardware-decoded first) is still unknown — needs traffic capture to confirm
+- **Image transfer**: Confirmed from disassembly (2026-06-06). `pictureUrl` HTTP response is raw 4bpp (192000 bytes, no header). The device streams HTTP body bytes directly to EPD via SPI with no intermediate decode step. No JPEG decoder exists.

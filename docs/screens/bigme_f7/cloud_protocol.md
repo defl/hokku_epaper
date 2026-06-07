@@ -142,9 +142,20 @@ OTA firmware check. Called when `otaUpdate.otaUrl` is present. Fields include `f
 
 ## Image Format
 
-**Unknown — needs traffic capture.** See [`hardware_guesses.md`](hardware_guesses.md) for the reasoning.
+**Confirmed from boot partition disassembly (2026-06-06).** See [`display_driver.md`](display_driver.md) for full analysis.
 
-Best guess: JPEG at 800×480, served via plain HTTP from `pictureUrl`. The XR872AT has a hardware JPEG decoder (no software library found in 4 MB flash dump). The device downloads the file, verifies the MD5, writes to spare flash, then hardware-decodes and sends pixels to the EPD via SPI.
+`pictureUrl` must return **192,000 bytes of raw 4bpp image data** — no header, no container format.
+
+- `Content-Type: application/octet-stream`
+- `Content-Length: 192000` (required — device uses this to know when transfer is complete)
+- Body: 192,000 bytes, 4 bits per pixel, 2 pixels per byte (high nibble = left pixel)
+- Color nibble encoding: 0=Black, 1=White, 2=Green, 3=Blue, 4=Red, 5=Yellow, 6=Orange
+- Resolution: 800 × 480 pixels, row-major top-to-bottom
+
+The device streams the HTTP response body byte-by-byte to the EPD via SPI (CMD 0x10 DTM) as
+it downloads. There is no JPEG decoder and no intermediate RAM buffer for the full image.
+After the last byte, the device sends CMD 0x04 (PON), CMD 0x12 (DRF), and CMD 0x02 (POF) to
+trigger the ~30-second ACeP display refresh.
 
 ## Integration with hokku_epaper
 
