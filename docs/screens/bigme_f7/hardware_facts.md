@@ -115,8 +115,25 @@ Full driver analysis: [`display_driver.md`](display_driver.md)
   PA19=MOSI/DC, PA21=SCLK, PA22=CS (active low), PA9=BUSY input (HIGH = ready)
 - **Refresh time**: ~20–30 seconds for full ACeP refresh
 
+## SDK Ecosystem
+
+The device firmware was built with **XRADIO Skylark SDK 1.2.3** (Aug 7 2025). Research conducted 2026-06-06 found no public availability of this version anywhere — making it the newest confirmed SDK version and suggesting the manufacturer has a private/NDA channel with Allwinner.
+
+Publicly available SDK versions (for reference):
+
+| Version | Source | Notes |
+|---|---|---|
+| 1.1.1 | github.com/XradioTech/xradio-skylark-sdk | Last official public release (Jun 2020, abandoned) |
+| 1.2.0 | github.com/divadiow/xr872_sdk | Community fork; also seen in device boot logs (Apr 2023 / Jun 2024 builds) |
+| 1.2.2 | github.com/divadiow/xr872_sdk | Community fork ceiling (Feb 2023); referenced as "test build" in Elektroda threads |
+| **1.2.3** | **This device only** | **No public source found; built Aug 7 2025** |
+
+Allwinner (who acquired XRadioTech) does not publicly host an XR872 SDK. Their official developer platform (aw-ol.com / docs.aw-ol.com) lists XR806 but not XR872. The community fork at github.com/divadiow/xr872_sdk (active through May 2025) is the best public alternative.
+
 ## Key References
 
 - XR872AT Datasheet v1.05: https://github.com/XradioTech/xradiotech.github.io/blob/master/docs/doc/XR872/XR872_Datasheet_V1.05.pdf
-- Official XR872 SDK: https://github.com/XradioTech/xradio-skylark-sdk
+- Official XR872 SDK (abandoned at 1.1.1): https://github.com/XradioTech/xradio-skylark-sdk
+- Community SDK fork (1.2.2, active): https://github.com/divadiow/xr872_sdk
+- Allwinner developer platform: https://www.aw-ol.com/
 - FCC filing: https://fccid.io/2A8EM-F7

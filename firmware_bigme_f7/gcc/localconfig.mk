@@ -5,5 +5,6 @@
 # XIP  = y  (execute-in-place, reduces SRAM pressure)
 #
 
+export __CONFIG_CHIP_TYPE := xr872
 export __CONFIG_HOSC_TYPE := 40
 export __CONFIG_XIP := y

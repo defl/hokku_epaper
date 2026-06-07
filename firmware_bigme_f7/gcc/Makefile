@@ -53,6 +53,17 @@ SRCS := $(basename $(foreach dir,$(DIRS),$(wildcard $(dir)/*.[csS])))
 OBJS := $(addsuffix .o,$(SRCS))
 
 # ----------------------------------------------------------------------------
+# image paths — override the project.mk defaults which assume ROOT_PATH is
+# relative (the ../$(ROOT_PATH) idiom breaks when ROOT_PATH is absolute)
+# IMAGE_CFG_PATH uses ?= so must be set before including project.mk.
+# IMAGE_TOOL uses := so is overridden after.
+# ----------------------------------------------------------------------------
+IMAGE_CFG_PATH := $(ROOT_PATH)/project/image_cfg
+
+# ----------------------------------------------------------------------------
 # project rules
 # ----------------------------------------------------------------------------
 include $(PRJ_MAKE_RULES)
+
+# Override IMAGE_TOOL now that MKIMAGE is defined (set in gcc.mk above).
+IMAGE_TOOL := $(ROOT_PATH)/tools/$(MKIMAGE)

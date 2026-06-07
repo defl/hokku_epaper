@@ -21,6 +21,7 @@
 #include "common/framework/net_ctrl.h"
 #include "net/HTTPClient/HTTPCUsr_api.h"
 #include "net/HTTPClient/API/HTTPClient.h"
+#include "net/HTTPClient/API/HTTPClientCommon.h"
 
 #include "epd.h"
 
@@ -48,9 +49,9 @@ static int do_refresh(void)
     HTTPParameters params;
     HTTP_CLIENT    info;
     char           hdr_val[32];
-    uint32_t       hdr_len;
+    UINT32         hdr_len;
     char           buf[512];
-    uint32_t       bytes_streamed = 0;
+    UINT32         bytes_streamed = 0;
     int            sleep_sec = DEFAULT_SLEEP_SECONDS;
     int            ret;
 
@@ -102,8 +103,8 @@ static int do_refresh(void)
     epd_send_cmd(0x10);  /* DTM: data start transmission */
 
     while (bytes_streamed < EPD_IMAGE_BYTES) {
-        uint32_t to_read = sizeof(buf);
-        uint32_t n = 0;
+        UINT32 to_read = sizeof(buf);
+        UINT32 n = 0;
 
         ret = HTTPC_read(&params, buf, to_read, &n);
         if (n > 0) {
