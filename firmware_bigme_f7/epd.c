@@ -147,6 +147,9 @@ static void epd_hw_init(void)
     pa_set(EPD_PIN_PA8,  0);    /* static LOW */
     pa_set(EPD_PIN_RST,  1);    /* RST deasserted */
     HAL_GPIO_WritePin(GPIO_PORT_B, EPD_PIN_POWER, GPIO_PIN_HIGH);  /* power on */
+    /* App note Fig 10: 20ms between VDD and first RSTN_L for rail stabilisation.
+     * OEM firmware skips this but the spec calls it out explicitly. */
+    OS_MSleep(20);
 }
 
 /* -------------------------------------------------------------------------

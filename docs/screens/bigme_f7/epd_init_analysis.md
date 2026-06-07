@@ -19,11 +19,17 @@ Sources:
 | RST LOW duration | 30 ms | 2 ms | 100 ms | 100 ms ✓ |
 | RST HIGH between pulses | 30 ms | — (single pulse) | 100 ms | 100 ms ✓ |
 | BUSY wait after reset | Not specified | Yes | Yes | Yes ✓ |
+| VDD→RST delay | **20 ms** | None | None | **20 ms** ✓ |
 | Delay after BUSY goes high | Not specified | **30 ms** | None | None |
 
 The app note and Waveshare driver contradict each other (double vs single pulse, 30ms vs 2ms).
 Bigme OEM follows the app note's double-pulse pattern with more conservative 100ms timing.
-Our firmware matches the OEM exactly.
+The 20ms VDD→RST delay is specified in Figure 10 of the app note. The OEM skips it; our
+firmware adds it in `epd_hw_init()` after `POWER_EN` goes HIGH — low cost, spec-correct.
+
+The app note v0.31 (Apr 2022) says "this process should be done twice", meaning the entire
+double-pulse sequence should be executed twice (4 RST edges) before register setting. The
+OEM does it once. Our firmware matches the OEM — this deviation is intentional.
 
 The 30ms post-BUSY delay present in the Waveshare driver is absent in the OEM firmware.
 Our firmware adds it (`OS_MSleep(30)` after `epd_wait_busy()` in `epd_run_init_sequence`)
