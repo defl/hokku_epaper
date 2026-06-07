@@ -58,12 +58,17 @@ if not IMAGE_PATH.exists():
     sys.exit(1)
 print(f"Image: {IMAGE_PATH}  ({IMAGE_PATH.stat().st_size:,} bytes)")
 
-# ── Set FLASH address to 0x00000000 ───────────────────────────────────────────
-# Hex edit fields sorted top-to-bottom:
-#   [0] MEMORY length   (top ~y190)
-#   [1] MEMORY address  (top ~y190)
-#   [2] FLASH length    (top ~y280)
-#   [3] FLASH address   (top ~y280)
+# ── Set FLASH address=0 and length=image size ─────────────────────────────────
+# Hex edit fields sorted top-to-bottom. With the full PhoenixMC dialog there are
+# 8 fields (MEMORY×2, FLASH×2, EXTERN×2, and two more). From the observed layout:
+#   [0] y≈447  MEMORY addr/len
+#   [1] y≈480  MEMORY addr/len
+#   [2] y≈587  FLASH length  ← must set to image size; default 0x00000200 = 512 B
+#   [3] y≈589  FLASH address ← set to 00000000
+# PhoenixMC respects the length field for both reads and writes.
+
+img_size = IMAGE_PATH.stat().st_size
+img_len_hex = f"{img_size:08X}"
 
 hex_edits = sorted(
     [
@@ -80,10 +85,12 @@ for i, (y, c) in enumerate(hex_edits):
     print(f"  [{i}] y={y}  {c.window_text()!r}")
 
 if len(hex_edits) >= 4:
+    hex_edits[2][1].set_edit_text(img_len_hex)
     hex_edits[3][1].set_edit_text("00000000")
-    print(f"FLASH addr -> {hex_edits[3][1].window_text()!r}")
+    print(f"FLASH length -> {hex_edits[2][1].window_text()!r}  ({img_size:,} bytes)")
+    print(f"FLASH addr   -> {hex_edits[3][1].window_text()!r}")
 else:
-    print("WARNING: expected 4 hex fields, found fewer — addr not set")
+    print("WARNING: expected 4 hex fields, found fewer — length/addr not set")
 
 # ── Find FLASH 写入 button (second one by Y — below MEMORY 写入) ──────────────
 
@@ -234,6 +241,10 @@ ctypes.windll.user32.SendMessageW(open_btn.handle, BM_CLICK, 0, 0)
 print("\nMonitoring flash progress (up to 10 min)...")
 deadline = time.monotonic() + 600
 last_status = ""
+
+# Labels on static buttons — filter these out of status monitoring
+BUTTON_NOISE = {"写入", "写入ram", "写入info", "读取", "擦除", "flash id", "reboot"}
+
 while time.monotonic() < deadline:
     time.sleep(1)
     try:
@@ -242,18 +253,21 @@ while time.monotonic() < deadline:
                 t = c.window_text().strip()
                 if not t or t == last_status:
                     continue
+                if t.lower() in BUTTON_NOISE:
+                    continue
                 if any(
                     kw in t.lower()
                     for kw in (
+                        "write",
                         "writing",
                         "flashing",
                         "success",
+                        "ok",
                         "error",
                         "fail",
                         "complete",
                         "finish",
                         "%",
-                        "写入",
                         "成功",
                         "失败",
                         "完成",
@@ -261,12 +275,13 @@ while time.monotonic() < deadline:
                 ):
                     print(f"  {t!r}")
                     last_status = t
-                    if any(
-                        kw in t.lower() for kw in ("success", "complete", "finish", "成功", "完成")
+                    tl = t.lower()
+                    if "write ok" in tl or any(
+                        kw in tl for kw in ("success", "complete", "finish", "成功", "完成")
                     ):
                         print("\nDone! Flash successful.")
                         sys.exit(0)
-                    if any(kw in t.lower() for kw in ("error", "fail", "失败")):
+                    if any(kw in tl for kw in ("error", "fail", "失败")):
                         print("\nERROR: Flash failed.")
                         sys.exit(1)
             except Exception:
