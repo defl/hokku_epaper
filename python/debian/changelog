@@ -1,4 +1,4 @@
-hokku-server (4.0.1~dev.17-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.70-1) unstable; urgency=medium
 
   * fix(ota): serve exact app image size; parse ESP image header to strip 0xFF padding and otadata
   * chore(firmware): bump VERSION to 1.2.9; reconfigure to embed correct version string in binary
