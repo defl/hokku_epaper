@@ -33,3 +33,21 @@ python/debian/*.substvars
 # Releases
 firmware/release/
 firmware/test/host/Testing/Temporary/CTestCostData.txt
+
+# XR872 firmware build artifacts
+firmware_bigme_f7/*.o
+firmware_bigme_f7/*.d
+firmware_bigme_f7/gcc/*.axf
+firmware_bigme_f7/gcc/*.bin
+firmware_bigme_f7/gcc/*.map
+firmware_bigme_f7/gcc/.project.ld
+firmware_bigme_f7/gcc/rom_symbol.ld
+firmware_bigme_f7/image/xr872/app.bin
+firmware_bigme_f7/image/xr872/app_xip.bin
+firmware_bigme_f7/image/xr872/.image.cfg
+firmware_bigme_f7/image/xr872/boot_40M.bin
+firmware_bigme_f7/image/xr872/wlan_*.bin
+
+# Local toolchain / config
+FlashTools_repo/
+settings_win.ini

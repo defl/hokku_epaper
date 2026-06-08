@@ -22,10 +22,17 @@
 #include "net/HTTPClient/HTTPCUsr_api.h"
 #include "net/HTTPClient/API/HTTPClient.h"
 #include "net/HTTPClient/API/HTTPClientCommon.h"
+#include "lwip/netif.h"
+#include "lwip/dhcp.h"
 
 #include "epd.h"
 
-#define HOKKU_SERVER_URL        "http://hokku.local/hokku/screen/"
+/* Static IP config — used when DHCP is unavailable on the network */
+#define STATIC_IP_ADDR   "192.168.6.199"
+#define STATIC_GW_ADDR   "192.168.6.254"
+#define STATIC_NM_ADDR   "255.255.255.0"
+
+#define HOKKU_SERVER_URL        "http://192.168.6.226:8080/hokku/screen/"
 #define SCREEN_NAME             "bigme-f7"
 #define FIRMWARE_VERSION        "1.0.0"
 
@@ -60,6 +67,7 @@ static int do_refresh(void)
     params.HttpVerb  = VerbGet;
     params.nTimeout  = HTTP_TIMEOUT_S;
 
+    printf("hokku: GET %s\n", HOKKU_SERVER_URL);
     ret = HTTPC_open(&params);
     if (ret != HTTP_CLIENT_SUCCESS) {
         printf("hokku: HTTP open failed (%d)\n", ret);
@@ -103,14 +111,18 @@ static int do_refresh(void)
     epd_send_cmd(0x10);  /* DTM: data start transmission */
 
     while (bytes_streamed < EPD_IMAGE_BYTES) {
-        UINT32 to_read = sizeof(buf);
+        UINT32 want = EPD_IMAGE_BYTES - bytes_streamed;
+        UINT32 to_read = want < sizeof(buf) ? want : (UINT32)sizeof(buf);
         UINT32 n = 0;
 
         ret = HTTPC_read(&params, buf, to_read, &n);
         if (n > 0) {
-            for (uint32_t i = 0; i < n; i++)
+            UINT32 usable = n;
+            if (bytes_streamed + usable > EPD_IMAGE_BYTES)
+                usable = EPD_IMAGE_BYTES - bytes_streamed;
+            for (uint32_t i = 0; i < usable; i++)
                 epd_send_data((uint8_t)buf[i]);
-            bytes_streamed += n;
+            bytes_streamed += n;  /* count all received, stream only usable */
         }
         if (ret != HTTP_CLIENT_SUCCESS)
             break;
@@ -118,8 +130,8 @@ static int do_refresh(void)
 
     HTTPC_close(&params);
 
-    if (bytes_streamed != EPD_IMAGE_BYTES) {
-        printf("hokku: incomplete image: %u / %u bytes\n",
+    if (bytes_streamed < EPD_IMAGE_BYTES) {
+        printf("hokku: short image: %u / %u bytes\n",
                (unsigned)bytes_streamed, (unsigned)EPD_IMAGE_BYTES);
         return -1;
     }
@@ -134,6 +146,7 @@ static int do_refresh(void)
 static void refresh_thread_fn(void *arg)
 {
     (void)arg;
+    printf("hokku: refresh thread started\n");
 
     if (!g_epd_ready) {
         printf("hokku: EPD init\n");
@@ -156,9 +169,40 @@ static void net_cb(uint32_t event, uint32_t data, void *arg)
 {
     uint16_t type = EVENT_SUBTYPE(event);
 
+    printf("hokku: net event 0x%04x data=0x%08x\n", (unsigned)type, (unsigned)data);
+
     switch (type) {
-    case NET_CTRL_MSG_NETWORK_UP:
-        printf("hokku: network up\n");
+    case NET_CTRL_MSG_WLAN_CONNECTED: {
+        /* DHCP is unreliable on this network — set static IP immediately.
+         * netif_set_addr() triggers netif_status_callback() which fires
+         * NET_CTRL_MSG_NETWORK_UP, so the refresh thread starts cleanly. */
+        ip_addr_t ip, gw, nm;
+        IP4_ADDR(&ip, 192, 168, 6, 199);
+        IP4_ADDR(&gw, 192, 168, 6, 254);
+        IP4_ADDR(&nm, 255, 255, 255, 0);
+        struct netif *nif = netif_list;
+        if (nif) {
+            dhcp_stop(nif);
+            /* Set addresses while the interface is down to avoid a spurious
+             * NETWORK_DOWN callback with IP=0 from netif_set_up().
+             * Setting ipaddr while down does not call netif_status_callback.
+             * Then netif_set_up() calls the callback once with a valid IP,
+             * triggering NET_CTRL_MSG_NETWORK_UP cleanly. */
+            nif->ip_addr = ip;
+            nif->netmask = nm;
+            nif->gw      = gw;
+            netif_set_up(nif);
+            printf("hokku: static IP set  %s  gw=%s\n",
+                   STATIC_IP_ADDR, STATIC_GW_ADDR);
+        } else {
+            printf("hokku: WLAN connected but no netif yet\n");
+        }
+        break;
+    }
+    case NET_CTRL_MSG_NETWORK_UP: {
+        struct netif *nif2 = netif_list;
+        if (nif2)
+            printf("hokku: network up  ip=%s\n", ipaddr_ntoa(&nif2->ip_addr));
         if (!OS_ThreadIsValid(&g_refresh_thread)) {
             OS_ThreadCreate(&g_refresh_thread,
                             "hokku_refresh",
@@ -168,6 +212,7 @@ static void net_cb(uint32_t event, uint32_t data, void *arg)
                             REFRESH_THREAD_STACK);
         }
         break;
+    }
     case NET_CTRL_MSG_NETWORK_DOWN:
         printf("hokku: network down\n");
         break;
