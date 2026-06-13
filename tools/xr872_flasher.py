@@ -72,16 +72,31 @@ def _crc_sysreboot() -> int:
 
 
 def _crc_changebaud(baud: int) -> int:
-    # baud_arg upper byte (= 0x03 when BAUD_FLAGS is applied) contributes
-    msb = ((baud | BAUD_FLAGS) >> 24) & 0xFF
-    ax = (msb + 0x0004 + 0x0010 - 0x606A) & 0xFFFF
+    # baud_arg is stored LE in frame[13..16] BEFORE CRC runs (then overwritten with bswap).
+    # CRC sums: MSB-of-baud_arg, word[4..5]=0x0004, word[12..13], word[14..15].
+    baud_arg = baud | BAUD_FLAGS
+    msb = (baud_arg >> 24) & 0xFF
+    ax = (msb + 0x0004 - 0x606A) & 0xFFFF
+    # word[12..13] at CRC time: {cmdID=0x10, baud_arg LE byte 0}
+    ax = (ax + 0x10 + ((baud_arg & 0xFF) << 8)) & 0xFFFF
+    # word[14..15] at CRC time: {baud_arg LE bytes 1, 2}
+    ax = (ax + ((baud_arg >> 8) & 0xFF) + (((baud_arg >> 16) & 0xFF) << 8)) & 0xFFFF
     return _crc_finish(ax)
 
 
-def _crc_readsector(length: int) -> int:
-    # length MSB (byte[17] on wire, i.e. length >> 24) contributes
+def _crc_readsector(addr: int, length: int) -> int:
+    # addr and length stored LE in frame BEFORE CRC runs (then overwritten with bswap).
+    # CRC sums: len MSB, word[4..5]=0x0004, then word[12..13..14..15..16..17..18..19].
     len_msb = (length >> 24) & 0xFF
-    ax = (len_msb + 0x0004 + 0x001A - 0x6066) & 0xFFFF
+    ax = (len_msb + 0x0004 - 0x6066) & 0xFFFF
+    # word[12..13]: {cmdID=0x1A, addr LE byte 0}
+    ax = (ax + 0x1A + ((addr & 0xFF) << 8)) & 0xFFFF
+    # word[14..15]: {addr LE bytes 1, 2}
+    ax = (ax + ((addr >> 8) & 0xFF) + (((addr >> 16) & 0xFF) << 8)) & 0xFFFF
+    # word[16..17]: {addr LE byte 3, length LE byte 0}
+    ax = (ax + ((addr >> 24) & 0xFF) + ((length & 0xFF) << 8)) & 0xFFFF
+    # word[18..19]: {length LE bytes 1, 2}
+    ax = (ax + ((length >> 8) & 0xFF) + (((length >> 16) & 0xFF) << 8)) & 0xFFFF
     return _crc_finish(ax)
 
 
@@ -89,6 +104,45 @@ def _crc_eraseflash(addr: int) -> int:
     # Both halves of addr contribute; additionally byte[13]=0x19, byte[14]=0x03
     ax = (0x0319 + 0x0004 + (addr & 0xFFFF) - 0x6069) & 0xFFFF
     ax = (ax + (addr >> 16)) & 0xFFFF
+    return _crc_finish(ax)
+
+
+def _data_checksum(data: bytes) -> tuple[int, int]:
+    """Compute WriteSector data checksum.
+
+    Returns (not_data_sum, data_crc) where:
+      not_data_sum = ~(sum of LE 16-bit words) & 0xFFFF  — used in header CRC
+      data_crc     = bswap16(not_data_sum)               — stored at frame[21..22]
+    """
+    s = 0
+    for i in range(0, len(data) - 1, 2):
+        s = (s + data[i] + (data[i + 1] << 8)) & 0xFFFF
+    if len(data) % 2:
+        s = (s + data[-1]) & 0xFFFF
+    not_s = (~s) & 0xFFFF
+    return not_s, _crc_finish(s)
+
+
+def _crc_writesector(addr: int, num_sectors: int, not_data_sum: int) -> int:
+    # Frame layout (at CRC time): "BROM"[0..3], type=4[4], pad=0[5], crc[6..7],
+    # count=0x0B LE initially as {0x0B,0,0,0}[8..11], cmdID=0x1B[12],
+    # addr LE[13..16], num_sectors LE[17..20], ~data_sum[21..22].
+    # Sums: (~data_sum>>8) + word[0..1] + word[2..3] + word[4..5]
+    #       + word[8..9] + word[0xC..0x15] (addr, num_sectors, ~data_sum LE bytes)
+    # word[0..1]="BR"=0x5242, word[2..3]="OM"=0x4D4F, word[4..5]=0x0004,
+    # word[8..9]=0x000B (from initial LE store of 0x0b), word[0xA..0xB]=0x0000.
+    ax = ((not_data_sum >> 8) & 0xFF) + 0x5242 + 0x4D4F + 0x0004 + 0x000B
+    ax &= 0xFFFF
+    # word[0xC..0xD]: {cmdID=0x1B, addr LE byte 0}
+    ax = (ax + 0x1B + ((addr & 0xFF) << 8)) & 0xFFFF
+    # word[0xE..0xF]: {addr LE bytes 1, 2}
+    ax = (ax + ((addr >> 8) & 0xFF) + (((addr >> 16) & 0xFF) << 8)) & 0xFFFF
+    # word[0x10..0x11]: {addr LE byte 3, num_sectors LE byte 0}
+    ax = (ax + ((addr >> 24) & 0xFF) + ((num_sectors & 0xFF) << 8)) & 0xFFFF
+    # word[0x12..0x13]: {num_sectors LE bytes 1, 2}
+    ax = (ax + ((num_sectors >> 8) & 0xFF) + (((num_sectors >> 16) & 0xFF) << 8)) & 0xFFFF
+    # word[0x14..0x15]: {num_sectors LE byte 3, not_data_sum LE byte 0}
+    ax = (ax + ((num_sectors >> 24) & 0xFF) + ((not_data_sum & 0xFF) << 8)) & 0xFFFF
     return _crc_finish(ax)
 
 
@@ -124,13 +178,37 @@ def frame_changebaud(baud: int) -> bytes:
 
 def frame_readsector(addr: int, length: int) -> bytes:
     payload = struct.pack(">II", addr, length)
-    return _frame(CMD_READ_SECTOR, b"\x00\x00\x00\x09", payload, _crc_readsector(length))
+    return _frame(CMD_READ_SECTOR, b"\x00\x00\x00\x09", payload, _crc_readsector(addr, length))
 
 
 def frame_eraseflash(addr: int) -> bytes:
     # payload: erase-type byte 0x03 + BE addr
     payload = bytes([0x03]) + struct.pack(">I", addr)
     return _frame(CMD_ERASE_FLASH, b"\x00\x00\x00\x06", payload, _crc_eraseflash(addr))
+
+
+def frame_writesector(addr: int, data: bytes) -> bytes:
+    """Build the 23-byte WriteSector header (data is sent separately after ACK).
+
+    data must be a multiple of 512 bytes (one or more flash pages).
+    """
+    assert len(data) % 512 == 0, f"WriteSector data must be multiple of 512 bytes, got {len(data)}"
+    num_sectors = len(data) // 512
+    not_data_sum, data_crc = _data_checksum(data)
+    hdr_crc = _crc_writesector(addr, num_sectors, not_data_sum)
+    buf = bytearray(23)
+    buf[0:4] = BROM_MAGIC
+    buf[4] = 0x04
+    buf[5] = 0x00
+    buf[6] = hdr_crc & 0xFF
+    buf[7] = (hdr_crc >> 8) & 0xFF
+    buf[8:12] = b"\x00\x00\x00\x0b"  # count=11: cmdID+addr+num_sectors+data_crc
+    buf[12] = CMD_WRITE_SECTOR
+    struct.pack_into(">I", buf, 13, addr)
+    struct.pack_into(">I", buf, 17, num_sectors)
+    buf[21] = data_crc & 0xFF
+    buf[22] = (data_crc >> 8) & 0xFF
+    return bytes(buf)
 
 
 # ── Protocol driver ───────────────────────────────────────────────────────────
@@ -262,7 +340,33 @@ class XR872Flasher:
         """Erase flash sector at addr."""
         return self._ack_ok(self._send_cmd(frame_eraseflash(addr)))
 
-    def connect(self, fast: bool = True) -> bool:
+    def write_sector(self, addr: int, data: bytes) -> bool:
+        """Write data (multiple of 512 B) to flash at addr.
+
+        Protocol: send 23-byte header → recv 12-byte ACK → send data → recv final ACK.
+        """
+        assert len(data) % 512 == 0
+        header = frame_writesector(addr, data)
+        # Send header, wait for ACK
+        resp = self._send_cmd(header)
+        if not self._ack_ok(resp):
+            self._log(f"WriteSector header ACK fail @ 0x{addr:08X}")
+            return False
+        # Stream data to BROM
+        self._log(f"TX data {len(data)}B @ 0x{addr:08X}")
+        self.ser.write(data)
+        self.ser.flush()
+        # Wait for final ACK (flash program can take a while per sector)
+        bps = self.ser.baudrate / 10.0
+        timeout = (len(data) / bps) * 2.0 + 10.0
+        final = self._read_exact(RESP_HDR_LEN, timeout=timeout)
+        self._log(f"RX final {len(final)}B: {final.hex()}")
+        if not self._ack_ok(final):
+            self._log(f"WriteSector final ACK fail @ 0x{addr:08X}")
+            return False
+        return True
+
+    def connect(self, fast: bool = False) -> bool:
         """Full connect: sync → GetFlashId → optional baud switch + re-sync."""
         print(f"Syncing with BROM on {self.ser.port}@{self.ser.baudrate}...")
         if not self.sync():
@@ -387,7 +491,7 @@ def cmd_read(args) -> int:
 
 def cmd_dump(args) -> int:
     _enter_brom(args)
-    FLASH_SIZE = 0x800000  # 8 MB
+    FLASH_SIZE = 0x400000  # 4 MB (Zbit SPI NOR on Bigme F7)
     CHUNK = 0x10000  # 64 KB per call
 
     with XR872Flasher(args.port, verbose=args.verbose) as f:
@@ -412,6 +516,54 @@ def cmd_dump(args) -> int:
 
         print(f"\nDone — {FLASH_SIZE // 1024 // 1024} MB saved to {outfile}")
         return 0
+
+
+def cmd_write(args) -> int:
+    _enter_brom(args)
+    addr = int(args.addr, 0)
+    CHUNK = 0x10000  # 64 KB = 128 sectors per WriteSector call
+
+    with open(args.input, "rb") as fh:
+        data = fh.read()
+
+    if len(data) % 512:
+        # Pad to 512-byte boundary
+        data = data + b"\xff" * (512 - len(data) % 512)
+
+    print(f"Writing {len(data):,} bytes from {args.input} to 0x{addr:08X}...")
+
+    with XR872Flasher(args.port, verbose=args.verbose) as f:
+        if not f.connect():
+            return 1
+
+        offset = 0
+        while offset < len(data):
+            chunk_addr = addr + offset
+            chunk = data[offset : offset + CHUNK]
+            # Pad last chunk to 512-byte boundary
+            if len(chunk) % 512:
+                chunk = chunk + b"\xff" * (512 - len(chunk) % 512)
+
+            pct = offset * 100 // len(data)
+            print(
+                f"  [{pct:3d}%] writing 0x{chunk_addr:08X} ({len(chunk)} bytes)...",
+                end=" ",
+                flush=True,
+            )
+
+            if args.erase:
+                if not f.erase_flash(chunk_addr):
+                    print("ERASE FAILED")
+                    return 1
+
+            if not f.write_sector(chunk_addr, chunk):
+                print("WRITE FAILED")
+                return 1
+            print("OK")
+            offset += len(chunk)
+
+    print(f"Done — {len(data):,} bytes written to 0x{addr:08X}")
+    return 0
 
 
 def cmd_erase(args) -> int:
@@ -468,8 +620,13 @@ def main():
     p.add_argument("length", help="Byte count, e.g. 0x10000")
     p.add_argument("--output", "-o")
 
-    p = sub.add_parser("dump", help="Dump entire 8 MB flash to a file")
+    p = sub.add_parser("dump", help="Dump entire 4 MB flash to a file")
     p.add_argument("--output", "-o")
+
+    p = sub.add_parser("write", help="Write a binary file to flash at a given address")
+    p.add_argument("addr", help="Start address, e.g. 0x000000")
+    p.add_argument("--input", "-i", required=True, help="Binary file to write")
+    p.add_argument("--erase", action="store_true", help="Erase each 64 KB block before writing")
 
     p = sub.add_parser("erase", help="Erase one flash sector")
     p.add_argument("addr", help="Sector address, e.g. 0x000000")
@@ -482,6 +639,7 @@ def main():
         "identify": cmd_identify,
         "read": cmd_read,
         "dump": cmd_dump,
+        "write": cmd_write,
         "erase": cmd_erase,
         "reboot": cmd_reboot,
     }

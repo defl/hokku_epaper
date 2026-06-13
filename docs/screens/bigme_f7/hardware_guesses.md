@@ -17,8 +17,10 @@ All pin assignments below are XR872AT SDK defaults. The device vendor may use an
 |------|------------------|-------|
 | PB0 | UART0_TX | SDK default (primary) |
 | PB1 | UART0_RX | SDK default (primary) |
-| PB2 | SWD_SWDIO | SDK default (secondary SWD — preferred to avoid UART conflict) |
-| PB3 | SWD_SWDCLK | SDK default (secondary SWD) |
+| PA12 | RED LED output | Boot partition disassembly 2026-06-07: 8-case switch at 0x002FF0 drives PA12 HIGH/LOW; init at 0x002FA0 sets output+LOW |
+| PB3 | GREEN LED output (SWD_SWDCLK repurposed) | Same switch; driven alongside PA12; both active HIGH |
+| PA20 | USB/charge detect input | Polled with compare-to-zero at 0x002CD0; HIGH = USB present (unconfirmed polarity) |
+| PB2 | SWD_SWDIO (possibly repurposed) | SDK default (secondary SWD — preferred to avoid UART conflict) |
 | PB4 | FLASH_MOSI | XR872AT hardware-fixed |
 | PB5 | FLASH_MISO | XR872AT hardware-fixed |
 | PB6 | FLASH_CS | XR872AT hardware-fixed |
@@ -30,10 +32,11 @@ Remaining unknown: which of PA8, PA13, PA15, PA16, PA17 is RST vs power-enable.
 
 ## UART / Boot Protocol
 
-From XR872AT SDK documentation — not verified on this device:
+From XR872AT SDK documentation unless noted:
 
 - UART0 boot log baud: 115200
-- PhoenixMC flash tool baud: 921600
+- **921600 baud NOT supported** on this device hardware — confirmed 2026-06-12; BROM operations work at 115200
+- PhoenixMC flash tool claims 921600 — does not apply to this unit
 - ROM download mode trigger: send `"upgrade"` + 50×`'U'` over UART0 → ROM responds `"OKBOOM"` → enters download mode
 - No hardware boot pin required (unlike ESP32's GPIO0 pull-down)
 
@@ -44,6 +47,29 @@ From XR872AT datasheet — not verified on this device:
 - Secondary SWD: PB2 (SWDIO), PB3 (SWDCLK) — preferred over PB0/PB1 which are shared with UART0
 - JTAG: PB0(TMS), PB1(TCK), PB2(TDO), PB3(TDI)
 - 3.3V logic, standard ARM SWJDP — J-Link / DAPLink / OpenOCD should work
+
+## LED and Charge Detection
+
+Source: disassembly of `01_boot_payload.bin` (SRAM-loaded, OEM app code), 2026-06-12.
+
+### LED pins
+
+An 8-case switch-statement at boot payload offset 0x002FF0 drives exactly two GPIO pins: PA12 and PB3. The init function at 0x002FA0 configures both as outputs (driving level 2) and immediately drives them LOW.
+
+- **PA12** (GPIOA pin 12) — RED LED, active HIGH
+- **PB3** (GPIOB pin 3) — GREEN LED, active HIGH
+
+PB3 is also the SDK-default SWD_SWDCLK pin (PB3 = SWDCLK). The OEM repurposes it as LED; SWD is presumably non-functional in production firmware.
+
+**Color assignment** is inferred from the Huessen screen pattern (work LED = red). The hardware may have them swapped — confirm on first flash. Swapping is a one-line change in `led.c`.
+
+### Charge detection
+
+- **PA20** (GPIOA pin 20) — USB/charge detect input, polled at 0x002CD0 in a loop
+- Logic: `HAL_GPIO_ReadPin(PORT_A, PIN_20)` result compared to zero; non-zero (HIGH) branches to a different code path — interpreted as USB present
+- **Polarity unconfirmed**; if green/off is inverted after first flash, flip `GPIO_PIN_HIGH` → `GPIO_PIN_LOW` in `led_usb_present()` in `firmware_bigme_f7/led.c`
+- The boot log shows `HAL_ADC_Init success!!` — ADC is likely used for battery voltage measurement, not for USB detect (USB detect appears to be a simple GPIO)
+- The OEM firmware uses wakeup IO 2 (`CHARGE_WAKEUP_IO_PIN_DEF=2`) for charge-triggered wakeup from deep sleep; this likely maps to PA20 via `WakeIo_To_Gpio()`
 
 ## Secure Boot
 
