@@ -1,0 +1,28 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "extraPaths": ["python"],
+  "include": ["tools"],
+  "exclude": [
+    "tools/_analyze_dll.py",
+    "tools/_analyze_ref_dump.py",
+    "tools/_baud_scan.py",
+    "tools/_brom_changebaud_test.py",
+    "tools/_brom_probe.py",
+    "tools/_brom_protocol_probe.py",
+    "tools/_console.py",
+    "tools/_erase_type_test.py",
+    "tools/_extract_brom_stub.py",
+    "tools/_extract_rsrc.py",
+    "tools/_probe_v2_brom.py",
+    "tools/_write_128sector_at_block1_test.py",
+    "tools/_write_128sector_test.py",
+    "tools/_write_addr_test.py",
+    "tools/_write_addr0_test.py",
+    "tools/_write_boundary_test.py",
+    "tools/_write_count_test.py",
+    "tools/_write_final_debug.py",
+    "tools/flash_proxy.py",
+    "tools/flash_proxy_analyze.py"
+  ]
+}

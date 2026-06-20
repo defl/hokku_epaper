@@ -19,10 +19,9 @@ except ImportError:
     print("pywinauto not found. Run: pip install pywinauto", file=sys.stderr)
     sys.exit(1)
 
-PHOENIXMC_EXE = str(
-    pathlib.Path(__file__).parents[1]
-    / ".private/screens/bigme_f7/tools/phoenixmc_v3.1.240901a/phoenixMC.exe"
-)
+from _private import res
+
+PHOENIXMC_EXE = str(res("bigme_flash_tool_exe"))
 TARGET_PORT = "COM6"
 
 

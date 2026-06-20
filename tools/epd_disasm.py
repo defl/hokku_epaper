@@ -18,9 +18,9 @@ import struct
 from capstone import CS_ARCH_ARM, CS_MODE_THUMB, Cs
 from capstone.arm import ARM_REG_PC
 
-PAYLOAD_PATH = (
-    r"c:\Users\defl\workspace\hokku_epaper\.private\screens\bigme_f7\partitions\01_boot_payload.bin"
-)
+from _private import res
+
+PAYLOAD_PATH = res("bigme_boot_payload")
 LOAD_ADDR = 0x00201000  # XR872AT code RAM base (not ARM SRAM 0x20000000!)
 ENTRY_OFF = 0x100  # entry point offset within payload
 

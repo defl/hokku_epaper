@@ -39,14 +39,17 @@ except ImportError:
 
 from pywinauto import Desktop  # noqa: E402
 
+from _private import res  # noqa: E402
+
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
 ROOT = pathlib.Path(__file__).parents[1]
-PHOENIXMC_DIR = ROOT / ".private/screens/bigme_f7/tools/phoenixmc_v3.1.240901a"
-PHOENIXMC_EXE = PHOENIXMC_DIR / "phoenixMC.exe"
+# Private resources resolved via tools/_private.py (no .private paths in tracked code)
+PHOENIXMC_DIR = res("bigme_flash_tool_dir")
+PHOENIXMC_EXE = res("bigme_flash_tool_exe")
 OUR_IMAGE = ROOT / "firmware_bigme_f7/image/xr872/xr_system.img"
-OEM_DUMP = ROOT / ".private/screens/bigme_f7/flash_dump.bin"
-READBACK_FILE = PHOENIXMC_DIR / "flash_A_0x0_L_0x400000.bin"
+OEM_DUMP = res("bigme_oem_dump")
+READBACK_FILE = res("bigme_flash_tool_readback")
 
 COM_PORT = "COM6"
 BAUD_RATE = 115200
@@ -312,7 +315,7 @@ def _dtr_reset():
     if not HAS_SERIAL:
         return
     try:
-        ser = serial.Serial(COM_PORT, BAUD_RATE, timeout=0)
+        ser = serial.Serial(COM_PORT, BAUD_RATE, timeout=0)  # type: ignore[possibly-unbound]
         ser.dtr = False  # assert reset (active-low on most boards)
         time.sleep(0.15)
         ser.dtr = True  # release reset → device boots into BROM
@@ -381,30 +384,45 @@ def phase_launch():
         except Exception as e:
             print(f"Listview: {e}")
 
-    # Click 调试
+    # Click 调试 — PhoenixMC does synchronous serial I/O in the button handler,
+    # so SendMessageW can block for minutes while it syncs with BROM. Use
+    # PostMessageW (async) so we return immediately and poll for the dialog.
     before = win_handles()
-    ctypes.windll.user32.SendMessageW(debug_btn.handle, BM_CLICK, 0, 0)
-    time.sleep(1.0)
+    ctypes.windll.user32.PostMessageW(debug_btn.handle, BM_CLICK, 0, 0)
 
-    # Dismiss port error if needed
-    for w in wins():
-        try:
-            if w.handle not in before and len(w.children()) <= 5:
-                ok = next((c for c in w.children() if c.window_text() == "OK"), None)
-                if ok:
-                    print("Dismissed port error, retrying 调试...")
-                    ctypes.windll.user32.SendMessageW(ok.handle, BM_CLICK, 0, 0)
-                    time.sleep(0.3)
-                    db = next((c for c in main_w.children() if c.window_text() == "调试"), None)
-                    if db:
-                        ctypes.windll.user32.SendMessageW(db.handle, BM_CLICK, 0, 0)
-                    time.sleep(1.0)
-        except Exception:  # noqa: S110
-            pass
+    # Wait up to 8 min for the flash dialog to appear (PhoenixMC may spend
+    # several minutes negotiating with the BROM before "Open comm OK!" shows).
+    dlg = None
+    port_err_dismissed = False
+    deadline_dlg = time.monotonic() + 480
+    while time.monotonic() < deadline_dlg:
+        time.sleep(0.5)
 
-    dlg = get_flash_dialog()
+        # Dismiss a port-error popup if it appeared
+        if not port_err_dismissed:
+            for w in wins():
+                try:
+                    if w.handle not in before and len(w.children()) <= 5:
+                        ok = next((c for c in w.children() if c.window_text() == "OK"), None)
+                        if ok:
+                            print("Dismissed port error, retrying 调试...")
+                            ctypes.windll.user32.PostMessageW(ok.handle, BM_CLICK, 0, 0)
+                            time.sleep(0.3)
+                            db = next(
+                                (c for c in main_w.children() if c.window_text() == "调试"), None
+                            )
+                            if db:
+                                ctypes.windll.user32.PostMessageW(db.handle, BM_CLICK, 0, 0)
+                            port_err_dismissed = True
+                except Exception:  # noqa: S110
+                    pass
+
+        dlg = get_flash_dialog()
+        if dlg:
+            break
+
     if not dlg:
-        raise RuntimeError("Debug dialog did not open")
+        raise RuntimeError("Debug dialog did not open within 8 min")
     print(f"Debug dialog: {dlg.window_text()!r}")
     return dlg
 
@@ -769,9 +787,9 @@ def phase_reboot_and_uart(dlg):
     deadline = time.monotonic() + 2  # wait up to 2s for port to free
     while time.monotonic() < deadline:
         try:
-            ser = serial.Serial(COM_PORT, BAUD_RATE, timeout=0.1)
+            ser = serial.Serial(COM_PORT, BAUD_RATE, timeout=0.1)  # type: ignore[possibly-unbound]
             break
-        except serial.SerialException:
+        except serial.SerialException:  # type: ignore[possibly-unbound]
             time.sleep(0.01)
 
     if ser is None:
@@ -830,8 +848,8 @@ def already_connected_dialog():
 def main():
     for path, _name in [
         (OUR_IMAGE, "xr_system.img"),
-        (OEM_DUMP, "flash_dump.bin"),
-        (PHOENIXMC_EXE, "phoenixMC.exe"),
+        (OEM_DUMP, "OEM reference dump"),
+        (PHOENIXMC_EXE, "flash tool"),
     ]:
         if not path.exists():
             print(f"ERROR: required file not found: {path}")

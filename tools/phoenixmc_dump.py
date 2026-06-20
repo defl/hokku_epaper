@@ -27,10 +27,10 @@ except ImportError:
     print("Run: pip install pywinauto")
     sys.exit(1)
 
-PHOENIXMC_DIR = (
-    pathlib.Path(__file__).parents[1] / ".private/screens/bigme_f7/tools/phoenixmc_v3.1.240901a"
-)
-PHOENIXMC_EXE = str(PHOENIXMC_DIR / "phoenixMC.exe")
+from _private import res
+
+PHOENIXMC_DIR = res("bigme_flash_tool_dir")
+PHOENIXMC_EXE = str(res("bigme_flash_tool_exe"))
 BROM_WAIT = 120  # seconds to wait for device after READY
 
 
@@ -276,7 +276,7 @@ def wait_and_click(dlg, read_btn):
 
 # --- Step 6: wait for dump file ---
 def wait_for_dump():
-    out = PHOENIXMC_DIR / "flash_A_0x0_L_0x200000.bin"
+    out = res("bigme_flash_tool_readback_2mb")
     print(f"\nWaiting for {out.name}...")
     deadline = time.monotonic() + 120
     last = -1

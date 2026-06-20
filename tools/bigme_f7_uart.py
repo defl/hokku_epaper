@@ -7,16 +7,17 @@ USB, or press+hold the power button) to catch the full boot log.
 Usage:
     python tools/bigme_f7_uart.py [--port COM6] [--baud 115200] [--duration 15]
 
-Output is printed to stdout and saved to .private/screens/bigme_f7/uart_log_<timestamp>.txt
+Output is printed to stdout and saved under the private data dir as uart_log_<timestamp>.txt
 """
 
 import argparse
 import datetime
-import pathlib
 import sys
 import time
 
 import serial
+
+from _private import res
 
 
 def main() -> None:
@@ -26,7 +27,7 @@ def main() -> None:
     parser.add_argument("--duration", type=int, default=15, help="Seconds to capture")
     args = parser.parse_args()
 
-    log_dir = pathlib.Path(__file__).parents[1] / ".private/screens/bigme_f7"
+    log_dir = res("bigme_data_dir")
     log_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = log_dir / f"uart_log_{ts}.txt"

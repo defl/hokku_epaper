@@ -84,19 +84,20 @@ def _crc_changebaud(baud: int) -> int:
     return _crc_finish(ax)
 
 
-def _crc_readsector(addr: int, length: int) -> int:
-    # addr and length stored LE in frame BEFORE CRC runs (then overwritten with bswap).
-    # CRC sums: len MSB, word[4..5]=0x0004, then word[12..13..14..15..16..17..18..19].
-    len_msb = (length >> 24) & 0xFF
-    ax = (len_msb + 0x0004 - 0x6066) & 0xFFFF
-    # word[12..13]: {cmdID=0x1A, addr LE byte 0}
-    ax = (ax + 0x1A + ((addr & 0xFF) << 8)) & 0xFFFF
-    # word[14..15]: {addr LE bytes 1, 2}
-    ax = (ax + ((addr >> 8) & 0xFF) + (((addr >> 16) & 0xFF) << 8)) & 0xFFFF
-    # word[16..17]: {addr LE byte 3, length LE byte 0}
-    ax = (ax + ((addr >> 24) & 0xFF) + ((length & 0xFF) << 8)) & 0xFFFF
-    # word[18..19]: {length LE bytes 1, 2}
-    ax = (ax + ((length >> 8) & 0xFF) + (((length >> 16) & 0xFF) << 8)) & 0xFFFF
+def _crc_readsector(sector_index: int, sector_count: int) -> int:
+    # The frame's addr field is a SECTOR INDEX (byte_addr >> 9) and its length field
+    # is a SECTOR COUNT (bytes >> 9) — both stored LE before CRC runs, then bswapped.
+    # CRC sums: count MSB, word[4..5]=0x0004, then word[12..13..14..15..16..17..18..19].
+    cnt_msb = (sector_count >> 24) & 0xFF
+    ax = (cnt_msb + 0x0004 - 0x6066) & 0xFFFF
+    # word[12..13]: {cmdID=0x1A, sector_index LE byte 0}
+    ax = (ax + 0x1A + ((sector_index & 0xFF) << 8)) & 0xFFFF
+    # word[14..15]: {sector_index LE bytes 1, 2}
+    ax = (ax + ((sector_index >> 8) & 0xFF) + (((sector_index >> 16) & 0xFF) << 8)) & 0xFFFF
+    # word[16..17]: {sector_index LE byte 3, sector_count LE byte 0}
+    ax = (ax + ((sector_index >> 24) & 0xFF) + ((sector_count & 0xFF) << 8)) & 0xFFFF
+    # word[18..19]: {sector_count LE bytes 1, 2}
+    ax = (ax + ((sector_count >> 8) & 0xFF) + (((sector_count >> 16) & 0xFF) << 8)) & 0xFFFF
     return _crc_finish(ax)
 
 
@@ -123,22 +124,26 @@ def _data_checksum(data: bytes) -> tuple[int, int]:
     return not_s, _crc_finish(s)
 
 
-def _crc_writesector(addr: int, num_sectors: int, not_data_sum: int) -> int:
+def _crc_writesector(sector_index: int, num_sectors: int, not_data_sum: int) -> int:
+    # Like ReadSector, the WriteSector frame addresses flash by SECTOR INDEX
+    # (byte_addr >> 9), stored big-endian at offset 0xd; num_sectors is the
+    # 512-byte sector count at offset 0x11 (proven by CFlashHost::WriteFlashLength,
+    # which does `addr >> 9` and writes 0x20 sectors = 0x4000 bytes per frame).
     # Frame layout (at CRC time): "BROM"[0..3], type=4[4], pad=0[5], crc[6..7],
     # count=0x0B LE initially as {0x0B,0,0,0}[8..11], cmdID=0x1B[12],
-    # addr LE[13..16], num_sectors LE[17..20], ~data_sum[21..22].
+    # sector_index LE[13..16], num_sectors LE[17..20], ~data_sum[21..22].
     # Sums: (~data_sum>>8) + word[0..1] + word[2..3] + word[4..5]
-    #       + word[8..9] + word[0xC..0x15] (addr, num_sectors, ~data_sum LE bytes)
+    #       + word[8..9] + word[0xC..0x15] (sector_index, num_sectors, ~data_sum LE).
     # word[0..1]="BR"=0x5242, word[2..3]="OM"=0x4D4F, word[4..5]=0x0004,
     # word[8..9]=0x000B (from initial LE store of 0x0b), word[0xA..0xB]=0x0000.
     ax = ((not_data_sum >> 8) & 0xFF) + 0x5242 + 0x4D4F + 0x0004 + 0x000B
     ax &= 0xFFFF
-    # word[0xC..0xD]: {cmdID=0x1B, addr LE byte 0}
-    ax = (ax + 0x1B + ((addr & 0xFF) << 8)) & 0xFFFF
-    # word[0xE..0xF]: {addr LE bytes 1, 2}
-    ax = (ax + ((addr >> 8) & 0xFF) + (((addr >> 16) & 0xFF) << 8)) & 0xFFFF
-    # word[0x10..0x11]: {addr LE byte 3, num_sectors LE byte 0}
-    ax = (ax + ((addr >> 24) & 0xFF) + ((num_sectors & 0xFF) << 8)) & 0xFFFF
+    # word[0xC..0xD]: {cmdID=0x1B, sector_index LE byte 0}
+    ax = (ax + 0x1B + ((sector_index & 0xFF) << 8)) & 0xFFFF
+    # word[0xE..0xF]: {sector_index LE bytes 1, 2}
+    ax = (ax + ((sector_index >> 8) & 0xFF) + (((sector_index >> 16) & 0xFF) << 8)) & 0xFFFF
+    # word[0x10..0x11]: {sector_index LE byte 3, num_sectors LE byte 0}
+    ax = (ax + ((sector_index >> 24) & 0xFF) + ((num_sectors & 0xFF) << 8)) & 0xFFFF
     # word[0x12..0x13]: {num_sectors LE bytes 1, 2}
     ax = (ax + ((num_sectors >> 8) & 0xFF) + (((num_sectors >> 16) & 0xFF) << 8)) & 0xFFFF
     # word[0x14..0x15]: {num_sectors LE byte 3, not_data_sum LE byte 0}
@@ -177,8 +182,26 @@ def frame_changebaud(baud: int) -> bytes:
 
 
 def frame_readsector(addr: int, length: int) -> bytes:
-    payload = struct.pack(">II", addr, length)
-    return _frame(CMD_READ_SECTOR, b"\x00\x00\x00\x09", payload, _crc_readsector(addr, length))
+    """Build a ReadSector frame for a 512-byte-aligned byte range.
+
+    The BROM addresses flash in 512-byte sectors (proven by disassembling the
+    phoenixMC ELF: CFlashHost::ReadFlashLength does `addr >> 9` and ReadSector
+    reads `count << 9` bytes). The on-wire address field is therefore a sector
+    index and the length field a sector count — NOT raw byte values.
+    """
+    assert addr % 512 == 0, f"ReadSector addr must be 512-byte aligned, got 0x{addr:X}"
+    assert length and length % 512 == 0, (
+        f"ReadSector length must be a positive multiple of 512, got {length}"
+    )
+    sector_index = addr >> 9
+    sector_count = length >> 9
+    payload = struct.pack(">II", sector_index, sector_count)
+    return _frame(
+        CMD_READ_SECTOR,
+        b"\x00\x00\x00\x09",
+        payload,
+        _crc_readsector(sector_index, sector_count),
+    )
 
 
 def frame_eraseflash(addr: int) -> bytes:
@@ -190,21 +213,24 @@ def frame_eraseflash(addr: int) -> bytes:
 def frame_writesector(addr: int, data: bytes) -> bytes:
     """Build the 23-byte WriteSector header (data is sent separately after ACK).
 
-    data must be a multiple of 512 bytes (one or more flash pages).
+    addr must be 512-byte aligned and data a multiple of 512 bytes — the BROM
+    addresses flash by sector index (byte_addr >> 9), not raw byte address.
     """
+    assert addr % 512 == 0, f"WriteSector addr must be 512-byte aligned, got 0x{addr:X}"
     assert len(data) % 512 == 0, f"WriteSector data must be multiple of 512 bytes, got {len(data)}"
+    sector_index = addr >> 9
     num_sectors = len(data) // 512
     not_data_sum, data_crc = _data_checksum(data)
-    hdr_crc = _crc_writesector(addr, num_sectors, not_data_sum)
+    hdr_crc = _crc_writesector(sector_index, num_sectors, not_data_sum)
     buf = bytearray(23)
     buf[0:4] = BROM_MAGIC
     buf[4] = 0x04
     buf[5] = 0x00
     buf[6] = hdr_crc & 0xFF
     buf[7] = (hdr_crc >> 8) & 0xFF
-    buf[8:12] = b"\x00\x00\x00\x0b"  # count=11: cmdID+addr+num_sectors+data_crc
+    buf[8:12] = b"\x00\x00\x00\x0b"  # count=11: cmdID+sector_index+num_sectors+data_crc
     buf[12] = CMD_WRITE_SECTOR
-    struct.pack_into(">I", buf, 13, addr)
+    struct.pack_into(">I", buf, 13, sector_index)
     struct.pack_into(">I", buf, 17, num_sectors)
     buf[21] = data_crc & 0xFF
     buf[22] = (data_crc >> 8) & 0xFF
@@ -217,8 +243,20 @@ def frame_writesector(addr: int, data: bytes) -> bytes:
 class XR872Flasher:
     """Communicate with the XR872AT BROM over serial."""
 
-    def __init__(self, port: str = DEFAULT_PORT, baud: int = DEFAULT_BAUD, verbose: bool = False):
+    def __init__(
+        self,
+        port: str = DEFAULT_PORT,
+        baud: int = DEFAULT_BAUD,
+        verbose: bool = False,
+        ser: Optional[serial.Serial] = None,
+    ):
         self.verbose = verbose
+        if ser is not None:
+            # Adopt an already-open, already-synced serial handle (e.g. from a
+            # BROM-window catcher). Do not re-open or toggle DTR/RTS.
+            self.ser = ser
+            self._log(f"adopted open handle {ser.port} @ {ser.baudrate}")
+            return
         self.ser = serial.Serial(port, baud, timeout=2.0)
         self.ser.dtr = False
         self.ser.rts = False
@@ -322,7 +360,11 @@ class XR872Flasher:
         return True
 
     def read_sector(self, addr: int, length: int) -> Optional[bytes]:
-        """Read length bytes from flash at addr; returns bytes or None on error."""
+        """Read length bytes from flash at addr; returns bytes or None on error.
+
+        addr and length must both be 512-byte aligned — the BROM reads in whole
+        512-byte sectors (see frame_readsector). length == sector_count * 512.
+        """
         resp = self._send_cmd(frame_readsector(addr, length))
         if not self._ack_ok(resp):
             self._log(f"ReadSector ACK fail @ 0x{addr:08X}+{length}")
@@ -521,7 +563,10 @@ def cmd_dump(args) -> int:
 def cmd_write(args) -> int:
     _enter_brom(args)
     addr = int(args.addr, 0)
-    CHUNK = 0x10000  # 64 KB = 128 sectors per WriteSector call
+    # PhoenixMC's CFlashHost::WriteFlashLength writes 0x20 sectors (16 KB) per
+    # WriteSector frame; mirror that exactly rather than risk an untested larger
+    # per-frame sector count on a destructive write.
+    CHUNK = 0x4000  # 16 KB = 32 sectors per WriteSector call
 
     with open(args.input, "rb") as fh:
         data = fh.read()

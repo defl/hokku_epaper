@@ -14,9 +14,9 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 
 from pywinauto import Desktop
 
-PHOENIXMC_DIR = (
-    pathlib.Path(__file__).parents[1] / ".private/screens/bigme_f7/tools/phoenixmc_v3.1.240901a"
-)
+from _private import res
+
+PHOENIXMC_DIR = res("bigme_flash_tool_dir")
 
 
 def wins():
@@ -81,10 +81,10 @@ btn = btns[1][1] if len(btns) > 1 else btns[0][1]
 print(f"Sending BM_CLICK to FLASH 读取 (y={btn.rectangle().top}, no mouse)...")
 btn.click()  # BM_CLICK — no mouse movement
 
-# Monitor output file — PhoenixMC names it flash_A_0x0_L_0x<length>.bin
+# Monitor the flash-tool readback output files (4 MB then 2 MB fallback)
 candidates = [
-    PHOENIXMC_DIR / "flash_A_0x0_L_0x400000.bin",
-    PHOENIXMC_DIR / "flash_A_0x0_L_0x200000.bin",
+    res("bigme_flash_tool_readback"),
+    res("bigme_flash_tool_readback_2mb"),
 ]
 print("Waiting for dump file to grow...")
 deadline = time.monotonic() + 420  # 7 min — 4 MB at 115200 baud takes ~5 min

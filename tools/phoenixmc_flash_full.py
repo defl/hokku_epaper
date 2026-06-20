@@ -16,10 +16,12 @@ sys.stdout = io.TextIOWrapper(
 )
 from pywinauto import Desktop
 
+from _private import res
+
 ROOT = pathlib.Path(__file__).parents[1]
 IMAGE = ROOT / "firmware_bigme_f7" / "image" / "xr872" / "xr_system.img"
-PMC_DIR = ROOT / ".private" / "screens" / "bigme_f7" / "tools" / "phoenixmc_v3.1.240901a"
-PMC_EXE = PMC_DIR / "phoenixMC.exe"
+PMC_DIR = res("bigme_flash_tool_dir")
+PMC_EXE = res("bigme_flash_tool_exe")
 BM_CLICK = 0x00F5
 WM_SETTEXT = 0x000C
 LVM_GETITEMCOUNT = 0x1004

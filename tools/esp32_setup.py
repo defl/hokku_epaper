@@ -351,7 +351,7 @@ def _mdns_resolve(hostname, timeout=3.0):
             logger.warning("mDNS query failed: %s", e)
         finally:
             try:
-                sock.close()
+                sock.close()  # type: ignore[possibly-unbound]
             except Exception as e:
                 logger.warning("socket close failed: %s", e)
 

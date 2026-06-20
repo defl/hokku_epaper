@@ -3,21 +3,20 @@
 Usage:
     python tools/compare_flash_readback.py [readback.bin]
 
-If no argument given, looks for flash_A_0x0_L_0x400000.bin in the PhoenixMC directory.
+If no argument given, looks for the flash-tool readback file (see tools/_private.py).
 """
 
 import pathlib
 import sys
 
-PHOENIXMC_DIR = (
-    pathlib.Path(__file__).parents[1] / ".private/screens/bigme_f7/tools/phoenixmc_v3.1.240901a"
-)
+from _private import res
+
 IMAGE_PATH = pathlib.Path(__file__).parents[1] / "firmware_bigme_f7/image/xr872/xr_system.img"
 
 if len(sys.argv) > 1:
     readback = pathlib.Path(sys.argv[1])
 else:
-    readback = PHOENIXMC_DIR / "flash_A_0x0_L_0x400000.bin"
+    readback = res("bigme_flash_tool_readback")
 
 if not IMAGE_PATH.exists():
     print(f"ERROR: image not found: {IMAGE_PATH}")

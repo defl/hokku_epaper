@@ -15,9 +15,9 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 
 from pywinauto import Desktop
 
-PHOENIXMC_DIR = (
-    pathlib.Path(__file__).parents[1] / ".private/screens/bigme_f7/tools/phoenixmc_v3.1.240901a"
-)
+from _private import res
+
+PHOENIXMC_DIR = res("bigme_flash_tool_dir")
 
 BM_CLICK = 0x00F5
 LVM_GETITEMCOUNT = 0x1004
@@ -103,7 +103,7 @@ def main():
             pass
     time.sleep(0.5)
 
-    subprocess.Popen([str(PHOENIXMC_DIR / "phoenixMC.exe")], cwd=str(PHOENIXMC_DIR))
+    subprocess.Popen([str(res("bigme_flash_tool_exe"))], cwd=str(PHOENIXMC_DIR))
     print("Launched PhoenixMC...")
 
     # Wait until the main window AND the 调试 button are both present

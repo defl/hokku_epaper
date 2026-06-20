@@ -1,4 +1,4 @@
-"""Flash the OEM 4MB dump (.private/screens/bigme_f7/flash_dump.bin) to the Bigme F7.
+"""Flash the OEM reference dump to the Bigme F7.
 
 Usage (after phoenixmc_open.py has connected the device):
     python tools/phoenixmc_flash_oem.py
@@ -14,9 +14,9 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 
 from pywinauto import Desktop
 
-IMAGE_PATH = (
-    pathlib.Path(__file__).parents[1] / ".private/screens/bigme_f7/flash_dump.bin"
-).resolve()
+from _private import res
+
+IMAGE_PATH = res("bigme_oem_dump").resolve()
 
 BM_CLICK = 0x00F5
 WM_SETTEXT = 0x000C
