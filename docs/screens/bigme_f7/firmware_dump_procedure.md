@@ -1,7 +1,9 @@
 # Bigme F7 — Firmware Dump and Flash Procedure
 
 Full 4 MB flash dump successfully obtained 2026-06-06 (repeated 2026-06-06 to verify automation).
-Dumps stored at `.private/screens/bigme_f7/flash_dump.bin` and `flash_dump_20260606.bin` (4,194,304 bytes each, `AWIH` magic — valid XR872AT images).
+Dumps are organised per physical unit under `.private/units/<serial>_<tag>/flash_full.bin`
+(4,194,304 bytes, `AWIH` magic — valid XR872AT images). Two units dumped so far:
+one factory unit and one provisioned unit (folders named `<serial>_<tag>`). See each unit's `NOTES.md`.
 
 ## Hardware Setup
 
@@ -14,7 +16,7 @@ Dumps stored at `.private/screens/bigme_f7/flash_dump.bin` and `flash_dump_20260
 **PhoenixMC v3.1.240901a** — the XRADIO/Allwinner flash tool.
 (XRadioTech was acquired by Allwinner; the tool works for XR806/XR809/XR872 family.)
 
-Copies archived at `.private/screens/bigme_f7/tools/`:
+Copies archived at `.private/tools/`:
 - `phoenixmc_v3.1.240901a/` ← used for the dump
 - `phoenixmc_v3.1.23215d/`
 - `phoenixmc_v3.1.21014b/`
@@ -57,6 +59,29 @@ python tools/phoenixmc_read.py
 
 This sets FLASH length to 4 MB, clicks 读取, and monitors progress. Takes ~5 minutes.
 Output: `flash_A_0x0_L_0x400000.bin` in the PhoenixMC directory (~5 min, progress logged).
+
+## UART-only Dump (no PhoenixMC GUI)
+
+Confirmed 2026-06-19 on a working unit — produces a 4 MB image **byte-for-byte identical** to the
+PhoenixMC dump (SHA256 `349c24c8…`), with no GUI automation and no button presses:
+
+```
+python tools/_dump_bigme_f7.py [out_dir]
+```
+
+- Auto-enters BROM via the awake firmware console (`upgrade\n` → watchdog reset → BROM), retrying
+  until it syncs; if the device is asleep, a single button press wakes it.
+- Dumps the whole 4 MB in 256 KB ReadSector frames chained on **one** BROM session (~6 min).
+- `out_dir` is optional; pass a per-unit folder, e.g.
+  `.private/units/<serial>_<tag>`.
+
+This depends on the **sector-addressed** ReadSector/WriteSector semantics (addr = `byte>>9`,
+length = sector count) — see "BROM command wire protocol" in [`hardware_facts.md`](hardware_facts.md).
+An earlier version passed raw byte offsets and produced **corrupt** dumps (every chunk past
+`0x40000` read 512× too far → erased/garbage blocks); the byte-vs-sector fix in
+`tools/xr872_flasher.py` resolved it. The `tools/xr872_flasher.py` `write`/`erase` paths use the
+same corrected addressing (WriteSector sector-indexed, 16 KB/frame; EraseFlash byte-addressed,
+64 KB blocks) and were validated by a write→readback→erase round-trip on erased flash regions.
 
 ## Manual Procedure (fallback)
 
@@ -105,8 +130,24 @@ Scripts: `tools/phoenixmc_open.py`, `tools/phoenixmc_read.py`
 - For `LVM_SETITEMSTATE` (listview checkbox): use `VirtualAllocEx` + `WriteProcessMemory` to
   write the `LVITEM` struct into the target process's own 32-bit address space, then pass that
   remote pointer. See `remote_lv_setstate()` in `phoenixmc_open.py`.
-- All button clicks use `SendMessageW(hwnd, BM_CLICK, 0, 0)` directly on the handle
+- **Use `PostMessageW` (not `SendMessageW`) for the 调试 button click.** PhoenixMC does
+  synchronous serial I/O in its button-click handler (opening COM6, sending sync bytes, waiting
+  for BROM). `SendMessageW` blocks until the handler returns — this can stall the Python process
+  for several minutes if the BROM negotiation is slow. `PostMessageW` fires the click
+  asynchronously; poll for the flash dialog to appear separately (see `phase_launch()` in
+  `bigme_f7_restore_and_verify.py`).
 - Dialog title varies by version: `"flash operation"` or `"phoenixMC"` (both handled)
+
+**stdout buffering gotcha:** `bigme_f7_restore_and_verify.py` replaces `sys.stdout` with
+`io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")` at module level. This
+wrapper uses block buffering when stdout is a pipe (not a TTY), so all `print()` output is held
+in an 8 KB buffer. Any script that imports from this module must call
+`sys.stdout.reconfigure(line_buffering=True)` after the import to restore live output.
+
+**Don't touch COM6 before PhoenixMC:** if you run any Python BROM v1 sync (sending `0x55` bytes)
+and leave the device mid-handshake, PhoenixMC's v2 BROM negotiation can get confused and stall.
+Always use `XR872Flasher.sys_reboot()` to return the device to a clean BROM-entry state before
+launching PhoenixMC, or ensure no Python process has the port open.
 
 ## Flash Verification and OEM Restore (end-to-end)
 
@@ -125,8 +166,34 @@ Phases:
 2. Wait for BROM mode (`Open comm OK!`)
 3. Read 4 MB flash → `flash_A_0x0_L_0x400000.bin` in PhoenixMC dir (~5 min)
 4. Compare first 1 MB against `firmware_bigme_f7/image/xr872/xr_system.img`
-5. Flash `.private/screens/bigme_f7/flash_dump.bin` (OEM, 4 MB) (~5 min)
+5. Flash any unit's OEM image `.private/units/<serial>_<tag>/flash_full.bin` (4 MB) (~5 min). Dumps are effectively interchangeable: firmware is identical and the MAC lives in efuse (not flash), so the device keeps its own MAC / `BIGME_<MAC>` cloud ID / `XRZ_<MAC>` AP regardless. The only thing inherited from the donor dump is the in-flash config blob (`sn=` serial, prior owner's WiFi creds/email, cached picture) — overwritten on re-provision. Prefer the unit's *own* dump only to preserve its original serial/config.
 6. Click reboot, close PhoenixMC, open COM6 at 115200 baud, capture 30 s of boot output
+
+### OEM Restore from AND-Corrupted Flash
+
+If the device flash has been AND-corrupted by a write-without-erase (device enters BROM mode
+immediately on power-up — see "Root Cause: Zero UART Output" below), use:
+
+```
+python tools/_oem_restore.py
+```
+
+This performs a **full erase** before writing the OEM dump. Required when the corrupted flash
+has bits cleared to 0 that need to be 1 in the OEM firmware (write-without-erase would leave
+those bits at 0).
+
+Phases:
+1. Launch PhoenixMC (device auto-connects from BROM mode, no button press needed)
+2. Read current 4 MB flash → `flash_readback_<timestamp>.bin`
+3. Compare vs the matching unit's `.private/units/<serial>_<tag>/flash_full.bin` (prints diff count and first mismatches)
+4. Full chip erase (4 MB)
+5. Write OEM dump (4 MB, ~5 min)
+6. Read back 4 MB → byte-by-byte compare vs OEM reference
+
+If the device already has OEM firmware (comparison passes), the script exits without writing.
+
+**Confirmed 2026-06-13**: after test-write corruption (915,426 differing bytes), OEM restore
+completed with `VERIFICATION PASSED — all 4,194,304 bytes match OEM reference`.
 
 ## Building Custom Firmware
 
@@ -152,9 +219,9 @@ docker run --rm \
 On Windows with PowerShell (xr872_sdk is a sibling of hokku_epaper):
 
 ```powershell
-$xr872 = "c:/Users/defl/workspace/xr872_sdk"
+$xr872 = "c:/path/to/xr872_sdk"
 docker run --rm `
-  -v "c:/Users/defl/workspace/hokku_epaper:/hokku" `
+  -v "c:/path/to/hokku_epaper:/hokku" `
   -v "${xr872}:/xr872_sdk" `
   -w /hokku/firmware_bigme_f7/gcc `
   hokku-xr872-builder `
@@ -253,7 +320,7 @@ PhoenixMC debug dialog was opened.
 写入. Confirmed by readback comparison: after erase+write, the flash matches `xr_system.img`
 exactly in the header region.
 
-The OEM firmware (`flash_dump.bin`) can be re-flashed without an erase step because our
+The OEM firmware (a unit's `flash_full.bin`) can be re-flashed without an erase step because our
 previously written all-FF priv fields already have all bits at 1, so the OEM's 0 bits program
 cleanly.
 

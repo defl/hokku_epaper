@@ -29,8 +29,8 @@ Manufacturer: Bigme Cloud Literacy Technology Co., Ltd. / xrztech.com
 
 ## Firmware
 
-Source: UART boot log captured 2026-06-06, full log at `.private/screens/bigme_f7/uart_log_20260606_104615.txt`
-Binary analysis of flash dump performed 2026-06-06; partition files in `.private/screens/bigme_f7/partitions/`.
+Source: UART boot log captured 2026-06-06, full log at `.private/uart_log_20260606_104615.txt`
+Binary analysis of flash dump performed 2026-06-06; partition files in `.private/units/<serial>_<tag>/partitions/`.
 
 - **SDK**: XRADIO Skylark SDK 1.2.3
 - **App firmware version**: **1.2.7** (string literal `1.2.7` at boot payload offset 0x84B1)
@@ -38,7 +38,7 @@ Binary analysis of flash dump performed 2026-06-06; partition files in `.private
 - **WLAN firmware version**: R-XR_C10.08.52.64_01.80 (built Jul 6 2019)
 - **WLAN driver version**: XR_V02.06.28
 - **Flash chip**: Zbit Semiconductor SPI NOR, **4 MB**, JEDEC ID `0x5E4016`
-- **Flash dump**: `.private/screens/bigme_f7/flash_dump.bin` (4,194,304 bytes, `AWIH` magic, captured 2026-06-06)
+- **Flash dump**: `.private/units/<serial>_<tag>/flash_full.bin` (4,194,304 bytes, `AWIH` magic, captured 2026-06-06). Dumps are organised per physical unit under `units/<serial>_<tag>/`; see each unit's `NOTES.md`.
 - **BROM version**: 2 (confirmed via PhoenixMC flash ID dialog)
 - **Dump procedure**: [`firmware_dump_procedure.md`](firmware_dump_procedure.md)
 - **MAC address (efuse)**: 18:9e:2d:f9:87:54
@@ -58,6 +58,72 @@ Confirmed from AWIH header analysis of flash dump. Each partition image has its 
 
 The EPD display driver lives in the **Boot partition** (SRAM-loaded). Confirmed EPD functions found:
 `check_busy_high`, `epd_test` (with sub-steps 1, 11, 2, 3).
+
+## XIP / Flash Cache Mapping
+
+Source: SDK ROM disassembly (`xr872_sdk/src/rom/rom_bin/out/rom_source_0424.objdump`,
+`rom_HAL_Flashc_Xip_Init` at ROM 0xb0d0) cross-checked against the OEM flash dump, 2026-06-13.
+
+- XIP code executes from VMA base **0x400000**. The flash instruction cache maps that VMA
+  window to flash via the **OPI memory controller** at base **`0x4000B000`**:
+  - `OPI_MEM_CTRL->START_ADDR0` = `0x4000B080` — start of cached VMA window
+  - `OPI_MEM_CTRL->END_ADDR0`   = `0x4000B084` — end of cached VMA window
+  - `OPI_MEM_CTRL->BIAS_ADDR0`  = **`0x4000B088`** — bits[27:0] = flash byte offset where the
+    XIP image data begins; bit31 = bias enable
+- Mapping: `flash_addr = (VMA - 0x400000) + BIAS_ADDR0[27:0]`.
+- The arch-v1 `FLASH_CACHE` block (base `0x4000C000`, `READ_BIAS_ADDR` at `0x4000C098`) from
+  the SDK headers **does NOT exist / is unused on this silicon** — zero references in the OEM
+  firmware. XR872AT uses the arch-v2 OPI flash controller above.
+- Programmed at boot by `platform_init_level0` → `platform_xip_init()` →
+  `HAL_Xip_Init(flash, app_xip_data_offset)` (which sets `BIAS_ADDR0 = offset`), run from SRAM
+  before `platform_init_level1` (the first code that executes from XIP).
+- OEM `app_xip` data is at flash **0x28040** (header 0x28000), so OEM boots with
+  `BIAS_ADDR0 = 0x28040`.
+
+## BROM / Recovery
+
+Source: direct testing on the device, 2026-06-13.
+
+- **Only software BROM trigger is the firmware console `upgrade` command** (`cmd_upgrade_exec`
+  → sets `PRCM CPUA_BOOT_FLAG = SYS_UPDATE` → watchdog reboot → bootloader enters `bl_upgrade`
+  and waits in BROM). If running firmware crashes before its console starts, this path is gone.
+- **DTR and RTS are NOT wired** to the XR872 reset or power-enable: pulsing either line (both
+  polarities) with a 9 s listen produces no boot/crash output. PhoenixMC's DTR-reset is a no-op
+  on this board.
+- **The power-on mask-BROM UART sync window is unreachable over the CH340.** A long-press is the
+  only reset and it power-cycles the CH340 too, so COM6 disappears ~1 s and only becomes openable
+  ~1.1 s after power-on — by then the BROM window has already closed (zero-latency capture:
+  flooding `0x55` and `"upgrade"+0x55` gets no answer; device is silent ~5 s then emits its crash
+  dump). PhoenixMC hits the same wall; it only connects when the device is already sitting in
+  `bl_upgrade` (e.g. right after an `xr872_flasher` write).
+- **Implication:** a device running crash-on-boot firmware cannot be recovered over UART. Recovery
+  requires hardware — SPI-clip the NOR flash (CH341A + flashrom) or a boot-strap test pad. (This is
+  the state of the bricked unit.)
+- **On a WORKING device, the `upgrade` console is a reliable UART BROM entry** (confirmed 2026-06-19
+  on a working unit): send `upgrade\n` to the awake firmware console → watchdog reset into BROM. No
+  boot-log-window timing is needed; the CH340 stays powered so the COM port does not bounce, and the
+  device auto-reboots back to the console after each BROM watchdog reset, so a tool can re-enter BROM
+  repeatedly with no button presses. `tools/_dump_bigme_f7.py` uses this to dump 4 MB fully
+  automatically.
+
+### BROM command wire protocol
+
+Source: disassembly of the phoenixMC Linux ELF (`CFlashHost::*`, symbols intact) cross-checked
+against live transactions, 2026-06-19. Implemented in `tools/xr872_flasher.py`.
+
+- Sync: host sends `0x55` until BROM replies `OK`. Commands are 12-byte-header frames:
+  `"BROM"(4) + type(1)=0x04 + pad(1) + CRC16_LE(2) + count_BE(4) + cmd(1) + payload_BE`.
+- **ReadSector (0x1A) and WriteSector (0x1B) address flash in 512-byte SECTOR units, not bytes:**
+  the on-wire address field is a **sector index (`byte_addr >> 9`)** and the length field a
+  **sector count (`bytes >> 9`)**, both big-endian. A read/write of byte address A for N bytes puts
+  `A>>9` and `N>>9` on the wire. *(Passing raw byte values silently reads/writes 512× too far —
+  this was the cause of earlier corrupt UART dumps; fixed and then verified byte-for-byte identical
+  to a PhoenixMC dump, and by a write→readback→erase round-trip on erased regions.)*
+- WriteSector streams a fixed **16 KB (0x20 sectors) data block per frame** after its header ACK;
+  each block has its own ACK. ReadSector streams `sector_count × 512` bytes after the ACK.
+- **EraseFlash (0x19) is the exception — it uses RAW BYTE addressing**, erase-type byte `0x03`,
+  one erase per **64 KB block** (64 KB-aligned). Do not sector-convert erase addresses.
+- ChangeBaud to 921600 is rejected in practice — the CH340 corrupts bulk data above 115200.
 
 ## Cloud Connectivity
 

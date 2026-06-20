@@ -8,7 +8,7 @@
 ## Building the hokku-server `.deb` (Windows via Docker)
 ```
 MSYS_NO_PATHCONV=1 docker run --rm \
-    -v "/c/Users/defl/workspace/hokku_epaper":/src \
+    -v "/path/to/hokku_epaper":/src \
     debian:trixie bash -c '
 set -e
 apt-get update -qq

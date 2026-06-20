@@ -2,11 +2,77 @@
 
 Sub-directory rules: [firmware/AGENTS.md](firmware/AGENTS.md) | [python/AGENTS.md](python/AGENTS.md)
 
+## Firmware flashing — STOP rules (read before ANY flash)
+
+Flashing can permanently brick a device whenever the only way back into the chip's
+download/recovery mode runs through the firmware you are replacing. This is not
+hypothetical: it bricked `bigme_f7` on 2026-06-13 — a crash-on-boot app removed the
+only software BROM trigger, and there was no hardware-independent way back in
+(see `docs/screens/bigme_f7/hardware_facts.md` → "BROM / Recovery").
+
+No tool can force these rules — there is no preflight script you are guaranteed to
+run. The forcing function is THIS FILE, which you read every session. Apply the
+rules directly. They are absolute and override "it's easier", "to be safe", and
+"looks fine".
+
+1. **Dual-slot / A/B only — else do not flash.** You MUST flash into the device's
+   inactive OTA slot (or its equivalent A/B / dual-bank mechanism — every supported
+   SoC has one; find it) and leave a known-good image bootable in the other slot, so
+   a bad image falls back automatically. If you cannot flash via the dual-slot
+   mechanism, you are NOT allowed to flash. **STOP and ask the human.**
+
+2. **If the device has dual-slot / A-B support, it MUST be used *correctly* — not
+   just "used".** Assume the SoC or bootloader provides an A/B / dual-bank / OTA-slot
+   mechanism with a verified-flag and automatic rollback (they almost always do;
+   confirm before assuming otherwise). Where it exists, you MUST drive it exactly as
+   designed, not merely write into a second region:
+   - Write the new image to the **inactive** slot only. NEVER overwrite the
+     currently-booting known-good slot.
+   - Leave the new slot **un-verified / non-active**. The new image must mark *itself*
+     verified only after it has booted and passed a self-check, so the bootloader
+     **auto-rolls-back** to the known-good slot on a failed boot. Marking it
+     active/verified up front throws away the entire safety net.
+   - You MUST understand this device's slot-selection and verified-flag semantics
+     **before** flashing. If you don't know them, you don't have a recovery path —
+     **STOP**, determine them (dump/reverse the bootloader, read the SDK), or ask.
+
+3. **Early recovery hatch is mandatory — else do not flash.** Every firmware you
+   build MUST include an early recovery hatch: code that runs at the very start of
+   boot, BEFORE any init that can fail, and can force the device into its
+   download/recovery mode (e.g. poll UART for a key → set the download-boot flag →
+   reboot into BROM). If you cannot add a working recovery hatch, you are NOT allowed
+   to flash. **STOP and ask the human.**
+
+4. **Never full-erase or touch the bootloader without explicit approval.** You MUST
+   NOT full-chip-erase, and MUST NOT write the bootloader / boot partitions, unless
+   you actually changed the bootloader. This ALWAYS requires explicit human approval:
+   state exactly what you will erase/write and wait for it. Otherwise flash only the
+   app partitions you changed; leave the bootloader and the known-good slot intact.
+
 ## Python environment
 - Venv: `.venv/` at repo root
 - Windows: `.venv/Scripts/python` | Linux/macOS: `.venv/bin/python`
 - Dependencies: `requirements.txt` (direct deps, unpinned; pip resolves transitive)
 - Recreate: `pip install -r requirements.txt`
+
+## Privacy & `.private/` — never leak into commits
+
+- **Nothing from `.private/` may ever appear in committed code, docs, or commit messages** — not its
+  file contents, and **not even its internal paths, filenames, directory names, version tags, or any
+  identifier found inside it.** The material under `.private/` (OEM firmware dumps, vendor flash
+  tools, per-unit data, etc.) is non-distributable third-party/owner IP; leaking even the path
+  structure is a leak. `.private/` is gitignored and MUST stay that way.
+- **Inside `.private/` you may use any names/identifiers freely** (real serials, tags, vendor
+  tool-version folders, etc.). The restriction is purely about what crosses into tracked files.
+- Tracked code that needs something from `.private/` MUST NOT hardcode the path/filename. Locate it at
+  runtime via a generic, IP-free mechanism: a CLI arg / env var, or a config file that itself lives in
+  `.private/` (referenced only through an env var or arg, never a literal path). Keep the indirection
+  generic — no embedded serials, screen names, or vendor filenames.
+- **Never put PII in commits** either — device **serial numbers or any part of them** (e.g. `6000xxx`
+  suffixes, full `F7CLR0W2…` serials), emails, WiFi SSIDs/passwords, account names, MAC addresses, or a
+  prior owner's data. In tracked files refer to things generically ("the connected unit", `<placeholder>`).
+- If you find any of the above already committed, scrub it (rewrite **unpushed** history; **ask** before
+  touching pushed history).
 
 ## Git / release rules
 - CAN `git commit`; commit message MUST be descriptive
