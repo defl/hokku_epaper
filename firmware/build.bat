@@ -9,7 +9,7 @@ set OPENOCD_SCRIPTS=C:\Espressif\tools\openocd-esp32\v0.12.0-esp32-20251215\open
 set PATH=C:\Espressif\tools\xtensa-esp-elf\esp-14.2.0_20251107\xtensa-esp-elf\bin;C:\Espressif\tools\ninja\1.12.1;C:\Espressif\tools\cmake\3.30.5\bin;C:\Espressif\tools\python\v5.5.3\venv\Scripts;%PATH%
 set PYTHON=C:\Espressif\tools\python\v5.5.3\venv\Scripts\python.exe
 set ESPTOOL=%PYTHON% %IDF_PATH%\components\esptool_py\esptool\esptool.py
-cd /d C:\Users\defl\workspace\hokku_epaper\firmware
+cd /d "%~dp0"
 
 REM If the first argument is "build" with no other flags, force a reconfigure
 REM so the CMake timestamp is always today's date, then run the build and
