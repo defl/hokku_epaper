@@ -15,6 +15,8 @@
     "tools/_extract_brom_stub.py",
     "tools/_extract_rsrc.py",
     "tools/_probe_v2_brom.py",
+    "tools/_recover_seq1.py",
+    "tools/_test_4k_erase.py",
     "tools/_write_128sector_at_block1_test.py",
     "tools/_write_128sector_test.py",
     "tools/_write_addr_test.py",
@@ -22,6 +24,7 @@
     "tools/_write_boundary_test.py",
     "tools/_write_count_test.py",
     "tools/_write_final_debug.py",
+    "tools/flash_candidate_slot0.py",
     "tools/flash_proxy.py",
     "tools/flash_proxy_analyze.py"
   ]
