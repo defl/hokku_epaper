@@ -270,6 +270,7 @@ def create_app(
             log=screen_log,
             firmware_version=fw_version,
             firmware_build=fw_build,
+            screen_model=screen_model,
         )
         logger.debug("Serving: %s to %s (sleep_seconds=%s)", chosen, screen_name, sleep_seconds)
 
