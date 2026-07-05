@@ -28,6 +28,8 @@ ignore = [
 "tools/tests/*.py" = ["S101", "S106"]           # same for tools test suite
 "python/tests/_*.py" = ["S101"]                 # test helpers (not prefixed test_)
 "tools/phoenixmc_*.py" = ["S110", "E722", "E402", "F401", "PLC0415"]  # GUI automation: bare except-pass is intentional
+"tools/flash_candidate_slot0*.py" = ["S110"]     # best-effort serial retry: except-pass is intentional
+"tools/_dump_bigme_f7.py" = ["S110", "E402", "PLC0415"]  # serial retry + sys.path/lazy imports
 
 [tool.ruff.lint.isort]
 known-first-party = ["hokku", "hokku_config", "hokku_setup"]

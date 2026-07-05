@@ -101,9 +101,11 @@ def _crc_readsector(sector_index: int, sector_count: int) -> int:
     return _crc_finish(ax)
 
 
-def _crc_eraseflash(addr: int) -> int:
-    # Both halves of addr contribute; additionally byte[13]=0x19, byte[14]=0x03
-    ax = (0x0319 + 0x0004 + (addr & 0xFFFF) - 0x6069) & 0xFFFF
+def _crc_eraseflash(addr: int, etype: int = 0x03) -> int:
+    # word[12..13] at CRC time = {cmd=0x19, etype}; addr halves also contribute.
+    # etype 0x03 = 64 KB block erase; 0x01 = 4 KB sector erase (confirmed from
+    # phoenixMC.dll: the 4 KB-aligned erase loop calls the type-0x01 eraser).
+    ax = ((0x19 | (etype << 8)) + 0x0004 + (addr & 0xFFFF) - 0x6069) & 0xFFFF
     ax = (ax + (addr >> 16)) & 0xFFFF
     return _crc_finish(ax)
 
@@ -204,10 +206,14 @@ def frame_readsector(addr: int, length: int) -> bytes:
     )
 
 
-def frame_eraseflash(addr: int) -> bytes:
-    # payload: erase-type byte 0x03 + BE addr
-    payload = bytes([0x03]) + struct.pack(">I", addr)
-    return _frame(CMD_ERASE_FLASH, b"\x00\x00\x00\x06", payload, _crc_eraseflash(addr))
+ERASE_TYPE_64K = 0x03
+ERASE_TYPE_4K = 0x01
+
+
+def frame_eraseflash(addr: int, etype: int = ERASE_TYPE_64K) -> bytes:
+    # payload: erase-type byte + BE addr. etype 0x03 = 64 KB block, 0x01 = 4 KB sector.
+    payload = bytes([etype]) + struct.pack(">I", addr)
+    return _frame(CMD_ERASE_FLASH, b"\x00\x00\x00\x06", payload, _crc_eraseflash(addr, etype))
 
 
 def frame_writesector(addr: int, data: bytes) -> bytes:
@@ -378,9 +384,9 @@ class XR872Flasher:
             return None
         return data
 
-    def erase_flash(self, addr: int) -> bool:
-        """Erase flash sector at addr."""
-        return self._ack_ok(self._send_cmd(frame_eraseflash(addr)))
+    def erase_flash(self, addr: int, etype: int = ERASE_TYPE_64K) -> bool:
+        """Erase flash at addr. etype 0x03 = 64 KB block, 0x01 = 4 KB sector."""
+        return self._ack_ok(self._send_cmd(frame_eraseflash(addr, etype)))
 
     def write_sector(self, addr: int, data: bytes) -> bool:
         """Write data (multiple of 512 B) to flash at addr.
