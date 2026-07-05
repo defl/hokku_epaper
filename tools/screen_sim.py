@@ -154,6 +154,7 @@ def fetch_screen(
     battery_mv: int | None = None,
     sim_state: SimState | None = None,
     timeout: int = 30,
+    screen_model: str = "huessen_epf1301",
 ) -> tuple[bytes, dict[str, str]]:
     """GET /hokku/screen/ and return (binary, response_headers).
 
@@ -161,10 +162,12 @@ def fetch_screen(
     request in its screen telemetry.
 
     Args:
-        server_url:  Base URL, e.g. ``http://localhost:8080``.
-        screen_name: Sent as ``X-Screen-Name``; shows up in the server UI.
-        battery_mv:  Optional battery voltage in mV (``X-Battery-mV``).
-        timeout:     Socket timeout in seconds.
+        server_url:   Base URL, e.g. ``http://localhost:8080``.
+        screen_name:  Sent as ``X-Screen-Name``; shows up in the server UI.
+        battery_mv:   Optional battery voltage in mV (``X-Battery-mV``).
+        timeout:      Socket timeout in seconds.
+        screen_model: Sent as ``X-Screen-Model`` — the hardware model the
+                      server routes on (default: huessen_epf1301).
 
     Returns:
         A (binary_data, headers_dict) tuple. headers_dict keys are lowercase.
@@ -177,6 +180,7 @@ def fetch_screen(
     hdrs: dict[str, str] = {
         "User-Agent": f"hokku-screen-sim/2.0 ({screen_name})",
         "X-Screen-Name": screen_name,
+        "X-Screen-Model": screen_model,
     }
     if battery_mv is not None:
         hdrs["X-Battery-mV"] = str(battery_mv)

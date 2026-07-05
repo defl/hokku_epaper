@@ -85,7 +85,7 @@ def test_serve_binary_status_200(live_client):
     client, _, _ = live_client
     resp = client.get(
         "/hokku/screen/",
-        headers={"X-Screen-Name": "test-screen"},
+        headers={"X-Screen-Name": "test-screen", "X-Screen-Model": "huessen_epf1301"},
     )
     assert resp.status_code == 200
 
@@ -94,7 +94,7 @@ def test_serve_binary_content_type(live_client):
     client, _, _ = live_client
     resp = client.get(
         "/hokku/screen/",
-        headers={"X-Screen-Name": "test-screen"},
+        headers={"X-Screen-Name": "test-screen", "X-Screen-Model": "huessen_epf1301"},
     )
     assert resp.headers["Content-Type"] == "application/octet-stream"
 
@@ -103,7 +103,7 @@ def test_serve_binary_exact_size(live_client):
     client, _, _ = live_client
     resp = client.get(
         "/hokku/screen/",
-        headers={"X-Screen-Name": "test-screen"},
+        headers={"X-Screen-Name": "test-screen", "X-Screen-Model": "huessen_epf1301"},
     )
     assert len(resp.data) == TOTAL_BYTES, f"Expected {TOTAL_BYTES} bytes, got {len(resp.data)}"
 
@@ -113,7 +113,7 @@ def test_serve_binary_valid_palette_indices(live_client):
     client, _, _ = live_client
     resp = client.get(
         "/hokku/screen/",
-        headers={"X-Screen-Name": "test-screen"},
+        headers={"X-Screen-Name": "test-screen", "X-Screen-Model": "huessen_epf1301"},
     )
     assert resp.status_code == 200
     indices = panel_bytes_to_indices(resp.data)
@@ -125,7 +125,7 @@ def test_serve_binary_x_sleep_seconds_header(live_client):
     client, _, _ = live_client
     resp = client.get(
         "/hokku/screen/",
-        headers={"X-Screen-Name": "test-screen"},
+        headers={"X-Screen-Name": "test-screen", "X-Screen-Model": "huessen_epf1301"},
     )
     assert "X-Sleep-Seconds" in resp.headers
     assert int(resp.headers["X-Sleep-Seconds"]) > 0
@@ -135,7 +135,7 @@ def test_serve_binary_x_server_time_epoch_header(live_client):
     client, _, _ = live_client
     resp = client.get(
         "/hokku/screen/",
-        headers={"X-Screen-Name": "test-screen"},
+        headers={"X-Screen-Name": "test-screen", "X-Screen-Model": "huessen_epf1301"},
     )
     assert "X-Server-Time-Epoch" in resp.headers
     epoch = int(resp.headers["X-Server-Time-Epoch"])
@@ -147,7 +147,7 @@ def test_serve_binary_content_disposition_header(live_client):
     client, _, _ = live_client
     resp = client.get(
         "/hokku/screen/",
-        headers={"X-Screen-Name": "test-screen"},
+        headers={"X-Screen-Name": "test-screen", "X-Screen-Model": "huessen_epf1301"},
     )
     cd = resp.headers.get("Content-Disposition", "")
     assert "hokku.bin" in cd
@@ -163,6 +163,7 @@ def test_serve_binary_firmware_headers_forwarded(live_client):
             "X-Screen-Name": "fw-screen",
             "X-Battery-mV": "3800",
             "X-Frame-State": "USB_AWAKE",
+            "X-Screen-Model": "huessen_epf1301",
         },
     )
     assert resp.status_code == 200
@@ -236,7 +237,10 @@ def test_serve_binary_no_images_returns_404_or_503(app_config: AppConfig, tmp_pa
     app = create_app(state, config_path=tmp_path / "config.json", template_folder=None)
     app.config["TESTING"] = True
     client = app.test_client()
-    resp = client.get("/hokku/screen/", headers={"X-Screen-Name": "empty"})
+    resp = client.get(
+        "/hokku/screen/",
+        headers={"X-Screen-Name": "empty", "X-Screen-Model": "huessen_epf1301"},
+    )
     assert resp.status_code in (404, 503)
     assert "X-Sleep-Seconds" in resp.headers
 

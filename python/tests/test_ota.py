@@ -264,7 +264,11 @@ def test_serve_binary_signals_ota_once_when_capable_and_pending(
         client.post("/hokku/api/screens/frame-1/update", json={"enabled": True}).status_code == 200
     )
 
-    headers = {"X-Screen-Name": "frame-1", "X-Frame-State": json.dumps({"fw": "1.0.0", "ota": 1})}
+    headers = {
+        "X-Screen-Name": "frame-1",
+        "X-Screen-Model": "huessen_epf1301",
+        "X-Frame-State": json.dumps({"fw": "1.0.0", "ota": 1}),
+    }
     r1 = client.get("/hokku/screen/", headers=headers)
     assert r1.status_code == 200
     assert r1.headers.get("X-Firmware-Update") == "9.9.9"
@@ -285,7 +289,11 @@ def test_serve_binary_no_signal_when_not_capable(
     client.post("/hokku/api/screens/frame-1/update", json={"enabled": True})
 
     # No "ota" flag in frame-state -> pre-OTA firmware -> never signalled.
-    headers = {"X-Screen-Name": "frame-1", "X-Frame-State": json.dumps({"fw": "1.0.0"})}
+    headers = {
+        "X-Screen-Name": "frame-1",
+        "X-Screen-Model": "huessen_epf1301",
+        "X-Frame-State": json.dumps({"fw": "1.0.0"}),
+    }
     r = client.get("/hokku/screen/", headers=headers)
     assert "X-Firmware-Update" not in r.headers
     # Pending flag is preserved (not consumed) so the UI still shows it.
@@ -300,6 +308,10 @@ def test_serve_binary_no_signal_when_not_pending(
     )
     state = _state_with_image(app_config, make_test_image)
     client = _client(state, tmp_path)
-    headers = {"X-Screen-Name": "frame-1", "X-Frame-State": json.dumps({"fw": "1.0.0", "ota": 1})}
+    headers = {
+        "X-Screen-Name": "frame-1",
+        "X-Screen-Model": "huessen_epf1301",
+        "X-Frame-State": json.dumps({"fw": "1.0.0", "ota": 1}),
+    }
     r = client.get("/hokku/screen/", headers=headers)
     assert "X-Firmware-Update" not in r.headers

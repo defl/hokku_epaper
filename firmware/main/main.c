@@ -83,6 +83,9 @@ static const char *TAG = "hokku";
 #define PIN_CHG_EN2         13   /* Charger enable (active LOW) */
 #define PIN_USB_DETECT      14   /* LOW = computer USB host present. See docs/hardware_facts.md */
 
+/* ── Screen identity ─────────────────────────────────────────────── */
+#define SCREEN_MODEL       "huessen_epf1301"
+
 /* ── Display parameters ──────────────────────────────────────────── */
 #define DISPLAY_W          1200
 #define DISPLAY_H           800
@@ -1079,10 +1082,11 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
     /* Switch to POST so the ring-buffer log can travel as the request body. */
     esp_http_client_set_method(client, HTTP_METHOD_POST);
 
-    /* Send screen name so the server can identify this device */
+    /* Send screen identity so the server can identify this device */
     if (config.screen_name[0] != '\0') {
         esp_http_client_set_header(client, "X-Screen-Name", config.screen_name);
     }
+    esp_http_client_set_header(client, "X-Screen-Model", SCREEN_MODEL);
 
     /* Full device state in a single compact JSON header. The server
      * stores the whole dict per screen for the dashboard Details view. */

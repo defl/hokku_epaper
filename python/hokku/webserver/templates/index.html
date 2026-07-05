@@ -2431,7 +2431,7 @@ function renderScreens(screens, bundledFirmwareVersion) {
     html += '</ul></div>';
   }
 
-  html += '<table class="screens-table"><tr><th>Name</th><th>IP</th><th>Battery</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th></th></tr>';
+  html += '<table class="screens-table"><tr><th>Name</th><th>Model</th><th>IP</th><th>Battery</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th></th></tr>';
   names.forEach(name => {
     const s = screens[name];
     const late = overdueMinutes(s);
@@ -2450,8 +2450,12 @@ function renderScreens(screens, bundledFirmwareVersion) {
     let nameBadges = '';
     if (s.ota_error) nameBadges += ' <span title="Firmware update error" style="color:#a33;font-weight:700">⛔</span>';
     else if (s.ota_pending) nameBadges += ' <span title="Firmware update scheduled for next refresh" style="color:var(--accent,#2a6);font-weight:700">⟳</span>';
+    const modelCell = s.screen_model
+      ? `<span style="font-family:var(--font-mono);font-size:0.85em">${escapeHtml(s.screen_model)}</span>`
+      : '<span style="color:var(--bamboo)">—</span>';
     html += `<tr${rowClass}>
       <td>${name}${nameBadges}</td>
+      <td>${modelCell}</td>
       <td>${s.ip || '-'}</td>
       <td>${formatBattery(s)}</td>
       <td>${s.last_seen || '-'}</td>

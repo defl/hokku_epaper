@@ -62,6 +62,7 @@ from hokku.webserver.screen_headers import (
     parse_firmware_build,
     parse_firmware_version,
     parse_frame_state,
+    parse_screen_model,
 )
 from hokku.webserver.time_utils import calculate_sleep_seconds, format_duration_human
 
@@ -179,6 +180,15 @@ def create_app(
 
         screen_name = request.headers.get("X-Screen-Name", "unnamed")
         screen_ip = request.remote_addr or "unknown"
+
+        # Every screen must self-identify its hardware model. No default, no
+        # fallback — an unknown or missing model is a misconfigured screen.
+        screen_model = parse_screen_model(request.headers.get("X-Screen-Model"))
+        if screen_model is None:
+            resp = make_response("Unknown or missing X-Screen-Model", 400)
+            resp.headers["X-Sleep-Seconds"] = str(_busy_retry_seconds(config))
+            return resp
+
         battery_mv = parse_battery_header(request.headers.get("X-Battery-mV"))
         frame_state = parse_frame_state(request.headers.get("X-Frame-State"))
         fw_version = parse_firmware_version(request.headers.get("X-Firmware-Version"))
@@ -218,6 +228,7 @@ def create_app(
                 log=screen_log,
                 firmware_version=fw_version,
                 firmware_build=fw_build,
+                screen_model=screen_model,
             )
             if converting:
                 msg, status, label = "Converting images, try again shortly", 503, "Converting"
@@ -242,6 +253,7 @@ def create_app(
                 log=screen_log,
                 firmware_version=fw_version,
                 firmware_build=fw_build,
+                screen_model=screen_model,
             )
             resp = make_response("Cached binary missing, try again shortly", 503)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
@@ -644,6 +656,7 @@ def create_app(
                 ),
                 "last_sleep_seconds": t.last_sleep_seconds,
                 "last_served": t.last_served,
+                "screen_model": t.screen_model,
                 "battery_mv": t.battery_mv,
                 "battery_percent": t.battery_percent,
                 "battery_seen_at": (

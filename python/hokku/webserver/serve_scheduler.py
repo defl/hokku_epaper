@@ -70,6 +70,9 @@ class ScreenTelemetryEntry:
     # screen successfully reports the bundled firmware version.
     ota_error: str | None = None
     ota_error_at: float | None = None
+    # Hardware model this screen self-reported via X-Screen-Model (e.g.
+    # "huessen_epf1301", "bigme_f7"). None until the screen first identifies.
+    screen_model: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -92,6 +95,7 @@ class ScreenTelemetryEntry:
             firmware_build=d.get("firmware_build"),
             ota_error=d.get("ota_error"),
             ota_error_at=d.get("ota_error_at"),
+            screen_model=d.get("screen_model"),
         )
 
 
@@ -221,6 +225,7 @@ class ServeScheduler:
         log: str | None = None,
         firmware_version: str | None = None,
         firmware_build: str | None = None,
+        screen_model: str | None = None,
     ) -> None:
         with self._lock:
             now = time.time()
@@ -280,12 +285,23 @@ class ServeScheduler:
                 # clear_ota_error (e.g. once the screen reports the new version).
                 ota_error=existing.ota_error if existing else None,
                 ota_error_at=existing.ota_error_at if existing else None,
+                screen_model=screen_model or (existing.screen_model if existing else None),
             )
             self._save()
 
     def screens(self) -> dict[str, ScreenTelemetryEntry]:
         with self._lock:
             return dict(self._screens)
+
+    def known_models(self) -> set[str]:
+        """Set of distinct hardware models across all screens seen so far.
+
+        Only screens that have self-identified via X-Screen-Model contribute;
+        screens with no reported model are omitted.  The image manager uses
+        this to decide which per-model binaries to render.
+        """
+        with self._lock:
+            return {t.screen_model for t in self._screens.values() if t.screen_model is not None}
 
     # ── OTA: per-screen update request + migration errors ─────────
 

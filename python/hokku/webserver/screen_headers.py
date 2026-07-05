@@ -38,6 +38,23 @@ def parse_firmware_version(raw: str | None) -> str | None:
     return v if v else None
 
 
+def parse_screen_model(raw: str | None) -> str | None:
+    """Parse the X-Screen-Model header and validate it against known models.
+
+    Returns the model id (e.g. ``"huessen_epf1301"``) only if it is a
+    registered display model; otherwise ``None`` for missing, empty, or
+    unknown values.  There is no default — callers reject a ``None`` result
+    so every screen must self-identify with a recognised model.
+    """
+    if not raw:
+        return None
+    # Imported lazily to avoid a heavy import chain at module load time.
+    from hokku.screens.registry import DISPLAY_REGISTRY  # noqa: PLC0415
+
+    v = str(raw).strip()
+    return v if v in DISPLAY_REGISTRY else None
+
+
 def parse_firmware_build(raw: str | None) -> str | None:
     """Parse X-Firmware-Build header — returns the stripped timestamp or None."""
     if not raw:

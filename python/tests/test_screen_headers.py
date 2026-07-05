@@ -10,6 +10,7 @@ from hokku.webserver.screen_headers import (
     battery_percent,
     parse_battery_header,
     parse_frame_state,
+    parse_screen_model,
 )
 
 # ── battery_percent ───────────────────────────────────────────────────────────
@@ -144,3 +145,30 @@ def test_parse_frame_state_nested_dict():
     result = parse_frame_state(raw)
     assert result is not None
     assert result["outer"] == {"inner": 1}
+
+
+# ── parse_screen_model ────────────────────────────────────────────────────────
+
+
+def test_parse_screen_model_valid_huessen():
+    assert parse_screen_model("huessen_epf1301") == "huessen_epf1301"
+
+
+def test_parse_screen_model_valid_bigme():
+    assert parse_screen_model("bigme_f7") == "bigme_f7"
+
+
+def test_parse_screen_model_with_whitespace():
+    assert parse_screen_model("  bigme_f7  ") == "bigme_f7"
+
+
+def test_parse_screen_model_none_returns_none():
+    assert parse_screen_model(None) is None
+
+
+def test_parse_screen_model_empty_returns_none():
+    assert parse_screen_model("") is None
+
+
+def test_parse_screen_model_unknown_returns_none():
+    assert parse_screen_model("nonexistent_screen") is None

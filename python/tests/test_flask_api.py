@@ -536,7 +536,10 @@ def test_screen_delete_removes_from_telemetry(bare_client):
     """After recording a screen call, deleting it removes it from telemetry."""
     client, state = bare_client
     # Simulate the screen checking in by hitting /hokku/screen/
-    client.get("/hokku/screen/", headers={"X-Screen-Name": "frame-1"})
+    client.get(
+        "/hokku/screen/",
+        headers={"X-Screen-Name": "frame-1", "X-Screen-Model": "huessen_epf1301"},
+    )
     assert "frame-1" in state.scheduler.screens()
 
     client.delete("/hokku/api/screens/frame-1")
