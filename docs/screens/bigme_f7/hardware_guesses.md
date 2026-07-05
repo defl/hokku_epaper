@@ -37,8 +37,25 @@ From XR872AT SDK documentation unless noted:
 - UART0 boot log baud: 115200
 - **921600 baud NOT supported** on this device hardware — confirmed 2026-06-12; BROM operations work at 115200
 - PhoenixMC flash tool claims 921600 — does not apply to this unit
-- ROM download mode trigger: send `"upgrade"` + 50×`'U'` over UART0 → ROM responds `"OKBOOM"` → enters download mode
-- No hardware boot pin required (unlike ESP32's GPIO0 pull-down)
+- ~~ROM download mode trigger: send `"upgrade"` + 50×`'U'` over UART0 → `"OKBOOM"`~~ — **DISPROVEN
+  2026-06-13.** Flooding `"upgrade"+0x55` at the bootloader during boot gets no response; the only
+  working `upgrade` trigger is the firmware *console* command (see BROM/Recovery in
+  [`hardware_facts.md`](hardware_facts.md)). Whether a boot-strap pin can force BROM is untested.
+- ~~No hardware boot pin required~~ — unverified; with no software BROM entry left on a bricked
+  unit, a boot-strap pad may be the only non-SPI-clip recovery. Needs PCB probing.
+
+## Custom-firmware XIP crash (root cause TBD)
+
+Our custom firmware crashes in `platform_init_level1` (MemManage IACCVIOL, PC=0x40000000) because
+the XIP cache bias (`OPI_MEM_CTRL->BIAS_ADDR0`, see facts) is left at 0 instead of our app_xip
+offset `0x13040`, so VMA 0x470534 maps to flash[0x70534] = wrong code. **Why the stock SDK path
+leaves it 0 is not yet confirmed** — by static analysis `platform_xip_init` → `HAL_Xip_Init` should
+program it correctly for our valid AWIH header chain. Leading hypothesis: we build with the generic
+`xr872_evb_ai` board config (flash 96 MHz + EVB read mode) rather than Bigme's, giving a wrong XIP
+read mode/clock for the Zbit part; alternatively `image_get_section_addr` fails before the console
+UART is up (its error print would be lost — consistent with the silent-then-crash boot capture).
+Current fix (`firmware_bigme_f7/main.c`, a `platform_init_level0` override that hardcodes the offset
+and force-writes `BIAS_ADDR0`) is **unverified** — needs a SPI-clip flash+observe loop to confirm.
 
 ## SWD / JTAG
 
