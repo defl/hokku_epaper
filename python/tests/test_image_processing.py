@@ -31,7 +31,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from hokku.webserver.display import TOTAL_BYTES
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import DitherConfig
 from hokku.webserver.dither_streaming import PALETTE_LAB, adaptive_saturate, rgb_to_lab
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
@@ -42,13 +42,15 @@ from hokku.webserver.image_renderer import ImageRenderer, open_image_for_render
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 from tests._helpers import is_oversize_fixture
 
+_HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
+
 # Panel ink L* limits — same derivation as image.py's private constants.
 _DISPLAY_BLACK_L = float(PALETTE_LAB[0, 0])
 _DISPLAY_WHITE_L = float(PALETTE_LAB[1, 0])
 
 
 def render_preview_png(img, cfg, orientation, max_side_px=800, crop_to_fill_threshold=0.0):
-    return ImageRenderer(NumbaStreamingDither()).render_preview_png(
+    return ImageRenderer(NumbaStreamingDither(_HUESSEN), _HUESSEN).render_preview_png(
         img, cfg, orientation, max_side_px, crop_to_fill_threshold
     )
 
@@ -863,7 +865,7 @@ def test_render_panel_bytes_honours_cfg_without_hidden_override():
     """
 
     def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0):
-        return ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
+        return ImageRenderer(NumbaStreamingDither(_HUESSEN), _HUESSEN).render_panel_bytes(
             img, cfg, orientation, crop_to_fill_threshold
         )
 
@@ -882,8 +884,8 @@ def test_render_panel_bytes_honours_cfg_without_hidden_override():
     out_bw = render_panel_bytes(_make_gradient(60, 40), cfg_bw, "landscape")
 
     # Both should produce valid panel output.
-    assert len(out_hue) == TOTAL_BYTES
-    assert len(out_bw) == TOTAL_BYTES
+    assert len(out_hue) == _HUESSEN.total_bytes
+    assert len(out_bw) == _HUESSEN.total_bytes
     # Outputs must differ — proves render_panel_bytes honoured the distinct cfgs.
     assert out_hue != out_bw, (
         "hue-aware and bw-safe configs must produce different outputs on a coloured image"

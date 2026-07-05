@@ -51,6 +51,12 @@ class Watcher:
         while self._run:
             manager = self._state.manager
             try:
+                # Render for every screen model seen so far (plus the reference
+                # default). Skip when none reported yet so the manager keeps its
+                # own default rather than being reset to an empty set.
+                known = self._state.scheduler.known_models()
+                if known:
+                    manager.set_known_models(known)
                 manager.sync()
             except Exception:
                 logger.exception("Watcher sync error")

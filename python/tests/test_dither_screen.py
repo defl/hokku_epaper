@@ -22,15 +22,9 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
-from hokku.webserver.display import (
-    FULL_W,
-    PALETTE_MEASURED_RGB,
-    PANEL_H,
-    TOTAL_BYTES,
-    indices_to_preview_rgb,
-    panel_bytes_to_indices,
-)
+from hokku.webserver.dither_streaming import PALETTE_MEASURED_RGB
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
 from hokku.webserver.image_classifier import ImageClassifier
@@ -45,6 +39,8 @@ _TEST_IMAGES_DIR = _REPO_ROOT / "images" / "test"
 _BUILD_SCREEN_DIR = _REPO_ROOT / "build" / "test_dither_screen"
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff", ".heic", ".heif"}
+
+_HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
 
 
 def _load_app_config() -> AppConfig:
@@ -63,7 +59,7 @@ def _test_images() -> list[Path]:
 
 
 def _indices_to_landscape_png(idx: np.ndarray) -> bytes:
-    rgb = indices_to_preview_rgb(idx)
+    rgb = _HUESSEN.indices_to_preview_rgb(idx)
     img = Image.fromarray(rgb).rotate(90, expand=True)
     buf = BytesIO()
     img.save(buf, format="PNG")
@@ -73,10 +69,10 @@ def _indices_to_landscape_png(idx: np.ndarray) -> bytes:
 def _fit_source_to_panel_rgb(src: Path) -> tuple[np.ndarray, np.ndarray]:
     """Open source, letterbox-fit to panel dims (landscape), no enhancements.
 
-    Returns (uint8 (PANEL_H, FULL_W, 3), bool (PANEL_H, FULL_W) padding_mask).
+    Returns (uint8 (panel_h, panel_w, 3), bool (panel_h, panel_w) padding_mask).
     Mirrors _prepare_canvas geometry so source and rendered output are aligned.
     """
-    visible_w, visible_h = PANEL_H, FULL_W  # landscape: 1600 wide × 1200 tall
+    visible_w, visible_h = _HUESSEN.panel_h, _HUESSEN.panel_w  # landscape: 1600 wide × 1200 tall
     with open_image_for_render(src) as img:
         src_w, src_h = img.size
         scale = min(visible_w / src_w, visible_h / src_h)
@@ -157,7 +153,7 @@ def test_render_as_screen() -> None:
 
     orientation = Orientation.LANDSCAPE
     crop_threshold = app_cfg.crop_to_fill_threshold
-    dither = NumbaStreamingDither()
+    dither = NumbaStreamingDither(_HUESSEN)
 
     for src in images:
         original_dest = _BUILD_SCREEN_DIR / f"{src.stem}_original{src.suffix}"
@@ -168,10 +164,12 @@ def test_render_as_screen() -> None:
         cfg = image_cfg_map[config_name]
 
         with open_image_for_render(src) as img:
-            raw = ImageRenderer(dither).render_panel_bytes(img, cfg, orientation, crop_threshold)
+            raw = ImageRenderer(dither, _HUESSEN).render_panel_bytes(
+                img, cfg, orientation, crop_threshold
+            )
 
-        assert len(raw) == TOTAL_BYTES, f"{src.name}: unexpected panel bytes length"
-        idx = panel_bytes_to_indices(raw)
+        assert len(raw) == _HUESSEN.total_bytes, f"{src.name}: unexpected panel bytes length"
+        idx = _HUESSEN.panel_bytes_to_indices(raw)
         assert int(idx.min()) >= 0 and int(idx.max()) <= 5, (
             f"{src.name}: palette indices out of range"
         )

@@ -18,10 +18,11 @@ instantiation so other dither classes remain importable if numba is absent.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numba
 import numpy as np
 
-from hokku.webserver.display import PALETTE_MEASURED_RGB
 from hokku.webserver.dither_abc import (
     AbstractDither,
     CanvasLike,
@@ -35,6 +36,9 @@ from hokku.webserver.dither_streaming import (
     lut_and_scale_for_dither_config,
     noop_dither,
 )
+
+if TYPE_CHECKING:
+    from hokku.screens.display import Display
 
 # ── Numba JIT kernel ──────────────────────────────────────────────────────────
 
@@ -151,13 +155,14 @@ class NumbaUnconstrainedDither(AbstractDither):
     Raises ``ImportError`` at instantiation if numba is not installed.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, display: Display) -> None:
         self._fn = _get_jit_fn()  # raises ImportError if numba not available
+        self._display = display
 
     def dither(self, canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
         """Dither a pre-processed canvas using the Numba JIT full-canvas loop."""
         _validate(cfg)
-        lut, scale = lut_and_scale_for_dither_config(cfg)
+        lut, scale = lut_and_scale_for_dither_config(cfg, self._display)
         if cfg.algorithm == "noop":
             return noop_dither(canvas, lut, scale, cfg.serpentine)
 
@@ -169,7 +174,7 @@ class NumbaUnconstrainedDither(AbstractDither):
         kernel = _KERNEL_FOR[cfg.algorithm]
         kdx, kdy, kwt = _kernel_arrays(kernel)
         lut_max = lut.shape[0] - 1
-        pal_rgb = PALETTE_MEASURED_RGB.astype(np.float32)
+        pal_rgb = self._display.palette_measured_rgb.astype(np.float32)
         result = np.empty((H, W), dtype=np.uint8)
 
         self._fn(

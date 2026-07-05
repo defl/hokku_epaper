@@ -36,7 +36,7 @@ def _images_dir(mgr: AbstractImageManager) -> Path:
 
 def _slug_for(mgr: AbstractImageManager, name: str) -> str:
     """Return the LANDSCAPE slug for a registered image (lifecycle primary)."""
-    result = mgr._records[name].slug(Orientation.LANDSCAPE)
+    result = mgr._records[name].slug_for("huessen_epf1301", Orientation.LANDSCAPE)
     assert result is not None
     return result
 

@@ -23,18 +23,11 @@ from numpy.typing import NDArray
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 from hokku.webserver.bounding_box import BoundingBox
-from hokku.webserver.display import (
-    FULL_W,
-    PANEL_H,
-    indices_to_panel_bytes,
-    indices_to_preview_rgb,
-    panel_bytes_to_indices,
-)
 from hokku.webserver.image_config import ImageConfig
 from hokku.webserver.orientation import Orientation
 
 if TYPE_CHECKING:
-    pass
+    from hokku.screens.display import Display
 
 
 def transform_bboxes_to_canvas_norm(
@@ -45,6 +38,8 @@ def transform_bboxes_to_canvas_norm(
     canvas_w: int,
     canvas_h: int,
     crop_to_fill_threshold: float = 0.0,
+    *,
+    panel_rotated: bool = True,
 ) -> list[tuple[float, float, float, float]]:
     """Convert face bboxes from original-image normalised coords to coords
     normalised against the rendered **preview PNG** (the PNG returned by
@@ -60,7 +55,10 @@ def transform_bboxes_to_canvas_norm(
         return []
 
     portrait = orientation == "portrait"
-    visible_w, visible_h = (canvas_w, canvas_h) if portrait else (canvas_h, canvas_w)
+    if panel_rotated:
+        visible_w, visible_h = (canvas_w, canvas_h) if portrait else (canvas_h, canvas_w)
+    else:
+        visible_w, visible_h = canvas_w, canvas_h
 
     scale_fit = min(visible_w / orig_w, visible_h / orig_h)
     scale_cover = max(visible_w / orig_w, visible_h / orig_h)
@@ -99,11 +97,13 @@ def transform_bboxes_to_canvas_norm(
     return out
 
 
-def preview_png_from_panel_bytes(panel_bytes: bytes, orientation: Orientation) -> bytes:
+def preview_png_from_panel_bytes(
+    panel_bytes: bytes, orientation: Orientation, display: Display
+) -> bytes:
     """Decode an already-rendered panel binary back to a PNG preview."""
-    idx = panel_bytes_to_indices(panel_bytes)
-    rgb = indices_to_preview_rgb(idx)
-    return AbstractImageRenderer._encode_panel_rgb_to_png(rgb, orientation)
+    idx = display.panel_bytes_to_indices(panel_bytes)
+    rgb = display.indices_to_preview_rgb(idx)
+    return AbstractImageRenderer._encode_panel_rgb_to_png(rgb, orientation, display.panel_rotated)
 
 
 def _apply_prepare_enhancements(
@@ -185,23 +185,31 @@ class AbstractImageRenderer(ABC):
     PIL enhancements, and rotation, returning a uint8 numpy array and a
     boolean padding mask.  Concrete subclasses implement ``render_indices()``
     which calls ``_prepare_canvas()`` and dispatches to their dither strategy.
+
+    A ``Display`` instance (required) supplies the panel geometry, palette,
+    wire-format packing, and rotation flag for the target screen model.
     """
+
+    def __init__(self, display: Display) -> None:
+        self._display = display
 
     # ── Static helpers ─────────────────────────────────────────────────────
 
-    @staticmethod
-    def _preview_canvas_dims(orientation: Orientation, max_side_px: int) -> tuple[int, int]:
-        """Scale (FULL_W, PANEL_H) so the longer side is ≤ max_side_px."""
-        s = min(1.0, float(max_side_px) / float(max(FULL_W, PANEL_H)))
-        cw = max(1, int(FULL_W * s))
-        ch = max(1, int(PANEL_H * s))
+    def _preview_canvas_dims(self, orientation: Orientation, max_side_px: int) -> tuple[int, int]:
+        """Scale the panel dims so the longer side is ≤ max_side_px."""
+        panel_w, panel_h = self._display.panel_w, self._display.panel_h
+        s = min(1.0, float(max_side_px) / float(max(panel_w, panel_h)))
+        cw = max(1, int(panel_w * s))
+        ch = max(1, int(panel_h * s))
         return cw, ch
 
     @staticmethod
-    def _encode_panel_rgb_to_png(panel_rgb: NDArray[np.uint8], orientation: Orientation) -> bytes:
+    def _encode_panel_rgb_to_png(
+        panel_rgb: NDArray[np.uint8], orientation: Orientation, panel_rotated: bool = True
+    ) -> bytes:
         """Panel-memory RGB → PNG bytes in the visible (browser) orientation."""
         img = Image.fromarray(np.asarray(panel_rgb, dtype=np.uint8))
-        if orientation == "landscape":
+        if panel_rotated and orientation == "landscape":
             img = img.rotate(90, expand=True)
         buf = BytesIO()
         img.save(buf, format="PNG")
@@ -232,7 +240,10 @@ class AbstractImageRenderer(ABC):
         _apply_prepare_enhancements to scope CLAHE away from the face regions.
         """
         portrait = orientation == "portrait"
-        visible_w, visible_h = (canvas_w, canvas_h) if portrait else (canvas_h, canvas_w)
+        if self._display.panel_rotated:
+            visible_w, visible_h = (canvas_w, canvas_h) if portrait else (canvas_h, canvas_w)
+        else:
+            visible_w, visible_h = canvas_w, canvas_h
 
         src_w, src_h = img.size
         scale_fit = min(visible_w / src_w, visible_h / src_h)
@@ -300,7 +311,7 @@ class AbstractImageRenderer(ABC):
 
         composed = _apply_prepare_enhancements(composed, cfg, keepout_canvas or None)
 
-        if not portrait:
+        if self._display.panel_rotated and not portrait:
             composed = composed.rotate(-90, expand=True)
             padding_mask = np.rot90(padding_mask, k=3)
 
@@ -344,13 +355,13 @@ class AbstractImageRenderer(ABC):
             img,
             cfg,
             orientation,
-            FULL_W,
-            PANEL_H,
+            self._display.panel_w,
+            self._display.panel_h,
             crop_to_fill_threshold,
             release_input=True,
             clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
         )
-        return indices_to_panel_bytes(idx)
+        return self._display.indices_to_panel_bytes(idx)
 
     def render_preview_png(
         self,
@@ -372,5 +383,5 @@ class AbstractImageRenderer(ABC):
             crop_to_fill_threshold,
             clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
         )
-        preview_rgb = indices_to_preview_rgb(idx)
-        return self._encode_panel_rgb_to_png(preview_rgb, orientation)
+        preview_rgb = self._display.indices_to_preview_rgb(idx)
+        return self._encode_panel_rgb_to_png(preview_rgb, orientation, self._display.panel_rotated)

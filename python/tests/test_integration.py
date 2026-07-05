@@ -27,12 +27,15 @@ import pytest
 from tools.screen_sim import fetch_screen
 from werkzeug.serving import make_server
 
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
-from hokku.webserver.display import TOTAL_BYTES, panel_bytes_to_indices
 from hokku.webserver.flask_app import create_app
 from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.serve_scheduler import ServeScheduler
+
+_HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
+TOTAL_BYTES = _HUESSEN.total_bytes
 
 # Path to a real source image (small enough to be fast with noop dither).
 _TEST_IMAGE = Path(__file__).resolve().parent.parent.parent / "images" / "test" / "Fitz_Roy_1.avif"
@@ -116,7 +119,7 @@ def test_serve_binary_valid_palette_indices(live_client):
         headers={"X-Screen-Name": "test-screen", "X-Screen-Model": "huessen_epf1301"},
     )
     assert resp.status_code == 200
-    indices = panel_bytes_to_indices(resp.data)
+    indices = _HUESSEN.panel_bytes_to_indices(resp.data)
     assert indices.min() >= 0
     assert indices.max() <= 5
 
@@ -299,7 +302,7 @@ def test_fetch_screen_valid_palette_indices(http_server):
     """Payload from the real server contains only valid palette nibbles."""
     base_url, _ = http_server
     data, _ = fetch_screen(base_url, "sim-screen")
-    indices = panel_bytes_to_indices(data)
+    indices = _HUESSEN.panel_bytes_to_indices(data)
     assert indices.min() >= 0
     assert indices.max() <= 5
 

@@ -27,6 +27,9 @@ class ScreenImageConfig:
     #: Face bounding boxes or None.
     #: Passed to the renderer to scope CLAHE away from the face regions.
     clahe_keepout_bboxes: tuple[BoundingBox, ...] | None = None
+    #: Target screen model. Part of the cache key so different-geometry models
+    #: (e.g. Bigme F7 192 KB vs Huessen 960 KB) never share a panel .bin file.
+    screen_model: str = "huessen_epf1301"
 
     def cache_slug(self) -> str:
         # Convert BoundingBox objects to dicts for JSON serialization
@@ -40,6 +43,11 @@ class ScreenImageConfig:
             "crop_to_fill_threshold": self.crop_to_fill_threshold,
             "clahe_keepout_bboxes": bbox_serializable,
         }
+        # Only non-default models contribute to the slug, so existing Huessen
+        # cache files keep their slugs unchanged across the v3→v4 upgrade
+        # (no re-render storm) while other models get distinct slugs/files.
+        if self.screen_model != "huessen_epf1301":
+            payload["screen_model"] = self.screen_model
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:14]
 
 
@@ -61,4 +69,5 @@ def _screen_image_config_from_dict(d: dict) -> ScreenImageConfig:
         orientation=orientation,
         crop_to_fill_threshold=crop_to_fill_threshold,
         clahe_keepout_bboxes=keepout,
+        screen_model=str(d.get("screen_model", "huessen_epf1301")),
     )

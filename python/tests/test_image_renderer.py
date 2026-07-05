@@ -8,9 +8,9 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from hokku.webserver.display import PALETTE_MEASURED_RGB
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import DitherConfig
-from hokku.webserver.dither_streaming import StreamingDither
+from hokku.webserver.dither_streaming import PALETTE_MEASURED_RGB, StreamingDither
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.dither_unconstrained import UnconstrainedDither
 from hokku.webserver.dither_unconstrained_numba import NumbaUnconstrainedDither
@@ -19,11 +19,13 @@ from hokku.webserver.image_renderer import ImageRenderer
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 
+_HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
+
 
 def _dither_params():
     return [
-        pytest.param(NumbaStreamingDither(), id="numba_streaming"),
-        pytest.param(NumbaUnconstrainedDither(), id="numba_unconstrained"),
+        pytest.param(NumbaStreamingDither(_HUESSEN), id="numba_streaming"),
+        pytest.param(NumbaUnconstrainedDither(_HUESSEN), id="numba_unconstrained"),
     ]
 
 
@@ -60,13 +62,13 @@ def _noop_cfg() -> ImageConfig:
 
 
 def test_dither_stored_is_numba_streaming() -> None:
-    r = ImageRenderer(NumbaStreamingDither())
+    r = ImageRenderer(NumbaStreamingDither(_HUESSEN), _HUESSEN)
     assert isinstance(r.dither, NumbaStreamingDither)
 
 
 def test_explicit_dither_stored() -> None:
-    d = NumbaUnconstrainedDither()
-    r = ImageRenderer(d)
+    d = NumbaUnconstrainedDither(_HUESSEN)
+    r = ImageRenderer(d, _HUESSEN)
     assert r.dither is d
 
 
@@ -76,7 +78,7 @@ def test_explicit_dither_stored() -> None:
 @pytest.mark.parametrize("dither", _dither_params())
 @pytest.mark.parametrize("orientation", [Orientation.PORTRAIT, Orientation.LANDSCAPE])
 def test_render_indices_shape(dither, orientation: Orientation) -> None:
-    r = ImageRenderer(dither)
+    r = ImageRenderer(dither, _HUESSEN)
     img = _synth_img(60, 80)
     cfg = _noop_cfg()
     canvas_w, canvas_h = 48, 64
@@ -89,7 +91,7 @@ def test_render_indices_shape(dither, orientation: Orientation) -> None:
 def test_render_indices_valid_palette_values(dither) -> None:
 
     n_palette = len(PALETTE_MEASURED_RGB)
-    r = ImageRenderer(dither)
+    r = ImageRenderer(dither, _HUESSEN)
     idx = r.render_indices(_synth_img(), _noop_cfg(), Orientation.PORTRAIT, 32, 32)
     assert int(idx.min()) >= 0
     assert int(idx.max()) < n_palette
@@ -100,7 +102,7 @@ def test_render_indices_valid_palette_values(dither) -> None:
 
 @pytest.mark.parametrize("dither", _dither_params())
 def test_render_preview_png_returns_bytes(dither) -> None:
-    r = ImageRenderer(dither)
+    r = ImageRenderer(dither, _HUESSEN)
     img = _synth_img()
     data = r.render_preview_png(img, _noop_cfg(), Orientation.PORTRAIT, max_side_px=64)
     assert isinstance(data, bytes)
@@ -116,7 +118,7 @@ def test_all_strategies_produce_valid_output(dither) -> None:
 
     n_palette = len(PALETTE_MEASURED_RGB)
     cfg = _noop_cfg()
-    idx = ImageRenderer(dither).render_indices(
+    idx = ImageRenderer(dither, _HUESSEN).render_indices(
         _synth_img(48, 48), cfg, Orientation.PORTRAIT, 48, 48
     )
     assert idx.shape == (48, 48)
@@ -138,8 +140,8 @@ def test_streaming_and_unconstrained_agree_on_preprocessed_canvas() -> None:
     canvas = _synth_img(32, 32)
     arr = np.asarray(canvas, dtype=np.float32)
 
-    idx_s = StreamingDither().dither(arr, cfg)
-    idx_u = UnconstrainedDither().dither(arr, cfg)
+    idx_s = StreamingDither(_HUESSEN).dither(arr, cfg)
+    idx_u = UnconstrainedDither(_HUESSEN).dither(arr, cfg)
     np.testing.assert_array_equal(
         idx_s,
         idx_u,
@@ -160,8 +162,8 @@ def test_numba_streaming_and_streaming_agree_on_preprocessed_canvas() -> None:
     canvas = _synth_img(32, 32)
     arr = np.asarray(canvas, dtype=np.float32)
 
-    idx_s = StreamingDither().dither(arr, cfg)
-    idx_n = NumbaStreamingDither().dither(arr, cfg)
+    idx_s = StreamingDither(_HUESSEN).dither(arr, cfg)
+    idx_n = NumbaStreamingDither(_HUESSEN).dither(arr, cfg)
     np.testing.assert_array_equal(
         idx_s,
         idx_n,

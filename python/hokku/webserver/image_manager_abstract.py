@@ -27,8 +27,8 @@ import defusedxml.ElementTree as ET
 import zstd
 from PIL import Image, ImageOps
 
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
-from hokku.webserver.display import TOTAL_BYTES
 from hokku.webserver.filesystem import atomic_write_json
 from hokku.webserver.image_classifier import ImageClassifier, ImageClassifierDecision
 from hokku.webserver.image_record import (
@@ -44,7 +44,10 @@ logger = logging.getLogger(__name__)
 
 
 _DB_FILENAME = "image_manager.json"
-_DB_VERSION = 3  # bump whenever ImageRecord schema changes; old DB is nuked on mismatch
+_DB_VERSION = 4  # bump whenever ImageRecord schema changes; v3 auto-migrates (see _load_db)
+# Reference model that is always rendered and used for previews / lifecycle
+# bookkeeping.  Screens self-report others via set_known_models().
+_PRIMARY_MODEL = "huessen_epf1301"
 _IMAGES_SUBDIR = "images"
 _PANEL_SUFFIX = "_panel.bin.zst"
 _PREVIEW_SUFFIX = "_preview.png"
@@ -57,14 +60,17 @@ _KNOWN_SUFFIXES = (_PANEL_SUFFIX, _PREVIEW_SUFFIX, _THUMB_SUFFIX)
 
 
 def _decision_to_screen_image_config(
-    decision: ImageClassifierDecision, orientation: Orientation
+    decision: ImageClassifierDecision,
+    orientation: Orientation,
+    model: str = _PRIMARY_MODEL,
 ) -> ScreenImageConfig:
-    """Combine a per-image ImageClassifierDecision with a render orientation."""
+    """Combine a per-image ImageClassifierDecision with a render orientation + model."""
     return ScreenImageConfig(
         image_config=decision.image_config,
         orientation=orientation,
         crop_to_fill_threshold=decision.crop_to_fill_threshold,
         clahe_keepout_bboxes=decision.clahe_keepout_bboxes,
+        screen_model=model,
     )
 
 
@@ -94,6 +100,10 @@ class AbstractImageManager(ABC):
         # Names of images currently being rendered. Protected by _db_lock.
         self._inflight: set[str] = set()
 
+        # Screen models to render for. Starts with the reference model; screens
+        # add more via set_known_models() as they self-identify. Under _db_lock.
+        self._known_models: set[str] = {_PRIMARY_MODEL}
+
         if classifier is None:
             classifier = ImageClassifier(config)
         self._classifier = classifier
@@ -113,6 +123,7 @@ class AbstractImageManager(ABC):
         self,
         name: str,
         expected_slug: str,
+        model: str,
         orientation: Orientation,
         render_args: tuple,
         t0: float,
@@ -318,13 +329,20 @@ class AbstractImageManager(ABC):
     # ── Reads (lock-free) ───────────────────────────────────────
 
     def panel_bytes_for_orientation(self, name: str, orientation: Orientation) -> bytes | None:
-        """Return the panel binary for *name* in a specific orientation, or None on miss."""
+        """Reference-model panel binary for *name* (back-compat convenience)."""
+        return self.panel_bytes_for_model_orientation(name, _PRIMARY_MODEL, orientation)
+
+    def panel_bytes_for_model_orientation(
+        self, name: str, model: str, orientation: Orientation
+    ) -> bytes | None:
+        """Return the panel binary for *name* in (model, orientation), or None on miss."""
         rec = self._records.get(name)
         if rec is None or rec.convert_status != "ok":
             return None
-        s = rec.slug(orientation)
+        s = rec.slug_for(model, orientation)
         if not s:
             return None
+        expected_bytes = DISPLAY_REGISTRY[model].total_bytes
         path = self._panel_path(rec.name_hash, s)
         if not path.exists():
             return None
@@ -333,11 +351,11 @@ class AbstractImageManager(ABC):
         except (OSError, Exception) as e:
             logger.error("Error reading panel file %s: %s", path.name, e)
             return None
-        if len(data) != TOTAL_BYTES:
+        if len(data) != expected_bytes:
             logger.error(
                 "Corrupt panel file %s: expected %d B, got %d B — deleting and re-queuing",
                 path.name,
-                TOTAL_BYTES,
+                expected_bytes,
                 len(data),
             )
             try:
@@ -352,6 +370,33 @@ class AbstractImageManager(ABC):
             return None
         return data
 
+    def set_known_models(self, models: set[str]) -> None:
+        """Update the set of screen models to render for.
+
+        Newly-appeared models mark all ok-status images pending so the next
+        sync() renders their per-model binaries.  Never removes the reference
+        model.  Unknown model ids (not in the registry) are ignored.
+        """
+        with self._db_lock:
+            valid = {m for m in models if m in DISPLAY_REGISTRY} | {_PRIMARY_MODEL}
+            new_models = valid - self._known_models
+            self._known_models = valid
+            if not new_models:
+                return
+            for name, rec in list(self._records.items()):
+                if rec.convert_status != ConvertStatus.OK:
+                    continue
+                needs_render = any(
+                    rec.slug_for(m, Orientation.LANDSCAPE) is None
+                    or rec.slug_for(m, Orientation.PORTRAIT) is None
+                    for m in new_models
+                )
+                if needs_render:
+                    self._records[name] = replace(
+                        rec, convert_status=ConvertStatus.PENDING, convert_error=None
+                    )
+            self._save_db()
+
     def preview_png(self, name: str) -> bytes | None:
         rec = self._records.get(name)
         if rec is None or rec.convert_status != "ok":
@@ -360,7 +405,7 @@ class AbstractImageManager(ABC):
         # have no native render target — use LANDSCAPE for those.
         native = rec.native_orientation
         orientation = native if native != Orientation.NEUTRAL else Orientation.LANDSCAPE
-        s = rec.slug(orientation)
+        s = rec.slug_for(_PRIMARY_MODEL, orientation)
         if not s:
             return None
         path = self._preview_path(rec.name_hash, s)
@@ -481,8 +526,7 @@ class AbstractImageManager(ABC):
                     image_height=h,
                     convert_status="pending" if w is not None else "failed",
                     convert_error=dim_err,
-                    landscape_image_config_slug=None,
-                    portrait_image_config_slug=None,
+                    slugs={},
                 )
             # Reset progress so the upcoming sync() starts a fresh batch
             # rather than accumulating on top of a stale done/total pair.
@@ -612,10 +656,14 @@ class AbstractImageManager(ABC):
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to load %s: %s (starting empty)", _DB_FILENAME, e)
             return
-        if data.get("version") != _DB_VERSION:
+        db_version = data.get("version")
+        # v3 records carry landscape/portrait slug fields; ImageRecord.from_dict
+        # migrates them into the model-keyed slugs dict, so v3 loads cleanly and
+        # is re-saved as v4 on the next write — no re-render storm for Huessen.
+        if db_version not in (3, _DB_VERSION):
             logger.warning(
                 "DB version mismatch (got %r, need %d) — wiping cache DB; images will be re-rendered on next sync",
-                data.get("version"),
+                db_version,
                 _DB_VERSION,
             )
             return
@@ -700,8 +748,7 @@ class AbstractImageManager(ABC):
                         original_mtime=st.st_mtime,
                         convert_status=ConvertStatus.FAILED if dim_err else ConvertStatus.PENDING,
                         convert_error=dim_err,
-                        landscape_image_config_slug=None,
-                        portrait_image_config_slug=None,
+                        slugs={},
                         image_width=w,
                         image_height=h,
                     )
@@ -713,15 +760,16 @@ class AbstractImageManager(ABC):
                 # Compare against the LANDSCAPE slug specifically — it's the
                 # lifecycle-primary orientation, and PORTRAIT shares the same
                 # decision so its slug changes in lockstep.
-                landscape_cfg = _decision_to_screen_image_config(decision, Orientation.LANDSCAPE)
+                landscape_cfg = _decision_to_screen_image_config(
+                    decision, Orientation.LANDSCAPE, _PRIMARY_MODEL
+                )
                 predicted_slug = landscape_cfg.cache_slug()
-                if existing.slug(Orientation.LANDSCAPE) != predicted_slug:
+                if existing.slug_for(_PRIMARY_MODEL, Orientation.LANDSCAPE) != predicted_slug:
                     self._records[name] = replace(
                         existing,
                         convert_status="pending",
                         convert_error=None,
-                        landscape_image_config_slug=None,
-                        portrait_image_config_slug=None,
+                        slugs={},
                     )
                     logger.info("ScreenImageConfig slug changed for %r: re-converting", name)
 
@@ -799,7 +847,7 @@ class AbstractImageManager(ABC):
                 if rec is not None:
                     valid_names = {
                         f"{name_hash}_{s}{suffix}"
-                        for s in (rec.landscape_image_config_slug, rec.portrait_image_config_slug)
+                        for s in rec.slugs.values()
                         if s
                         for suffix in (_PANEL_SUFFIX, _PREVIEW_SUFFIX)
                     }
@@ -822,8 +870,7 @@ class AbstractImageManager(ABC):
                     rec,
                     convert_status="failed",
                     convert_error=error,
-                    landscape_image_config_slug=None,
-                    portrait_image_config_slug=None,
+                    slugs={},
                 )
                 self._inflight.discard(name)
                 self._batch_failed += 1
@@ -875,13 +922,21 @@ class AbstractImageManager(ABC):
                 f"{name!r} missing from _inflight at dispatch"
             )  # sync() pre-populates _inflight under lock
 
-            # Render both real orientations. LANDSCAPE is the
-            # lifecycle-tracking primary (it drives pending → ok and the
-            # progress counter) — an internal bookkeeping choice.
-            landscape_cfg = _decision_to_screen_image_config(decision, Orientation.LANDSCAPE)
-            portrait_cfg = _decision_to_screen_image_config(decision, Orientation.PORTRAIT)
-            self._dispatch_cfg(name, landscape_cfg, update_status=True)
-            self._dispatch_cfg(name, portrait_cfg, update_status=False)
+            # Render both real orientations for every known screen model. The
+            # (alphabetically-first model, LANDSCAPE) render is the lifecycle
+            # primary — it drives pending → ok and the progress counter. All
+            # others are secondary (update_status=False). No model is
+            # hardcoded; only the ordering is deterministic.
+            with self._db_lock:
+                sorted_models = sorted(self._known_models)
+            primary_model = sorted_models[0]
+            for mdl in sorted_models:
+                landscape_cfg = _decision_to_screen_image_config(
+                    decision, Orientation.LANDSCAPE, mdl
+                )
+                portrait_cfg = _decision_to_screen_image_config(decision, Orientation.PORTRAIT, mdl)
+                self._dispatch_cfg(name, landscape_cfg, update_status=(mdl == primary_model))
+                self._dispatch_cfg(name, portrait_cfg, update_status=False)
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             logger.exception("Failed to submit %r: %s", name, err)
@@ -902,38 +957,47 @@ class AbstractImageManager(ABC):
             return
         slug = cfg.cache_slug()
         if self._panel_path(rec.name_hash, slug).exists():
-            self._set_orientation_slug(name, cfg.orientation, slug)
+            self._set_orientation_slug(name, cfg.screen_model, cfg.orientation, slug)
             return
         render_args = (
             str(self._upload_dir / name),
             asdict(cfg.image_config),
+            cfg.screen_model,
             cfg.orientation,
             cfg.crop_to_fill_threshold,
             tuple(asdict(b) for b in cfg.clahe_keepout_bboxes)
             if cfg.clahe_keepout_bboxes
             else None,
         )
-        logger.debug("Submitted %r for dithering (%s)", name, cfg.orientation)
+        logger.debug("Submitted %r for dithering (%s, %s)", name, cfg.screen_model, cfg.orientation)
         self._dispatch_render(
-            name, slug, cfg.orientation, render_args, time.monotonic(), update_status=update_status
+            name,
+            slug,
+            cfg.screen_model,
+            cfg.orientation,
+            render_args,
+            time.monotonic(),
+            update_status=update_status,
         )
 
-    def _set_orientation_slug(self, name: str, orientation: Orientation, slug: str) -> None:
-        """Update landscape_image_config_slug or portrait_image_config_slug in the record."""
+    def _set_orientation_slug(
+        self, name: str, model: str, orientation: Orientation, slug: str
+    ) -> None:
+        """Record the cached slug for (model, orientation) in the record's slugs dict."""
+        key = f"{model}.{orientation.value}"
         with self._db_lock:
             cur = self._records.get(name)
             if cur is None:
                 return
-            if orientation == Orientation.LANDSCAPE:
-                self._records[name] = replace(cur, landscape_image_config_slug=slug)
-            else:
-                self._records[name] = replace(cur, portrait_image_config_slug=slug)
+            new_slugs = {**cur.slugs, key: slug}
+            self._records[name] = replace(cur, slugs=new_slugs)
             self._save_db()
 
     def _on_render_done(
         self,
         name: str,
         expected_slug: str,
+        model: str,
         orientation: Orientation,
         future: concurrent.futures.Future,
         t0: float,
@@ -962,8 +1026,7 @@ class AbstractImageManager(ABC):
                             cur,
                             convert_status="failed",
                             convert_error=err,
-                            landscape_image_config_slug=None,
-                            portrait_image_config_slug=None,
+                            slugs={},
                         )
                     done = self._progress.done + 1
                     total = self._progress.total
@@ -984,16 +1047,36 @@ class AbstractImageManager(ABC):
                 if update_status:
                     self._inflight.discard(name)
                 return
+            # Validate the rendered binary is the right size for this model
+            # before it ever reaches a screen (a mismatch is a render bug).
+            expected_bytes = DISPLAY_REGISTRY[model].total_bytes
+            if len(panel_bytes) != expected_bytes:
+                err = (
+                    f"render produced {len(panel_bytes)} B, expected {expected_bytes} B "
+                    f"for model {model!r}"
+                )
+                logger.error("Bad panel size for %r (%s/%s): %s", name, model, orientation, err)
+                if update_status:
+                    self._inflight.discard(name)
+                    self._batch_failed += 1
+                    self._records[name] = replace(
+                        cur, convert_status="failed", convert_error=err, slugs={}
+                    )
+                    done = self._progress.done + 1
+                    self._progress = replace(self._progress, done=done)
+                    if done >= self._progress.total:
+                        self._log_batch_complete()
+                    self._save_db()
+                return
+
             name_hash = cur.name_hash
             # Write files to disk.
             self._images_dir.mkdir(parents=True, exist_ok=True)
             self._panel_path(name_hash, expected_slug).write_bytes(zstd.compress(panel_bytes, 1))
             self._preview_path(name_hash, expected_slug).write_bytes(preview_bytes)
-            # Update the orientation slug in the record.
-            if orientation == Orientation.LANDSCAPE:
-                slug_update = {"landscape_image_config_slug": expected_slug}
-            else:
-                slug_update = {"portrait_image_config_slug": expected_slug}
+            # Record the cached slug under this (model, orientation) key.
+            slug_key = f"{model}.{orientation.value}"
+            new_slugs = {**cur.slugs, slug_key: expected_slug}
 
             if update_status:
                 self._inflight.discard(name)
@@ -1002,7 +1085,7 @@ class AbstractImageManager(ABC):
                     convert_status="ok",
                     convert_error=None,
                     last_conversion_seconds=conversion_seconds,
-                    **slug_update,
+                    slugs=new_slugs,
                 )
                 self._records[name] = new_rec
                 done = self._progress.done + 1
@@ -1012,8 +1095,8 @@ class AbstractImageManager(ABC):
                 if done >= total:
                     self._log_batch_complete()
             else:
-                self._records[name] = replace(cur, **slug_update)
-                logger.debug("Dithered %r (%s)", name, orientation)
+                self._records[name] = replace(cur, slugs=new_slugs)
+                logger.debug("Dithered %r (%s/%s)", name, model, orientation)
             self._save_db()
 
     def _log_batch_complete(self) -> None:

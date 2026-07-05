@@ -11,10 +11,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from hokku.webserver.display import PALETTE_MEASURED_RGB
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import AlgorithmName, DitherConfig
+from hokku.webserver.dither_streaming import PALETTE_MEASURED_RGB
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.dither_unconstrained_numba import NumbaUnconstrainedDither
+
+_HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
 
 
 def _fs_cfg() -> DitherConfig:
@@ -43,13 +46,13 @@ def _numba_classes():
 @pytest.mark.parametrize("cls", _numba_classes())
 def test_instantiation_succeeds(cls) -> None:
     """Both Numba dithers must construct without raising when numba is available."""
-    d = cls()
+    d = cls(_HUESSEN)
     assert d is not None
 
 
 @pytest.mark.parametrize("cls", _numba_classes())
 def test_dither_output_shape_and_dtype(cls) -> None:
-    d = cls()
+    d = cls(_HUESSEN)
     canvas = _synth(64, 64).astype(np.float32)
     result = d.dither(canvas, _fs_cfg())
     assert result.shape == (64, 64)
@@ -59,7 +62,7 @@ def test_dither_output_shape_and_dtype(cls) -> None:
 @pytest.mark.parametrize("cls", _numba_classes())
 def test_dither_output_valid_palette_indices(cls) -> None:
     n_palette = len(PALETTE_MEASURED_RGB)
-    d = cls()
+    d = cls(_HUESSEN)
     canvas = _synth(64, 64).astype(np.float32)
     result = d.dither(canvas, _fs_cfg())
     assert int(result.min()) >= 0
@@ -76,7 +79,7 @@ def test_all_algorithms_produce_valid_output(cls, algorithm: AlgorithmName) -> N
         hue_cutoff_deg=95.0,
         neutral_chroma=8.0,
     )
-    d = cls()
+    d = cls(_HUESSEN)
     canvas = _synth(48, 48).astype(np.float32)
     result = d.dither(canvas, cfg)
     assert result.shape == (48, 48)
@@ -87,7 +90,7 @@ def test_all_algorithms_produce_valid_output(cls, algorithm: AlgorithmName) -> N
 def test_dither_with_prep_applies_preprocessing(cls) -> None:
     """dither_with_prep output must differ when prep_stripe adds a constant offset."""
     cfg = _fs_cfg()
-    d = cls()
+    d = cls(_HUESSEN)
     canvas = _synth(64, 64)
 
     def identity_prep(stripe):
@@ -112,8 +115,8 @@ def test_numba_streaming_and_numba_unconstrained_agree() -> None:
     cfg = _fs_cfg()
     canvas = _synth(32, 32).astype(np.float32)
 
-    streaming_result = NumbaStreamingDither().dither(canvas, cfg)
-    unconstrained_result = NumbaUnconstrainedDither().dither(canvas, cfg)
+    streaming_result = NumbaStreamingDither(_HUESSEN).dither(canvas, cfg)
+    unconstrained_result = NumbaUnconstrainedDither(_HUESSEN).dither(canvas, cfg)
 
     np.testing.assert_array_equal(
         streaming_result,

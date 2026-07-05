@@ -20,11 +20,15 @@ the first row of the next stripe.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numba
 import numpy as np
 from PIL import Image
 
-from hokku.webserver.display import PALETTE_MEASURED_RGB
+if TYPE_CHECKING:
+    from hokku.screens.display import Display
+
 from hokku.webserver.dither_abc import (
     _DEFAULT_STRIPE_H,
     AbstractDither,
@@ -188,8 +192,9 @@ class NumbaStreamingDither(AbstractDither):
     Raises ``ImportError`` at instantiation if numba is not installed.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, display: Display) -> None:
         self._fn = _get_jit_fn()  # raises ImportError if numba not available
+        self._display = display
 
     def dither(self, canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
         """Dither a pre-processed canvas using the Numba JIT loop.
@@ -199,7 +204,7 @@ class NumbaStreamingDither(AbstractDither):
         ``dither_with_prep`` instead.
         """
         _validate(cfg)
-        lut, scale = lut_and_scale_for_dither_config(cfg)
+        lut, scale = lut_and_scale_for_dither_config(cfg, self._display)
         if cfg.algorithm == "noop":
             return noop_dither(canvas, lut, scale, cfg.serpentine)
 
@@ -216,7 +221,7 @@ class NumbaStreamingDither(AbstractDither):
         max_dy = int(kdy.max())
         n_rows = max_dy + 1
         lut_max = lut.shape[0] - 1
-        pal_rgb = PALETTE_MEASURED_RGB.astype(np.float32)
+        pal_rgb = self._display.palette_measured_rgb.astype(np.float32)
         rolling = np.zeros((n_rows, W, 3), dtype=np.float32)
         result = np.empty((H, W), dtype=np.uint8)
 
@@ -252,7 +257,7 @@ class NumbaStreamingDither(AbstractDither):
         float32 plus the rolling window.  GIL is released during each JIT call.
         """
         _validate(cfg)
-        lut, scale = lut_and_scale_for_dither_config(cfg)
+        lut, scale = lut_and_scale_for_dither_config(cfg, self._display)
         if cfg.algorithm == "noop":
             return noop_dither(canvas, lut, scale, cfg.serpentine)
 
@@ -269,7 +274,7 @@ class NumbaStreamingDither(AbstractDither):
         max_dy = int(kdy.max())
         n_rows = max_dy + 1
         lut_max = lut.shape[0] - 1
-        pal_rgb = PALETTE_MEASURED_RGB.astype(np.float32)
+        pal_rgb = self._display.palette_measured_rgb.astype(np.float32)
         rolling = np.zeros((n_rows, W, 3), dtype=np.float32)
         result = np.empty((H, W), dtype=np.uint8)
 

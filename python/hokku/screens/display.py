@@ -36,6 +36,17 @@ class Display(ABC):
     visual_h: int
     """Visible height after mounting rotation (what the viewer sees)."""
 
+    panel_rotated: bool
+    """True if panel memory is rotated 90° relative to the visible image.
+
+    Huessen EPF1301 stores a portrait 1200×1600 buffer but is mounted
+    landscape, so a landscape render is composed at 1600×1200 then rotated
+    -90° into panel memory (``panel_rotated=True``).  The Bigme F7 panel
+    memory is natively landscape (800×480 == visible), so no rotation is
+    applied (``panel_rotated=False``).  The render pipeline gates its
+    rotate/dimension-swap on this flag.
+    """
+
     palette_measured_rgb: NDArray
     """Shape (N, 3) float32 — measured RGB of each ink colour on-panel."""
 

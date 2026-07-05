@@ -14,11 +14,14 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
-from hokku.webserver.display import TOTAL_BYTES
 from hokku.webserver.image_manager_multi import MultiThreadedImageManager
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
 from hokku.webserver.orientation import Orientation
+
+_HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
+TOTAL_BYTES = _HUESSEN.total_bytes
 
 
 def test_single_threaded_does_not_spawn_threads(app_config: AppConfig, make_test_image):
@@ -62,8 +65,8 @@ def test_multi_threaded_runs_in_parallel(app_config: AppConfig, monkeypatch):
 
     mgr = MultiThreadedImageManager(app_config, worker_count=2)
     try:
-        mgr._dispatch_render("a.png", "slug", Orientation.LANDSCAPE, (), 0.0)
-        mgr._dispatch_render("b.png", "slug", Orientation.LANDSCAPE, (), 0.0)
+        mgr._dispatch_render("a.png", "slug", "huessen_epf1301", Orientation.LANDSCAPE, (), 0.0)
+        mgr._dispatch_render("b.png", "slug", "huessen_epf1301", Orientation.LANDSCAPE, (), 0.0)
         # Joining the barrier proves both workers entered fake_render_one
         # concurrently. Raises BrokenBarrierError if only one did.
         barrier.wait(timeout=5.0)

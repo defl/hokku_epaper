@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from hokku.webserver.display import PALETTE_MEASURED_RGB
+from hokku.webserver.dither_streaming import PALETTE_MEASURED_RGB
 from hokku.webserver.image_quality import image_compare
 
 _EXPECTED_KEYS = frozenset(

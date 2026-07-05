@@ -23,6 +23,8 @@ class HuessenEpf1301Display(Display):
     visual_w = 1600  # after 90° rotation
     visual_h = 1200
 
+    panel_rotated = True  # portrait 1200×1600 memory, mounted landscape
+
     # Measured RGB values of the six on-panel inks (used for Lab→palette LUTs).
     palette_measured_rgb = np.array(
         [

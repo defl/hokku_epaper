@@ -41,6 +41,7 @@ class MultiThreadedImageManager(AbstractImageManager):
         self,
         name: str,
         expected_slug: str,
+        model: str,
         orientation: Orientation,
         render_args: tuple,
         t0: float,
@@ -49,8 +50,8 @@ class MultiThreadedImageManager(AbstractImageManager):
     ) -> None:
         future = self._executor.submit(render_one, *render_args)
         future.add_done_callback(
-            lambda f, _n=name, _s=expected_slug, _o=orientation, _t=t0, _us=update_status: (
-                self._on_render_done(_n, _s, _o, f, _t, update_status=_us)
+            lambda f, _n=name, _s=expected_slug, _m=model, _o=orientation, _t=t0, _us=update_status: (
+                self._on_render_done(_n, _s, _m, _o, f, _t, update_status=_us)
             )
         )
 

@@ -36,18 +36,9 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from hokku.webserver.display import (
-    FULL_W,
-    PALETTE_MEASURED_RGB,
-    PANEL_H,
-    TOTAL_BYTES,
-    VISUAL_H,
-    VISUAL_W,
-    indices_to_preview_rgb,
-    panel_bytes_to_indices,
-)
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import DitherConfig
-from hokku.webserver.dither_streaming import StreamingDither
+from hokku.webserver.dither_streaming import PALETTE_MEASURED_RGB, StreamingDither
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.dither_unconstrained import UnconstrainedDither
 from hokku.webserver.dither_unconstrained_numba import NumbaUnconstrainedDither
@@ -60,14 +51,18 @@ from hokku.webserver.orientation import Orientation
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 from tests._helpers import is_oversize_fixture
 
+_HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
+
 
 def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0, *, unconstrained=False):
-    dither = NumbaUnconstrainedDither() if unconstrained else NumbaStreamingDither()
-    return ImageRenderer(dither).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
+    dither = NumbaUnconstrainedDither(_HUESSEN) if unconstrained else NumbaStreamingDither(_HUESSEN)
+    return ImageRenderer(dither, _HUESSEN).render_panel_bytes(
+        img, cfg, orientation, crop_to_fill_threshold
+    )
 
 
 def render_preview_png(img, cfg, orientation, max_side_px=800, crop_to_fill_threshold=0.0):
-    return ImageRenderer(NumbaStreamingDither()).render_preview_png(
+    return ImageRenderer(NumbaStreamingDither(_HUESSEN), _HUESSEN).render_preview_png(
         img, cfg, orientation, max_side_px, crop_to_fill_threshold
     )
 
@@ -123,7 +118,7 @@ def _test_images() -> list[Path]:
 
 
 def _indices_to_png(idx: np.ndarray, orientation: Orientation) -> bytes:
-    rgb = indices_to_preview_rgb(idx)
+    rgb = _HUESSEN.indices_to_preview_rgb(idx)
     img = Image.fromarray(rgb)
     if orientation == "landscape":
         img = img.rotate(90, expand=True)
@@ -137,14 +132,14 @@ def _indices_to_png(idx: np.ndarray, orientation: Orientation) -> bytes:
 
 def test_panel_bytes_size():
     raw = render_panel_bytes(_make_rgb(), _FAST_CFG, "landscape")
-    assert len(raw) == TOTAL_BYTES
+    assert len(raw) == _HUESSEN.total_bytes
 
 
 def test_panel_bytes_nibbles_are_valid():
     """Every nibble must decode to a known palette index (0–5)."""
     raw = render_panel_bytes(_make_rgb(), _FAST_CFG, "landscape")
-    idx = panel_bytes_to_indices(raw)  # raises on invalid nibbles
-    assert idx.shape == (PANEL_H, FULL_W)
+    idx = _HUESSEN.panel_bytes_to_indices(raw)  # raises on invalid nibbles
+    assert idx.shape == (_HUESSEN.panel_h, _HUESSEN.panel_w)
     assert idx.dtype == np.uint8
     assert int(idx.min()) >= 0
     assert int(idx.max()) <= 5
@@ -152,7 +147,7 @@ def test_panel_bytes_nibbles_are_valid():
 
 def test_panel_bytes_portrait_size():
     raw = render_panel_bytes(_make_rgb(), _FAST_CFG, "portrait")
-    assert len(raw) == TOTAL_BYTES
+    assert len(raw) == _HUESSEN.total_bytes
 
 
 # ── fast: preview PNG structure ───────────────────────────────────────────────
@@ -189,16 +184,18 @@ def test_preview_png_max_side_respected():
 
 def test_preview_from_panel_bytes_is_valid_png():
     raw = render_panel_bytes(_make_rgb(), _FAST_CFG, Orientation.LANDSCAPE)
-    png = preview_png_from_panel_bytes(raw, Orientation.LANDSCAPE)
+    png = preview_png_from_panel_bytes(raw, Orientation.LANDSCAPE, _HUESSEN)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_preview_from_panel_bytes_landscape_dimensions():
     """panel_bytes → PNG must be the full visible panel size in landscape."""
     raw = render_panel_bytes(_make_rgb(), _FAST_CFG, Orientation.LANDSCAPE)
-    png = preview_png_from_panel_bytes(raw, Orientation.LANDSCAPE)
+    png = preview_png_from_panel_bytes(raw, Orientation.LANDSCAPE, _HUESSEN)
     w, h = _png_size(png)
-    assert (w, h) == (VISUAL_W, VISUAL_H), f"Expected {VISUAL_W}x{VISUAL_H}, got {w}x{h}"
+    assert (w, h) == (_HUESSEN.visual_w, _HUESSEN.visual_h), (
+        f"Expected {_HUESSEN.visual_w}x{_HUESSEN.visual_h}, got {w}x{h}"
+    )
 
 
 # ── fast: B&W detection ───────────────────────────────────────────────────────
@@ -220,11 +217,11 @@ def test_bw_image_renders_without_error():
     # Use NumbaStreamingDither: the B&W guard runs upstream of error diffusion,
     # so it is exercised identically, and the full-panel render finishes in <1s
     # instead of ~13s under pure-Python StreamingDither.
-    raw = ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
+    raw = ImageRenderer(NumbaStreamingDither(_HUESSEN), _HUESSEN).render_panel_bytes(
         _make_grey(10, 10), cfg, Orientation.LANDSCAPE, 0.0
     )
-    assert len(raw) == TOTAL_BYTES
-    idx = panel_bytes_to_indices(raw)
+    assert len(raw) == _HUESSEN.total_bytes
+    idx = _HUESSEN.panel_bytes_to_indices(raw)
     assert 1 in set(idx.flatten().tolist())  # white letterbox pixels present
 
 
@@ -350,20 +347,20 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
 
     cfg = PRESET_IMAGE_CONFIGS[preset_name]
     _DITHER_FOR_MODE = {
-        "streaming": StreamingDither(),
-        "unconstrained": UnconstrainedDither(),
-        "numba_streaming": NumbaStreamingDither(),
-        "numba_unconstrained": NumbaUnconstrainedDither(),
+        "streaming": StreamingDither(_HUESSEN),
+        "unconstrained": UnconstrainedDither(_HUESSEN),
+        "numba_streaming": NumbaStreamingDither(_HUESSEN),
+        "numba_unconstrained": NumbaUnconstrainedDither(_HUESSEN),
     }
     with open_image_for_render(src) as img:
-        raw = ImageRenderer(_DITHER_FOR_MODE[mode]).render_panel_bytes(
+        raw = ImageRenderer(_DITHER_FOR_MODE[mode], _HUESSEN).render_panel_bytes(
             img, cfg, Orientation.LANDSCAPE
         )
 
-    assert len(raw) == TOTAL_BYTES
+    assert len(raw) == _HUESSEN.total_bytes
 
-    idx = panel_bytes_to_indices(raw)
-    assert idx.shape == (PANEL_H, FULL_W)
+    idx = _HUESSEN.panel_bytes_to_indices(raw)
+    assert idx.shape == (_HUESSEN.panel_h, _HUESSEN.panel_w)
     assert int(idx.min()) >= 0
     assert int(idx.max()) <= 5
 
@@ -371,8 +368,8 @@ def test_dither_full_scale(src: Path, preset_name: str, mode: str):
     (_BUILD_FULL_DIR / f"{src.stem}__{preset_name}__{mode}.png").write_bytes(png_bytes)
 
     w, h = _png_size(png_bytes)
-    assert (w, h) == (VISUAL_W, VISUAL_H), (
-        f"{src.name}/{preset_name}/{mode}: expected {VISUAL_W}x{VISUAL_H}, got {w}x{h}"
+    assert (w, h) == (_HUESSEN.visual_w, _HUESSEN.visual_h), (
+        f"{src.name}/{preset_name}/{mode}: expected {_HUESSEN.visual_w}x{_HUESSEN.visual_h}, got {w}x{h}"
     )
 
     src_arr, padding_mask = _fit_source_to_panel_rgb(src)
@@ -434,8 +431,8 @@ def test_numba_streaming_matches_streaming() -> None:
     """NumbaStreamingDither must produce bit-identical results to StreamingDither."""
     cfg = _parity_cfg()
     canvas = _parity_canvas()
-    ref = StreamingDither().dither(canvas, cfg)
-    got = NumbaStreamingDither().dither(canvas, cfg)
+    ref = StreamingDither(_HUESSEN).dither(canvas, cfg)
+    got = NumbaStreamingDither(_HUESSEN).dither(canvas, cfg)
     np.testing.assert_array_equal(
         ref,
         got,
@@ -448,8 +445,8 @@ def test_numba_unconstrained_matches_unconstrained() -> None:
     """NumbaUnconstrainedDither must produce bit-identical results to UnconstrainedDither."""
     cfg = _parity_cfg()
     canvas = _parity_canvas()
-    ref = UnconstrainedDither().dither(canvas, cfg)
-    got = NumbaUnconstrainedDither().dither(canvas, cfg)
+    ref = UnconstrainedDither(_HUESSEN).dither(canvas, cfg)
+    got = NumbaUnconstrainedDither(_HUESSEN).dither(canvas, cfg)
     np.testing.assert_array_equal(
         ref,
         got,
@@ -463,10 +460,10 @@ def test_numba_unconstrained_matches_unconstrained() -> None:
 def _fit_source_to_panel_rgb(src: Path) -> tuple[np.ndarray, np.ndarray]:
     """Open source, letterbox-fit to panel dims (landscape), no enhancements.
 
-    Returns (uint8 (PANEL_H, FULL_W, 3), bool (PANEL_H, FULL_W) padding_mask).
+    Returns (uint8 (panel_h, panel_w, 3), bool (panel_h, panel_w) padding_mask).
     Mirrors _prepare_canvas geometry so source and output are spatially aligned.
     """
-    visible_w, visible_h = PANEL_H, FULL_W  # landscape: 1600 wide × 1200 tall
+    visible_w, visible_h = _HUESSEN.panel_h, _HUESSEN.panel_w  # landscape: 1600 wide × 1200 tall
     with open_image_for_render(src) as img:
         src_w, src_h = img.size
         scale = min(visible_w / src_w, visible_h / src_h)
@@ -512,10 +509,10 @@ def test_dither_quality_metrics():
         for preset_name in presets:
             cfg = PRESET_IMAGE_CONFIGS[preset_name]
             with open_image_for_render(src) as img:
-                raw = ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
+                raw = ImageRenderer(NumbaStreamingDither(_HUESSEN), _HUESSEN).render_panel_bytes(
                     img, cfg, Orientation.LANDSCAPE
                 )
-            idx = panel_bytes_to_indices(raw)
+            idx = _HUESSEN.panel_bytes_to_indices(raw)
             all_results[preset_name][src.stem] = image_compare(
                 src_arr, PALETTE_MEASURED_RGB[idx], padding_mask=padding_mask
             )

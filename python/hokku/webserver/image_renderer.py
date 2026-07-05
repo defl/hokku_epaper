@@ -18,17 +18,23 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import resvg_py
 from numpy.typing import NDArray
 from PIL import Image, ImageOps
 
+if TYPE_CHECKING:
+    from hokku.screens.display import Display
+
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.bounding_box import BoundingBox
-from hokku.webserver.display import FULL_W as _SCREEN_W
-from hokku.webserver.display import PANEL_H as _SCREEN_H
 from hokku.webserver.dither_abc import AbstractDither
 from hokku.webserver.dither_streaming import (
+    # PALETTE_LAB / PALETTE_OKLAB are the Huessen reference DRC L*-anchors
+    # (black/white lightness).  Bigme F7 ink is not yet photographically
+    # measured, so its DRC reuses these reference anchors until calibrated.
     PALETTE_LAB,
     PALETTE_OKLAB,
     adaptive_saturate,
@@ -40,6 +46,13 @@ from hokku.webserver.dither_streaming import (
 from hokku.webserver.image_abc import AbstractImageRenderer
 from hokku.webserver.image_config import DrcSpace, ImageConfig
 from hokku.webserver.orientation import Orientation
+
+# Reference panel geometry (Huessen EPF1301) used only to bound the source
+# pre-shrink budget below.  It caps decoded-buffer RAM; it does not affect
+# output geometry, which comes from the per-render Display instance.
+_REFERENCE_DISPLAY = DISPLAY_REGISTRY["huessen_epf1301"]
+_SCREEN_W = _REFERENCE_DISPLAY.panel_w
+_SCREEN_H = _REFERENCE_DISPLAY.panel_h
 
 IMAGE_EXTENSIONS = {
     ".jpg",
@@ -178,11 +191,15 @@ class ImageRenderer(AbstractImageRenderer):
     ----------
     dither:
         Any ``AbstractDither`` implementation.  Required — no default.
-        Typical choices: ``StreamingDither()``, ``NumbaStreamingDither()``,
-        ``UnconstrainedDither()``.
+        Typical choices: ``StreamingDither(display)``,
+        ``NumbaStreamingDither(display)``, ``UnconstrainedDither(display)``.
+    display:
+        The target screen model's ``Display`` — supplies panel geometry,
+        palette, wire packing, and rotation.  Required — no default.
     """
 
-    def __init__(self, dither: AbstractDither) -> None:
+    def __init__(self, dither: AbstractDither, display: Display) -> None:
+        super().__init__(display)
         self._dither = dither
 
     @staticmethod

@@ -98,11 +98,14 @@ image_path = payload['image_path']
 render_kwargs = payload.get('render_kwargs', {})
 from pillow_heif import register_heif_opener
 register_heif_opener()
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.image_renderer import ImageRenderer, open_image_for_render
 
+_HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
+
 def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0):
-    return ImageRenderer(NumbaStreamingDither()).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
+    return ImageRenderer(NumbaStreamingDither(_HUESSEN), _HUESSEN).render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold)
 from hokku.webserver.image_config import ImageConfig
 from hokku.webserver.dither_config import DitherConfig
 cfg = render_kwargs['cfg']

@@ -39,9 +39,9 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 from hokku.screens import huessen_epf1301
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState
-from hokku.webserver.display import FULL_W, PANEL_H, TOTAL_BYTES, VISUAL_H, VISUAL_W
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.image_abc import transform_bboxes_to_canvas_norm
 from hokku.webserver.image_config import _image_config_from_dict
@@ -239,7 +239,7 @@ def create_app(
             logger.debug("%s: %s told to retry in %ss", label, screen_name, sleep_seconds)
             return resp
 
-        binary = manager.panel_bytes_for_orientation(chosen, cfg.orientation)
+        binary = manager.panel_bytes_for_model_orientation(chosen, screen_model, cfg.orientation)
         if binary is None:
             # Cache missing (not yet rendered for this orientation) — tell screen to retry.
             sleep_seconds = _busy_retry_seconds(config)
@@ -359,7 +359,8 @@ def create_app(
 
     @app.route("/hokku/ui")
     def web_gui():
-        return render_template("index.html", visual_w=VISUAL_W, visual_h=VISUAL_H)
+        ref = DISPLAY_REGISTRY["huessen_epf1301"]
+        return render_template("index.html", visual_w=ref.visual_w, visual_h=ref.visual_h)
 
     @app.route("/hokku/static/<path:filename>")
     def static_asset(filename: str):
@@ -734,7 +735,22 @@ def create_app(
                 "config_defaults": AppConfig().to_dict(),
                 "dither_presets": presets,
                 "server_time": datetime.now().isoformat(timespec="seconds"),
-                "panel": {"visual_w": VISUAL_W, "visual_h": VISUAL_H, "total_bytes": TOTAL_BYTES},
+                # Per-model panel geometry, keyed by model id — auto-includes any
+                # model added to the registry.  The legacy "panel" key mirrors the
+                # reference model so older UI code keeps working.
+                "panels": {
+                    mid: {
+                        "visual_w": d.visual_w,
+                        "visual_h": d.visual_h,
+                        "total_bytes": d.total_bytes,
+                    }
+                    for mid, d in DISPLAY_REGISTRY.items()
+                },
+                "panel": {
+                    "visual_w": DISPLAY_REGISTRY["huessen_epf1301"].visual_w,
+                    "visual_h": DISPLAY_REGISTRY["huessen_epf1301"].visual_h,
+                    "total_bytes": DISPLAY_REGISTRY["huessen_epf1301"].total_bytes,
+                },
                 "git_describe": git_describe,
                 "commit_url": f"{_REPO_URL}/commit/{git_hash}" if git_hash else None,
                 "repo_url": _REPO_URL,
@@ -790,6 +806,12 @@ def create_app(
         if not name or not isinstance(image_blob, dict):
             logger.info("Dither preview: missing name or image in body")
             return jsonify({"error": "expected {name, image}"}), 400
+        # Which screen model to preview for. Defaults to the reference model;
+        # an explicit value must be a known model.
+        screen_model = str(body.get("screen_model", "huessen_epf1301"))
+        if screen_model not in DISPLAY_REGISTRY:
+            return jsonify({"error": f"unknown screen_model {screen_model!r}"}), 400
+        preview_display = DISPLAY_REGISTRY[screen_model]
         try:
             path = state.manager.original_path(name)
         except FileNotFoundError:
@@ -827,7 +849,9 @@ def create_app(
         logger.debug("Preview: %r", name)
         with open_image_for_render(path) as img:
             orig_w, orig_h = img.size
-            png = ImageRenderer(NumbaStreamingDither()).render_preview_png(
+            png = ImageRenderer(
+                NumbaStreamingDither(preview_display), preview_display
+            ).render_preview_png(
                 img,
                 cfg,
                 render_orientation,
@@ -840,9 +864,10 @@ def create_app(
             orig_w,
             orig_h,
             render_orientation,
-            FULL_W,
-            PANEL_H,
+            preview_display.panel_w,
+            preview_display.panel_h,
             state.config.crop_to_fill_threshold,
+            panel_rotated=preview_display.panel_rotated,
         )
 
         resp = _png_response(png)

@@ -26,6 +26,7 @@ class SingleThreadedImageManager(AbstractImageManager):
         self,
         name: str,
         expected_slug: str,
+        model: str,
         orientation: Orientation,
         render_args: tuple,
         t0: float,
@@ -38,5 +39,5 @@ class SingleThreadedImageManager(AbstractImageManager):
         except BaseException as e:
             future.set_exception(e)
         self._on_render_done(
-            name, expected_slug, orientation, future, t0, update_status=update_status
+            name, expected_slug, model, orientation, future, t0, update_status=update_status
         )

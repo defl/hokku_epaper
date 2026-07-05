@@ -21,7 +21,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from PIL import Image
 
-from hokku.webserver.display import PALETTE_MEASURED_RGB
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_abc import (
     _DEFAULT_STRIPE_H,
     AbstractDither,
@@ -34,7 +34,7 @@ from hokku.webserver.dither_abc import (
 from hokku.webserver.dither_config import DitherConfig
 
 if TYPE_CHECKING:
-    pass
+    from hokku.screens.display import Display
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,13 @@ def rgb_to_lab(rgb: ArrayLike, *, dtype: Any = np.float64) -> FloatArray:
     arr = np.clip(np.asarray(rgb, dtype=dtype), 0, 255)
     return xyz_to_lab(linear_to_xyz(srgb_to_linear(arr, dtype=dtype), dtype=dtype), dtype=dtype)
 
+
+# Reference palette (Huessen EPF1301) for shared quality/saturation analytics
+# and DRC-anchor defaults.  The per-model dither LUTs below are built from the
+# Display passed into each dither instance — NOT from these module constants —
+# so a Bigme F7 render uses its own 7-colour palette, not this reference.
+_REFERENCE_DISPLAY = DISPLAY_REGISTRY["huessen_epf1301"]
+PALETTE_MEASURED_RGB = _REFERENCE_DISPLAY.palette_measured_rgb
 
 PALETTE_LAB = rgb_to_lab(PALETTE_MEASURED_RGB)
 
@@ -235,8 +242,9 @@ def adaptive_saturate_oklab(
 # ── LUTs ────────────────────────────────────────────────────────────────────
 
 
-def build_rgb_lut() -> tuple[UInt8Array, float]:
+def build_rgb_lut(display: Display) -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index by Euclidean CIELAB distance."""
+    PALETTE_LAB = rgb_to_lab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -248,12 +256,13 @@ def build_rgb_lut() -> tuple[UInt8Array, float]:
     return lut, scale
 
 
-def build_rgb_lut_weighted() -> tuple[UInt8Array, float]:
+def build_rgb_lut_weighted(display: Display) -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index by weighted CIELAB distance (2L² + a² + b²).
 
     The 2× L* weight reflects that a 1-unit lightness step is perceptually
     larger than a 1-unit chroma step in CIELAB.
     """
+    PALETTE_LAB = rgb_to_lab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -267,10 +276,12 @@ def build_rgb_lut_weighted() -> tuple[UInt8Array, float]:
 
 
 def build_rgb_lut_hue_aware(
+    display: Display,
     hue_cutoff_deg: float,
     neutral_chroma: float,
 ) -> tuple[UInt8Array, float]:
     """Like build_rgb_lut, but forbids hue-distant colour palette entries."""
+    PALETTE_LAB = rgb_to_lab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -302,10 +313,12 @@ def build_rgb_lut_hue_aware(
 
 
 def build_rgb_lut_hue_aware_weighted(
+    display: Display,
     hue_cutoff_deg: float,
     neutral_chroma: float,
 ) -> tuple[UInt8Array, float]:
     """Like build_rgb_lut_hue_aware but uses weighted CIELAB distance (2L² + a² + b²)."""
+    PALETTE_LAB = rgb_to_lab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -337,12 +350,13 @@ def build_rgb_lut_hue_aware_weighted(
     return lut, scale
 
 
-def build_rgb_lut_bw() -> tuple[UInt8Array, float]:
+def build_rgb_lut_bw(display: Display) -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index using ONLY black (0) and white (1) entries.
 
     Prevents B&W dithering from using colored palette entries, which would
     create artifacts like red/pink tints in grayscale images.
     """
+    PALETTE_LAB = rgb_to_lab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -359,8 +373,9 @@ def build_rgb_lut_bw() -> tuple[UInt8Array, float]:
     return lut, scale
 
 
-def build_rgb_lut_oklab() -> tuple[UInt8Array, float]:
+def build_rgb_lut_oklab(display: Display) -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index by Euclidean OKLAB distance."""
+    PALETTE_OKLAB = rgb_to_oklab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -372,12 +387,15 @@ def build_rgb_lut_oklab() -> tuple[UInt8Array, float]:
     return lut, scale
 
 
-def build_rgb_lut_oklab_hue_aware(hue_cutoff_deg: float) -> tuple[UInt8Array, float]:
+def build_rgb_lut_oklab_hue_aware(
+    display: Display, hue_cutoff_deg: float
+) -> tuple[UInt8Array, float]:
     """Like build_rgb_lut_oklab but forbids hue-distant colour palette entries.
 
     Hue and chroma are measured in OKLAB space.  Neutral palette entries
     (OKLAB chroma < _OKLAB_NEUTRAL_CHROMA) are always allowed.
     """
+    PALETTE_OKLAB = rgb_to_oklab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -428,8 +446,9 @@ def _rgb_to_cam16ucs(rgb: ArrayLike) -> FloatArray:
     return colour.XYZ_to_CAM16UCS(xyz)
 
 
-def build_rgb_lut_cam16ucs() -> tuple[UInt8Array, float]:
+def build_rgb_lut_cam16ucs(display: Display) -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index by Euclidean CAM16-UCS distance."""
+    PALETTE_MEASURED_RGB = display.palette_measured_rgb
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -443,6 +462,7 @@ def build_rgb_lut_cam16ucs() -> tuple[UInt8Array, float]:
 
 
 def build_rgb_lut_cam16ucs_hue_aware(
+    display: Display,
     hue_cutoff_deg: float,
     neutral_chroma: float,
 ) -> tuple[UInt8Array, float]:
@@ -452,6 +472,7 @@ def build_rgb_lut_cam16ucs_hue_aware(
     is in CAM16-UCS chroma units — comparable in scale to CIELAB (panel inks
     land roughly 20–60, panel-white near 4), so the existing default 8.0 works.
     """
+    PALETTE_MEASURED_RGB = display.palette_measured_rgb
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -483,73 +504,87 @@ def build_rgb_lut_cam16ucs_hue_aware(
     return lut, scale
 
 
-@lru_cache(maxsize=1)
-def _cached_euclidean_lut() -> tuple[UInt8Array, float]:
-    return build_rgb_lut()
+# The LUT caches are keyed by ``model_id`` (a hashable string) so each screen
+# model gets its own cached palette LUT.  The Display is looked up from the
+# registry inside each wrapper; array palettes never enter the cache key.
 
 
-@lru_cache(maxsize=1)
-def _cached_euclidean_weighted_lut() -> tuple[UInt8Array, float]:
-    return build_rgb_lut_weighted()
+@lru_cache(maxsize=8)
+def _cached_euclidean_lut(model_id: str) -> tuple[UInt8Array, float]:
+    return build_rgb_lut(DISPLAY_REGISTRY[model_id])
 
 
-@lru_cache(maxsize=16)
-def _cached_hue_aware_lut(hue_cutoff_deg: float, neutral_chroma: float) -> tuple[UInt8Array, float]:
-    return build_rgb_lut_hue_aware(hue_cutoff_deg, neutral_chroma)
+@lru_cache(maxsize=8)
+def _cached_euclidean_weighted_lut(model_id: str) -> tuple[UInt8Array, float]:
+    return build_rgb_lut_weighted(DISPLAY_REGISTRY[model_id])
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=32)
+def _cached_hue_aware_lut(
+    model_id: str, hue_cutoff_deg: float, neutral_chroma: float
+) -> tuple[UInt8Array, float]:
+    return build_rgb_lut_hue_aware(DISPLAY_REGISTRY[model_id], hue_cutoff_deg, neutral_chroma)
+
+
+@lru_cache(maxsize=32)
 def _cached_hue_aware_weighted_lut(
-    hue_cutoff_deg: float, neutral_chroma: float
+    model_id: str, hue_cutoff_deg: float, neutral_chroma: float
 ) -> tuple[UInt8Array, float]:
-    return build_rgb_lut_hue_aware_weighted(hue_cutoff_deg, neutral_chroma)
+    return build_rgb_lut_hue_aware_weighted(
+        DISPLAY_REGISTRY[model_id], hue_cutoff_deg, neutral_chroma
+    )
 
 
-@lru_cache(maxsize=1)
-def _cached_bw_lut() -> tuple[UInt8Array, float]:
-    return build_rgb_lut_bw()
+@lru_cache(maxsize=8)
+def _cached_bw_lut(model_id: str) -> tuple[UInt8Array, float]:
+    return build_rgb_lut_bw(DISPLAY_REGISTRY[model_id])
 
 
-@lru_cache(maxsize=1)
-def _cached_oklab_lut() -> tuple[UInt8Array, float]:
-    return build_rgb_lut_oklab()
+@lru_cache(maxsize=8)
+def _cached_oklab_lut(model_id: str) -> tuple[UInt8Array, float]:
+    return build_rgb_lut_oklab(DISPLAY_REGISTRY[model_id])
 
 
-@lru_cache(maxsize=16)
-def _cached_oklab_hue_aware_lut(hue_cutoff_deg: float) -> tuple[UInt8Array, float]:
-    return build_rgb_lut_oklab_hue_aware(hue_cutoff_deg)
+@lru_cache(maxsize=32)
+def _cached_oklab_hue_aware_lut(model_id: str, hue_cutoff_deg: float) -> tuple[UInt8Array, float]:
+    return build_rgb_lut_oklab_hue_aware(DISPLAY_REGISTRY[model_id], hue_cutoff_deg)
 
 
-@lru_cache(maxsize=1)
-def _cached_cam16ucs_lut() -> tuple[UInt8Array, float]:
-    return build_rgb_lut_cam16ucs()
+@lru_cache(maxsize=8)
+def _cached_cam16ucs_lut(model_id: str) -> tuple[UInt8Array, float]:
+    return build_rgb_lut_cam16ucs(DISPLAY_REGISTRY[model_id])
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=32)
 def _cached_cam16ucs_hue_aware_lut(
-    hue_cutoff_deg: float, neutral_chroma: float
+    model_id: str, hue_cutoff_deg: float, neutral_chroma: float
 ) -> tuple[UInt8Array, float]:
-    return build_rgb_lut_cam16ucs_hue_aware(hue_cutoff_deg, neutral_chroma)
+    return build_rgb_lut_cam16ucs_hue_aware(
+        DISPLAY_REGISTRY[model_id], hue_cutoff_deg, neutral_chroma
+    )
 
 
-def lut_and_scale_for_dither_config(cfg: DitherConfig) -> tuple[NDArray[np.uint8], float]:
+def lut_and_scale_for_dither_config(
+    cfg: DitherConfig, display: Display
+) -> tuple[NDArray[np.uint8], float]:
+    mid = display.model_id
     if cfg.lut_name == "euclidean":
-        return _cached_euclidean_lut()
+        return _cached_euclidean_lut(mid)
     if cfg.lut_name == "euclidean_weighted":
-        return _cached_euclidean_weighted_lut()
+        return _cached_euclidean_weighted_lut(mid)
     if cfg.lut_name == "bw":
-        return _cached_bw_lut()
+        return _cached_bw_lut(mid)
     if cfg.lut_name == "oklab":
-        return _cached_oklab_lut()
+        return _cached_oklab_lut(mid)
     if cfg.lut_name == "oklab_hue_aware":
-        return _cached_oklab_hue_aware_lut(cfg.hue_cutoff_deg)
+        return _cached_oklab_hue_aware_lut(mid, cfg.hue_cutoff_deg)
     if cfg.lut_name == "cam16ucs":
-        return _cached_cam16ucs_lut()
+        return _cached_cam16ucs_lut(mid)
     if cfg.lut_name == "cam16ucs_hue_aware":
-        return _cached_cam16ucs_hue_aware_lut(cfg.hue_cutoff_deg, cfg.neutral_chroma)
+        return _cached_cam16ucs_hue_aware_lut(mid, cfg.hue_cutoff_deg, cfg.neutral_chroma)
     if cfg.lut_name == "hue_aware_weighted":
-        return _cached_hue_aware_weighted_lut(cfg.hue_cutoff_deg, cfg.neutral_chroma)
-    return _cached_hue_aware_lut(cfg.hue_cutoff_deg, cfg.neutral_chroma)
+        return _cached_hue_aware_weighted_lut(mid, cfg.hue_cutoff_deg, cfg.neutral_chroma)
+    return _cached_hue_aware_lut(mid, cfg.hue_cutoff_deg, cfg.neutral_chroma)
 
 
 # ── Algorithms ───────────────────────────────────────────────────────────────
@@ -618,12 +653,22 @@ class StreamingDither(AbstractDither):
     cache the peak transient stays well under the 50 MB per-render budget.
     """
 
+    def __init__(self, display: Display) -> None:
+        self._display = display
+
     def dither(self, canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
         _validate(cfg)
-        lut, scale = lut_and_scale_for_dither_config(cfg)
+        lut, scale = lut_and_scale_for_dither_config(cfg, self._display)
         if cfg.algorithm == "noop":
             return noop_dither(canvas, lut, scale, cfg.serpentine)
-        return self._diffuse(canvas, _KERNEL_FOR[cfg.algorithm], lut, scale, cfg.serpentine)
+        return self._diffuse(
+            canvas,
+            _KERNEL_FOR[cfg.algorithm],
+            lut,
+            scale,
+            cfg.serpentine,
+            self._display.palette_measured_rgb,
+        )
 
     def dither_with_prep(
         self,
@@ -633,7 +678,7 @@ class StreamingDither(AbstractDither):
         stripe_h: int = _DEFAULT_STRIPE_H,
     ) -> UInt8Array:
         _validate(cfg)
-        lut, scale = lut_and_scale_for_dither_config(cfg)
+        lut, scale = lut_and_scale_for_dither_config(cfg, self._display)
         if cfg.algorithm == "noop":
             return noop_dither(canvas, lut, scale, cfg.serpentine)
         return self._diffuse(
@@ -642,6 +687,7 @@ class StreamingDither(AbstractDither):
             lut,
             scale,
             cfg.serpentine,
+            self._display.palette_measured_rgb,
             prep_stripe=prep_stripe,
             stripe_h=stripe_h,
         )
@@ -653,6 +699,7 @@ class StreamingDither(AbstractDither):
         lut: NDArray[np.uint8],
         lut_scale: float,
         serpentine: bool,
+        pal_rgb: NDArray[np.float32],
         prep_stripe: PrepStripe | None = None,
         stripe_h: int = _DEFAULT_STRIPE_H,
     ) -> UInt8Array:
@@ -677,7 +724,6 @@ class StreamingDither(AbstractDither):
 
         use_prep = canvas_arr.dtype == np.uint8 and prep_stripe is not None
 
-        pal_rgb = PALETTE_MEASURED_RGB
         lut_max = n - 1
         result_idx = np.empty((H, W), dtype=np.uint8)
 
@@ -766,16 +812,17 @@ def _validate(cfg: DitherConfig) -> None:
 # ── Module-level free-function API (mirrors old dither_constrained interface) ─
 
 
-def dither(canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
+def dither(canvas: CanvasLike, cfg: DitherConfig, display: Display) -> UInt8Array:
     """Run the configured streaming dither.  Interchangeable with dither_unconstrained.dither."""
-    return StreamingDither().dither(canvas, cfg)
+    return StreamingDither(display).dither(canvas, cfg)
 
 
 def dither_with_prep(
     canvas: CanvasLike,
     cfg: DitherConfig,
     prep_stripe: PrepStripe,
+    display: Display,
     stripe_h: int = _DEFAULT_STRIPE_H,
 ) -> UInt8Array:
     """Streaming dither with per-stripe preprocessing (production entry-point)."""
-    return StreamingDither().dither_with_prep(canvas, cfg, prep_stripe, stripe_h)
+    return StreamingDither(display).dither_with_prep(canvas, cfg, prep_stripe, stripe_h)

@@ -31,6 +31,8 @@ class BigmeF7Display(Display):
     visual_w = 800
     visual_h = 480
 
+    panel_rotated = False  # panel memory is natively landscape (800×480)
+
     # Nominal RGB for the seven ACeP inks (measure from device and replace).
     palette_measured_rgb = np.array(
         [

@@ -3,16 +3,19 @@
 import numpy as np
 import pytest
 
-from hokku.webserver.display import PALETTE_MEASURED_RGB
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import AlgorithmName, DitherConfig
 from hokku.webserver.dither_streaming import (
     PALETTE_LAB,
+    PALETTE_MEASURED_RGB,
     _cached_euclidean_lut,
     _cached_hue_aware_lut,
     dither,
 )
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.dither_unconstrained_numba import NumbaUnconstrainedDither
+
+_HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
 
 # ── LUT and palette ───────────────────────────────────────────────────────────
 
@@ -22,7 +25,7 @@ def test_palette_lab_shape():
 
 
 def test_euclidean_lut_cube():
-    lut, scale = _cached_euclidean_lut()
+    lut, scale = _cached_euclidean_lut(_HUESSEN.model_id)
     assert lut.shape == (32, 32, 32)
     assert lut.dtype == np.uint8
     assert lut.max() <= 5
@@ -30,7 +33,7 @@ def test_euclidean_lut_cube():
 
 
 def test_hue_aware_lut_cube():
-    lut, _ = _cached_hue_aware_lut(95.0, 8.0)
+    lut, _ = _cached_hue_aware_lut(_HUESSEN.model_id, 95.0, 8.0)
     assert lut.shape == (32, 32, 32)
     assert lut.max() <= 5
 
@@ -44,7 +47,7 @@ def test_noop_kernel_runs():
         neutral_chroma=8.0,
     )
     canvas = np.full((20, 20, 3), 128, dtype=np.uint8)
-    out = dither(canvas, cfg)
+    out = dither(canvas, cfg, _HUESSEN)
     assert out.shape == (20, 20)
     assert out.dtype == np.uint8
     assert out.max() <= 5
@@ -86,7 +89,7 @@ def _synth(h: int = 32, w: int = 32) -> np.ndarray:
 @pytest.mark.parametrize("cls", _concrete_classes())
 def test_dither_output_shape_and_dtype(cls) -> None:
 
-    d = cls()
+    d = cls(_HUESSEN)
     result = d.dither(_synth(32, 32), _fs_cfg())
     assert result.shape == (32, 32)
     assert result.dtype == np.uint8
@@ -96,7 +99,7 @@ def test_dither_output_shape_and_dtype(cls) -> None:
 def test_dither_output_valid_palette_indices(cls) -> None:
 
     n_palette = len(PALETTE_MEASURED_RGB)
-    d = cls()
+    d = cls(_HUESSEN)
     result = d.dither(_synth(32, 32), _fs_cfg())
     assert int(result.min()) >= 0
     assert int(result.max()) < n_palette
@@ -112,7 +115,7 @@ def test_all_algorithms_all_classes(cls, algorithm: AlgorithmName) -> None:
         hue_cutoff_deg=95.0,
         neutral_chroma=8.0,
     )
-    d = cls()
+    d = cls(_HUESSEN)
     result = d.dither(_synth(24, 24), cfg)
     assert result.shape == (24, 24)
     assert result.dtype == np.uint8
@@ -122,7 +125,7 @@ def test_all_algorithms_all_classes(cls, algorithm: AlgorithmName) -> None:
 def test_dither_with_prep_applies_preprocessing(cls) -> None:
     """dither_with_prep output must differ when prep_stripe adds a constant offset."""
     cfg = _fs_cfg()
-    d = cls()
+    d = cls(_HUESSEN)
     canvas = np.random.default_rng(42).integers(0, 256, (32, 32, 3), dtype=np.uint8)
 
     def identity_prep(stripe):

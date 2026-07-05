@@ -23,6 +23,7 @@ from __future__ import annotations
 def render_one(
     image_path: str,
     image_config_dict: dict,
+    model: str,
     orientation: str,
     crop_to_fill_threshold: float = 0.0,
     clahe_keepout_bboxes: tuple[dict, ...] | None = None,
@@ -36,6 +37,9 @@ def render_one(
     image_config_dict:
         ``dataclasses.asdict(image_config)`` — the full ImageConfig as a plain
         dict, ready to be reconstructed via ``_image_config_from_dict``.
+    model:
+        Screen model id (e.g. ``"huessen_epf1301"``, ``"bigme_f7"``) selecting
+        the ``Display`` that drives palette, geometry, and wire packing.
     orientation:
         ``"landscape"`` or ``"portrait"``.
     crop_to_fill_threshold:
@@ -63,14 +67,16 @@ def render_one(
 
     register_heif_opener()
 
+    from hokku.screens.registry import DISPLAY_REGISTRY  # noqa: PLC0415
     from hokku.webserver.bounding_box import BoundingBox  # noqa: PLC0415
     from hokku.webserver.dither_streaming_numba import NumbaStreamingDither  # noqa: PLC0415
     from hokku.webserver.image_abc import preview_png_from_panel_bytes  # noqa: PLC0415
     from hokku.webserver.image_config import _image_config_from_dict  # noqa: PLC0415
     from hokku.webserver.image_renderer import ImageRenderer, open_image_for_render  # noqa: PLC0415
 
+    display = DISPLAY_REGISTRY[model]
     cfg = _image_config_from_dict(image_config_dict)
-    renderer = ImageRenderer(NumbaStreamingDither())
+    renderer = ImageRenderer(NumbaStreamingDither(display), display)
 
     # Convert bbox dicts back to BoundingBox instances
     bboxes_norm = None
@@ -90,5 +96,5 @@ def render_one(
             crop_to_fill_threshold,
             clahe_keepout_bboxes_norm=bboxes_norm,
         )
-    preview_bytes = preview_png_from_panel_bytes(panel_bytes, orientation)  # type: ignore[arg-type]
+    preview_bytes = preview_png_from_panel_bytes(panel_bytes, orientation, display)  # type: ignore[arg-type]
     return panel_bytes, preview_bytes

@@ -16,11 +16,14 @@ from pathlib import Path
 import pytest
 from PIL import Image as _Image
 
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
-from hokku.webserver.display import TOTAL_BYTES
 from hokku.webserver.image_manager_abstract import AbstractImageManager
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.screen_image_config import ScreenImageConfig
+
+_HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
+TOTAL_BYTES = _HUESSEN.total_bytes
 
 
 def test_hash_name_stable():
@@ -50,7 +53,9 @@ def test_register_and_convert(app_config: AppConfig, image_manager_factory, make
         orientation=Orientation.LANDSCAPE,
         crop_to_fill_threshold=app_config.crop_to_fill_threshold,
     ).cache_slug()
-    assert all(r.landscape_image_config_slug == expected_slug for r in records)
+    assert all(
+        r.slug_for("huessen_epf1301", Orientation.LANDSCAPE) == expected_slug for r in records
+    )
 
 
 def test_panel_bytes_after_sync(app_config: AppConfig, image_manager_factory, make_test_image):
@@ -107,7 +112,7 @@ def test_remove_clears_cache(app_config: AppConfig, image_manager_factory, make_
     panel_path = (
         Path(app_config.cache_dir)
         / "images"
-        / f"{rec.name_hash}_{rec.slug(Orientation.LANDSCAPE)}_panel.bin.zst"
+        / f"{rec.name_hash}_{rec.slug_for('huessen_epf1301', Orientation.LANDSCAPE)}_panel.bin.zst"
     )
     assert panel_path.exists()
 
@@ -209,10 +214,10 @@ def test_inflight_prevents_double_submission(
     submitted: list[str] = []
     original = mgr._dispatch_render
 
-    def counting(name, expected_slug, orientation, render_args, t0, *, update_status=True):
+    def counting(name, expected_slug, model, orientation, render_args, t0, *, update_status=True):
         submitted.append(name)
         return original(
-            name, expected_slug, orientation, render_args, t0, update_status=update_status
+            name, expected_slug, model, orientation, render_args, t0, update_status=update_status
         )
 
     monkeypatch.setattr(mgr, "_dispatch_render", counting)

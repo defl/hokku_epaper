@@ -43,15 +43,18 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Any, ClassVar, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, TypeAlias
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from PIL import Image
 
-from hokku.webserver.display import PALETTE_MEASURED_RGB
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_abc import AbstractDither
 from hokku.webserver.dither_config import DitherConfig
+
+if TYPE_CHECKING:
+    from hokku.screens.display import Display
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +100,13 @@ def _rgb_to_lab(rgb: ArrayLike) -> FloatArray:
     return _xyz_to_lab(_linear_to_xyz(linear))
 
 
+# Reference palette (Huessen EPF1301) for the module-level constants below.  The
+# per-model dither LUTs are built from the Display passed into each dither
+# instance — NOT from these module constants — so a Bigme F7 render uses its own
+# palette, not this reference.
+_REFERENCE_DISPLAY = DISPLAY_REGISTRY["huessen_epf1301"]
+PALETTE_MEASURED_RGB = _REFERENCE_DISPLAY.palette_measured_rgb
+
 _PALETTE_LAB = _rgb_to_lab(PALETTE_MEASURED_RGB)
 
 
@@ -133,8 +143,9 @@ _OKLAB_NEUTRAL_CHROMA = 0.05
 # ── LUTs (self-contained copy) ─────────────────────────────────────
 
 
-def _build_rgb_lut() -> tuple[UInt8Array, float]:
+def _build_rgb_lut(display: Display) -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index by Euclidean CIELAB distance."""
+    _PALETTE_LAB = _rgb_to_lab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -146,8 +157,9 @@ def _build_rgb_lut() -> tuple[UInt8Array, float]:
     return lut, scale
 
 
-def _build_rgb_lut_weighted() -> tuple[UInt8Array, float]:
+def _build_rgb_lut_weighted(display: Display) -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index by weighted CIELAB distance (2L² + a² + b²)."""
+    _PALETTE_LAB = _rgb_to_lab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -161,10 +173,12 @@ def _build_rgb_lut_weighted() -> tuple[UInt8Array, float]:
 
 
 def _build_rgb_lut_hue_aware(
+    display: Display,
     hue_cutoff_deg: float,
     neutral_chroma: float,
 ) -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index, excluding hue-distant palette entries."""
+    _PALETTE_LAB = _rgb_to_lab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -196,10 +210,12 @@ def _build_rgb_lut_hue_aware(
 
 
 def _build_rgb_lut_hue_aware_weighted(
+    display: Display,
     hue_cutoff_deg: float,
     neutral_chroma: float,
 ) -> tuple[UInt8Array, float]:
     """Like _build_rgb_lut_hue_aware but uses weighted CIELAB distance (2L² + a² + b²)."""
+    _PALETTE_LAB = _rgb_to_lab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -231,11 +247,12 @@ def _build_rgb_lut_hue_aware_weighted(
     return lut, scale
 
 
-def _build_rgb_lut_bw() -> tuple[UInt8Array, float]:
+def _build_rgb_lut_bw(display: Display) -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index using ONLY black (0) and white (1) entries.
 
     Prevents B&W dithering from using colored palette entries.
     """
+    _PALETTE_LAB = _rgb_to_lab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -250,8 +267,9 @@ def _build_rgb_lut_bw() -> tuple[UInt8Array, float]:
     return lut, scale
 
 
-def _build_rgb_lut_oklab() -> tuple[UInt8Array, float]:
+def _build_rgb_lut_oklab(display: Display) -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index by Euclidean OKLAB distance."""
+    _PALETTE_OKLAB = _rgb_to_oklab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -263,8 +281,11 @@ def _build_rgb_lut_oklab() -> tuple[UInt8Array, float]:
     return lut, scale
 
 
-def _build_rgb_lut_oklab_hue_aware(hue_cutoff_deg: float) -> tuple[UInt8Array, float]:
+def _build_rgb_lut_oklab_hue_aware(
+    display: Display, hue_cutoff_deg: float
+) -> tuple[UInt8Array, float]:
     """Like _build_rgb_lut_oklab but forbids hue-distant colour palette entries."""
+    _PALETTE_OKLAB = _rgb_to_oklab(display.palette_measured_rgb)
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -309,8 +330,9 @@ def _rgb_to_cam16ucs_unc(rgb: ArrayLike) -> FloatArray:
     return colour.XYZ_to_CAM16UCS(xyz)
 
 
-def _build_rgb_lut_cam16ucs() -> tuple[UInt8Array, float]:
+def _build_rgb_lut_cam16ucs(display: Display) -> tuple[UInt8Array, float]:
     """32³ RGB grid → palette index by Euclidean CAM16-UCS distance."""
+    PALETTE_MEASURED_RGB = display.palette_measured_rgb
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -324,10 +346,12 @@ def _build_rgb_lut_cam16ucs() -> tuple[UInt8Array, float]:
 
 
 def _build_rgb_lut_cam16ucs_hue_aware(
+    display: Display,
     hue_cutoff_deg: float,
     neutral_chroma: float,
 ) -> tuple[UInt8Array, float]:
     """CAM16-UCS LUT with hue-distant palette entries forbidden."""
+    PALETTE_MEASURED_RGB = display.palette_measured_rgb
     steps = 32
     scale = 256 / steps
     vals = np.arange(steps) * scale + scale / 2
@@ -359,73 +383,80 @@ def _build_rgb_lut_cam16ucs_hue_aware(
     return lut, scale
 
 
-@lru_cache(maxsize=1)
-def _cached_euclidean_lut() -> tuple[UInt8Array, float]:
-    return _build_rgb_lut()
+@lru_cache(maxsize=8)
+def _cached_euclidean_lut(model_id: str) -> tuple[UInt8Array, float]:
+    return _build_rgb_lut(DISPLAY_REGISTRY[model_id])
 
 
-@lru_cache(maxsize=1)
-def _cached_euclidean_weighted_lut() -> tuple[UInt8Array, float]:
-    return _build_rgb_lut_weighted()
+@lru_cache(maxsize=8)
+def _cached_euclidean_weighted_lut(model_id: str) -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_weighted(DISPLAY_REGISTRY[model_id])
 
 
-@lru_cache(maxsize=16)
-def _cached_hue_aware_lut(hue_cutoff_deg: float, neutral_chroma: float) -> tuple[UInt8Array, float]:
-    return _build_rgb_lut_hue_aware(hue_cutoff_deg, neutral_chroma)
+@lru_cache(maxsize=32)
+def _cached_hue_aware_lut(
+    model_id: str, hue_cutoff_deg: float, neutral_chroma: float
+) -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_hue_aware(DISPLAY_REGISTRY[model_id], hue_cutoff_deg, neutral_chroma)
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=32)
 def _cached_hue_aware_weighted_lut(
-    hue_cutoff_deg: float, neutral_chroma: float
+    model_id: str, hue_cutoff_deg: float, neutral_chroma: float
 ) -> tuple[UInt8Array, float]:
-    return _build_rgb_lut_hue_aware_weighted(hue_cutoff_deg, neutral_chroma)
+    return _build_rgb_lut_hue_aware_weighted(
+        DISPLAY_REGISTRY[model_id], hue_cutoff_deg, neutral_chroma
+    )
 
 
-@lru_cache(maxsize=1)
-def _cached_bw_lut() -> tuple[UInt8Array, float]:
-    return _build_rgb_lut_bw()
+@lru_cache(maxsize=8)
+def _cached_bw_lut(model_id: str) -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_bw(DISPLAY_REGISTRY[model_id])
 
 
-@lru_cache(maxsize=1)
-def _cached_oklab_lut() -> tuple[UInt8Array, float]:
-    return _build_rgb_lut_oklab()
+@lru_cache(maxsize=8)
+def _cached_oklab_lut(model_id: str) -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_oklab(DISPLAY_REGISTRY[model_id])
 
 
-@lru_cache(maxsize=16)
-def _cached_oklab_hue_aware_lut(hue_cutoff_deg: float) -> tuple[UInt8Array, float]:
-    return _build_rgb_lut_oklab_hue_aware(hue_cutoff_deg)
+@lru_cache(maxsize=32)
+def _cached_oklab_hue_aware_lut(model_id: str, hue_cutoff_deg: float) -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_oklab_hue_aware(DISPLAY_REGISTRY[model_id], hue_cutoff_deg)
 
 
-@lru_cache(maxsize=1)
-def _cached_cam16ucs_lut() -> tuple[UInt8Array, float]:
-    return _build_rgb_lut_cam16ucs()
+@lru_cache(maxsize=8)
+def _cached_cam16ucs_lut(model_id: str) -> tuple[UInt8Array, float]:
+    return _build_rgb_lut_cam16ucs(DISPLAY_REGISTRY[model_id])
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=32)
 def _cached_cam16ucs_hue_aware_lut(
-    hue_cutoff_deg: float, neutral_chroma: float
+    model_id: str, hue_cutoff_deg: float, neutral_chroma: float
 ) -> tuple[UInt8Array, float]:
-    return _build_rgb_lut_cam16ucs_hue_aware(hue_cutoff_deg, neutral_chroma)
+    return _build_rgb_lut_cam16ucs_hue_aware(
+        DISPLAY_REGISTRY[model_id], hue_cutoff_deg, neutral_chroma
+    )
 
 
-def _lut_and_scale(cfg: DitherConfig) -> tuple[NDArray[np.uint8], float]:
+def _lut_and_scale(cfg: DitherConfig, display: Display) -> tuple[NDArray[np.uint8], float]:
+    mid = display.model_id
     if cfg.lut_name == "euclidean":
-        return _cached_euclidean_lut()
+        return _cached_euclidean_lut(mid)
     if cfg.lut_name == "euclidean_weighted":
-        return _cached_euclidean_weighted_lut()
+        return _cached_euclidean_weighted_lut(mid)
     if cfg.lut_name == "bw":
-        return _cached_bw_lut()
+        return _cached_bw_lut(mid)
     if cfg.lut_name == "oklab":
-        return _cached_oklab_lut()
+        return _cached_oklab_lut(mid)
     if cfg.lut_name == "oklab_hue_aware":
-        return _cached_oklab_hue_aware_lut(cfg.hue_cutoff_deg)
+        return _cached_oklab_hue_aware_lut(mid, cfg.hue_cutoff_deg)
     if cfg.lut_name == "cam16ucs":
-        return _cached_cam16ucs_lut()
+        return _cached_cam16ucs_lut(mid)
     if cfg.lut_name == "cam16ucs_hue_aware":
-        return _cached_cam16ucs_hue_aware_lut(cfg.hue_cutoff_deg, cfg.neutral_chroma)
+        return _cached_cam16ucs_hue_aware_lut(mid, cfg.hue_cutoff_deg, cfg.neutral_chroma)
     if cfg.lut_name == "hue_aware_weighted":
-        return _cached_hue_aware_weighted_lut(cfg.hue_cutoff_deg, cfg.neutral_chroma)
-    return _cached_hue_aware_lut(cfg.hue_cutoff_deg, cfg.neutral_chroma)
+        return _cached_hue_aware_weighted_lut(mid, cfg.hue_cutoff_deg, cfg.neutral_chroma)
+    return _cached_hue_aware_lut(mid, cfg.hue_cutoff_deg, cfg.neutral_chroma)
 
 
 # ── Diffusion kernels ──────────────────────────────────────────────
@@ -485,6 +516,7 @@ def _full_canvas_diffusion(
     lut: NDArray[np.uint8],
     lut_scale: float,
     serpentine: bool,
+    pal_rgb: NDArray[np.float32],
 ) -> UInt8Array:
     """Full-canvas error-diffusion dither.
 
@@ -499,7 +531,6 @@ def _full_canvas_diffusion(
 
     pixels, h, w = _canvas_to_float32(canvas)
     result_idx = np.zeros((h, w), dtype=np.uint8)
-    pal_rgb = PALETTE_MEASURED_RGB
     lut_max = n - 1
 
     for y in range(h):
@@ -548,7 +579,7 @@ def _noop(
 # ── Public interface ───────────────────────────────────────────────
 
 
-def dither(canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
+def dither(canvas: CanvasLike, cfg: DitherConfig, display: Display) -> UInt8Array:
     """Run the configured full-canvas dither algorithm.
 
     Interchangeable with ``dither_constrained.dither`` — same call
@@ -560,7 +591,7 @@ def dither(canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
     ``dither_constrained.dither_with_prep`` for production rendering
     within the 50 MB budget.
     """
-    return UnconstrainedDither().dither(canvas, cfg)
+    return UnconstrainedDither(display).dither(canvas, cfg)
 
 
 # ── Public class ─────────────────────────────────────────────────────────────
@@ -584,6 +615,9 @@ class UnconstrainedDither(AbstractDither):
         "stucki": _STUCKI_KERNEL,
     }
 
+    def __init__(self, display: Display) -> None:
+        self._display = display
+
     def dither(self, canvas: CanvasLike, cfg: DitherConfig) -> UInt8Array:
         if cfg.algorithm not in self._KERNELS and cfg.algorithm != "noop":
             raise ValueError(f"Unknown algorithm: {cfg.algorithm!r}")
@@ -599,9 +633,14 @@ class UnconstrainedDither(AbstractDither):
             "cam16ucs_hue_aware",
         ):
             raise ValueError(f"Unknown lut_name: {cfg.lut_name!r}")
-        lut, lut_scale = _lut_and_scale(cfg)
+        lut, lut_scale = _lut_and_scale(cfg, self._display)
         if cfg.algorithm == "noop":
             return _noop(canvas, lut, lut_scale, cfg.serpentine)
         return _full_canvas_diffusion(
-            canvas, self._KERNELS[cfg.algorithm], lut, lut_scale, cfg.serpentine
+            canvas,
+            self._KERNELS[cfg.algorithm],
+            lut,
+            lut_scale,
+            cfg.serpentine,
+            self._display.palette_measured_rgb,
         )

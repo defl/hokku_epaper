@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from hokku.webserver.display import TOTAL_BYTES
+from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import DitherConfig
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.image_abc import preview_png_from_panel_bytes
@@ -24,6 +24,9 @@ from hokku.webserver.orientation import Orientation
 from hokku.webserver.presets import FALLBACK_PRESET, PRESET_IMAGE_CONFIGS
 from hokku.webserver.screen_image_config import ScreenImageConfig, _screen_image_config_from_dict
 from tests._helpers import is_oversize_fixture
+
+_HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
+TOTAL_BYTES = _HUESSEN.total_bytes
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -137,7 +140,7 @@ def test_visual_render_all_test_images(_wipe_build_dir):
     """
 
     def render_panel_bytes(img, cfg, orientation, crop_to_fill_threshold=0.0):
-        return ImageRenderer(NumbaStreamingDither()).render_panel_bytes(
+        return ImageRenderer(NumbaStreamingDither(_HUESSEN), _HUESSEN).render_panel_bytes(
             img, cfg, orientation, crop_to_fill_threshold
         )
 
@@ -162,6 +165,6 @@ def test_visual_render_all_test_images(_wipe_build_dir):
             f"{src.name}: expected {TOTAL_BYTES} bytes, got {len(panel_bytes)}"
         )
 
-        preview = preview_png_from_panel_bytes(panel_bytes, screen_cfg.orientation)
+        preview = preview_png_from_panel_bytes(panel_bytes, screen_cfg.orientation, _HUESSEN)
         out_png = _BUILD_DIR / f"{src.stem}__noop.png"
         out_png.write_bytes(preview)
