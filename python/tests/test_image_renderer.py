@@ -15,7 +15,7 @@ from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.dither_unconstrained import UnconstrainedDither
 from hokku.webserver.dither_unconstrained_numba import NumbaUnconstrainedDither
 from hokku.webserver.image_config import ImageConfig
-from hokku.webserver.image_renderer import ImageRenderer
+from hokku.webserver.image_renderer import ImageRenderer, open_image_for_render
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 
@@ -169,3 +169,19 @@ def test_numba_streaming_and_streaming_agree_on_preprocessed_canvas() -> None:
         idx_n,
         err_msg="NumbaStreamingDither diverged from StreamingDither on identical preprocessed canvas",
     )
+
+
+def test_transparent_image_flattens_to_white(tmp_path) -> None:
+    """RGBA transparency must composite onto WHITE, not the black that a plain
+    convert('RGB') leaves under transparent pixels (regression: transparent logo
+    backgrounds rendered black on the panel)."""
+    im = Image.new("RGBA", (16, 16), (0, 0, 0, 0))  # fully transparent (black RGB under alpha)
+    im.putpixel((8, 8), (255, 0, 0, 255))  # one opaque red pixel
+    p = tmp_path / "transparent.png"
+    im.save(p)
+
+    with open_image_for_render(p) as out:
+        assert out.mode == "RGB"
+        arr = np.asarray(out)
+        assert tuple(arr[0, 0]) == (255, 255, 255), "transparent area should flatten to white"
+        assert tuple(arr[8, 8]) == (255, 0, 0), "opaque pixel must be preserved"

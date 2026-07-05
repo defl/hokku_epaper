@@ -162,7 +162,15 @@ def open_image_for_render(path: Path) -> Image.Image:
                     pass
         img = ImageOps.exif_transpose(img)
         try:
-            img = img.convert("RGB")
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                # Flatten transparency onto WHITE so a transparent background
+                # becomes white (the panel/letterbox background) rather than the
+                # black that a plain convert("RGB") leaves under transparent pixels.
+                rgba = img.convert("RGBA")
+                bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+                img = Image.alpha_composite(bg, rgba).convert("RGB")
+            else:
+                img = img.convert("RGB")
         except Image.DecompressionBombError as exc:
             raise ValueError(f"image {path.name} is too large to decode") from exc
 
