@@ -17,10 +17,21 @@ extern "C" {
 #define PRJCONF_IMG_FLASH               0
 #define PRJCONF_IMG_ADDR                0x00000000
 
-/* WiFi credentials + server URL stored here */
+/*
+ * WiFi credentials (MAC / wlan_mode / sta params) live in the sysinfo fdcm block.
+ *
+ * The SDK default (1020 KB = 0xFF000) targets a small single-image layout; on this
+ * device it lands INSIDE slot 0's image area ([0, img_max_size*1K) = [0, 0x17F000)),
+ * so sysinfo_init()'s overlap check returns -1 and sysinfo stays uninitialized —
+ * WLAN never starts and `net sta config` can't persist ("sysinfo uninitialized, hdl 0").
+ *
+ * 0x300000 is the vendor-designated sysinfo partition: the first address past slot 1
+ * ([0x181000, 0x300000) with img_max_size 0x5fc K) and clear of the OTA area, so the
+ * overlap check passes. The OEM keeps its own sysinfo fdcm here too.
+ */
 #define PRJCONF_SYSINFO_SAVE_TO_FLASH   1
 #define PRJCONF_SYSINFO_FLASH           0
-#define PRJCONF_SYSINFO_ADDR            ((1024 - 4) * 1024)
+#define PRJCONF_SYSINFO_ADDR            0x300000
 #define PRJCONF_SYSINFO_SIZE            (4 * 1024)
 #define PRJCONF_SYSINFO_CHECK_OVERLAP   1
 
