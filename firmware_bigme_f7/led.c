@@ -3,7 +3,7 @@
  *
  * PA12 = RED  LED (active HIGH)
  * PB3  = GREEN LED (active HIGH)
- * PA20 = USB/charge detect input (HIGH = USB present; confirm polarity on first flash)
+ * PA20 = USB/charge detect input (ACTIVE-LOW: LOW = USB-C present; confirmed on bench)
  *
  * Pin identities derived from disassembly of original firmware boot partition
  * (01_boot_payload.bin). The 8-case switch at 0x002FF0 operates exclusively on
@@ -71,5 +71,9 @@ void led_set_green(void)
 
 int led_usb_present(void)
 {
-    return HAL_GPIO_ReadPin(LED_USB_PORT, LED_USB_PIN) == GPIO_PIN_HIGH;
+    /* PA20 is ACTIVE-LOW: it reads LOW when USB-C is connected, so USB-present is
+     * (pin == LOW). Verified on the bench 2026-07-05: `cfg show` reports
+     * usb_present=1 on USB-C. The input pull-up biases the line HIGH (= no USB)
+     * when it floats on battery. */
+    return HAL_GPIO_ReadPin(LED_USB_PORT, LED_USB_PIN) == GPIO_PIN_LOW;
 }

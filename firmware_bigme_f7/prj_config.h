@@ -51,9 +51,12 @@ extern "C" {
 
 /* Services */
 #define PRJCONF_CONSOLE_EN              1
-#define PRJCONF_PM_EN                   0
+#define PRJCONF_PM_EN                   1   /* enable PM framework (hibernation between refreshes) */
 #define PRJCONF_NET_EN                  1
-#define PRJCONF_NET_PM_EN               0
+/* MUST be 1 with PM_EN: registers pm_register_wlan_power_onoff() so pm_enter_mode
+ * powers the WLAN core down before hibernation. With it 0, hibernation aborts to an
+ * immediate CPU reset -> boot/fetch/refresh/"hibernate"/reset reboot-loop. */
+#define PRJCONF_NET_PM_EN               1
 #define PRJCONF_ENV_TZ                  "TZ=UTC"
 #define PRJCONF_SWD_EN                  0
 

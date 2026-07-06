@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdarg.h>
 
 #include "kernel/os/os.h"
 #include "common/framework/platform_init.h"
@@ -24,13 +25,19 @@
 #include "net/HTTPClient/API/HTTPClientCommon.h"
 #include "lwip/netif.h"
 #include "lwip/dhcp.h"
+#include "lwip/ip_addr.h"
 
 #include "image/image.h"
 #include "driver/chip/hal_wdg.h"
+#include "driver/chip/hal_adc.h"
+#include "driver/chip/hal_wakeup.h"
 #include "net/wlan/wlan.h"
 #include "common/framework/sysinfo.h"
+#include "pm/pm.h"
 
 #include "epd.h"
+#include "led.h"
+#include "hokku_config.h"
 
 /* Static IP config — used when DHCP is unavailable on the network */
 #define STATIC_IP_ADDR   "192.168.6.199"
@@ -49,8 +56,148 @@
 #define REFRESH_THREAD_STACK    (8 * 1024)
 #define REFRESH_THREAD_PRIO     OS_THREAD_PRIO_APP
 
+/* Config schema version reported to the server (frame-state cfg_ver). */
+#define HOKKU_CFG_VER           1
+/* Firmware build stamp (X-Firmware-Build). Clean builds keep this fresh. */
+#define HOKKU_BUILD_TS          (__DATE__ " " __TIME__)
+
 static OS_Thread_t g_refresh_thread;
 static int         g_epd_ready = 0;
+
+/* --------------------------------------------------------------------------
+ * Reporting (Phase 1): activity log ring + software wall-clock + frame-state.
+ * ------------------------------------------------------------------------ */
+
+/*
+ * Activity log ring. Every hlog() line is echoed to the serial console AND
+ * appended here; the accumulated buffer is POSTed to the server as the request
+ * body on each fetch (mirrors the ESP32 firmware's RTC log ring) and reset only
+ * after a 200. Truncating (not circular): once full it stops appending until the
+ * next successful upload resets it — bounded and simple.
+ */
+#define HOKKU_LOG_RING_SZ       2048U
+static char     g_log_ring[HOKKU_LOG_RING_SZ];
+static uint32_t g_log_len;
+
+static void hlog(const char *fmt, ...)
+{
+    char    line[160];
+    va_list ap;
+    int     n;
+
+    va_start(ap, fmt);
+    n = vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (n < 0)
+        return;
+    if (n > (int)sizeof(line) - 1)
+        n = (int)sizeof(line) - 1;
+
+    printf("%s", line);                       /* still to serial console */
+    if (g_log_len + (uint32_t)n < HOKKU_LOG_RING_SZ) {
+        memcpy(g_log_ring + g_log_len, line, (size_t)n);
+        g_log_len += (uint32_t)n;
+    }
+}
+static void hlog_reset(void) { g_log_len = 0; }
+
+/*
+ * Software wall-clock anchored to the server epoch (X-Server-Time-Epoch), so we
+ * can report clk_now without an RTC. base==0 means never synced. Good enough for
+ * the always-on loop; Phase 3 will back this with the RTC across hibernation.
+ */
+static uint32_t g_clk_epoch_base;    /* server epoch captured at last sync */
+static uint32_t g_clk_uptime_base;   /* OS_GetTime() (secs) at last sync */
+
+static void hokku_clock_set(uint32_t server_epoch)
+{
+    g_clk_epoch_base  = server_epoch;
+    g_clk_uptime_base = OS_GetTime();
+}
+static uint32_t hokku_clock_now(void)
+{
+    if (g_clk_epoch_base == 0)
+        return 0;
+    return g_clk_epoch_base + (OS_GetTime() - g_clk_uptime_base);
+}
+
+/* SDK SRAM heap span (same accessor the `heap` console command uses). */
+extern void heap_get_space(uint8_t **start, uint8_t **end, uint8_t **current);
+
+/* Wake reason captured once at boot (frame-state "wake"): "timer" = hibernation wake. */
+static const char *g_wake = "first_boot";
+
+static void hokku_capture_wake(void)
+{
+    uint32_t ev = HAL_Wakeup_GetEvent();
+    if (ev & PM_WAKEUP_SRC_WKTIMER)
+        g_wake = "timer";
+    else if (ev != 0)                          /* 0 == cold power-on */
+        g_wake = "wake_io";
+}
+
+/*
+ * Best-effort battery read via the SoC's internal VBAT ADC channel. Returns mV, or
+ * 0 if unavailable/implausible (build_frame_state then omits it, so the server shows
+ * no battery rather than a bogus 0%). NOTE: the F7's battery-sense wiring is
+ * unconfirmed — this may read the regulated rail, not the pack. Calibrate on device
+ * (the /2 divider + plausibility range are a starting point).
+ */
+static int g_adc_ready = 0;
+uint32_t hokku_battery_mv(void)          /* also used by the `cfg show` diagnostics */
+{
+    uint32_t data = 0, mv;
+
+    if (!g_adc_ready) {
+        ADC_InitParam p;
+        memset(&p, 0, sizeof(p));
+        p.freq  = 1000000;
+        p.delay = 10;
+        p.mode  = ADC_CONTI_CONV;
+#if (__CONFIG_CHIP_ARCH_VER == 2)
+        p.vref_mode = ADC_VREF_MODE_1;
+#endif
+        if (HAL_ADC_Init(&p) != HAL_OK)
+            return 0;
+        g_adc_ready = 1;
+    }
+    if (HAL_ADC_Conv_Polling(ADC_CHANNEL_VBAT, &data, 1000) != HAL_OK)
+        return 0;
+    mv = (data * 2500U / 4096U) * 2U;         /* ADC input mV (ref 2500) x VBAT /2 divider */
+    return (mv >= 2000U && mv <= 5000U) ? mv : 0;
+}
+
+/* Build the compact X-Frame-State telemetry JSON (server parses ota/bat_mv/clk_now). */
+static void build_frame_state(char *buf, size_t sz)
+{
+    hokku_config_t *cfg = hokku_config_get();
+    wlan_sta_ap_t   ap;
+    int             rssi = 0;
+    uint8_t        *hs, *he, *hc;
+    uint32_t        bat = hokku_battery_mv();
+    char            batfield[24] = "";
+
+    if (wlan_sta_ap_info(&ap) == 0)
+        rssi = (int)(int8_t)ap.rssi;         /* stored as signed dBm in a u8 */
+
+    heap_get_space(&hs, &he, &hc);           /* free ~= end - current watermark */
+
+    if (bat > 0)
+        snprintf(batfield, sizeof(batfield), ",\"bat_mv\":%u", (unsigned)bat);
+
+    snprintf(buf, sz,
+        "{\"fw\":\"%s\",\"uptime_s\":%u,\"heap_kb\":%u,\"rssi\":%d,"
+        "\"regime\":\"%s\",\"wake\":\"%s\",\"cfg_ver\":%u,\"clk_now\":%u,\"ota\":0%s}",
+        FIRMWARE_VERSION,
+        (unsigned)OS_GetTime(),
+        (unsigned)((he - hc) / 1024),
+        rssi,
+        (cfg->power_mode == HOKKU_PWR_AWAKE || led_usb_present()) ? "usb_awake" : "battery",
+        g_wake,
+        (unsigned)HOKKU_CFG_VER,
+        (unsigned)hokku_clock_now(),
+        batfield);
+}
 
 /*
  * A/B try-boot rollback state.
@@ -100,42 +247,77 @@ static uint32_t g_b0_rst_src, g_b0_boot_flag, g_b0_boot_arg, g_b0_wdg_cfg;
 #endif
 
 /*
+ * Read a numeric response header. The SDK's HTTPClientFindFirstHeader only sets
+ * the search clue; HTTPClientGetNextHeader actually returns the matched text
+ * (which may include the "Name:" prefix, so we skip past any ':'). Returns 1 and
+ * writes *out on success. (The prior code called only FindFirstHeader and never
+ * read the value, so X-Sleep-Seconds silently fell back to the default.)
+ */
+static int read_resp_header_uint(HTTP_SESSION_HANDLE h, const char *name, uint32_t *out)
+{
+    char   v[48];
+    UINT32 len = sizeof(v);
+    int    ok = 0;
+
+    HTTPClientFindFirstHeader(h, (char *)name, v, &len);
+    len = sizeof(v);
+    if (HTTPClientGetNextHeader(h, v, &len) == HTTP_CLIENT_SUCCESS) {
+        char *p = strchr(v, ':');
+        p = p ? p + 1 : v;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        *out = (uint32_t)strtoul(p, NULL, 10);
+        ok = 1;
+    }
+    HTTPClientFindCloseHeader(h);
+    return ok;
+}
+
+/*
  * Fetch one image from the server and stream it byte-by-byte to the EPD.
  * Returns the number of seconds to sleep before the next refresh, or -1 on
  * any error (caller should retry after a short backoff).
  */
 static int do_refresh(void)
 {
-    HTTPParameters params;
-    HTTP_CLIENT    info;
-    char           hdr_val[32];
-    UINT32         hdr_len;
-    char           buf[512];
-    UINT32         bytes_streamed = 0;
-    int            sleep_sec = DEFAULT_SLEEP_SECONDS;
-    int            ret;
+    hokku_config_t *cfg = hokku_config_get();
+    HTTPParameters  params;
+    HTTP_CLIENT     info;
+    char            buf[512];
+    char            frame_state[384];
+    UINT32          bytes_streamed = 0;
+    UINT32          log_sent;
+    int             sleep_sec = (int)cfg->default_sleep_s;
+    int             ret;
 
+    build_frame_state(frame_state, sizeof(frame_state));
+
+    log_sent = g_log_len;                     /* bytes delivered by this POST */
     memset(&params, 0, sizeof(params));
-    strncpy(params.Uri, HOKKU_SERVER_URL, sizeof(params.Uri) - 1);
-    params.HttpVerb  = VerbGet;
+    strncpy(params.Uri, cfg->server_url, sizeof(params.Uri) - 1);
+    params.HttpVerb  = VerbPost;              /* POST so the log ring rides as the body */
     params.nTimeout  = HTTP_TIMEOUT_S;
+    params.pData     = g_log_ring;            /* request body = accumulated activity log */
+    params.pLength   = log_sent;              /* snapshot; dropped only after a 200 */
 
-    printf("hokku: GET %s\n", HOKKU_SERVER_URL);
+    hlog("hokku: POST %s (log %u B)\n", cfg->server_url, (unsigned)g_log_len);
     ret = HTTPC_open(&params);
     if (ret != HTTP_CLIENT_SUCCESS) {
-        printf("hokku: HTTP open failed (%d)\n", ret);
+        hlog("hokku: HTTP open failed (%d)\n", ret);
         return -1;
     }
 
-    /* Request headers — server uses these for logging / OTA checks */
-    HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Name",     SCREEN_NAME,      1);
-    HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Model",    SCREEN_MODEL,     1);
+    /* Request headers — server uses these for telemetry / OTA checks */
+    HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Name",      cfg->screen_name, 1);
+    HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Model",     SCREEN_MODEL,     1);
     HTTPClientAddRequestHeaders(params.pHTTP, "X-Firmware-Version", FIRMWARE_VERSION, 1);
-    HTTPClientAddRequestHeaders(params.pHTTP, "X-Frame-State",     "{\"ver\":1}",     1);
+    HTTPClientAddRequestHeaders(params.pHTTP, "X-Firmware-Build",   HOKKU_BUILD_TS,   1);
+    HTTPClientAddRequestHeaders(params.pHTTP, "X-Frame-State",      frame_state,      1);
+    HTTPClientAddRequestHeaders(params.pHTTP, "Content-Type",       "text/plain",     1);
 
     ret = HTTPC_request(&params, NULL);
     if (ret != HTTP_CLIENT_SUCCESS) {
-        printf("hokku: HTTP request failed (%d)\n", ret);
+        hlog("hokku: HTTP request failed (%d)\n", ret);
         HTTPC_close(&params);
         return -1;
     }
@@ -146,19 +328,28 @@ static int do_refresh(void)
         return -1;
     }
     if (info.HTTPStatusCode != 200) {
-        printf("hokku: server returned %u\n", (unsigned)info.HTTPStatusCode);
+        hlog("hokku: server returned %u\n", (unsigned)info.HTTPStatusCode);
         HTTPC_close(&params);
         /* For 503/404 (no image ready), use a short retry */
         return (info.HTTPStatusCode == 503 || info.HTTPStatusCode == 404) ? 30 : -1;
     }
 
-    /* Capture sleep time from response header before consuming body */
-    hdr_len = sizeof(hdr_val);
-    if (HTTPClientFindFirstHeader(params.pHTTP, "X-Sleep-Seconds",
-                                  hdr_val, &hdr_len) == HTTP_CLIENT_SUCCESS) {
-        int s = atoi(hdr_val);
-        if (s > 0)
-            sleep_sec = s;
+    /* The POST body (log) reached the server in a 200 — drop the delivered prefix,
+     * keeping anything hlog() appended during this exchange for the next upload. */
+    if (g_log_len >= log_sent) {
+        g_log_len -= log_sent;
+        memmove(g_log_ring, g_log_ring + log_sent, g_log_len);
+    } else {
+        hlog_reset();
+    }
+
+    /* Capture sleep + server clock from response headers before consuming body */
+    {
+        uint32_t v;
+        if (read_resp_header_uint(params.pHTTP, "X-Sleep-Seconds", &v) && v > 0)
+            sleep_sec = (int)v;
+        if (read_resp_header_uint(params.pHTTP, "X-Server-Time-Epoch", &v) && v > 1600000000U)
+            hokku_clock_set(v);              /* sanity: after 2020-09-13 */
     }
 
     /* Stream response body to EPD (CMD 0x10 was not sent yet — do it now) */
@@ -185,37 +376,67 @@ static int do_refresh(void)
     HTTPC_close(&params);
 
     if (bytes_streamed < EPD_IMAGE_BYTES) {
-        printf("hokku: short image: %u / %u bytes\n",
+        hlog("hokku: short image: %u / %u bytes\n",
                (unsigned)bytes_streamed, (unsigned)EPD_IMAGE_BYTES);
         return -1;
     }
 
-    printf("hokku: image received, refreshing display...\n");
+    hlog("hokku: image received, refreshing display...\n");
     epd_refresh();  /* ~30 s */
-    printf("hokku: refresh done, sleeping %d s\n", sleep_sec);
+    hlog("hokku: refresh done, sleeping %d s\n", sleep_sec);
 
     return sleep_sec;
+}
+
+/*
+ * Deep sleep until the next refresh, then WAKE = full restart (hibernation). The
+ * device re-runs the whole boot flow (rollback-commit, config, WiFi, fetch) on
+ * wake, so no state needs retaining across sleep beyond the flash config. Does not
+ * return; if pm_enter_mode somehow fails, fall back to a clean reboot.
+ */
+static void hokku_hibernate(uint32_t sleep_s)
+{
+    if (sleep_s < 5)
+        sleep_s = 5;
+    if (sleep_s > 60000)                       /* HAL wake timer tops out ~18.6 h */
+        sleep_s = 60000;
+    hlog("hokku: battery mode — hibernating %u s (wake -> full reboot)\n", (unsigned)sleep_s);
+    OS_MSleep(60);                             /* let the log line flush over UART */
+    HAL_Wakeup_SetTimer_Sec(sleep_s);
+    pm_enter_mode(PM_MODE_HIBERNATION);
+    HAL_WDG_Reboot();                          /* unreached on success */
+}
+
+/* True when the device should deep-sleep (vs stay awake) between refreshes. */
+static int hokku_should_sleep(void)
+{
+    switch (hokku_config_get()->power_mode) {
+    case HOKKU_PWR_SLEEP: return 1;
+    case HOKKU_PWR_AWAKE: return 0;
+    default:              return !led_usb_present();   /* AUTO: sleep only on battery */
+    }
 }
 
 static void refresh_thread_fn(void *arg)
 {
     (void)arg;
-    printf("hokku: refresh thread started\n");
+    hlog("hokku: refresh thread started (wake=%s)\n", g_wake);
 
     if (!g_epd_ready) {
-        printf("hokku: EPD init\n");
+        hlog("hokku: EPD init\n");
         epd_init();
         g_epd_ready = 1;
     }
 
     while (1) {
         int sleep_sec = do_refresh();
-        if (sleep_sec < 0) {
-            /* Error — short backoff before retry */
-            OS_MSleep(30 * 1000);
-        } else {
-            OS_MSleep((uint32_t)sleep_sec * 1000);
-        }
+        if (sleep_sec < 0)
+            sleep_sec = 30;                    /* error backoff */
+
+        if (hokku_should_sleep())
+            hokku_hibernate((uint32_t)sleep_sec);   /* battery: deep sleep, restarts on wake */
+        else
+            OS_MSleep((uint32_t)sleep_sec * 1000);  /* USB/awake: keep looping */
     }
 }
 
@@ -223,40 +444,43 @@ static void net_cb(uint32_t event, uint32_t data, void *arg)
 {
     uint16_t type = EVENT_SUBTYPE(event);
 
-    printf("hokku: net event 0x%04x data=0x%08x\n", (unsigned)type, (unsigned)data);
+    hlog("hokku: net event 0x%04x data=0x%08x\n", (unsigned)type, (unsigned)data);
 
     switch (type) {
     case NET_CTRL_MSG_WLAN_CONNECTED: {
-        /* DHCP is unreliable on this network — set static IP immediately.
-         * netif_set_addr() triggers netif_status_callback() which fires
-         * NET_CTRL_MSG_NETWORK_UP, so the refresh thread starts cleanly. */
-        ip_addr_t ip, gw, nm;
-        IP4_ADDR(&ip, 192, 168, 6, 199);
-        IP4_ADDR(&gw, 192, 168, 6, 254);
-        IP4_ADDR(&nm, 255, 255, 255, 0);
-        struct netif *nif = netif_list;
-        if (nif) {
-            dhcp_stop(nif);
-            /* Set addresses while the interface is down to avoid a spurious
-             * NETWORK_DOWN callback with IP=0 from netif_set_up().
-             * Setting ipaddr while down does not call netif_status_callback.
-             * Then netif_set_up() calls the callback once with a valid IP,
-             * triggering NET_CTRL_MSG_NETWORK_UP cleanly. */
-            nif->ip_addr = ip;
-            nif->netmask = nm;
-            nif->gw      = gw;
-            netif_set_up(nif);
-            printf("hokku: static IP set  %s  gw=%s\n",
-                   STATIC_IP_ADDR, STATIC_GW_ADDR);
-        } else {
-            printf("hokku: WLAN connected but no netif yet\n");
+        hokku_config_t *cfg = hokku_config_get();
+        struct netif   *nif = netif_list;
+        ip_addr_t       ip, gw, nm;
+
+        if (!nif) {
+            hlog("hokku: WLAN connected but no netif yet\n");
+            break;
         }
+        if (cfg->use_dhcp) {
+            /* Leave the SDK's DHCP client running; it fires NETWORK_UP on lease. */
+            hlog("hokku: WLAN connected, using DHCP\n");
+            break;
+        }
+        /* Static IP from config. Set addresses while the interface is down to
+         * avoid a spurious NETWORK_DOWN (IP=0) from netif_set_up(); then bring it
+         * up so netif_status_callback() fires NETWORK_UP once, cleanly. */
+        if (!ipaddr_aton(cfg->ip, &ip) || !ipaddr_aton(cfg->gw, &gw) ||
+            !ipaddr_aton(cfg->nm, &nm)) {
+            hlog("hokku: bad static IP in config — leaving DHCP to run\n");
+            break;
+        }
+        dhcp_stop(nif);
+        nif->ip_addr = ip;
+        nif->netmask = nm;
+        nif->gw      = gw;
+        netif_set_up(nif);
+        hlog("hokku: static IP set  %s  gw=%s\n", cfg->ip, cfg->gw);
         break;
     }
     case NET_CTRL_MSG_NETWORK_UP: {
         struct netif *nif2 = netif_list;
         if (nif2)
-            printf("hokku: network up  ip=%s\n", ipaddr_ntoa(&nif2->ip_addr));
+            hlog("hokku: network up  ip=%s\n", ipaddr_ntoa(&nif2->ip_addr));
         if (!OS_ThreadIsValid(&g_refresh_thread)) {
             OS_ThreadCreate(&g_refresh_thread,
                             "hokku_refresh",
@@ -268,7 +492,7 @@ static void net_cb(uint32_t event, uint32_t data, void *arg)
         break;
     }
     case NET_CTRL_MSG_NETWORK_DOWN:
-        printf("hokku: network down\n");
+        hlog("hokku: network down\n");
         break;
     default:
         break;
@@ -382,13 +606,13 @@ void hokku_rollback_commit(void)
     if (image_set_cfg(&cfg) != 0) {
         /* Leave the watchdog running: if we cannot commit, better to roll back
          * to the known-good slot than to adopt an unconfirmed image. */
-        printf("hokku: rollback COMMIT FAILED (set_cfg) — will roll back to seq %d\n",
+        hlog("hokku: rollback COMMIT FAILED (set_cfg) — will roll back to seq %d\n",
                (g_boot_seq + 1) % IMAGE_SEQ_NUM);
         return;
     }
     HAL_WDG_Stop();
     g_rollback_armed = 0;
-    printf("hokku: boot confirmed healthy; running seq %d, rollback disarmed\n",
+    hlog("hokku: boot confirmed healthy; running seq %d, rollback disarmed\n",
            g_boot_seq);
 }
 
@@ -478,7 +702,7 @@ static int hokku_wifi_connect(const uint8_t *ssid, uint8_t ssid_len, const uint8
 {
     if (wlan_sta_config((uint8_t *)ssid, ssid_len, (uint8_t *)psk,
                         WLAN_STA_CONF_FLAG_WPA3) != 0) {
-        printf("hokku: wlan_sta_config failed\n");
+        hlog("hokku: wlan_sta_config failed\n");
         return -1;
     }
     return wlan_sta_enable();
@@ -492,11 +716,11 @@ int hokku_wifi_provision(const char *ssid, const char *psk)
     size_t plen = strlen(psk);
 
     if (si == NULL) {
-        printf("hokku: sysinfo unavailable — cannot persist WiFi\n");
+        hlog("hokku: sysinfo unavailable — cannot persist WiFi\n");
         return -1;
     }
     if (slen == 0 || slen > SYSINFO_SSID_LEN_MAX || plen >= SYSINFO_PSK_LEN_MAX) {
-        printf("hokku: bad ssid (%u) / psk (%u) length\n",
+        hlog("hokku: bad ssid (%u) / psk (%u) length\n",
                (unsigned)slen, (unsigned)plen);
         return -1;
     }
@@ -509,9 +733,9 @@ int hokku_wifi_provision(const char *ssid, const char *psk)
     si->wlan_mode = WLAN_MODE_STA;
 
     if (sysinfo_save() != 0)
-        printf("hokku: WARNING sysinfo_save failed — creds NOT persisted\n");
+        hlog("hokku: WARNING sysinfo_save failed — creds NOT persisted\n");
     else
-        printf("hokku: WiFi creds saved to sysinfo (ssid '%s')\n", ssid);
+        hlog("hokku: WiFi creds saved to sysinfo (ssid '%s')\n", ssid);
 
     return hokku_wifi_connect(si->wlan_sta_param.ssid, si->wlan_sta_param.ssid_len,
                               si->wlan_sta_param.psk);
@@ -523,10 +747,10 @@ static void hokku_wifi_connect_saved(void)
     struct sysinfo *si = sysinfo_get();
 
     if (si == NULL || si->wlan_sta_param.ssid_len == 0) {
-        printf("hokku: no saved WiFi — provision once with: wifi <ssid> <password>\n");
+        hlog("hokku: no saved WiFi — provision once with: wifi <ssid> <password>\n");
         return;
     }
-    printf("hokku: auto-connecting to saved SSID '%.*s'\n",
+    hlog("hokku: auto-connecting to saved SSID '%.*s'\n",
            si->wlan_sta_param.ssid_len, si->wlan_sta_param.ssid);
     hokku_wifi_connect(si->wlan_sta_param.ssid, si->wlan_sta_param.ssid_len,
                        si->wlan_sta_param.psk);
@@ -550,7 +774,14 @@ int main(void)
      * unit where the cfg was never repointed. */
     hokku_rollback_commit();
 
-    printf("WiFi: 'wifi <ssid> <password>' to provision (persists across reboots)\n\n");
+    /* Load persistent app config (server URL, screen name, static IP, ...) from
+     * flash, or compile-time defaults on first boot. Must precede WiFi/refresh. */
+    hokku_config_load();
+
+    /* Capture why we booted (timer = returned from hibernation) for frame-state. */
+    hokku_capture_wake();
+
+    printf("WiFi: 'wifi <ssid> <password>' to provision, 'cfg' to configure\n\n");
 
     net_ob = sys_callback_observer_create(CTRL_MSG_TYPE_NETWORK,
                                           NET_CTRL_MSG_ALL,
