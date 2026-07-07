@@ -53,6 +53,16 @@ def release_app_header(directory: Path | None = None) -> bytes | None:
         return f.read(256)
 
 
+def bundled_firmware_version(directory: Path | None = None) -> str | None:
+    """Return the bundled firmware's version string (from the ESP app descriptor),
+    or None if no bundled firmware is present. The version lives at bytes [48:80]
+    of the app section header (``esp_app_desc_t.version``)."""
+    hdr = release_app_header(directory)
+    if not hdr:
+        return None
+    return hdr[48:80].split(b"\x00")[0].decode("ascii", errors="replace").strip() or None
+
+
 def _esp_app_image_size(data: bytes) -> int | None:
     """Parse an ESP-IDF app image header to determine the image's exact byte length.
 

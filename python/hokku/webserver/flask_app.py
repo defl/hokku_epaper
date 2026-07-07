@@ -39,6 +39,11 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 from hokku.screens import huessen_epf1301
+from hokku.screens.firmware_registry import (
+    bundled_firmware_versions,
+    firmware_version_for,
+    release_app_image_for,
+)
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState
@@ -194,9 +199,10 @@ def create_app(
         fw_version = parse_firmware_version(request.headers.get("X-Firmware-Version"))
         fw_build = parse_firmware_build(request.headers.get("X-Firmware-Build"))
 
-        # A device that reports the bundled version has finished any update —
-        # drop a stale OTA-migration error if one was recorded.
-        if fw_version and fw_version == bundled_firmware_version:
+        # A device that reports its model's bundled version has finished any
+        # update — drop a stale OTA-migration error if one was recorded.
+        model_fw_version = firmware_version_for(screen_model)
+        if fw_version and fw_version == model_fw_version:
             scheduler.clear_ota_error(screen_name)
         # OTA capability is advertised in the frame-state JSON ("ota":1). Only
         # OTA-capable firmware understands X-Firmware-Update + config migration,
@@ -286,22 +292,32 @@ def create_app(
         # flag is consumed one-shot here so the device gets exactly one signal.
         if (
             ota_capable
-            and bundled_firmware_version
+            and model_fw_version
             and scheduler.is_ota_pending(screen_name)
             and scheduler.take_ota_pending(screen_name)
         ):
-            response.headers["X-Firmware-Update"] = bundled_firmware_version
-            logger.info("Signalling OTA to %s (-> %s)", screen_name, bundled_firmware_version)
+            response.headers["X-Firmware-Update"] = model_fw_version
+            logger.info(
+                "Signalling OTA to %s [%s] (-> %s)", screen_name, screen_model, model_fw_version
+            )
         return response
 
     @app.route("/hokku/firmware.bin", methods=["GET"])
     def serve_firmware_image():
-        """Serve the OTA-flashable app image (sliced from the bundled merged bin).
+        """Serve the OTA firmware image for the requesting screen's model.
 
-        The device streams this straight into its inactive OTA slot."""
-        app_image = huessen_epf1301.release_app_image()
+        The model is taken from the ``?model=`` query param (or the
+        ``X-Screen-Model`` header). The device streams this straight into its
+        inactive OTA slot — the byte format is per-model (huessen: sliced ESP
+        app; bigme_f7: the full AWIH image, verbatim).
+
+        Back-compat: existing huessen devices fetch this with no model param, so
+        an absent model defaults to the huessen reference model."""
+        model_arg = request.args.get("model") or request.headers.get("X-Screen-Model")
+        model = parse_screen_model(model_arg) if model_arg else "huessen_epf1301"
+        app_image = release_app_image_for(model)
         if not app_image:
-            logger.error("OTA firmware.bin requested but no bundled firmware found")
+            logger.error("OTA firmware.bin requested for model %r but no firmware found", model)
             abort(404)
         resp = make_response(app_image)
         resp.headers["Content-Type"] = "application/octet-stream"
@@ -566,8 +582,15 @@ def create_app(
         Body: {"enabled": bool}. The actual OTA is signalled to the device on its
         next poll (only if it is OTA-capable). Available regardless of version so
         the user can also re-flash the same firmware."""
-        if not bundled_firmware_version:
-            return jsonify({"error": "no bundled firmware available on the server"}), 409
+        model = state.scheduler.get_screen_model(name)
+        # Block only when there is nothing to serve for this screen: its own
+        # model has no firmware, and (for a screen that hasn't reported a model
+        # yet) the server has no bundled firmware at all.
+        has_firmware = (
+            firmware_version_for(model) if model else any(bundled_firmware_versions().values())
+        )
+        if not has_firmware:
+            return jsonify({"error": "no bundled firmware available for this screen"}), 409
         body = request.get_json(silent=True) or {}
         enabled = body.get("enabled", True)
         if not isinstance(enabled, bool):
@@ -717,6 +740,9 @@ def create_app(
                 "cpu_cores": os.cpu_count(),
                 "memory_available_gb": round(psutil.virtual_memory().available / 1e9, 1),
                 "bundled_firmware_version": bundled_firmware_version,
+                # Per-model bundled firmware versions, keyed by model id (the
+                # legacy scalar above mirrors the huessen reference model).
+                "bundled_firmware_versions": bundled_firmware_versions(),
             }
         )
 

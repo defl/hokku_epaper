@@ -303,6 +303,12 @@ class ServeScheduler:
         with self._lock:
             return {t.screen_model for t in self._screens.values() if t.screen_model is not None}
 
+    def get_screen_model(self, name: str) -> str | None:
+        """The hardware model a screen last self-identified as, or None if unseen."""
+        with self._lock:
+            t = self._screens.get(name)
+            return t.screen_model if t else None
+
     # ── OTA: per-screen update request + migration errors ─────────
 
     def set_ota_pending(self, name: str, enabled: bool) -> None:

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from hokku.screens import huessen_epf1301
+from hokku.screens import bigme_f7, huessen_epf1301
 from hokku.screens.huessen_epf1301.constants import APP_OFFSET
 from hokku.screens.huessen_epf1301.nvs import migrate_config
 from hokku.webserver.app_config import AppConfig
@@ -192,6 +192,48 @@ def test_firmware_bin_404_when_absent(app_config, tmp_path, monkeypatch):
     assert client.get("/hokku/firmware.bin").status_code == 404
 
 
+# ── model-aware firmware serving (bigme_f7) ───────────────────────────────────
+
+
+def test_firmware_bin_model_aware_dispatch(app_config, tmp_path, monkeypatch):
+    monkeypatch.setattr(huessen_epf1301, "release_app_image", lambda *a, **k: b"HUESSEN")
+    monkeypatch.setattr(bigme_f7, "release_app_image", lambda *a, **k: b"BIGME_IMG")
+    client = _client(_bare_state(app_config), tmp_path)
+    # No model -> huessen (back-compat); explicit model -> that model's bytes.
+    assert client.get("/hokku/firmware.bin").data == b"HUESSEN"
+    assert client.get("/hokku/firmware.bin?model=bigme_f7").data == b"BIGME_IMG"
+    assert (
+        client.get("/hokku/firmware.bin", headers={"X-Screen-Model": "bigme_f7"}).data
+        == b"BIGME_IMG"
+    )
+
+
+def test_firmware_bin_unknown_model_404(app_config, tmp_path):
+    client = _client(_bare_state(app_config), tmp_path)
+    assert client.get("/hokku/firmware.bin?model=nonesuch").status_code == 404
+
+
+def test_bigme_firmware_module_reads_repo_tree():
+    # The repo ships the built image + FIRMWARE_VERSION in main.c; the module
+    # serves the image verbatim (no slicing) and reads the version from source.
+    img = bigme_f7.release_app_image()
+    assert img is not None and len(img) > 900_000  # ~1 MB AWIH app-chain
+    assert img == bigme_f7.firmware_image_file().read_bytes()
+    ver = bigme_f7.bundled_firmware_version()
+    assert ver and all(part.isdigit() for part in ver.split("."))
+
+
+def test_status_reports_per_model_firmware_versions(app_config, tmp_path, monkeypatch):
+    monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "1.2.9")
+    monkeypatch.setattr(bigme_f7, "bundled_firmware_version", lambda *a, **k: "1.0.0")
+    client = _client(_bare_state(app_config), tmp_path)
+    body = client.get("/hokku/api/status").get_json()
+    assert body["bundled_firmware_versions"] == {
+        "huessen_epf1301": "1.2.9",
+        "bigme_f7": "1.0.0",
+    }
+
+
 # ── /hokku/firmware-config ────────────────────────────────────────────────────
 
 
@@ -245,7 +287,9 @@ def test_firmware_config_returns_migrated_nvs_image(app_config, tmp_path):
 
 
 def test_update_toggle_requires_bundled_firmware(app_config, tmp_path, monkeypatch):
-    monkeypatch.setattr(huessen_epf1301, "release_app_header", lambda *a, **k: None)
+    # No firmware for ANY model (frame-1 hasn't reported a model yet) -> blocked.
+    monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: None)
+    monkeypatch.setattr(bigme_f7, "bundled_firmware_version", lambda *a, **k: None)
     client = _client(_bare_state(app_config), tmp_path)
     r = client.post("/hokku/api/screens/frame-1/update", json={"enabled": True})
     assert r.status_code == 409
@@ -254,9 +298,7 @@ def test_update_toggle_requires_bundled_firmware(app_config, tmp_path, monkeypat
 def test_serve_binary_signals_ota_once_when_capable_and_pending(
     app_config, make_test_image, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(
-        huessen_epf1301, "release_app_header", lambda *a, **k: _make_app_header(b"9.9.9")
-    )
+    monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "9.9.9")
     state = _state_with_image(app_config, make_test_image)
     client = _client(state, tmp_path)
 

@@ -22,6 +22,7 @@ from .device import (
     scan_devices,
 )
 from .firmware import (
+    bundled_firmware_version,
     merged_firmware_file,
     release_app_header,
     release_app_image,
@@ -50,6 +51,7 @@ __all__ = [
     "EsptoolError",
     "NvsToolUnavailable",
     "build_nvs_binary",
+    "bundled_firmware_version",
     "constants",
     "flash_device",
     "flash_firmware",
