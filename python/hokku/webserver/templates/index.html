@@ -2366,7 +2366,12 @@ function formatBattery(s) {
   return `<span style="color:${colour};font-weight:600" title="${volts} V (${s.battery_mv} mV)">${pct}%</span>`;
 }
 
-function renderScreens(screens, bundledFirmwareVersion) {
+function renderScreens(screens, bundledFirmwareVersions) {
+  // Bundled version for a screen's OWN model (or null if that model has none).
+  const bundledFor = n => {
+    const m = screens[n] && screens[n].screen_model;
+    return (m && bundledFirmwareVersions && bundledFirmwareVersions[m]) || null;
+  };
   const container = document.getElementById('screens-container');
   const names = Object.keys(screens || {});
   if (names.length === 0) {
@@ -2384,9 +2389,11 @@ function renderScreens(screens, bundledFirmwareVersion) {
   // Collect screens with outdated firmware.
   // frame_state.fw has carried the version string since early firmware; use it as source of truth.
   const screenFwVersion = n => (screens[n].state && screens[n].state.fw) || screens[n].firmware_version;
-  const outdated = bundledFirmwareVersion
-    ? names.filter(n => { const v = screenFwVersion(n); return v && v !== bundledFirmwareVersion; })
-    : [];
+  // Outdated = running version differs from THIS screen's model's bundled version.
+  const outdated = names.filter(n => {
+    const v = screenFwVersion(n), b = bundledFor(n);
+    return v && b && v !== b;
+  });
 
   let html = '';
   if (overdue.length > 0) {
@@ -2409,10 +2416,10 @@ function renderScreens(screens, bundledFirmwareVersion) {
   if (outdated.length > 0) {
     html += '<div class="screen-warning">';
     html += '<strong>⚠ Screen' + (outdated.length > 1 ? 's have' : ' has') + ' outdated firmware.</strong> ';
-    html += `New version available: <strong>${bundledFirmwareVersion}</strong>. Open a screen's <em>Config</em> to update over-the-air, or use "Flash a screen" via USB.`;
+    html += `Open a screen's <em>Config</em> to update over-the-air, or use "Flash a screen" via USB.`;
     html += '<ul>';
     outdated.forEach(n => {
-      html += `<li><strong>${n}</strong> — firmware ${screenFwVersion(n)}</li>`;
+      html += `<li><strong>${n}</strong> — firmware ${screenFwVersion(n)} → <strong>${bundledFor(n)}</strong></li>`;
     });
     html += '</ul></div>';
   }
@@ -2471,7 +2478,9 @@ function renderScreens(screens, bundledFirmwareVersion) {
 // Keep the most recent /hokku/api/status screens object around so the
 // Details modal can read from it without another round-trip.
 let lastScreens = {};
-let lastBundledFirmwareVersion = null;
+// Per-model bundled firmware versions, keyed by model_id (e.g. {bigme_f7: "1.1.1"}).
+// A screen is "outdated" only vs ITS OWN model's version — never another model's.
+let lastBundledFirmwareVersions = {};
 
 async function removeScreen(name) {
   const ok = await showConfirm({
@@ -2485,7 +2494,7 @@ async function removeScreen(name) {
     if (!r.ok) throw new Error(await r.text());
     // Remove the row immediately without waiting for the next poll.
     delete lastScreens[name];
-    renderScreens(lastScreens, lastBundledFirmwareVersion);
+    renderScreens(lastScreens, lastBundledFirmwareVersions);
   } catch (e) {
     alert('Failed to remove screen: ' + e.message);
   }
@@ -2503,7 +2512,7 @@ async function setScreenOrientation(name, value) {
     if (lastScreens[name]) lastScreens[name].orientation = value;
   } catch (e) {
     alert('Failed to set orientation: ' + e.message);
-    renderScreens(lastScreens, lastBundledFirmwareVersion);
+    renderScreens(lastScreens, lastBundledFirmwareVersions);
   }
 }
 
@@ -2518,7 +2527,7 @@ async function setScreenFilterByOrientation(name, value) {
     if (lastScreens[name]) lastScreens[name].filter_by_orientation = value;
   } catch (e) {
     alert('Failed to set orientation filter: ' + e.message);
-    renderScreens(lastScreens, lastBundledFirmwareVersion);
+    renderScreens(lastScreens, lastBundledFirmwareVersions);
   }
 }
 
@@ -2646,16 +2655,17 @@ function showScreenConfig(name) {
       onchange="setScreenUrlOverride('${safeName}', this.value)">`;
   body += `</div>`;
 
-  if (lastBundledFirmwareVersion) {
+  const bundledForThis = (s.screen_model && lastBundledFirmwareVersions[s.screen_model]) || null;
+  if (bundledForThis) {
     const curFw = (s.state && s.state.fw) || s.firmware_version || 'unknown';
-    const upToDate = curFw === lastBundledFirmwareVersion;
+    const upToDate = curFw === bundledForThis;
     body += `<div class="fw-section">`;
     body += `<h4>Firmware update</h4>`;
     if (s.ota_error) {
       const at = s.ota_error_at ? ` (${s.ota_error_at})` : '';
       body += `<div style="background:#fdecec;border:1px solid #a33;color:#7a1f1f;border-radius:4px;padding:8px;margin-bottom:8px;font-size:0.85em">⛔ Last update attempt failed: ${escapeHtml(s.ota_error)}${at}. This should never happen — please report it.</div>`;
     }
-    body += `<div style="font-size:0.85em;color:var(--stone);margin-bottom:8px">Installed: <strong>${escapeHtml(curFw)}</strong> · Available: <strong>${escapeHtml(lastBundledFirmwareVersion)}</strong>${upToDate ? ' (up to date)' : ''}</div>`;
+    body += `<div style="font-size:0.85em;color:var(--stone);margin-bottom:8px">Installed: <strong>${escapeHtml(curFw)}</strong> · Available: <strong>${escapeHtml(bundledForThis)}</strong>${upToDate ? ' (up to date)' : ''}</div>`;
     if (s.ota_capable) {
       const checked = s.ota_pending ? 'checked' : '';
       body += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer">
@@ -2717,10 +2727,11 @@ async function showScreenDetails(name) {
     </td></tr>`;
     rows += `<tr><td></td><td style="word-break:break-all;font-size:0.85em;color:var(--stone);padding-top:2px;">${escapeHtml(s.last_served)}</td></tr>`;
   }
+  const bundledForThis = (s.screen_model && lastBundledFirmwareVersions[s.screen_model]) || null;
   keys.forEach(k => {
     let val = formatStateValue(k, s.state[k], s.state);
-    if (k === 'fw' && lastBundledFirmwareVersion && s.state[k] !== lastBundledFirmwareVersion) {
-      val += ` <span style="color:#a33;font-weight:600">→ new version available: ${lastBundledFirmwareVersion}</span>`;
+    if (k === 'fw' && bundledForThis && s.state[k] !== bundledForThis) {
+      val += ` <span style="color:#a33;font-weight:600">→ new version available: ${bundledForThis}</span>`;
     }
     rows += `<tr><td>${k}</td><td>${val}</td></tr>`;
   });
@@ -3195,8 +3206,8 @@ async function refreshStatus() {
 
     // Screens
     lastScreens = data.screens || {};
-    lastBundledFirmwareVersion = data.bundled_firmware_version || null;
-    renderScreens(data.screens, lastBundledFirmwareVersion);
+    lastBundledFirmwareVersions = data.bundled_firmware_versions || {};
+    renderScreens(data.screens, lastBundledFirmwareVersions);
 
     // Image worker system info (cores + RAM) + resolved count
     const sysInfoEl = document.getElementById('image-worker-system-info');
