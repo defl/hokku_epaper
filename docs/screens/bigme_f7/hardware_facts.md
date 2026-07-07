@@ -162,6 +162,24 @@ Source: label visible in FCC internal photo 9.
 - **Manufacturer**: Shenzhen Utility Energy Co., Ltd.
 - **Date on unit**: 2025-05-26
 
+### Voltage sensing (confirmed 2026-07-06, reverse-engineered from OEM firmware)
+
+The pack voltage is read on **ADC channel 4 = pin PA14** through an external
+resistor divider — **NOT** `ADC_CHANNEL_VBAT` (channel 8), which measures the SoC's
+regulated internal rail (a steady ~2.58 V that is meaningless as a battery gauge).
+
+The OEM's `adc_voltage_get()` (disassembled at VMA `0x20122c` in the boot
+partition) reads channel 4 and scales the raw 12-bit value (2500 mV ref, ratio-1
+channel behind a ~4.37:1 divider) as:
+
+```
+mv = raw * 295000 / 1105920 * 10      (≈ raw × 2.6674),  clamped to 4200 mV
+```
+
+Our firmware's `hokku_battery_mv()` uses exactly this. `HAL_ADC_Conv_Polling(
+ADC_CHANNEL_4, …)` auto-configures the PA14→CH4 pinmux via the `xr872_evb_ai`
+board config. Verified on-device: reads ~4170–4200 mV / 100 % on USB.
+
 ## Display
 
 Source: product description + E Ink Spectra 6 spec + disassembly of boot partition (2026-06-06).

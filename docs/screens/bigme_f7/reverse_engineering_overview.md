@@ -2,21 +2,26 @@
 
 See [`hardware_facts.md`](hardware_facts.md) for the hardware reference.
 
+> **This is the early RE overview.** The F7 is now fully brought up on custom Hokku
+> firmware. For the finished work see:
+> [`custom_firmware.md`](custom_firmware.md) (feature parity + boot/rollback),
+> [`ota.md`](ota.md) (A/B OTA design, safety, adversarial findings),
+> [`firmware_build.md`](firmware_build.md) (build),
+> [`display_driver.md`](display_driver.md) (EK79655 / Spectra-6),
+> [`restore_to_stock.md`](restore_to_stock.md) (surgical OEM restore).
+
 ## Current Status
 
 - [x] SoC identified: XRADIOTECH XR872AT (from FCC internal photo)
-- [x] Display identified: E Ink Spectra 6 ACeP, 7.3", 800×480, 7-color
-- [x] Battery identified: U255671P 1300mAh
+- [x] Display identified: E Ink Spectra 6 ACeP, 7.3", 800×480 (EK79655)
+- [x] Battery identified: U255671P 1300mAh; voltage sense = ADC ch4/PA14
 - [x] PCB photographed: FCC filing internal photos (L-shaped board)
-- [x] Toolchain researched: PhoenixMC (UART), CH341A (direct SPI flash), OpenOCD (SWD)
-- [ ] Device opened physically
-- [ ] SPI flash chip identified (part number, location on PCB)
-- [ ] UART test pads located
-- [ ] Firmware dumped
-- [ ] Boot log captured
-- [ ] Display controller identified
-- [ ] Display SPI pinout mapped
-- [ ] Image format / pixel encoding confirmed
+- [x] Toolchain: PhoenixMC (UART), pure-Python `xr872_flasher` (BROM), CH341A (SPI)
+- [x] Firmware dumped (PhoenixMC + pure-Python BROM dump, 4 MB)
+- [x] Boot log captured; display controller identified + driven
+- [x] Image format / pixel encoding confirmed (Spectra-6 nibble map)
+- [x] **Custom firmware: reporting, config, deep-sleep, battery, A/B OTA** — all
+      verified on hardware (see `custom_firmware.md`, `ota.md`)
 
 ## Firmware Extraction Plan
 
