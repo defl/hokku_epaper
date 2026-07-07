@@ -147,6 +147,12 @@ def _read_git_describe() -> tuple[str, str | None]:
 
 _REPO_URL = "https://github.com/defl/hokku_epaper"
 
+# How many times to re-signal a pending firmware UPGRADE before giving up and
+# recording an error (guards against a genuinely-bad image looping forever). Each
+# attempt is one device poll; a transient failure (e.g. a dropped download) just
+# retries on the next poll and self-heals well within this budget.
+OTA_MAX_ATTEMPTS = 5
+
 
 def _busy_retry_seconds(config: AppConfig) -> int:
     return min(300, calculate_sleep_seconds(config))
@@ -200,10 +206,14 @@ def create_app(
         fw_build = parse_firmware_build(request.headers.get("X-Firmware-Build"))
 
         # A device that reports its model's bundled version has finished any
-        # update — drop a stale OTA-migration error if one was recorded.
+        # update — drop a stale OTA-migration error and, if an UPGRADE was
+        # pending, clear it (the retry succeeded). Re-flash requests are one-shot
+        # and clear themselves when signalled, so leave those alone.
         model_fw_version = firmware_version_for(screen_model)
         if fw_version and fw_version == model_fw_version:
             scheduler.clear_ota_error(screen_name)
+            if scheduler.is_ota_pending(screen_name) and not scheduler.is_ota_reflash(screen_name):
+                scheduler.clear_ota_pending(screen_name)
         # OTA capability is advertised in the frame-state JSON ("ota":1). Only
         # OTA-capable firmware understands X-Firmware-Update + config migration,
         # so we never signal an update to a pre-OTA screen (would be a no-op).
@@ -286,20 +296,40 @@ def create_app(
         response.headers["X-Server-Time-Epoch"] = str(int(_time.time()))
         response.headers["Content-Disposition"] = "attachment; filename=hokku.bin"
 
-        # Manual OTA: if the user toggled "update on next refresh" for this screen
-        # and it is OTA-capable and we actually have firmware to ship, tell it to
-        # update (it will ignore this image body and fetch firmware/config). The
-        # flag is consumed one-shot here so the device gets exactly one signal.
-        if (
-            ota_capable
-            and model_fw_version
-            and scheduler.is_ota_pending(screen_name)
-            and scheduler.take_ota_pending(screen_name)
-        ):
-            response.headers["X-Firmware-Update"] = model_fw_version
-            logger.info(
-                "Signalling OTA to %s [%s] (-> %s)", screen_name, screen_model, model_fw_version
-            )
+        # Manual OTA: if the user toggled "update on next refresh" and the screen
+        # is OTA-capable with firmware to ship, tell it to update (it ignores this
+        # image body and fetches the firmware). A same-version RE-FLASH is one-shot
+        # (success can't be confirmed by version). An UPGRADE is re-signalled every
+        # poll until the device reports the target version, so a dropped download
+        # self-heals — capped at OTA_MAX_ATTEMPTS to bound a genuinely-bad image.
+        if ota_capable and model_fw_version and scheduler.is_ota_pending(screen_name):
+            if scheduler.is_ota_reflash(screen_name):
+                if scheduler.take_ota_pending(screen_name):
+                    response.headers["X-Firmware-Update"] = model_fw_version
+                    logger.info(
+                        "Signalling OTA re-flash to %s [%s] (-> %s)",
+                        screen_name,
+                        screen_model,
+                        model_fw_version,
+                    )
+            elif fw_version != model_fw_version:
+                attempts = scheduler.note_ota_signal(screen_name)
+                if attempts > OTA_MAX_ATTEMPTS:
+                    scheduler.clear_ota_pending(screen_name)
+                    scheduler.record_ota_error(
+                        screen_name,
+                        f"OTA to {model_fw_version} did not take after {OTA_MAX_ATTEMPTS} attempts",
+                    )
+                else:
+                    response.headers["X-Firmware-Update"] = model_fw_version
+                    logger.info(
+                        "Signalling OTA to %s [%s] (-> %s) attempt %d/%d",
+                        screen_name,
+                        screen_model,
+                        model_fw_version,
+                        attempts,
+                        OTA_MAX_ATTEMPTS,
+                    )
         return response
 
     @app.route("/hokku/firmware.bin", methods=["GET"])
@@ -577,25 +607,29 @@ def create_app(
 
     @app.route("/hokku/api/screens/<string:name>/update", methods=["POST"])
     def api_screen_update(name: str):
-        """Toggle the one-shot 'update firmware on next refresh' flag for a screen.
+        """Toggle the 'update firmware on next refresh' flag for a screen.
 
-        Body: {"enabled": bool}. The actual OTA is signalled to the device on its
-        next poll (only if it is OTA-capable). Available regardless of version so
-        the user can also re-flash the same firmware."""
+        Body: {"enabled": bool}. Signalled to the device on its next poll (only if
+        OTA-capable). An upgrade retries until the device reports the new version;
+        a same-version re-flash is one-shot. Available regardless of version so the
+        user can also re-flash the current firmware."""
         model = state.scheduler.get_screen_model(name)
         # Block only when there is nothing to serve for this screen: its own
         # model has no firmware, and (for a screen that hasn't reported a model
         # yet) the server has no bundled firmware at all.
-        has_firmware = (
-            firmware_version_for(model) if model else any(bundled_firmware_versions().values())
-        )
+        model_version = firmware_version_for(model)
+        has_firmware = model_version if model else any(bundled_firmware_versions().values())
         if not has_firmware:
             return jsonify({"error": "no bundled firmware available for this screen"}), 409
         body = request.get_json(silent=True) or {}
         enabled = body.get("enabled", True)
         if not isinstance(enabled, bool):
             return jsonify({"error": "enabled must be a boolean"}), 400
-        state.scheduler.set_ota_pending(name, enabled)
+        # Re-flash vs upgrade: if the device already runs the target version, the
+        # update can't be confirmed by a version change, so it's a one-shot.
+        current = state.scheduler.get_screen_firmware_version(name)
+        reflash = bool(model_version and current and current == model_version)
+        state.scheduler.set_ota_pending(name, enabled, reflash=reflash)
         return jsonify({"ok": True, "ota_pending": enabled})
 
     @app.route("/hokku/api/scrub", methods=["POST"])

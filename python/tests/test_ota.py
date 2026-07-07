@@ -24,7 +24,7 @@ from hokku.screens.huessen_epf1301.constants import APP_OFFSET
 from hokku.screens.huessen_epf1301.nvs import migrate_config
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
-from hokku.webserver.flask_app import create_app
+from hokku.webserver.flask_app import OTA_MAX_ATTEMPTS, create_app
 from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
 from hokku.webserver.serve_scheduler import ServeScheduler
@@ -295,29 +295,84 @@ def test_update_toggle_requires_bundled_firmware(app_config, tmp_path, monkeypat
     assert r.status_code == 409
 
 
-def test_serve_binary_signals_ota_once_when_capable_and_pending(
+def test_serve_binary_retries_upgrade_until_confirmed(
     app_config, make_test_image, tmp_path, monkeypatch
 ):
     monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "9.9.9")
     state = _state_with_image(app_config, make_test_image)
     client = _client(state, tmp_path)
-
     assert (
         client.post("/hokku/api/screens/frame-1/update", json={"enabled": True}).status_code == 200
     )
 
+    old = {
+        "X-Screen-Name": "frame-1",
+        "X-Screen-Model": "huessen_epf1301",
+        "X-Firmware-Version": "1.0.0",
+        "X-Frame-State": json.dumps({"fw": "1.0.0", "ota": 1}),
+    }
+    # An upgrade re-signals every poll while the device is still on the old version
+    # (so a dropped download self-heals) — not one-shot.
+    assert client.get("/hokku/screen/", headers=old).headers.get("X-Firmware-Update") == "9.9.9"
+    assert client.get("/hokku/screen/", headers=old).headers.get("X-Firmware-Update") == "9.9.9"
+    assert state.scheduler.is_ota_pending("frame-1") is True
+
+    # Once the device reports the target version the update is confirmed: no more
+    # signal, and the pending flag clears.
+    new = {
+        **old,
+        "X-Firmware-Version": "9.9.9",
+        "X-Frame-State": json.dumps({"fw": "9.9.9", "ota": 1}),
+    }
+    r = client.get("/hokku/screen/", headers=new)
+    assert "X-Firmware-Update" not in r.headers
+    assert state.scheduler.is_ota_pending("frame-1") is False
+
+
+def test_serve_binary_upgrade_gives_up_after_cap(
+    app_config, make_test_image, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "9.9.9")
+    state = _state_with_image(app_config, make_test_image)
+    client = _client(state, tmp_path)
+    client.post("/hokku/api/screens/frame-1/update", json={"enabled": True})
     headers = {
         "X-Screen-Name": "frame-1",
         "X-Screen-Model": "huessen_epf1301",
+        "X-Firmware-Version": "1.0.0",
         "X-Frame-State": json.dumps({"fw": "1.0.0", "ota": 1}),
     }
-    r1 = client.get("/hokku/screen/", headers=headers)
-    assert r1.status_code == 200
-    assert r1.headers.get("X-Firmware-Update") == "9.9.9"
+    # Device never reaches the target: signals up to the cap, then gives up + errors.
+    for _ in range(OTA_MAX_ATTEMPTS):
+        assert client.get("/hokku/screen/", headers=headers).headers.get("X-Firmware-Update") == (
+            "9.9.9"
+        )
+    r = client.get("/hokku/screen/", headers=headers)
+    assert "X-Firmware-Update" not in r.headers
+    assert state.scheduler.is_ota_pending("frame-1") is False
+    assert state.scheduler.screens()["frame-1"].ota_error is not None
 
-    # One-shot: the next poll must not re-signal.
-    r2 = client.get("/hokku/screen/", headers=headers)
-    assert "X-Firmware-Update" not in r2.headers
+
+def test_serve_binary_reflash_same_version_is_one_shot(
+    app_config, make_test_image, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "9.9.9")
+    state = _state_with_image(app_config, make_test_image)
+    client = _client(state, tmp_path)
+    headers = {
+        "X-Screen-Name": "frame-1",
+        "X-Screen-Model": "huessen_epf1301",
+        "X-Firmware-Version": "9.9.9",
+        "X-Frame-State": json.dumps({"fw": "9.9.9", "ota": 1}),
+    }
+    # Device polls first so the server knows it is already on the target version;
+    # toggling then is a re-flash (no version change to confirm) -> one-shot.
+    client.get("/hokku/screen/", headers=headers)
+    client.post("/hokku/api/screens/frame-1/update", json={"enabled": True})
+    assert client.get("/hokku/screen/", headers=headers).headers.get("X-Firmware-Update") == "9.9.9"
+    r = client.get("/hokku/screen/", headers=headers)
+    assert "X-Firmware-Update" not in r.headers
+    assert state.scheduler.is_ota_pending("frame-1") is False
 
 
 def test_serve_binary_no_signal_when_not_capable(

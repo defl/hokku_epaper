@@ -110,9 +110,15 @@ class ServeScheduler:
         self._screens: dict[str, ScreenTelemetryEntry] = {}
         self._screen_configs: dict[str, ScreenConfig] = {}
         # Screens whose user has toggled "update firmware on next refresh" ON.
-        # One-shot: consumed (and removed) by take_ota_pending when the device
-        # next polls. Persisted so a pending request survives a server restart.
+        # For a version UPGRADE we keep signalling until the device reports the
+        # target version (bounded auto-retry, so a dropped download self-heals);
+        # for a same-version RE-FLASH we can't confirm by version, so it stays a
+        # one-shot (consumed via take_ota_pending). _ota_reflash marks the latter;
+        # _ota_attempts counts signals for the retry cap. All persisted so a
+        # pending request survives a server restart.
         self._ota_pending: set[str] = set()
+        self._ota_reflash: set[str] = set()
+        self._ota_attempts: dict[str, int] = {}
         self._last_served: tuple[str, float] | None = None
         self._next_for: dict[Orientation, str | None] = dict.fromkeys(Orientation, None)
         self._load()
@@ -311,14 +317,25 @@ class ServeScheduler:
 
     # ── OTA: per-screen update request + migration errors ─────────
 
-    def set_ota_pending(self, name: str, enabled: bool) -> None:
-        """Set/clear the one-shot 'update firmware on next refresh' flag."""
-        logger.info("OTA pending for %r -> %s", name, enabled)
+    def set_ota_pending(self, name: str, enabled: bool, reflash: bool = False) -> None:
+        """Set/clear the 'update firmware on next refresh' flag.
+
+        ``reflash=True`` marks a same-version re-flash (device already on the
+        target version) — signalled one-shot, since success can't be confirmed
+        by a version change. Otherwise it's an upgrade: signalled repeatedly
+        until the device reports the target version, capped by note_ota_signal.
+        """
+        logger.info("OTA pending for %r -> %s (reflash=%s)", name, enabled, reflash)
         with self._lock:
             if enabled:
                 self._ota_pending.add(name)
+                if reflash:
+                    self._ota_reflash.add(name)
+                else:
+                    self._ota_reflash.discard(name)
+                self._ota_attempts[name] = 0
             else:
-                self._ota_pending.discard(name)
+                self._clear_ota_pending_locked(name)
             self._save()
 
     def is_ota_pending(self, name: str) -> bool:
@@ -326,14 +343,53 @@ class ServeScheduler:
         with self._lock:
             return name in self._ota_pending
 
+    def is_ota_reflash(self, name: str) -> bool:
+        """Whether the pending update is a same-version re-flash (one-shot)."""
+        with self._lock:
+            return name in self._ota_reflash
+
+    def note_ota_signal(self, name: str) -> int:
+        """Record that an upgrade was signalled; return the running attempt count."""
+        with self._lock:
+            n = self._ota_attempts.get(name, 0) + 1
+            self._ota_attempts[name] = n
+            self._save()
+            return n
+
+    def clear_ota_pending(self, name: str) -> None:
+        """Clear the pending flag + retry state (on confirmed success or give-up)."""
+        with self._lock:
+            if name in self._ota_pending or name in self._ota_attempts:
+                self._clear_ota_pending_locked(name)
+                self._save()
+
     def take_ota_pending(self, name: str) -> bool:
         """Consume the pending flag: returns True once, then clears it (one-shot)."""
         with self._lock:
             if name in self._ota_pending:
-                self._ota_pending.discard(name)
+                self._clear_ota_pending_locked(name)
                 self._save()
                 return True
             return False
+
+    def _clear_ota_pending_locked(self, name: str) -> None:
+        self._ota_pending.discard(name)
+        self._ota_reflash.discard(name)
+        self._ota_attempts.pop(name, None)
+
+    def get_screen_firmware_version(self, name: str) -> str | None:
+        """The screen's currently-running firmware version. Prefers the value from
+        the X-Firmware-Version header (same source serve_binary compares against),
+        falling back to the frame-state fw field."""
+        with self._lock:
+            t = self._screens.get(name)
+            if t is None:
+                return None
+            if t.firmware_version:
+                return t.firmware_version
+            if t.frame_state and isinstance(t.frame_state.get("fw"), str):
+                return t.frame_state["fw"]
+            return None
 
     def record_ota_error(self, name: str, msg: str) -> None:
         """Record an OTA config-migration failure on the screen's record.
@@ -386,7 +442,7 @@ class ServeScheduler:
             self._screens.pop(name, None)
             self._stats.pop(name, None)
             self._screen_configs.pop(name, None)
-            self._ota_pending.discard(name)
+            self._clear_ota_pending_locked(name)
             if self._last_served and self._last_served[0] == name:
                 self._last_served = None
             self._save()
@@ -488,6 +544,14 @@ class ServeScheduler:
         pending = data.get("ota_pending")
         if isinstance(pending, list):
             self._ota_pending = {n for n in pending if isinstance(n, str)}
+        reflash = data.get("ota_reflash")
+        if isinstance(reflash, list):
+            self._ota_reflash = {n for n in reflash if isinstance(n, str)} & self._ota_pending
+        attempts = data.get("ota_attempts")
+        if isinstance(attempts, dict):
+            self._ota_attempts = {
+                n: v for n, v in attempts.items() if isinstance(n, str) and isinstance(v, int)
+            }
         ls = data.get("last_served")
         if isinstance(ls, dict) and "name" in ls and "served_at" in ls:
             try:
@@ -518,5 +582,7 @@ class ServeScheduler:
             "screens": {n: t.to_dict() for n, t in self._screens.items()},
             "screen_configs": {n: c.to_dict() for n, c in self._screen_configs.items()},
             "ota_pending": sorted(self._ota_pending),
+            "ota_reflash": sorted(self._ota_reflash),
+            "ota_attempts": dict(self._ota_attempts),
         }
         self._atomic_write_json(payload)
