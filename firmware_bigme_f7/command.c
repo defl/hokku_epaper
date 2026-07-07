@@ -10,6 +10,7 @@
 /* Defined in main.c. */
 extern int      hokku_wifi_provision(const char *ssid, const char *psk);
 extern uint32_t hokku_battery_mv(void);
+extern void     hokku_ota_manual(void);
 
 static const struct cmd_data g_net_cmds[] = {
     { "sta", cmd_wlan_sta_exec },
@@ -119,10 +120,25 @@ static enum cmd_status cmd_cfg_exec(char *cmd)
     return CMD_STATUS_INVALID_ARG;
 }
 
+/*
+ * `ota` — trigger an A/B firmware update from the configured server right now.
+ * Downloads /hokku/firmware.bin into the inactive slot, flips the boot cfg, and
+ * reboots into it (rollback watchdog guards the new image). Used to test the OTA
+ * path deterministically without waiting for a server-signalled update.
+ */
+static enum cmd_status cmd_hokku_ota_exec(char *cmd)
+{
+    (void)cmd;
+    cmd_write_respond(CMD_STATUS_OK, "OK");
+    hokku_ota_manual();                  /* reboots on success; returns on failure */
+    return CMD_STATUS_ACKED;
+}
+
 static const struct cmd_data g_main_cmds[] = {
     { "net",     cmd_net_exec },
     { "wifi",    cmd_wifi_exec },
     { "cfg",     cmd_cfg_exec },
+    { "ota",     cmd_hokku_ota_exec },
     { "upgrade", cmd_upgrade_exec },
 };
 

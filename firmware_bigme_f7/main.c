@@ -28,6 +28,7 @@
 #include "lwip/ip_addr.h"
 
 #include "image/image.h"
+#include "ota/ota.h"
 #include "driver/chip/hal_wdg.h"
 #include "driver/chip/hal_adc.h"
 #include "driver/chip/hal_wakeup.h"
@@ -47,7 +48,7 @@
 #define HOKKU_SERVER_URL        "http://192.168.6.111:8080/hokku/screen/"
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.0.0"
+#define FIRMWARE_VERSION        "1.1.4"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -63,6 +64,15 @@
 
 static OS_Thread_t g_refresh_thread;
 static int         g_epd_ready = 0;
+
+/*
+ * Serializes the network+flash critical section so an OTA (flash erase/write via a
+ * second HTTP session) can never run concurrently with a periodic refresh or a
+ * second OTA. The refresh thread holds it around do_refresh(); the console `ota`
+ * command TRY-locks it and refuses if the refresh thread is busy. hokku_do_ota()
+ * itself does NOT lock — its callers already hold the lock (no recursive lock).
+ */
+static OS_Mutex_t  g_ota_lock;
 
 /* --------------------------------------------------------------------------
  * Reporting (Phase 1): activity log ring + software wall-clock + frame-state.
@@ -137,11 +147,12 @@ static void hokku_capture_wake(void)
 }
 
 /*
- * Best-effort battery read via the SoC's internal VBAT ADC channel. Returns mV, or
- * 0 if unavailable/implausible (build_frame_state then omits it, so the server shows
- * no battery rather than a bogus 0%). NOTE: the F7's battery-sense wiring is
- * unconfirmed — this may read the regulated rail, not the pack. Calibrate on device
- * (the /2 divider + plausibility range are a starting point).
+ * Battery read on ADC channel 4 (pin PA14) — the pack-sense line the OEM firmware
+ * uses (NOT ADC_CHANNEL_VBAT, which reads the SoC's regulated internal rail and was
+ * the source of the bogus steady ~2.58 V). Returns mV in the Li-ion range, or 0 if
+ * unavailable/implausible (build_frame_state then omits it, so the server shows no
+ * battery rather than a wrong value). Channel + scaling confirmed by disassembling
+ * the OEM firmware. HAL_ADC_Conv_Polling auto-configures the PA14->CH4 pinmux.
  */
 static int g_adc_ready = 0;
 uint32_t hokku_battery_mv(void)          /* also used by the `cfg show` diagnostics */
@@ -161,10 +172,17 @@ uint32_t hokku_battery_mv(void)          /* also used by the `cfg show` diagnost
             return 0;
         g_adc_ready = 1;
     }
-    if (HAL_ADC_Conv_Polling(ADC_CHANNEL_VBAT, &data, 1000) != HAL_OK)
+    if (HAL_ADC_Conv_Polling(ADC_CHANNEL_4, &data, 1000) != HAL_OK)   /* PA14 pack sense, NOT VBAT */
         return 0;
-    mv = (data * 2500U / 4096U) * 2U;         /* ADC input mV (ref 2500) x VBAT /2 divider */
-    return (mv >= 2000U && mv <= 5000U) ? mv : 0;
+    /* OEM battery scaling (reverse-engineered from the OEM boot partition's
+     * adc_voltage_get @VMA 0x20122c): a ratio-1 external channel (2500 mV ref,
+     * 12-bit) behind a ~4.37:1 divider on PA14, compiled as
+     * (raw*295000/1105920)*10 (= raw * 2.6674). No u32 overflow (4095*295000 <
+     * 2^32). Clamp to the 4.2 V charge limit exactly like the OEM. */
+    mv = (data * 295000U / 1105920U) * 10U;
+    if (mv > 4200U)
+        mv = 4200U;
+    return (mv >= 3000U && mv <= 4200U) ? mv : 0;
 }
 
 /* Build the compact X-Frame-State telemetry JSON (server parses ota/bat_mv/clk_now). */
@@ -187,7 +205,7 @@ static void build_frame_state(char *buf, size_t sz)
 
     snprintf(buf, sz,
         "{\"fw\":\"%s\",\"uptime_s\":%u,\"heap_kb\":%u,\"rssi\":%d,"
-        "\"regime\":\"%s\",\"wake\":\"%s\",\"cfg_ver\":%u,\"clk_now\":%u,\"ota\":0%s}",
+        "\"regime\":\"%s\",\"wake\":\"%s\",\"cfg_ver\":%u,\"clk_now\":%u,\"ota\":1%s}",
         FIRMWARE_VERSION,
         (unsigned)OS_GetTime(),
         (unsigned)((he - hc) / 1024),
@@ -273,6 +291,126 @@ static int read_resp_header_uint(HTTP_SESSION_HANDLE h, const char *name, uint32
     return ok;
 }
 
+/* Read a string response header into out[]. Returns 1 if a non-empty value was found. */
+static int read_resp_header_str(HTTP_SESSION_HANDLE h, const char *name, char *out, size_t outsz)
+{
+    char   v[64];
+    UINT32 len = sizeof(v);
+    int    ok = 0;
+
+    out[0] = '\0';
+    HTTPClientFindFirstHeader(h, (char *)name, v, &len);
+    len = sizeof(v);
+    if (HTTPClientGetNextHeader(h, v, &len) == HTTP_CLIENT_SUCCESS) {
+        char *p = strchr(v, ':');
+        p = p ? p + 1 : v;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        strncpy(out, p, outsz - 1);
+        out[outsz - 1] = '\0';
+        for (int i = (int)strlen(out) - 1; i >= 0 &&
+             (out[i] == '\r' || out[i] == '\n' || out[i] == ' '); i--)
+            out[i] = '\0';
+        ok = (out[0] != '\0');
+    }
+    HTTPClientFindCloseHeader(h);
+    return ok;
+}
+
+/*
+ * Derive the firmware.bin URL from the configured screen server_url, e.g.
+ *   "http://host:port/hokku/screen/" -> "http://host:port/hokku/firmware.bin?model=bigme_f7"
+ * by keeping everything up to and including "/hokku/" and appending the OTA path.
+ */
+static void hokku_build_firmware_url(char *out, size_t outsz)
+{
+    const char *base = hokku_config_get()->server_url;
+    const char *hk   = strstr(base, "/hokku/");
+
+    if (hk) {
+        size_t prefix = (size_t)(hk - base) + 7;    /* through "/hokku/" */
+        if (prefix < outsz) {
+            memcpy(out, base, prefix);
+            out[prefix] = '\0';
+            strncat(out, "firmware.bin?model=" SCREEN_MODEL, outsz - strlen(out) - 1);
+            return;
+        }
+    }
+    snprintf(out, outsz, "%s", base);               /* fallback: unrecognised URL shape */
+}
+
+/*
+ * Run an A/B OTA update: stream the server's firmware image into the INACTIVE
+ * slot, flip the boot cfg to it, and reboot into it. On success this does NOT
+ * return — it reboots, and platform_init_level0 re-arms the rollback watchdog so
+ * a bad new image auto-reverts to the slot we are running now. On ANY failure it
+ * returns with the current image still active and the boot cfg unchanged (the
+ * half-written slot is never booted).
+ *
+ * Safe because: (1) the rollback WDG was already stopped at boot-commit, so the
+ * multi-second download won't trip it; (2) ota_get_image validates the written
+ * section chain before we flip anything; (3) the cfg flip is the last step.
+ */
+static void hokku_do_ota(const char *server_ver)
+{
+    char url[192];
+    const image_ota_param_t *iop = image_get_ota_param();
+    image_seq_t upd = (image_seq_t)((image_get_running_seq() + 1) % IMAGE_SEQ_NUM);
+    uint32_t wr_start = iop ? iop->addr[upd] : 0;
+    uint32_t wr_end   = iop ? wr_start + IMAGE_AREA_SIZE(iop->img_max_size) : 0;
+
+    /* Safety guard: the SDK OTA erases [addr[upd], addr[upd]+img_max_size) BEFORE
+     * a single byte is downloaded. The update target ALTERNATES by A/B policy:
+     * running seq0 -> writes slot1 (0x181000); running seq1 -> writes slot0
+     * (bl_size, 0x8000). BOTH are valid — the guard must allow either. It only
+     * rejects an address BELOW the bootloader (would erase the bootloader) or one
+     * whose end runs into the sysinfo/config partition at 0x300000 — e.g. a
+     * mis-provisioned header (ota_addr=0xFFFFFFFF) that wraps addr[1] to ~0x7FFF.
+     * Cheap insurance; a no-op on the confirmed unit in either direction. */
+    if (!iop || wr_start < iop->bl_size || wr_end > 0x300000U || wr_end <= wr_start) {
+        hlog("hokku: OTA refused — update slot 0x%x..0x%x outside safe window\n",
+             (unsigned)wr_start, (unsigned)wr_end);
+        return;
+    }
+
+    hokku_build_firmware_url(url, sizeof(url));
+    hlog("hokku: OTA start (server ver '%s') <- %s\n", server_ver, url);
+
+    if (ota_init() != OTA_STATUS_OK) {
+        hlog("hokku: OTA ota_init failed\n");
+        return;
+    }
+    if (ota_get_image(OTA_PROTOCOL_HTTP, url) != OTA_STATUS_OK) {
+        hlog("hokku: OTA download/write failed (slot unchanged)\n");
+        return;
+    }
+    /* No verify trailer in our image (built without mkimage -O); the per-section
+     * checksum walk inside ota_get_image already ran. VERIFY_NONE still commits
+     * the boot cfg to the freshly written slot. */
+    if (ota_verify_image(OTA_VERIFY_NONE, NULL) != OTA_STATUS_OK) {
+        hlog("hokku: OTA verify/commit failed (slot unchanged)\n");
+        return;
+    }
+    hlog("hokku: OTA OK — rebooting into new image\n");
+    OS_MSleep(200);                                 /* flush log over UART first */
+    ota_reboot();                                   /* HAL_WDG_Reboot(); no return */
+    hlog("hokku: OTA reboot returned?!\n");         /* unreached */
+}
+
+/* Console-triggered OTA (`ota` command) — updates from the configured server.
+ * TRY-locks the OTA/flash mutex so it refuses (rather than racing) if the refresh
+ * thread is mid-cycle. On OTA success hokku_do_ota reboots and never returns. */
+void hokku_ota_manual(void)
+{
+    if (!OS_MutexIsValid(&g_ota_lock) || OS_MutexLock(&g_ota_lock, 0) != OS_OK) {
+        hlog("hokku: OTA busy (refresh in progress) — retry in a few seconds\n");
+        return;
+    }
+    hlog("hokku: manual OTA requested from console\n");
+    hokku_do_ota("manual");                    /* reboots on success */
+    OS_MutexUnlock(&g_ota_lock);               /* only reached if OTA failed */
+}
+
 /*
  * Fetch one image from the server and stream it byte-by-byte to the EPD.
  * Returns the number of seconds to sleep before the next refresh, or -1 on
@@ -343,13 +481,25 @@ static int do_refresh(void)
         hlog_reset();
     }
 
-    /* Capture sleep + server clock from response headers before consuming body */
+    /* Capture sleep + server clock + any OTA signal from response headers */
+    char fw_update[32] = "";
     {
         uint32_t v;
         if (read_resp_header_uint(params.pHTTP, "X-Sleep-Seconds", &v) && v > 0)
             sleep_sec = (int)v;
         if (read_resp_header_uint(params.pHTTP, "X-Server-Time-Epoch", &v) && v > 1600000000U)
             hokku_clock_set(v);              /* sanity: after 2020-09-13 */
+        read_resp_header_str(params.pHTTP, "X-Firmware-Update", fw_update, sizeof(fw_update));
+    }
+
+    /* OTA takes priority over display: the server told us to update. Discard the
+     * image body, close the socket, and run the A/B update (reboots on success;
+     * returns only on failure, in which case we keep the current image). */
+    if (fw_update[0]) {
+        hlog("hokku: firmware update signalled -> %s\n", fw_update);
+        HTTPC_close(&params);
+        hokku_do_ota(fw_update);
+        return -1;                           /* OTA failed: short backoff, unchanged */
     }
 
     /* Stream response body to EPD (CMD 0x10 was not sent yet — do it now) */
@@ -429,7 +579,11 @@ static void refresh_thread_fn(void *arg)
     }
 
     while (1) {
-        int sleep_sec = do_refresh();
+        /* Hold the OTA/flash lock across the whole refresh (which may itself run
+         * an OTA on X-Firmware-Update) so a console `ota` can't run concurrently. */
+        OS_MutexLock(&g_ota_lock, OS_WAIT_FOREVER);
+        int sleep_sec = do_refresh();          /* may reboot via OTA and never return */
+        OS_MutexUnlock(&g_ota_lock);
         if (sleep_sec < 0)
             sleep_sec = 30;                    /* error backoff */
 
@@ -530,17 +684,35 @@ static void net_cb(uint32_t event, uint32_t data, void *arg)
  * the watchdog before it faults; the watchdog must then roll back to the OEM.
  */
 #define HOKKU_B_BREAK_XIP 0
-#if HOKKU_B_BREAK_XIP
-#define XIP_FLASH_DATA_OFFSET     0x18C040U  /* WRONG for slot 0 -> XIP fault */
-#else
-#define XIP_FLASH_DATA_OFFSET     0x13040U   /* app_xip data: header 0x13000 + 0x40 */
-#endif
+
+/*
+ * app_xip flash offset is PER-SLOT. slot 0's app_xip data sits at 0x13040 (header
+ * 0x13000 + 0x40); the two A/B app-chains are one image-area apart, so slot 1's is
+ * 0x13040 + XIP_SLOT_STRIDE = 0x18C040. XIP_SLOT_STRIDE is the app-base spacing
+ * (slot1 app base 0x181000 - slot0 app base 0x8000). An image running from slot N
+ * MUST map its OWN app_xip: a fixed slot-0 offset would send a slot-1 (OTA'd) image
+ * to slot 0's code on its first XIP instruction and MemManage-fault. So the offset
+ * is derived from the slot we actually booted, not hardcoded.
+ */
+#define XIP_FLASH_DATA_OFFSET     0x13040U   /* slot 0 app_xip data */
+#define XIP_SLOT_STRIDE           0x179000U  /* per-slot app_xip spacing */
 
 extern void pm_start(void);
 extern int  HAL_Flash_Init(uint32_t flash);
 extern int  image_init(uint32_t flash, uint32_t addr, uint32_t max_size);
 extern int  HAL_Xip_Init(uint32_t flash, uint32_t xaddr);
 extern void platform_cache_init(void);
+
+/* Flash offset of the app_xip section for the slot we booted from (boot_seq). */
+static uint32_t hokku_xip_offset(uint32_t boot_seq)
+{
+#if HOKKU_B_BREAK_XIP
+    (void)boot_seq;
+    return 0x18C040U;   /* deliberately slot-1's offset while on slot 0 -> XIP fault (rollback test) */
+#else
+    return XIP_FLASH_DATA_OFFSET + boot_seq * XIP_SLOT_STRIDE;
+#endif
+}
 
 /*
  * Arm A/B try-boot rollback. Runs from SRAM in platform_init_level0, BEFORE
@@ -567,6 +739,16 @@ static void hokku_rollback_arm(void)
 
     g_boot_seq = image_get_running_seq();
     image_seq_t good = (image_seq_t)((g_boot_seq + 1) % IMAGE_SEQ_NUM);
+
+    /* Only arm if the fallback slot actually holds a valid image. An OTA erases
+     * its target (the "other") slot UP FRONT, before downloading — so a failed or
+     * interrupted OTA can leave that slot blank. Repointing the boot cfg at a
+     * blank slot and arming the WDG would risk a reset INTO an unbootable slot
+     * (the exact "both slots dead" case). If the fallback isn't valid, skip the
+     * rollback this boot: run our own (booted) slot best-effort; USB BROM recovery
+     * remains the backstop. All callees here are ROM funcs, valid before XIP. */
+    if (image_check_sections(good) != IMAGE_VALID)
+        return;
 
     cfg.seq   = good;
     cfg.state = IMAGE_STATE_VERIFIED;
@@ -664,9 +846,14 @@ static void hokku_b0_wdgtest(void)
 /* Strong override of the SDK's __weak platform_init_level0 (runs from SRAM). */
 void platform_init_level0(void)
 {
+    uint32_t boot_seq;
+
     pm_start();
     HAL_Flash_Init(0);
     image_init(0, 0, 0);
+    /* Cached from image_init's cfg read; capture BEFORE hokku_rollback_arm()
+     * repoints the persisted cfg, so it reflects the slot we actually booted. */
+    boot_seq = (uint32_t)image_get_running_seq();
 #if HOKKU_B0_WDGTEST
     /* Capture reset-cause registers as early as possible (raw, no HAL/XIP dependency)
      * and do NOT arm the A/B rollback — B0 must keep the cfg pointing at itself. */
@@ -677,11 +864,14 @@ void platform_init_level0(void)
 #else
     hokku_rollback_arm();                     /* repoint cfg to good slot + arm WDG */
 #endif
-    HAL_Xip_Init(0, XIP_FLASH_DATA_OFFSET);  /* sets read mode + BIAS_ADDR0 */
-    platform_cache_init();
-    /* Belt-and-suspenders: force the bias in case HAL_Xip_Init bailed early
-     * (e.g. flash chip not recognized) before programming the register. */
-    OPI_MEM_CTRL_BIAS_ADDR0 = XIP_BIAS_ENABLE | XIP_FLASH_DATA_OFFSET;
+    {
+        uint32_t xip_off = hokku_xip_offset(boot_seq);   /* per-slot: booted slot's app_xip */
+        HAL_Xip_Init(0, xip_off);            /* sets read mode + BIAS_ADDR0 */
+        platform_cache_init();
+        /* Belt-and-suspenders: force the bias in case HAL_Xip_Init bailed early
+         * (e.g. flash chip not recognized) before programming the register. */
+        OPI_MEM_CTRL_BIAS_ADDR0 = XIP_BIAS_ENABLE | xip_off;
+    }
 }
 
 /*
@@ -758,6 +948,10 @@ static void hokku_wifi_connect_saved(void)
 
 int main(void)
 {
+    /* Create the OTA/refresh lock before platform_init() (which brings up the
+     * console) so a `ota` command can never reference an uninitialised mutex. */
+    OS_MutexCreate(&g_ota_lock);
+
     platform_init();
 
     printf("\nhokku bigme-f7 firmware\n");
