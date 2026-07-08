@@ -8,6 +8,7 @@ each request so they automatically pick up a hot-reloaded config.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import logging
@@ -19,6 +20,7 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 import pillow_jxl  # noqa: F401 — PIL plugin registration
 import psutil
@@ -158,6 +160,22 @@ OTA_MAX_ATTEMPTS = 5
 
 def _busy_retry_seconds(config: AppConfig) -> int:
     return min(300, calculate_sleep_seconds(config))
+
+
+def _f7_reachable_url(url: str) -> str:
+    """Make a server URL reachable by a Bigme F7.
+
+    The F7's lwIP has no mDNS resolver, so an ``<host>.local`` URL (which the UI
+    auto-fills, fine for the ESP32) is unreachable — the device connects but every
+    POST fails to resolve the name. Swap a ``.local`` host for this server's LAN IP;
+    leave any other host (real DNS name or IP) untouched."""
+    with contextlib.suppress(Exception):
+        p = urlparse(url)
+        if p.hostname and p.hostname.lower().endswith(".local"):
+            ip = _get_local_ip()
+            netloc = f"{ip}:{p.port}" if p.port else ip
+            return urlunparse(p._replace(netloc=netloc))
+    return url
 
 
 def create_app(
@@ -1083,7 +1101,8 @@ def create_app(
         ssid = (body.get("wifi_ssid1") or "").strip()
         psk = body.get("wifi_pass1") or ""
         name = (body.get("screen_name") or "").strip()
-        server_url = (body.get("image_url") or "").strip()
+        # The F7 can't resolve mDNS `.local`, so pin the server URL to the LAN IP.
+        server_url = _f7_reachable_url((body.get("image_url") or "").strip())
         for label, val in (("Wi-Fi name", ssid), ("Wi-Fi password", psk), ("screen name", name)):
             if val and not bigme_bootstrap.console_safe_token(val):
                 return jsonify(
