@@ -71,37 +71,46 @@ def _import_tools():
         hammer_sync,
         open_stable,
     )
-    from xr872_flasher import XR872Flasher  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
+    from xr872_flasher import (  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
+        XR872Flasher,
+        send_upgrade_command,
+    )
 
-    return flash_slot0, hammer_sync, open_stable, XR872Flasher, serial
+    return flash_slot0, hammer_sync, open_stable, XR872Flasher, send_upgrade_command, serial
 
 
-def bootstrap_device(
-    port: str,
-    image_path: str | Path,
-    on_line: Callable[[str], None],
-    should_cancel: Callable[[], bool],
-    timeout_s: float = CATCH_TIMEOUT_S,
-) -> dict:
-    """Catch the BROM (operator does the replug+press) and write slot 0.
+def _software_entry(port, writer, should_cancel, XR872Flasher, send_upgrade_command, attempts):
+    """No-touch BROM entry for a unit already running Hokku firmware.
 
-    Streams progress line-by-line via ``on_line``; polls ``should_cancel`` between
-    attempts. Returns ``{"ok": True}`` on success. Raises ``RuntimeError`` on
-    timeout, cancel, or a safety abort — never leaves the unit unbootable (slot 1
-    stays intact throughout)."""
-    if not tooling_available():
-        raise RuntimeError("Bigme F7 flash tooling (tools/) is not present on this install")
-    flash_slot0, hammer_sync, open_stable, XR872Flasher, serial = _import_tools()
+    ``upgrade`` on our console sets the boot flag and watchdog-resets into the BROM,
+    so no replug/press is needed. Returns a synced ``XR872Flasher`` (caller closes
+    it), or ``None`` if the unit never answered — i.e. it's stock, and the caller
+    should fall back to the manual catch. Non-destructive: stock firmware just
+    ignores the console line."""
+    for _ in range(attempts):
+        if should_cancel():
+            raise RuntimeError("cancelled by the operator")
+        with contextlib.suppress(Exception), contextlib.redirect_stdout(writer):
+            send_upgrade_command(port)  # sends `upgrade\n`; harmless on a stock unit
+        writer.flush()
+        time.sleep(0.4)
+        try:
+            ft = XR872Flasher(port, verbose=False)
+            if ft.sync(attempts=4, timeout_per=0.25):
+                return ft
+            ft.close()
+        except Exception:
+            # port can bounce between close/reopen on Windows — just retry
+            time.sleep(0.2)
+    return None
 
-    img = Path(image_path).read_bytes()
-    if img[:4] != b"AWIH":
-        raise RuntimeError("bundled image is not an AWIH xr_system.img")
 
-    on_line(f"Bootstrapping Bigme F7 on {port} ({len(img):,} B image).")
-    on_line("Enter the BROM: UNPLUG the USB cable -> REPLUG it -> PRESS the power button.")
-    on_line(f"Repeat the replug+press until it catches (waiting up to {int(timeout_s)} s)...")
-    writer = _LineWriter(on_line)
-
+def _catch_entry(
+    port, on_line, should_cancel, open_stable, hammer_sync, XR872Flasher, serial, timeout_s
+):
+    """Manual mask-BROM catch for a stock unit: hammer 0x55 while the operator does
+    a USB replug + power press. Returns a synced ``XR872Flasher`` (caller closes it);
+    raises on timeout/cancel."""
     deadline = time.monotonic() + timeout_s
     last_note = 0.0
     while time.monotonic() < deadline:
@@ -115,39 +124,93 @@ def bootstrap_device(
                 last_note = time.monotonic()
             time.sleep(0.15)
             continue
+        caught = False
         try:
-            try:
-                caught = hammer_sync(ser, duration=1.5)
-            except (serial.SerialException, OSError):
-                caught = False  # port yanked mid-hammer (the replug) — retry
-            if caught:
-                on_line("*** BROM caught — writing firmware (do NOT unplug now) ***")
-                f = XR872Flasher(ser=ser, verbose=False)
-                if not f.sync(attempts=30, timeout_per=0.1):
-                    on_line("  command channel didn't come up — keep replug+pressing")
-                    continue
-                # flash_slot0 prints its own progress and raises SystemExit via die()
-                # on ANY safety-check failure, which leaves slot 1 (OEM) bootable.
-                # reboot=False: sys_reboot only re-enters BROM on this chip, so the
-                # operator power-cycles to boot the app.
-                try:
-                    with contextlib.redirect_stdout(writer):
-                        flash_slot0(f, img, reboot=False)
-                    writer.flush()
-                except SystemExit as e:
-                    writer.flush()
-                    raise RuntimeError(f"safety check aborted the write: {e}") from e
-                on_line("")
-                on_line("DONE — Hokku firmware in slot 0 (bootloader + OEM slot untouched).")
-                on_line("Next: POWER-CYCLE the unit (unplug/replug, or long-press) to boot it.")
-                on_line("Then set Wi-Fi over the console (115200): `wifi <ssid> <pw>`, `cfg save`.")
-                on_line("Details: docs/screens/bigme_f7/bootstrap.md")
-                return {"ok": True}
-        finally:
-            with contextlib.suppress(Exception):
-                ser.close()
+            caught = hammer_sync(ser, duration=1.5)
+        except (serial.SerialException, OSError):
+            caught = False  # port yanked mid-hammer (the replug) — retry
+        if caught:
+            on_line("*** BROM caught — writing firmware (do NOT unplug now) ***")
+            f = XR872Flasher(ser=ser, verbose=False)  # f now owns ser
+            if f.sync(attempts=30, timeout_per=0.1):
+                return f
+            on_line("  command channel didn't come up — keep replug+pressing")
+        with contextlib.suppress(Exception):
+            ser.close()
         if time.monotonic() - last_note > 4:
             on_line("  hammering 0x55 — replug the USB, then press the power button")
             last_note = time.monotonic()
-
     raise RuntimeError("no BROM catch within the time limit — retry the replug+press")
+
+
+def bootstrap_device(
+    port: str,
+    image_path: str | Path,
+    on_line: Callable[[str], None],
+    should_cancel: Callable[[], bool],
+    timeout_s: float = CATCH_TIMEOUT_S,
+) -> dict:
+    """Enter the BROM and write slot 0. Tries the no-touch ``upgrade`` entry first
+    (works when the unit already runs Hokku firmware), then falls back to the manual
+    replug+press catch for a stock unit.
+
+    Streams progress line-by-line via ``on_line``; polls ``should_cancel`` between
+    attempts. Returns ``{"ok": True}`` on success. Raises ``RuntimeError`` on
+    timeout, cancel, or a safety abort — never leaves the unit unbootable (slot 1
+    stays intact throughout)."""
+    if not tooling_available():
+        raise RuntimeError("Bigme F7 flash tooling (tools/) is not present on this install")
+    (
+        flash_slot0,
+        hammer_sync,
+        open_stable,
+        XR872Flasher,
+        send_upgrade_command,
+        serial,
+    ) = _import_tools()
+
+    img = Path(image_path).read_bytes()
+    if img[:4] != b"AWIH":
+        raise RuntimeError("bundled image is not an AWIH xr_system.img")
+
+    on_line(f"Bootstrapping Bigme F7 on {port} ({len(img):,} B image).")
+    writer = _LineWriter(on_line)
+
+    # Phase A — no-touch software entry (a unit already on Hokku firmware answers
+    # `upgrade`). No replug/press needed; a stock unit ignores it and we fall through.
+    on_line("Trying software BROM entry via `upgrade` (no action needed if this unit")
+    on_line("already runs Hokku firmware)...")
+    f = _software_entry(port, writer, should_cancel, XR872Flasher, send_upgrade_command, 6)
+
+    # Phase B — manual mask-BROM catch (stock unit; no software way in).
+    if f is None:
+        on_line("No `upgrade` response — looks like a stock unit. Catch the BROM by hand:")
+        on_line("UNPLUG the USB cable -> REPLUG it -> PRESS the power button; repeat until caught.")
+        f = _catch_entry(
+            port, on_line, should_cancel, open_stable, hammer_sync, XR872Flasher, serial, timeout_s
+        )
+    else:
+        on_line("*** BROM entered via `upgrade` — writing firmware (do NOT unplug now) ***")
+
+    # Write. flash_slot0 prints its own progress and raises SystemExit via die() on
+    # ANY safety-check failure, which leaves slot 1 (OEM) bootable. reboot=False:
+    # sys_reboot only re-enters BROM on this chip, so the operator power-cycles.
+    try:
+        try:
+            with contextlib.redirect_stdout(writer):
+                flash_slot0(f, img, reboot=False)
+            writer.flush()
+        except SystemExit as e:
+            writer.flush()
+            raise RuntimeError(f"safety check aborted the write: {e}") from e
+    finally:
+        with contextlib.suppress(Exception):
+            f.close()
+
+    on_line("")
+    on_line("DONE — Hokku firmware in slot 0 (bootloader + OEM slot untouched).")
+    on_line("Next: POWER-CYCLE the unit (unplug/replug, or long-press) to boot it.")
+    on_line("An already-provisioned unit boots straight back online; a fresh unit needs")
+    on_line("Wi-Fi set over the console (115200): `wifi <ssid> <pw>`, then `cfg save`.")
+    on_line("Details: docs/screens/bigme_f7/bootstrap.md")
+    return {"ok": True}

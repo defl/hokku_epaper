@@ -71,12 +71,24 @@ python tools/f7_initial_flasher.py --port COM7
 ## From the web GUI
 
 The "Flash a screen" page also drives this bootstrap. Scan for devices, pick the
-F7 (it's recognised by the CH340 VID/PID and shows a **Bootstrap F7** panel instead
-of the ESP32 form), press **Bootstrap F7**, and do the same **replug + press** when
-prompted — the server runs the identical catch → `flash_slot0` and streams progress
-into the log, with a **Cancel** button for the catch loop. It's the same one-slot
-job as the ESP32 flash (scanning is refused while it runs). Wi-Fi is still
-provisioned over the console afterward (the GUI doesn't touch it).
+F7 (recognised by the CH340 VID/PID — it shows a **Bootstrap F7** panel instead of
+the ESP32 form) and press **Bootstrap F7**. The server then writes slot 0 via the
+identical `flash_slot0`, streaming progress into the log with a **Cancel** button.
+It's the same one-slot job as the ESP32 flash (scanning is refused while it runs),
+and Wi-Fi is still provisioned over the console afterward (the GUI doesn't touch it).
+
+Entry is two-phase, so the physical dance is usually unnecessary:
+
+1. **No-touch `upgrade` entry first.** If the unit already runs Hokku firmware, the
+   server sends `upgrade` over the console → watchdog reset into the BROM, no replug
+   or press needed. This is the common case for re-flashing an existing unit (though
+   note such a unit can also just take an **OTA** with no USB at all — see
+   [`ota.md`](ota.md)).
+2. **Manual catch fallback.** Only if `upgrade` gets no answer (a stock unit) does
+   the log ask for the **unplug → replug → press power** catch, repeated until it
+   lands.
+
+So a stock unit needs the replug+press; a unit already on our firmware doesn't.
 
 Server bits: `POST /hokku/api/flash/start_f7` + `/hokku/api/flash/cancel`,
 `hokku/screens/bigme_f7/bootstrap.py` (wraps the `tools/` primitives; only available

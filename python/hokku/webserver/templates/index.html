@@ -961,20 +961,22 @@
 
     <div id="flash-f7-form" hidden>
       <div class="flash-note">
-        <strong>Bigme F7 (XR872).</strong> This installs Hokku firmware into slot 0
-        (the bootloader and the OEM backup slot are left untouched). It enters the
-        chip's BROM by catching a power-cycle, so you'll physically power-cycle the
-        unit while it runs. Wi-Fi and the screen name are set afterward over the
-        device's USB console (see docs/screens/bigme_f7/bootstrap.md) — not here.
+        <strong>Bigme F7 (XR872).</strong> Installs Hokku firmware into slot 0 (the
+        bootloader and OEM backup slot are left untouched). A unit that
+        <em>already runs Hokku firmware</em> enters update mode on its own — no
+        touching needed. Only a <em>stock</em> unit needs the manual step below.
+        Wi-Fi is set afterward over the USB console (see
+        docs/screens/bigme_f7/bootstrap.md), not here.
       </div>
       <ol class="flash-f7-steps">
-        <li>Press <em>Bootstrap F7</em> below.</li>
-        <li><strong>Unplug</strong> the USB cable, <strong>replug</strong> it, then
-            <strong>press the power button</strong> (short press).</li>
-        <li>Repeat the replug + press until the log shows <em>BROM caught</em>; then
-            leave it alone while it writes.</li>
+        <li>Press <em>Bootstrap F7</em> and watch the log.</li>
+        <li><strong>Already on Hokku firmware:</strong> nothing to do — it enters the
+            BROM via <code>upgrade</code> and writes automatically.</li>
+        <li><strong>Stock unit</strong> (only if the log asks): <strong>unplug</strong>
+            the USB, <strong>replug</strong> it, then <strong>press power</strong> —
+            repeat until the log shows <em>BROM caught</em>.</li>
         <li>When it's done, <strong>power-cycle</strong> the unit to boot the new
-            firmware, then provision Wi-Fi over the console.</li>
+            firmware.</li>
       </ol>
       <div class="config-row">
         <button type="button" class="btn btn-primary" id="flash-f7-go-btn" onclick="startF7Flash()">Bootstrap F7</button>
@@ -2236,7 +2238,7 @@ function pollF7Flash() {
     const log = document.getElementById('flash-log');
     if (j.log && j.log.length) { log.hidden = false; log.textContent = j.log.join('\n'); log.scrollTop = log.scrollHeight; }
     if (j.state === 'running') {
-      setF7Status('Waiting for the BROM — unplug/replug USB, then press power', '');
+      setF7Status('Working… watch the log (a stock unit will ask for a replug + press)', '');
     } else if (j.state === 'done') {
       clearInterval(flashPollTimer); flashPollTimer = null;
       setF7Status('Firmware written — now power-cycle the unit, then set Wi-Fi over the console.', 'ok');

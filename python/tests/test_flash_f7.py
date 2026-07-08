@@ -200,3 +200,117 @@ def test_route_start_f7_starts_and_is_single_slot(app_config, tmp_path, monkeypa
 def test_route_cancel_no_job(app_config, tmp_path):
     client = _client(_bare_state(app_config), tmp_path)
     assert client.post("/hokku/api/flash/cancel").get_json()["cancelled"] is False
+
+
+# ── two-phase BROM entry (software `upgrade` first, catch fallback) ────────────
+
+
+def _null_writer():
+    return bigme_bootstrap._LineWriter(lambda _l: None)
+
+
+class _FakeFlasher:
+    """Stand-in for XR872Flasher; sync() result controls whether entry lands."""
+
+    sync_result = False
+
+    def __init__(self, *a, **k):
+        self.closed = False
+
+    def sync(self, **k):
+        return type(self).sync_result
+
+    def close(self):
+        self.closed = True
+
+
+def test_software_entry_returns_flasher_when_sync_lands():
+    class FF(_FakeFlasher):
+        sync_result = True
+
+    sent: list[str] = []
+    f = bigme_bootstrap._software_entry(
+        "COM7", _null_writer(), lambda: False, FF, lambda p: sent.append(p), attempts=3
+    )
+    assert isinstance(f, FF)
+    assert sent == ["COM7"]  # landed on the first `upgrade`
+
+
+def test_software_entry_gives_up_on_a_stock_unit():
+    # sync never lands -> None after all attempts (each still sends `upgrade`).
+    sent: list[str] = []
+    f = bigme_bootstrap._software_entry(
+        "COM7", _null_writer(), lambda: False, _FakeFlasher, lambda p: sent.append(p), attempts=4
+    )
+    assert f is None
+    assert len(sent) == 4
+
+
+def test_software_entry_honors_cancel():
+    try:
+        bigme_bootstrap._software_entry(
+            "COM7", _null_writer(), lambda: True, _FakeFlasher, lambda p: None, attempts=5
+        )
+    except RuntimeError as e:
+        assert "cancel" in str(e).lower()
+    else:
+        raise AssertionError("expected RuntimeError on cancel")
+
+
+def _stub_import_tools(monkeypatch, flash_records):
+    def fake_flash_slot0(f, img, reboot=False):
+        flash_records.append(reboot)
+
+    monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
+    monkeypatch.setattr(
+        bigme_bootstrap,
+        "_import_tools",
+        lambda: (fake_flash_slot0, None, None, object(), lambda p: None, None),
+    )
+
+
+def test_bootstrap_prefers_software_entry(tmp_path, monkeypatch):
+    img = tmp_path / "x.img"
+    img.write_bytes(b"AWIH" + b"\x00" * 32)
+    records: list[bool] = []
+    _stub_import_tools(monkeypatch, records)
+    fake_f = _FakeFlasher()
+    monkeypatch.setattr(bigme_bootstrap, "_software_entry", lambda *a, **k: fake_f)
+    catch_calls = {"n": 0}
+
+    def _catch(*a, **k):
+        catch_calls["n"] += 1
+        return fake_f
+
+    monkeypatch.setattr(bigme_bootstrap, "_catch_entry", _catch)
+
+    lines: list[str] = []
+    result = bigme_bootstrap.bootstrap_device("COM7", img, lines.append, lambda: False)
+    assert result == {"ok": True}
+    assert records == [False]  # flash_slot0 called once, reboot=False
+    assert catch_calls["n"] == 0  # never fell back to the manual catch
+    assert fake_f.closed is True
+    assert any("upgrade" in ln for ln in lines)
+
+
+def test_bootstrap_falls_back_to_catch_for_stock(tmp_path, monkeypatch):
+    img = tmp_path / "x.img"
+    img.write_bytes(b"AWIH" + b"\x00" * 32)
+    records: list[bool] = []
+    _stub_import_tools(monkeypatch, records)
+    fake_f = _FakeFlasher()
+    monkeypatch.setattr(bigme_bootstrap, "_software_entry", lambda *a, **k: None)
+    catch_calls = {"n": 0}
+
+    def _catch(*a, **k):
+        catch_calls["n"] += 1
+        return fake_f
+
+    monkeypatch.setattr(bigme_bootstrap, "_catch_entry", _catch)
+
+    lines: list[str] = []
+    result = bigme_bootstrap.bootstrap_device("COM7", img, lines.append, lambda: False)
+    assert result == {"ok": True}
+    assert records == [False]
+    assert catch_calls["n"] == 1  # fell back to the manual catch
+    assert any("stock unit" in ln.lower() for ln in lines)
