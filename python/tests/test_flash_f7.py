@@ -1,0 +1,202 @@
+"""Tests for the Bigme F7 (XR872) web bootstrap: FlashJobManager.start_f7 / cancel,
+the bootstrap streaming/cancel contract, and the /flash/start_f7 + /flash/cancel
+routes. Hardware-free — the BROM catch + slot-0 write are stubbed."""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+from hokku.screens.bigme_f7 import bootstrap as bigme_bootstrap
+from hokku.webserver import flashing
+from hokku.webserver.app_config import AppConfig
+from hokku.webserver.app_state import AppState, build_manager
+from hokku.webserver.flask_app import create_app
+from hokku.webserver.image_classifier import ImageClassifier
+from hokku.webserver.serve_scheduler import ServeScheduler
+
+
+def _bare_state(app_config: AppConfig) -> AppState:
+    clf = ImageClassifier(app_config)
+    mgr = build_manager(app_config, clf)
+    return AppState(app_config, clf, mgr, ServeScheduler(mgr))
+
+
+def _client(state: AppState, tmp_path: Path):
+    app = create_app(state, config_path=tmp_path / "cfg.json", template_folder=None)
+    app.config["TESTING"] = True
+    return app.test_client()
+
+
+def _wait_state(mgr: flashing.FlashJobManager, target: str, timeout: float = 3.0) -> dict:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        st = mgr.status() or {}
+        if st.get("state") == target:
+            return st
+        time.sleep(0.02)
+    return mgr.status() or {}
+
+
+# ── _LineWriter ───────────────────────────────────────────────────────────────
+
+
+def test_line_writer_splits_and_flushes():
+    lines: list[str] = []
+    w = bigme_bootstrap._LineWriter(lines.append)
+    w.write("hello\nwor")
+    assert lines == ["hello"]  # only the completed line
+    w.write("ld\n")
+    assert lines == ["hello", "world"]
+    w.write("trailing")  # no newline yet
+    assert lines == ["hello", "world"]
+    w.flush()  # flush emits the partial line
+    assert lines == ["hello", "world", "trailing"]
+
+
+def test_line_writer_strips_carriage_return():
+    lines: list[str] = []
+    w = bigme_bootstrap._LineWriter(lines.append)
+    w.write("a\r\nb\r\n")
+    assert lines == ["a", "b"]
+
+
+# ── bootstrap_device contract ─────────────────────────────────────────────────
+
+
+def test_bootstrap_requires_tooling(monkeypatch):
+    monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: False)
+    try:
+        bigme_bootstrap.bootstrap_device("COM7", "x.img", lambda _l: None, lambda: False)
+    except RuntimeError as e:
+        assert "tooling" in str(e).lower()
+    else:
+        raise AssertionError("expected RuntimeError when tooling is absent")
+
+
+# ── FlashJobManager.start_f7 / cancel ─────────────────────────────────────────
+
+
+def test_start_f7_runs_to_done(monkeypatch):
+    def fake_bootstrap(port, image_path, on_line, should_cancel, **kw):
+        on_line(f"catching on {port}")
+        on_line("*** BROM caught ***")
+        return {"ok": True}
+
+    monkeypatch.setattr(flashing.f7_bootstrap, "bootstrap_device", fake_bootstrap)
+    mgr = flashing.FlashJobManager()
+    job_id = mgr.start_f7("COM7", Path("xr_system.img"))
+    assert job_id is not None
+    st = _wait_state(mgr, "done")
+    assert st["state"] == "done"
+    assert st["kind"] == "bigme_f7"
+    assert st["result"] == {"ok": True}
+    assert any("BROM caught" in ln for ln in st["log"])
+
+
+def test_start_f7_is_single_slot(monkeypatch):
+    started = {"go": False}
+
+    def blocking(port, image_path, on_line, should_cancel, **kw):
+        while not should_cancel():
+            time.sleep(0.01)
+        raise RuntimeError("cancelled by the operator")
+
+    monkeypatch.setattr(flashing.f7_bootstrap, "bootstrap_device", blocking)
+    mgr = flashing.FlashJobManager()
+    assert mgr.start_f7("COM7", Path("a.img")) is not None
+    # a second start is refused while the first runs
+    assert mgr.start_f7("COM7", Path("a.img")) is None
+    assert mgr.is_busy() is True
+    mgr.cancel()
+    _wait_state(mgr, "error")
+    _ = started
+
+
+def test_cancel_stops_the_catch_loop(monkeypatch):
+    def blocking(port, image_path, on_line, should_cancel, **kw):
+        on_line("waiting for BROM")
+        while not should_cancel():
+            time.sleep(0.01)
+        raise RuntimeError("cancelled by the operator")
+
+    monkeypatch.setattr(flashing.f7_bootstrap, "bootstrap_device", blocking)
+    mgr = flashing.FlashJobManager()
+    mgr.start_f7("COM7", Path("a.img"))
+    assert _wait_state(mgr, "running", 1.0)["state"] == "running"
+    assert mgr.cancel() is True
+    st = _wait_state(mgr, "error")
+    assert st["state"] == "error"
+    assert "cancelled" in (st["error"] or "").lower()
+
+
+def test_cancel_with_no_job_is_false():
+    assert flashing.FlashJobManager().cancel() is False
+
+
+# ── routes ────────────────────────────────────────────────────────────────────
+
+
+def test_route_start_f7_requires_port(app_config, tmp_path, monkeypatch):
+    monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
+    monkeypatch.setattr(
+        "hokku.webserver.flask_app.bigme_firmware.firmware_image_file",
+        lambda: tmp_path / "xr_system.img",
+    )
+    (tmp_path / "xr_system.img").write_bytes(b"AWIH" + b"\x00" * 32)
+    client = _client(_bare_state(app_config), tmp_path)
+    r = client.post("/hokku/api/flash/start_f7", json={})
+    assert r.status_code == 400
+
+
+def test_route_start_f7_503_without_tooling(app_config, tmp_path, monkeypatch):
+    monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: False)
+    client = _client(_bare_state(app_config), tmp_path)
+    r = client.post("/hokku/api/flash/start_f7", json={"port": "COM7"})
+    assert r.status_code == 503
+
+
+def test_route_start_f7_503_without_image(app_config, tmp_path, monkeypatch):
+    monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
+    monkeypatch.setattr(
+        "hokku.webserver.flask_app.bigme_firmware.firmware_image_file", lambda: None
+    )
+    client = _client(_bare_state(app_config), tmp_path)
+    r = client.post("/hokku/api/flash/start_f7", json={"port": "COM7"})
+    assert r.status_code == 503
+
+
+def test_route_start_f7_starts_and_is_single_slot(app_config, tmp_path, monkeypatch):
+    img = tmp_path / "xr_system.img"
+    img.write_bytes(b"AWIH" + b"\x00" * 32)
+    monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
+    monkeypatch.setattr("hokku.webserver.flask_app.bigme_firmware.firmware_image_file", lambda: img)
+
+    def slow(port, image_path, on_line, should_cancel, **kw):
+        on_line("catching")
+        while not should_cancel():
+            time.sleep(0.01)
+        raise RuntimeError("cancelled by the operator")
+
+    monkeypatch.setattr(flashing.f7_bootstrap, "bootstrap_device", slow)
+    state = _bare_state(app_config)
+    client = _client(state, tmp_path)
+
+    r = client.post("/hokku/api/flash/start_f7", json={"port": "COM7"})
+    assert r.status_code == 200
+    assert "job_id" in r.get_json()
+
+    # a device scan is refused while flashing
+    assert client.get("/hokku/api/flash/devices").status_code == 409
+    # a second F7 start is refused
+    assert client.post("/hokku/api/flash/start_f7", json={"port": "COM7"}).status_code == 409
+
+    # cancel via the route, then the job ends in error("cancelled")
+    assert client.post("/hokku/api/flash/cancel").get_json()["cancelled"] is True
+    st = _wait_state(state.flash_jobs, "error")
+    assert st["state"] == "error" and "cancelled" in (st["error"] or "").lower()
+
+
+def test_route_cancel_no_job(app_config, tmp_path):
+    client = _client(_bare_state(app_config), tmp_path)
+    assert client.post("/hokku/api/flash/cancel").get_json()["cancelled"] is False

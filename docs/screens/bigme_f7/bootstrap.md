@@ -68,13 +68,20 @@ python tools/f7_initial_flasher.py --port COM7
   base + our app in slot 0 + cfg→seq0). Momentarily blanks the bootloader during the
   erase, so it's the last resort.
 
-## Not in the web GUI (yet)
+## From the web GUI
 
-The web "Flash a screen" GUI is still ESP32/esptool only; it recognises an F7 (CH340
-VID/PID) and points here rather than trying to esptool-flash it. Now that the
-bootstrap is pure-Python and server-side-runnable, a GUI "flash a fresh F7" button
-(server drives catch + `flash_slot0`, user does the replug+press) is feasible as a
-follow-up.
+The "Flash a screen" page also drives this bootstrap. Scan for devices, pick the
+F7 (it's recognised by the CH340 VID/PID and shows a **Bootstrap F7** panel instead
+of the ESP32 form), press **Bootstrap F7**, and do the same **replug + press** when
+prompted — the server runs the identical catch → `flash_slot0` and streams progress
+into the log, with a **Cancel** button for the catch loop. It's the same one-slot
+job as the ESP32 flash (scanning is refused while it runs). Wi-Fi is still
+provisioned over the console afterward (the GUI doesn't touch it).
+
+Server bits: `POST /hokku/api/flash/start_f7` + `/hokku/api/flash/cancel`,
+`hokku/screens/bigme_f7/bootstrap.py` (wraps the `tools/` primitives; only available
+where the dev-tree `tools/` dir is present — it gates on `tooling_available()` and
+returns 503 otherwise, e.g. on a packaged Pi install), and `FlashJobManager.start_f7`.
 
 ## Reversing it (back to stock)
 

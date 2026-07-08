@@ -801,6 +801,11 @@
     border-radius: 6px; padding: 10px 12px; font-size: 0.82em; line-height: 1.45;
     white-space: pre-wrap; word-break: break-word; color: var(--sumi);
   }
+  .flash-f7-steps {
+    margin: 10px 0 4px; padding-left: 22px; font-size: 0.9em;
+    line-height: 1.6; color: var(--sumi);
+  }
+  .flash-f7-steps li { margin: 3px 0; }
 </style>
 </head>
 <body>
@@ -951,6 +956,30 @@
       <div class="config-row">
         <button type="button" class="btn btn-primary" id="flash-go-btn" onclick="startFlash()">Flash screen</button>
         <span id="flash-status" class="flash-status"></span>
+      </div>
+    </div>
+
+    <div id="flash-f7-form" hidden>
+      <div class="flash-note">
+        <strong>Bigme F7 (XR872).</strong> This installs Hokku firmware into slot 0
+        (the bootloader and the OEM backup slot are left untouched). It enters the
+        chip's BROM by catching a power-cycle, so you'll physically power-cycle the
+        unit while it runs. Wi-Fi and the screen name are set afterward over the
+        device's USB console (see docs/screens/bigme_f7/bootstrap.md) — not here.
+      </div>
+      <ol class="flash-f7-steps">
+        <li>Press <em>Bootstrap F7</em> below.</li>
+        <li><strong>Unplug</strong> the USB cable, <strong>replug</strong> it, then
+            <strong>press the power button</strong> (short press).</li>
+        <li>Repeat the replug + press until the log shows <em>BROM caught</em>; then
+            leave it alone while it writes.</li>
+        <li>When it's done, <strong>power-cycle</strong> the unit to boot the new
+            firmware, then provision Wi-Fi over the console.</li>
+      </ol>
+      <div class="config-row">
+        <button type="button" class="btn btn-primary" id="flash-f7-go-btn" onclick="startF7Flash()">Bootstrap F7</button>
+        <button type="button" class="btn btn-secondary" id="flash-f7-cancel-btn" onclick="cancelF7Flash()" hidden>Cancel</button>
+        <span id="flash-f7-status" class="flash-status"></span>
       </div>
     </div>
 
@@ -2020,20 +2049,16 @@ function onFlashDeviceChange() {
   const note = document.getElementById('flash-device-note');
   const port = sel.value;
   const dev = flashDevices.find(d => d.port === port);
+  const f7form = document.getElementById('flash-f7-form');
   form.hidden = !port;
+  if (f7form) f7form.hidden = true;
   if (!port || !dev) { note.textContent = ''; return; }
 
   if (dev.is_bigme_f7) {
-    // The F7 (XR872) isn't wired into this ESP32/esptool form. It's bootstrapped
-    // once with a one-command pure-Python CLI tool (BROM caught via a USB
-    // replug+press), then updates over-the-air. A GUI button for it is a follow-up.
+    // The F7 (XR872) uses the BROM-catch bootstrap, not the ESP32/esptool form.
     form.hidden = true;
-    note.textContent =
-      'Bigme F7 (XR872) detected. Bootstrap it once from the CLI: '
-      + 'python tools/f7_initial_flasher.py --port ' + (dev.port || 'COMx')
-      + ' (unplug+replug USB, then press power to enter the BROM). See '
-      + 'docs/screens/bigme_f7/bootstrap.md. After that it updates over-the-air '
-      + 'and appears as a normal screen for OTA + config.';
+    if (f7form) f7form.hidden = false;
+    note.textContent = 'Bigme F7 (XR872) detected — bootstrap it below.';
     return;
   }
   if (!dev.is_esp32) {
@@ -2155,6 +2180,72 @@ function pollFlashStatus() {
       setFlashStatus(j.error ? 'Failed: ' + j.error : 'Flash failed', 'err');
       setFlashControlsDisabled(false);
       document.getElementById('flash-go-btn').textContent = 'Flash screen';
+    }
+  }, 1000);
+}
+
+// ── Bigme F7 (XR872) bootstrap ────────────────────────────────────
+function setF7Status(msg, cls) {
+  const s = document.getElementById('flash-f7-status');
+  if (s) { s.textContent = msg; s.className = 'flash-status' + (cls ? ' ' + cls : ''); }
+}
+
+function setF7Busy(busy) {
+  const go = document.getElementById('flash-f7-go-btn');
+  const cancel = document.getElementById('flash-f7-cancel-btn');
+  if (go) { go.disabled = busy; go.textContent = busy ? 'Bootstrapping…' : 'Bootstrap F7'; }
+  if (cancel) cancel.hidden = !busy;
+  ['flash-device', 'flash-scan-btn'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.disabled = busy;
+  });
+}
+
+async function startF7Flash() {
+  const port = document.getElementById('flash-device').value;
+  if (!port) { showToast('Select a device first'); return; }
+  setF7Status('Starting… get ready to replug + press power', '');
+  const log = document.getElementById('flash-log');
+  log.hidden = false; log.textContent = '';
+  setF7Busy(true);
+  try {
+    const r = await fetch('/hokku/api/flash/start_f7', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 409) { showToast('A flash is already in progress'); setF7Busy(false); return; }
+    if (!r.ok) { setF7Status(j.error || 'Failed to start', 'err'); setF7Busy(false); return; }
+    pollF7Flash();
+  } catch (e) {
+    setF7Status('Failed to start: ' + e, 'err');
+    setF7Busy(false);
+  }
+}
+
+async function cancelF7Flash() {
+  setF7Status('Cancelling…', '');
+  try { await fetch('/hokku/api/flash/cancel', { method: 'POST' }); } catch (e) { /* ignore */ }
+}
+
+function pollF7Flash() {
+  if (flashPollTimer) clearInterval(flashPollTimer);
+  flashPollTimer = setInterval(async () => {
+    let j;
+    try { j = await (await fetch('/hokku/api/flash/status')).json(); } catch (e) { return; }
+    const log = document.getElementById('flash-log');
+    if (j.log && j.log.length) { log.hidden = false; log.textContent = j.log.join('\n'); log.scrollTop = log.scrollHeight; }
+    if (j.state === 'running') {
+      setF7Status('Waiting for the BROM — unplug/replug USB, then press power', '');
+    } else if (j.state === 'done') {
+      clearInterval(flashPollTimer); flashPollTimer = null;
+      setF7Status('Firmware written — now power-cycle the unit, then set Wi-Fi over the console.', 'ok');
+      setF7Busy(false);
+      showToast('Bigme F7 firmware written');
+    } else if (j.state === 'error') {
+      clearInterval(flashPollTimer); flashPollTimer = null;
+      setF7Status(j.error ? 'Failed: ' + j.error : 'Bootstrap failed', 'err');
+      setF7Busy(false);
     }
   }, 1000);
 }

@@ -39,6 +39,8 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 from hokku.screens import huessen_epf1301
+from hokku.screens.bigme_f7 import bootstrap as bigme_bootstrap
+from hokku.screens.bigme_f7 import firmware as bigme_firmware
 from hokku.screens.firmware_registry import (
     bundled_firmware_versions,
     firmware_version_for,
@@ -1054,6 +1056,39 @@ def create_app(
                     logger.warning("Could not persist WiFi credentials to config: %s", e)
 
         return jsonify({"job_id": job_id})
+
+    @app.route("/hokku/api/flash/start_f7", methods=["POST"])
+    def api_flash_start_f7():
+        """Bootstrap a fresh Bigme F7 (XR872) into Hokku firmware over USB.
+
+        Catches the mask-BROM (the operator power-cycles with a USB replug + power
+        press) and writes slot 0 via the same validated ``flash_slot0`` — bootloader
+        and OEM slot 1 untouched. Wi-Fi/config are provisioned afterward over the
+        device console, not here. Progress polls the shared ``/flash/status``."""
+        if not bigme_bootstrap.tooling_available():
+            logger.error("F7 bootstrap requested but tools/ flash primitives are absent")
+            return jsonify({"error": "Bigme F7 flash tooling is not available on this server"}), 503
+        image = bigme_firmware.firmware_image_file()
+        if image is None:
+            logger.error("F7 bootstrap requested but no bundled xr_system.img is present")
+            return jsonify({"error": "no bundled Bigme F7 firmware on this server"}), 503
+
+        body = request.get_json(silent=True) or {}
+        port = (body.get("port") or "").strip()
+        if not port:
+            return jsonify({"error": "port is required"}), 400
+
+        job_id = state.flash_jobs.start_f7(port, image)
+        if job_id is None:
+            logger.warning("F7 bootstrap rejected: a flash is already in progress")
+            return jsonify({"error": "a flash is already in progress"}), 409
+        return jsonify({"job_id": job_id})
+
+    @app.route("/hokku/api/flash/cancel", methods=["POST"])
+    def api_flash_cancel():
+        """Ask the running flash job to stop (only the F7 catch loop is cancellable)."""
+        cancelled = state.flash_jobs.cancel()
+        return jsonify({"cancelled": cancelled})
 
     @app.route("/hokku/api/flash/status")
     def api_flash_status():
