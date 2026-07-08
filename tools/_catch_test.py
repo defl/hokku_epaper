@@ -2,14 +2,15 @@
 """Non-destructive test: can we catch the XR872 mask-BROM on a STOCK unit via the
 0x55 power-cycle catch (the only entry when the firmware doesn't answer `upgrade`)?
 
-Long-press the power button to power-cycle the device; this hammers 0x55 across the
-CH340 re-enumeration blackout to catch the mask-BROM sync window. On success it
-confirms with GetFlashId and immediately sys_reboots back out — nothing is written,
-the unit stays stock. This settles whether pure-Python fresh-unit flashing is viable.
+PROVEN: it works. Hammer 0x55 on an already-open CH340 port while the user does a
+USB **replug + power press** — the replug brings the port up first (no re-enumeration
+gap to miss; a plain long-press drops the port for ~1.1 s and misses the window). On
+success it confirms with GetFlashId and sys_reboots back out — nothing is written,
+the unit stays stock.
 
 Usage:
   python tools/_catch_test.py [--port COM7]
-  -> LONG-PRESS the power button, repeat every ~8 s until it syncs (Ctrl-C to stop).
+  -> UNPLUG + REPLUG the USB, then PRESS the power button; repeat until it syncs.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ def main() -> int:
     args = ap.parse_args()
 
     print(f"NON-DESTRUCTIVE BROM catch test on {args.port}")
-    print(">>> LONG-PRESS the power button now, and repeat every ~8 s until it syncs. <<<")
+    print(">>> UNPLUG + REPLUG the USB, then PRESS the power button; repeat until sync. <<<")
     print("    (Ctrl-C to abort; nothing is written either way)\n")
 
     deadline = time.monotonic() + args.seconds
@@ -47,18 +48,18 @@ def main() -> int:
                 ser = open_stable(args.port)
             except (serial.SerialException, OSError):
                 if time.monotonic() - last_status > 3:
-                    print(f"[{ts()}] waiting for port... LONG-PRESS the button")
+                    print(f"[{ts()}] waiting for port... replug USB + press the button")
                     last_status = time.monotonic()
                 continue
             try:
                 if time.monotonic() - last_status > 3:
-                    print(f"[{ts()}] hammering 0x55 — keep long-pressing")
+                    print(f"[{ts()}] hammering 0x55 — replug USB + press the button")
                     last_status = time.monotonic()
                 if hammer_sync(ser, duration=2.0):
                     print(f"\n[{ts()}] *** BROM SYNC CAUGHT — establishing command channel ***")
                     f = XR872Flasher(ser=ser, verbose=False)
                     if not f.sync(attempts=30, timeout_per=0.1):
-                        print("  command sync failed after trigger — keep long-pressing")
+                        print("  command sync failed after trigger — keep replug+pressing")
                         continue
                     fid = f.get_flash_id()
                     print(f"  GetFlashId -> {fid}")
@@ -74,8 +75,9 @@ def main() -> int:
             print("\nAborted.")
             return 130
 
-    print(f"\n[{ts()}] gave up after {args.seconds}s — no BROM catch.")
-    print("  ===> The 0x55 catch did NOT work on this stock unit over the CH340.")
+    print(f"\n[{ts()}] gave up after {args.seconds}s — no catch this run.")
+    print("  ===> Retry: the trigger is replug+press (NOT long-press). Long-press")
+    print("       drops the port past the sync window, so the catch misses.")
     return 1
 
 

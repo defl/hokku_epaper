@@ -2024,15 +2024,16 @@ function onFlashDeviceChange() {
   if (!port || !dev) { note.textContent = ''; return; }
 
   if (dev.is_bigme_f7) {
-    // The F7 (XR872) is not USB-flashable from here (the mask-BROM window is
-    // unreachable from Python over the CH340). It's bootstrapped once with the
-    // vendor tool, then updates over-the-air. The ESP32/NVS form doesn't apply.
+    // The F7 (XR872) isn't wired into this ESP32/esptool form. It's bootstrapped
+    // once with a one-command pure-Python CLI tool (BROM caught via a USB
+    // replug+press), then updates over-the-air. A GUI button for it is a follow-up.
     form.hidden = true;
     note.textContent =
-      'Bigme F7 (XR872) detected. F7 screens are not flashed over USB from here — '
-      + 'bootstrap once with the vendor-tool procedure (see '
-      + 'docs/screens/bigme_f7/bootstrap.md), after which they update over-the-air '
-      + 'and appear as normal screens for OTA + config.';
+      'Bigme F7 (XR872) detected. Bootstrap it once from the CLI: '
+      + 'python tools/f7_initial_flasher.py --port ' + (dev.port || 'COMx')
+      + ' (unplug+replug USB, then press power to enter the BROM). See '
+      + 'docs/screens/bigme_f7/bootstrap.md. After that it updates over-the-air '
+      + 'and appears as a normal screen for OTA + config.';
     return;
   }
   if (!dev.is_esp32) {

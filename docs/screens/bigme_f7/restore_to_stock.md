@@ -67,5 +67,7 @@ python tools/_surgical_oem_restore.py "$DUMP" --port COM7 --write
 - It has the factory WiFi/cloud config (not your network), so it won't fetch new
   content, and e-paper retains its last image — the screen may look unchanged until
   it's set up via the Bigme app. This is expected for an un-provisioned unit.
-- Re-flashing custom firmware onto a now-stock unit requires USB BROM entry via a
-  long-press catch / PhoenixMC (it can't OTA and won't answer `upgrade`).
+- Re-flashing custom firmware onto a now-stock unit requires USB BROM entry via the
+  **replug+press `0x55` catch** — a one-command pure-Python bootstrap
+  (`tools/f7_initial_flasher.py`); see [`bootstrap.md`](bootstrap.md). (It can't OTA
+  and won't answer `upgrade` until our firmware is back on.)

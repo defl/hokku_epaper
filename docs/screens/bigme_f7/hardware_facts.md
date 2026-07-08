@@ -90,15 +90,20 @@ Source: direct testing on the device, 2026-06-13.
 - **DTR and RTS are NOT wired** to the XR872 reset or power-enable: pulsing either line (both
   polarities) with a 9 s listen produces no boot/crash output. PhoenixMC's DTR-reset is a no-op
   on this board.
-- **The power-on mask-BROM UART sync window is unreachable over the CH340.** A long-press is the
-  only reset and it power-cycles the CH340 too, so COM6 disappears ~1 s and only becomes openable
-  ~1.1 s after power-on — by then the BROM window has already closed (zero-latency capture:
-  flooding `0x55` and `"upgrade"+0x55` gets no answer; device is silent ~5 s then emits its crash
-  dump). PhoenixMC hits the same wall; it only connects when the device is already sitting in
-  `bl_upgrade` (e.g. right after an `xr872_flasher` write).
-- **Implication:** a device running crash-on-boot firmware cannot be recovered over UART. Recovery
-  requires hardware — SPI-clip the NOR flash (CH341A + flashrom) or a boot-strap test pad. (This is
-  the state of the bricked unit.)
+- **The power-on mask-BROM UART sync window IS reachable over the CH340 — with the right trigger.**
+  Proven 2026-07-07 (`tools/_catch_test.py`; used by `tools/f7_initial_flasher.py`). The trigger is
+  a **USB replug + power press**, NOT a long-press:
+  - **Replug + press (works):** unplug the cable, replug it, *then* press power. The replug brings
+    the CH340 port up **first**, so a Python watcher holds it open and hammers `0x55` straight
+    through the sync window — no re-enumeration gap.
+  - **Long-press (fails):** a long-press power-cycles the CH340 too, so the port disappears ~1 s and
+    only re-opens ~1.1 s after power-on — by then the BROM window has closed and the catch misses.
+    Our earlier "unreachable over the CH340" conclusion was this wrong trigger.
+  PhoenixMC connects the same way (its own driver timing) once the device is in the window.
+- **Implication — the "bricked" unit may be recoverable.** The mask-BROM's sync window runs at
+  power-on, **before** the app boots and crashes, so the replug+press catch should land on a
+  crash-on-boot device too. This is UNTESTED on the bricked unit (6000203) but is worth trying
+  before resorting to hardware (SPI-clip the NOR flash / boot-strap test pad).
 - **On a WORKING device, the `upgrade` console is a reliable UART BROM entry** (confirmed 2026-06-19
   on a working unit): send `upgrade\n` to the awake firmware console → watchdog reset into BROM. No
   boot-log-window timing is needed; the CH340 stays powered so the COM port does not bounce, and the
