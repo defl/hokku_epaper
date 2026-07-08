@@ -72,10 +72,16 @@ python tools/f7_initial_flasher.py --port COM7
 
 The "Flash a screen" page also drives this bootstrap. Scan for devices, pick the
 F7 (recognised by the CH340 VID/PID — it shows a **Bootstrap F7** panel instead of
-the ESP32 form) and press **Bootstrap F7**. The server then writes slot 0 via the
-identical `flash_slot0`, streaming progress into the log with a **Cancel** button.
-It's the same one-slot job as the ESP32 flash (scanning is refused while it runs),
-and Wi-Fi is still provisioned over the console afterward (the GUI doesn't touch it).
+the ESP32 form), enter the **Wi-Fi + screen name**, and press **Bootstrap F7**. The
+server writes slot 0 via the identical `flash_slot0`, then **provisions Wi-Fi/config
+over the console** for you (see below), streaming progress into the log with a
+**Cancel** button. It's the same one-slot job as the ESP32 flash (scanning is
+refused while it runs).
+
+Wi-Fi provisioning caveats: the F7 supports a **single** network (no fallback yet),
+and because the console tokenizer splits on whitespace, the **SSID, password, and
+screen name can't contain spaces** (the GUI + server reject spaces up front). Leave
+the fields blank to skip provisioning and set Wi-Fi by hand later.
 
 Entry is two-phase, so the physical dance is usually unnecessary:
 
@@ -89,6 +95,11 @@ Entry is two-phase, so the physical dance is usually unnecessary:
    lands.
 
 So a stock unit needs the replug+press; a unit already on our firmware doesn't.
+
+After the write, if you supplied Wi-Fi/config the log asks you to **power-cycle** the
+unit (needed to boot on this chip regardless). The server then waits for the console
+to come up and writes `cfg server`/`cfg name`/`cfg save` + `wifi <ssid> <psk>`
+(password never logged), and briefly watches for the join + first server POST.
 
 Server bits: `POST /hokku/api/flash/start_f7` + `/hokku/api/flash/cancel`,
 `hokku/screens/bigme_f7/bootstrap.py` (wraps the `tools/` primitives; only available
