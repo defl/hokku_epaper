@@ -89,38 +89,41 @@ class FlashJobManager:
         self._thread.start()
         return job_id
 
-    def start_f7(self, port: str, image_path: Path) -> int | None:
-        """Begin a Bigme F7 (XR872) BROM-catch bootstrap in a background thread.
+    def start_f7(self, port: str, image_path: Path, provision: dict | None = None) -> int | None:
+        """Begin a Bigme F7 (XR872) BROM bootstrap in a background thread.
 
-        Unlike the esptool flash this waits (streaming guidance) for the operator to
-        power-cycle the unit with a USB replug + power press, then writes slot 0.
-        Returns the job id, or ``None`` if a flash is already running."""
+        Enters the BROM (no-touch ``upgrade`` if the unit runs Hokku firmware, else a
+        replug+press catch), writes slot 0, and — if ``provision`` is given — writes
+        Wi-Fi/config over the console after a power-cycle. Returns the job id, or
+        ``None`` if a flash is already running."""
         job = self._new_job(port, kind="bigme_f7")
         if job is None:
             return None
         job_id = job["id"]
         logger.info(
-            "Flash job #%d starting: Bigme F7 bootstrap port=%s image=%s",
+            "Flash job #%d starting: Bigme F7 bootstrap port=%s image=%s provision=%s",
             job_id,
             port,
             Path(image_path).name,
+            bool(provision),
         )
         self._thread = threading.Thread(
             target=self._run_f7,
-            args=(job, port, image_path),
+            args=(job, port, image_path, provision),
             name=f"flash-f7-{job_id}",
             daemon=True,
         )
         self._thread.start()
         return job_id
 
-    def _run_f7(self, job: dict, port: str, image_path: Path) -> None:
+    def _run_f7(self, job: dict, port: str, image_path: Path, provision: dict | None) -> None:
         try:
             result = f7_bootstrap.bootstrap_device(
                 port,
                 image_path,
                 on_line=lambda ln: self._append(job, ln),
                 should_cancel=lambda: bool(job.get("cancel")),
+                provision=provision,
             )
             duration = time.time() - job["started_at"]
             with self._lock:

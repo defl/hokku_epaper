@@ -1078,7 +1078,22 @@ def create_app(
         if not port:
             return jsonify({"error": "port is required"}), 400
 
-        job_id = state.flash_jobs.start_f7(port, image)
+        # Optional provisioning: written over the console after the flash. The F7
+        # console tokenizer splits on whitespace, so these must be single tokens.
+        ssid = (body.get("wifi_ssid1") or "").strip()
+        psk = body.get("wifi_pass1") or ""
+        name = (body.get("screen_name") or "").strip()
+        server_url = (body.get("image_url") or "").strip()
+        for label, val in (("Wi-Fi name", ssid), ("Wi-Fi password", psk), ("screen name", name)):
+            if val and not bigme_bootstrap.console_safe_token(val):
+                return jsonify(
+                    {"error": f"{label} can't contain spaces on the Bigme F7 (console limit)"}
+                ), 400
+        provision = None
+        if ssid or name or server_url:
+            provision = {"ssid": ssid, "psk": psk, "name": name, "server_url": server_url}
+
+        job_id = state.flash_jobs.start_f7(port, image, provision)
         if job_id is None:
             logger.warning("F7 bootstrap rejected: a flash is already in progress")
             return jsonify({"error": "a flash is already in progress"}), 409

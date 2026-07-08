@@ -143,16 +143,121 @@ def _catch_entry(
     raise RuntimeError("no BROM catch within the time limit — retry the replug+press")
 
 
+# The F7 console tokenizer (cmd_parse_argv) splits on whitespace with no quoting, so
+# an SSID / password / screen name written over the console must be a single token.
+def console_safe_token(s: str) -> bool:
+    """True if ``s`` is a single console token (no whitespace or control chars)."""
+    return bool(s) and not any(c.isspace() or ord(c) < 0x20 for c in s)
+
+
+PROVISION_BOOT_TIMEOUT_S = 150.0
+
+
+def _open_console(port, serial):
+    """Open the F7 console; return the serial handle if the firmware answers, else None."""
+    try:
+        s = serial.Serial(port, 115200, timeout=0.3)
+        s.dtr = False
+        s.rts = False
+    except (serial.SerialException, OSError):
+        return None
+    try:
+        s.reset_input_buffer()
+        s.write(b"cfg show\r\n")
+        s.flush()
+        time.sleep(1.0)
+        if b"cfg:" in s.read(600):
+            return s
+    except (serial.SerialException, OSError):
+        pass
+    with contextlib.suppress(Exception):
+        s.close()
+    return None
+
+
+def _console_send(s, line: str, settle: float = 0.8) -> bytes:
+    """Send one console command (CRLF) and return whatever it printed back."""
+    s.reset_input_buffer()
+    s.write((line + "\r\n").encode())
+    s.flush()
+    time.sleep(settle)
+    return s.read(800)
+
+
+def _provision_over_console(port, prov, on_line, should_cancel, serial):
+    """After the firmware is written, wait for the operator to power-cycle, then write
+    Wi-Fi + config over the booted firmware's console. Never logs the password."""
+    on_line("")
+    on_line("POWER-CYCLE the unit now (unplug/replug USB, or long-press) to boot it —")
+    on_line("Wi-Fi and config are then written over the console automatically. Waiting...")
+    deadline = time.monotonic() + PROVISION_BOOT_TIMEOUT_S
+    last = 0.0
+    s = None
+    while time.monotonic() < deadline:
+        if should_cancel():
+            raise RuntimeError("cancelled by the operator")
+        s = _open_console(port, serial)
+        if s is not None:
+            break
+        if time.monotonic() - last > 5:
+            on_line("  waiting for the unit to boot... (power-cycle it if you haven't)")
+            last = time.monotonic()
+        time.sleep(1.0)
+    if s is None:
+        raise RuntimeError("console never came up — power-cycle the unit and re-run to provision")
+
+    try:
+        on_line("Console up — writing configuration...")
+        # server + name + save first, so a refresh right after Wi-Fi connects uses them.
+        if prov.get("server_url"):
+            _console_send(s, f"cfg server {prov['server_url']}")
+            on_line(f"  server = {prov['server_url']}")
+        if prov.get("name"):
+            _console_send(s, f"cfg name {prov['name']}")
+            on_line(f"  name   = {prov['name']}")
+        _console_send(s, "cfg save")
+        if prov.get("ssid"):
+            # `wifi` persists to sysinfo AND connects; never echo the password.
+            _console_send(s, f"wifi {prov['ssid']} {prov['psk']}", settle=1.0)
+            on_line(f"  Wi-Fi  = '{prov['ssid']}' (connecting)")
+
+        verify = _console_send(s, "cfg show").decode("utf-8", "replace")
+        name_ok = not prov.get("name") or f"name='{prov['name']}'" in verify
+        url_ok = not prov.get("server_url") or f"url='{prov['server_url']}'" in verify
+        on_line("Configuration saved." if (name_ok and url_ok) else "Configuration written.")
+
+        # Best-effort: watch briefly for the join + first server POST as confirmation.
+        if prov.get("ssid"):
+            on_line("Waiting for the unit to associate and check in...")
+            end = time.monotonic() + 40
+            while time.monotonic() < end:
+                if should_cancel():
+                    break
+                chunk = s.read(400)
+                if b"network up" in chunk or b"POST http" in chunk:
+                    on_line("  associated + checked in with the server.")
+                    break
+    finally:
+        with contextlib.suppress(Exception):
+            s.close()
+    on_line("Provisioned — the unit is configured and should appear in the screen list.")
+
+
 def bootstrap_device(
     port: str,
     image_path: str | Path,
     on_line: Callable[[str], None],
     should_cancel: Callable[[], bool],
     timeout_s: float = CATCH_TIMEOUT_S,
+    provision: dict | None = None,
 ) -> dict:
     """Enter the BROM and write slot 0. Tries the no-touch ``upgrade`` entry first
     (works when the unit already runs Hokku firmware), then falls back to the manual
     replug+press catch for a stock unit.
+
+    If ``provision`` is given (``{"ssid","psk","name","server_url"}``, all optional),
+    after the write it waits for the operator to power-cycle, then writes those over
+    the booted firmware's console.
 
     Streams progress line-by-line via ``on_line``; polls ``should_cancel`` between
     attempts. Returns ``{"ok": True}`` on success. Raises ``RuntimeError`` on
@@ -209,8 +314,11 @@ def bootstrap_device(
 
     on_line("")
     on_line("DONE — Hokku firmware in slot 0 (bootloader + OEM slot untouched).")
-    on_line("Next: POWER-CYCLE the unit (unplug/replug, or long-press) to boot it.")
-    on_line("An already-provisioned unit boots straight back online; a fresh unit needs")
-    on_line("Wi-Fi set over the console (115200): `wifi <ssid> <pw>`, then `cfg save`.")
-    on_line("Details: docs/screens/bigme_f7/bootstrap.md")
+    if provision:
+        _provision_over_console(port, provision, on_line, should_cancel, serial)
+    else:
+        on_line("Next: POWER-CYCLE the unit (unplug/replug, or long-press) to boot it.")
+        on_line("An already-provisioned unit boots straight back online; a fresh unit needs")
+        on_line("Wi-Fi set over the console (115200): `wifi <ssid> <pw>`, then `cfg save`.")
+        on_line("Details: docs/screens/bigme_f7/bootstrap.md")
     return {"ok": True}

@@ -964,10 +964,27 @@
         <strong>Bigme F7 (XR872).</strong> Installs Hokku firmware into slot 0 (the
         bootloader and OEM backup slot are left untouched). A unit that
         <em>already runs Hokku firmware</em> enters update mode on its own — no
-        touching needed. Only a <em>stock</em> unit needs the manual step below.
-        Wi-Fi is set afterward over the USB console (see
-        docs/screens/bigme_f7/bootstrap.md), not here.
+        touching needed. Only a <em>stock</em> unit needs the manual replug+press.
+        Fill in Wi-Fi below and it's written for you after the flash.
       </div>
+
+      <div class="config-row">
+        <label>Wi-Fi network:</label>
+        <input type="text" id="flash-f7-ssid" placeholder="SSID (no spaces)" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="config-row">
+        <label>Wi-Fi password:</label>
+        <input type="password" id="flash-f7-pass" placeholder="(blank for an open network)" autocomplete="off">
+      </div>
+      <div class="config-row">
+        <label>Screen name:</label>
+        <input type="text" id="flash-f7-name" placeholder="e.g. living-room (no spaces)" maxlength="63">
+      </div>
+      <div class="flash-note" style="font-size:0.82em;">
+        The F7 console can't take spaces in the Wi-Fi name, password, or screen name.
+        A single fallback network isn't supported on the F7 yet.
+      </div>
+
       <ol class="flash-f7-steps">
         <li>Press <em>Bootstrap F7</em> and watch the log.</li>
         <li><strong>Already on Hokku firmware:</strong> nothing to do — it enters the
@@ -975,8 +992,8 @@
         <li><strong>Stock unit</strong> (only if the log asks): <strong>unplug</strong>
             the USB, <strong>replug</strong> it, then <strong>press power</strong> —
             repeat until the log shows <em>BROM caught</em>.</li>
-        <li>When it's done, <strong>power-cycle</strong> the unit to boot the new
-            firmware.</li>
+        <li>When the log says so, <strong>power-cycle</strong> the unit — it boots and
+            the Wi-Fi/config is written automatically.</li>
       </ol>
       <div class="config-row">
         <button type="button" class="btn btn-primary" id="flash-f7-go-btn" onclick="startF7Flash()">Bootstrap F7</button>
@@ -2197,7 +2214,7 @@ function setF7Busy(busy) {
   const cancel = document.getElementById('flash-f7-cancel-btn');
   if (go) { go.disabled = busy; go.textContent = busy ? 'Bootstrapping…' : 'Bootstrap F7'; }
   if (cancel) cancel.hidden = !busy;
-  ['flash-device', 'flash-scan-btn'].forEach(id => {
+  ['flash-device', 'flash-scan-btn', 'flash-f7-ssid', 'flash-f7-pass', 'flash-f7-name'].forEach(id => {
     const el = document.getElementById(id); if (el) el.disabled = busy;
   });
 }
@@ -2205,7 +2222,21 @@ function setF7Busy(busy) {
 async function startF7Flash() {
   const port = document.getElementById('flash-device').value;
   if (!port) { showToast('Select a device first'); return; }
-  setF7Status('Starting… get ready to replug + press power', '');
+  const ssid = document.getElementById('flash-f7-ssid').value.trim();
+  const psk = document.getElementById('flash-f7-pass').value;
+  const name = document.getElementById('flash-f7-name').value.trim();
+  const noSpace = s => !/\s/.test(s);
+  if ((ssid && !noSpace(ssid)) || !noSpace(psk) || (name && !noSpace(name))) {
+    showToast('F7 Wi-Fi/name can’t contain spaces'); return;
+  }
+  const body = {
+    port,
+    wifi_ssid1: ssid,
+    wifi_pass1: psk,
+    screen_name: name,
+    image_url: document.getElementById('flash-url').value,
+  };
+  setF7Status('Starting…', '');
   const log = document.getElementById('flash-log');
   log.hidden = false; log.textContent = '';
   setF7Busy(true);
@@ -2213,7 +2244,7 @@ async function startF7Flash() {
     const r = await fetch('/hokku/api/flash/start_f7', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ port }),
+      body: JSON.stringify(body),
     });
     const j = await r.json().catch(() => ({}));
     if (r.status === 409) { showToast('A flash is already in progress'); setF7Busy(false); return; }
@@ -2238,12 +2269,12 @@ function pollF7Flash() {
     const log = document.getElementById('flash-log');
     if (j.log && j.log.length) { log.hidden = false; log.textContent = j.log.join('\n'); log.scrollTop = log.scrollHeight; }
     if (j.state === 'running') {
-      setF7Status('Working… watch the log (a stock unit will ask for a replug + press)', '');
+      setF7Status('Working… follow the log (it will tell you when to power-cycle)', '');
     } else if (j.state === 'done') {
       clearInterval(flashPollTimer); flashPollTimer = null;
-      setF7Status('Firmware written — now power-cycle the unit, then set Wi-Fi over the console.', 'ok');
+      setF7Status('Done — firmware written and Wi-Fi/config provisioned.', 'ok');
       setF7Busy(false);
-      showToast('Bigme F7 firmware written');
+      showToast('Bigme F7 flashed + provisioned');
     } else if (j.state === 'error') {
       clearInterval(flashPollTimer); flashPollTimer = null;
       setF7Status(j.error ? 'Failed: ' + j.error : 'Bootstrap failed', 'err');
