@@ -1970,6 +1970,7 @@ let flashDevices = [];
 let flashPollTimer = null;
 
 function flashDeviceLabel(d) {
+  if (d.is_bigme_f7) return `${d.port} — Bigme F7 (XR872)`;
   if (!d.is_esp32) return `${d.port} — ${d.description} (not an ESP32-S3)`;
   let s = `${d.port} — ESP32-S3`;
   if (d.config && d.config.screen_name) s += ` · "${d.config.screen_name}"`;
@@ -2022,6 +2023,18 @@ function onFlashDeviceChange() {
   form.hidden = !port;
   if (!port || !dev) { note.textContent = ''; return; }
 
+  if (dev.is_bigme_f7) {
+    // The F7 (XR872) is not USB-flashable from here (the mask-BROM window is
+    // unreachable from Python over the CH340). It's bootstrapped once with the
+    // vendor tool, then updates over-the-air. The ESP32/NVS form doesn't apply.
+    form.hidden = true;
+    note.textContent =
+      'Bigme F7 (XR872) detected. F7 screens are not flashed over USB from here — '
+      + 'bootstrap once with the vendor-tool procedure (see '
+      + 'docs/screens/bigme_f7/bootstrap.md), after which they update over-the-air '
+      + 'and appear as normal screens for OTA + config.';
+    return;
+  }
   if (!dev.is_esp32) {
     note.textContent = 'Warning: this port is not an ESP32-S3. Flashing will likely fail.';
     return;

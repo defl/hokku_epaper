@@ -33,7 +33,8 @@ ota_reboot();
 
 The *first* OTA-capable image must be flashed over **USB** — a pre-OTA image (or
 stock OEM) has no OTA client to receive `X-Firmware-Update`. After that, updates
-are over-the-air. Reflashing a stock unit needs USB too (stock OEM can't OTA).
+are over-the-air. Reflashing a stock unit needs USB too (stock OEM can't OTA). The
+one-time fresh-unit bootstrap is documented in [`bootstrap.md`](bootstrap.md).
 
 ## Server side (model-aware)
 

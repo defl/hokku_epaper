@@ -234,6 +234,37 @@ def test_status_reports_per_model_firmware_versions(app_config, tmp_path, monkey
     }
 
 
+def test_flash_devices_classifies_bigme_f7(app_config, tmp_path, monkeypatch):
+    # firmware must be present so the /flash/devices route doesn't 503.
+    fw = tmp_path / "hokku-firmware_1.2.9.bin"
+    fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
+    monkeypatch.setattr(huessen_epf1301, "merged_firmware_file", lambda *a, **k: fw)
+    monkeypatch.setattr(
+        huessen_epf1301,
+        "scan_devices",
+        lambda: [
+            {
+                "port": "COM7",
+                "description": "USB-SERIAL CH340",
+                "vid": 0x1A86,
+                "pid": 0x7523,
+                "is_esp32": False,
+            },
+            {
+                "port": "COM3",
+                "description": "ESP32-S3",
+                "vid": 0x303A,
+                "pid": 0x1001,
+                "is_esp32": True,
+            },
+        ],
+    )
+    client = _client(_bare_state(app_config), tmp_path)
+    devs = {d["port"]: d for d in client.get("/hokku/api/flash/devices").get_json()["devices"]}
+    assert devs["COM7"]["is_bigme_f7"] is True  # CH340 -> Bigme F7
+    assert devs["COM3"]["is_bigme_f7"] is False  # ESP32-S3 -> not F7
+
+
 # ── /hokku/firmware-config ────────────────────────────────────────────────────
 
 

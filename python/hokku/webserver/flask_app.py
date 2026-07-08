@@ -950,7 +950,14 @@ def create_app(
         if state.flash_jobs.is_busy():
             logger.warning("Flash scan rejected: a flash is already in progress")
             return jsonify({"error": "a flash is in progress", "busy": True}), 409
-        return jsonify({"devices": huessen_epf1301.scan_devices(), "busy": False})
+        devices = huessen_epf1301.scan_devices()
+        # Classify non-ESP32 ports the UI knows how to guide: a CH340 bridge is a
+        # Bigme F7 (XR872), which is USB-flashed by a different (vendor-tool)
+        # procedure, not esptool — so the UI shows F7 guidance instead of the
+        # generic "not an ESP32-S3" warning.
+        for d in devices:
+            d["is_bigme_f7"] = (d.get("vid"), d.get("pid")) == (0x1A86, 0x7523)
+        return jsonify({"devices": devices, "busy": False})
 
     @app.route("/hokku/api/flash/server_url")
     def api_flash_server_url():

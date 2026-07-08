@@ -33,13 +33,18 @@ _READ_SIZE = (APP_OFFSET + 256) - NVS_OFFSET
 
 
 def list_serial_ports() -> list[dict]:
-    """Return ``{port, description, is_esp32}`` for every serial port present."""
+    """Return ``{port, description, vid, pid, is_esp32}`` for every serial port.
+
+    ``vid``/``pid`` are raw USB ids (or None) so callers can classify the port's
+    hardware model (e.g. a CH340 bridge → Bigme F7)."""
     ports = []
     for p in serial.tools.list_ports.comports():
         ports.append(
             {
                 "port": p.device,
                 "description": p.description or p.device,
+                "vid": p.vid,
+                "pid": p.pid,
                 "is_esp32": p.vid == ESP32S3_VID and p.pid == ESP32S3_PID,
             }
         )
