@@ -93,12 +93,16 @@ def test_parse_device_state_reads_config():
 
 
 def test_merged_firmware_file_picks_highest(tmp_path):
-    for name in ("hokku-firmware_1.2.4.bin", "hokku-firmware_1.2.10.bin", "ignore.txt"):
+    for name in (
+        "hokku-huessen_epf1301-1.2.4.bin",
+        "hokku-huessen_epf1301-1.2.10.bin",
+        "ignore.txt",
+    ):
         (tmp_path / name).write_bytes(b"\x00")
     picked = huessen_epf1301.merged_firmware_file(tmp_path)
     # sorted()[-1] is lexicographic, so "1.2.4" sorts after "1.2.10".
     assert picked is not None
-    assert picked.name == "hokku-firmware_1.2.4.bin"
+    assert picked.name == "hokku-huessen_epf1301-1.2.4.bin"
 
 
 def test_merged_firmware_file_none_when_empty(tmp_path):

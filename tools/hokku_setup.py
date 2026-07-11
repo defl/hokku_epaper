@@ -128,10 +128,10 @@ def _cache_entries():
 
 
 def _parse_firmware_tag(filename):
-    """Extract the tag from 'hokku-firmware_<tag>.bin'. Returns tag or 'local'."""
+    """Extract the tag from 'hokku-huessen_epf1301-<tag>.bin'. Returns tag or 'local'."""
     stem = Path(filename).stem  # drops .bin
-    if stem.startswith("hokku-firmware_"):
-        return stem[len("hokku-firmware_") :]
+    if stem.startswith("hokku-huessen_epf1301-"):
+        return stem[len("hokku-huessen_epf1301-") :]
     return "local"
 
 
@@ -150,7 +150,7 @@ def _fetch_firmware_from_github():
     tag = rel.get("tag_name", "latest")
     asset = release_cache.find_asset(rel, esp32_setup._is_merged_firmware_asset)
     if asset is None:
-        print(f"  ERROR: release {tag} has no hokku-firmware_*.bin asset.")
+        print(f"  ERROR: release {tag} has no hokku-huessen_epf1301-*.bin asset.")
         return None
 
     target_dir = esp32_setup.FIRMWARE_CACHE_DIR / tag
@@ -228,7 +228,7 @@ def action_download_everything():
         print("  .deb: FAILED")
 
     # 3. Firmware merged bin.
-    # If a local build exists (firmware/huessen_epf1301/release/hokku-firmware_*.bin) ask the
+    # If a local build exists (firmware/release/hokku-huessen_epf1301-*.bin) ask the
     # user whether to import it or pull the latest release from GitHub —
     # they might be running this to capture a dev build in .cache/, or to
     # refresh an old cache from the official release. Don't guess.

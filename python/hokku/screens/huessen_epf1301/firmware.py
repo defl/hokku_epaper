@@ -1,13 +1,16 @@
 """Locate the bundled merged firmware image for the huessen_epf1301 frame.
 
-The merged ``hokku-firmware_<version>.bin`` (bootloader + partition table + app)
-is searched for in:
-  1. the repo's ``firmware/huessen_epf1301/release/`` directory (dev tree), then
+The merged ``hokku-huessen_epf1301-<version>.bin`` (bootloader + partition table +
+app) is searched for in:
+  1. the repo's shared ``firmware/release/`` directory (dev tree), then
   2. ``/usr/share/hokku-server/firmware/`` (installed via the Debian package).
+
+The release filename carries the version (see firmware/*/ci-build.sh).
 """
 
 from __future__ import annotations
 
+import re
 import struct
 from pathlib import Path
 
@@ -15,8 +18,11 @@ from .constants import APP_OFFSET
 
 # python/hokku/screens/huessen_epf1301/firmware.py -> repo root is parents[4]
 _REPO_ROOT = Path(__file__).resolve().parents[4]
-_DEV_FIRMWARE_DIR = _REPO_ROOT / "firmware" / "huessen_epf1301" / "release"
+_DEV_FIRMWARE_DIR = _REPO_ROOT / "firmware" / "release"
 _INSTALLED_FIRMWARE_DIR = Path("/usr/share/hokku-server/firmware")
+
+_MERGED_GLOB = "hokku-huessen_epf1301-*.bin"
+_MERGED_RE = re.compile(r"^hokku-huessen_epf1301-(.+)\.bin$")
 
 
 def resolve_firmware_dir() -> Path | None:
@@ -28,7 +34,8 @@ def resolve_firmware_dir() -> Path | None:
 
 
 def merged_firmware_file(directory: Path | None = None) -> Path | None:
-    """Return the merged ``hokku-firmware_<version>.bin`` in *directory*, or None.
+    """Return the merged ``hokku-huessen_epf1301-<version>.bin`` in *directory*, or
+    None.
 
     With no argument, searches the resolved firmware dir. Picks the highest
     version by filename sort when several are present.
@@ -37,7 +44,7 @@ def merged_firmware_file(directory: Path | None = None) -> Path | None:
         directory = resolve_firmware_dir()
     if directory is None or not directory.exists():
         return None
-    matches = sorted(directory.glob("hokku-firmware_*.bin"))
+    matches = sorted(directory.glob(_MERGED_GLOB))
     return matches[-1] if matches else None
 
 
@@ -54,13 +61,14 @@ def release_app_header(directory: Path | None = None) -> bytes | None:
 
 
 def bundled_firmware_version(directory: Path | None = None) -> str | None:
-    """Return the bundled firmware's version string (from the ESP app descriptor),
-    or None if no bundled firmware is present. The version lives at bytes [48:80]
-    of the app section header (``esp_app_desc_t.version``)."""
-    hdr = release_app_header(directory)
-    if not hdr:
+    """Return the bundled firmware's version, parsed from the release filename
+    (``hokku-huessen_epf1301-<version>.bin``), or None if not present. The build
+    embeds the same version in both the filename and the app descriptor."""
+    merged = merged_firmware_file(directory)
+    if not merged:
         return None
-    return hdr[48:80].split(b"\x00")[0].decode("ascii", errors="replace").strip() or None
+    m = _MERGED_RE.match(merged.name)
+    return m.group(1) if m else None
 
 
 def _esp_app_image_size(data: bytes) -> int | None:

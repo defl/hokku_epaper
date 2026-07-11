@@ -137,10 +137,10 @@ Connect the frame to your computer via the USB-C charging port. Find the serial 
 
 **Step 2: Flash the firmware**
 
-Download `hokku-firmware_<tag>.bin` from the latest GitHub release, then:
+Download `hokku-huessen_epf1301-<tag>.bin` from the latest GitHub release, then:
 
 ```bash
-esptool.py --chip esp32s3 --port <PORT> write_flash 0x0 hokku-firmware_<tag>.bin
+esptool.py --chip esp32s3 --port <PORT> write_flash 0x0 hokku-huessen_epf1301-<tag>.bin
 ```
 
 The flash takes about 30 seconds.
@@ -307,7 +307,7 @@ It then presents a menu and pre-selects the most sensible option for the detecte
 
 2. **Configuration prompts** (options 3 and 4) — you're asked for WiFi SSID, WiFi password, server IP, server port (default `8080`), and an optional screen name. You can also configure an optional secondary WiFi network; if you do, a connection-order prompt follows (`primary first` or `last-used first`). The wizard checks the server is reachable before writing; if it isn't you'll see a warning and can continue anyway.
 
-3. **Firmware download and flash** (options 3 and 5) — the wizard fetches the latest `hokku-firmware_*.bin` from GitHub releases (or imports a local build if one exists) and flashes it over USB. Takes about 30 seconds. A boot check follows: the wizard reads serial output for 10 seconds and reports whether the firmware started cleanly.
+3. **Firmware download and flash** (options 3 and 5) — the wizard fetches the latest `hokku-huessen_epf1301-*.bin` from GitHub releases (or imports a local build if one exists) and flashes it over USB. Takes about 30 seconds. A boot check follows: the wizard reads serial output for 10 seconds and reports whether the firmware started cleanly.
 
 ![Setup tool configuring a frame](../images/configurator.png)
 

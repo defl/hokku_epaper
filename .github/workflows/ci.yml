@@ -77,7 +77,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: hokku-firmware
-          path: firmware/huessen_epf1301/release/hokku-firmware_*.bin
+          path: firmware/release/hokku-huessen_epf1301-*.bin
 
   build-webserver-deb:
     needs: [test-webserver, build-firmware]

@@ -30,8 +30,10 @@ python/debian/files
 python/debian/*.debhelper
 python/debian/*.substvars
 
-# Releases
-firmware/huessen_epf1301/release/
+# Releases — shared dir holding every variant's built firmware
+# (hokku-<vendor>_<model>-<version>.{bin,img}); build artifacts, never committed.
+firmware/release/
+firmware/huessen_epf1301/build/
 firmware/huessen_epf1301/test/host/Testing/Temporary/CTestCostData.txt
 
 # XR872 firmware build artifacts
@@ -53,3 +55,6 @@ firmware/bigme_f7/image/xr872/xr_system.img.version
 # Local toolchain / config
 FlashTools_repo/
 settings_win.ini
+
+# Editor / IDE
+.vscode/

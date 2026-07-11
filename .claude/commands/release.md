@@ -201,7 +201,7 @@ gh run download <run-id> --name hokku-server-deb --dir "$env:TEMP\hokku-release"
 
 List the downloaded files and their sizes. Verify that exactly one `.bin` file (firmware) and one `.deb` file (webserver) are present. If anything is missing, report and stop.
 
-The firmware filename embeds the `firmware/huessen_epf1301/VERSION` string (e.g., `hokku-firmware_1.2.0.bin`). Note whether this is a new firmware version compared to the previous release.
+The firmware filename embeds the `firmware/huessen_epf1301/VERSION` string (e.g., `hokku-huessen_epf1301-1.2.0.bin`). Note whether this is a new firmware version compared to the previous release.
 
 ---
 

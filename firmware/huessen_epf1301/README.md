@@ -24,7 +24,7 @@ The build timestamp is embedded as the firmware version (YYYYMMDDHHMMSSZ format)
 The setup tool handles flashing automatically. For manual flashing:
 
 ```bash
-esptool.py --chip esp32s3 --port /dev/ttyACM0 write_flash 0x0 hokku-firmware_<tag>.bin
+esptool.py --chip esp32s3 --port /dev/ttyACM0 write_flash 0x0 hokku-huessen_epf1301-<tag>.bin
 ```
 
 On Windows, replace `/dev/ttyACM0` with `COM3` (or whichever port your device is on).

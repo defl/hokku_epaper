@@ -81,7 +81,7 @@ def test_release_app_image_slices_app_section(tmp_path):
     app_bytes = bytes(header) + b"\x00" * 8  # pad(7) + checksum(1) = 8 bytes
     assert len(app_bytes) == 32
     merged = b"\x00" * APP_OFFSET + app_bytes + b"\xff" * 100  # trailing junk
-    (tmp_path / "hokku-firmware_1.2.8.bin").write_bytes(merged)
+    (tmp_path / "hokku-huessen_epf1301-1.2.8.bin").write_bytes(merged)
     assert huessen_epf1301.release_app_image(tmp_path) == app_bytes
 
 
@@ -236,7 +236,7 @@ def test_status_reports_per_model_firmware_versions(app_config, tmp_path, monkey
 
 def test_flash_devices_classifies_bigme_f7(app_config, tmp_path, monkeypatch):
     # firmware must be present so the /flash/devices route doesn't 503.
-    fw = tmp_path / "hokku-firmware_1.2.9.bin"
+    fw = tmp_path / "hokku-huessen_epf1301-1.2.9.bin"
     fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
     monkeypatch.setattr(huessen_epf1301, "merged_firmware_file", lambda *a, **k: fw)
     monkeypatch.setattr(

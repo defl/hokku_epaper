@@ -13,7 +13,7 @@ cd /d "%~dp0"
 
 REM If the first argument is "build" with no other flags, force a reconfigure
 REM so the CMake timestamp is always today's date, then run the build and
-REM merge the output into a single firmware/huessen_epf1301/release/hokku-firmware_<ver>.bin.
+REM merge the output into a single firmware/release/hokku-huessen_epf1301-<ver>.bin.
 if /i "%~1"=="build" if "%~2"=="" (
     %PYTHON% %IDF_PATH%\tools\idf.py reconfigure build
     if errorlevel 1 exit /b %errorlevel%
@@ -28,15 +28,16 @@ if /i "%~1"=="build" if "%~2"=="" (
     )
     echo Version: !VERSION!
 
-    REM Remove old merged files, write new one
-    del /q release\hokku-firmware_*.bin 2>nul
+    REM Remove old merged files, write new one into the shared firmware/release/
+    if not exist ..\release mkdir ..\release
+    del /q ..\release\hokku-huessen_epf1301-*.bin 2>nul
     %ESPTOOL% --chip esp32s3 merge_bin ^
-        --output release\hokku-firmware_!VERSION!.bin ^
+        --output ..\release\hokku-huessen_epf1301-!VERSION!.bin ^
         0x0     build\bootloader\bootloader.bin ^
         0x8000  build\partition_table\partition-table.bin ^
         0x10000 build\hokku_epaper.bin
     if errorlevel 1 exit /b %errorlevel%
-    echo Merged firmware: release\hokku-firmware_!VERSION!.bin
+    echo Merged firmware: firmware\release\hokku-huessen_epf1301-!VERSION!.bin
     exit /b 0
 )
 

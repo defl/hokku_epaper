@@ -51,17 +51,17 @@ APP_OFFSET = 0x10000
 
 
 def _merged_firmware_file(directory):
-    """Return the merged hokku-firmware_<version>.bin in `directory`, or None."""
+    """Return the merged hokku-huessen_epf1301-<version>.bin in `directory`, or None."""
     return huessen_epf1301.merged_firmware_file(directory)
 
 
 def _is_merged_firmware_asset(name):
-    return name.startswith("hokku-firmware_") and name.endswith(".bin")
+    return name.startswith("hokku-huessen_epf1301-") and name.endswith(".bin")
 
 
 def resolve_firmware_dir(interactive=False):
-    """Return a directory containing a merged hokku-firmware_<version>.bin.
-    Prefers the local firmware/huessen_epf1301/release/ dir; falls back to downloading the
+    """Return a directory containing a merged hokku-huessen_epf1301-<version>.bin.
+    Prefers the local firmware/release/ dir; falls back to downloading the
     merged release asset from GitHub into .cache/firmware/<tag>/. Returns None
     if nothing is available (no local file and no network).
 
@@ -86,7 +86,9 @@ def resolve_firmware_dir(interactive=False):
                 break
             print(f"    Unknown choice {choice!r}; pick L or D.")
 
-    print(f"  No hokku-firmware_*.bin in {LOCAL_FIRMWARE_DIR}. Fetching latest GitHub release...")
+    print(
+        f"  No hokku-huessen_epf1301-*.bin in {LOCAL_FIRMWARE_DIR}. Fetching latest GitHub release..."
+    )
     try:
         release, asset = release_cache.find_latest_release_with_asset(_is_merged_firmware_asset)
     except Exception as e:
@@ -94,9 +96,9 @@ def resolve_firmware_dir(interactive=False):
         return None
 
     if release is None:
-        print("  ERROR: no GitHub release with a hokku-firmware_*.bin asset found.")
+        print("  ERROR: no GitHub release with a hokku-huessen_epf1301-*.bin asset found.")
         print("  (See 'Releasing firmware' in CLAUDE.md — the release must ship")
-        print("   a single merged hokku-firmware_<version>.bin file.)")
+        print("   a single merged hokku-huessen_epf1301-<version>.bin file.)")
         return None
 
     tag = release.get("tag_name", "latest")
@@ -570,10 +572,10 @@ def write_config(port, config):
 
 
 def flash_firmware(port):
-    """Flash the merged hokku-firmware_<version>.bin image at offset 0x0."""
+    """Flash the merged hokku-huessen_epf1301-<version>.bin image at offset 0x0."""
     merged = _merged_firmware_file(FIRMWARE_DIR)
     if not merged:
-        print(f"  ERROR: No hokku-firmware_*.bin in {FIRMWARE_DIR}.")
+        print(f"  ERROR: No hokku-huessen_epf1301-*.bin in {FIRMWARE_DIR}.")
         print("  (See 'Releasing firmware' in CLAUDE.md — builds must produce a")
         print("   single merged firmware file.)")
         return False

@@ -7,4 +7,4 @@ hokku/webserver/static/line_seg_2.png /usr/share/hokku-server/static/
 hokku/webserver/static/line_seg_3.png /usr/share/hokku-server/static/
 hokku/webserver/static/line_seg_4.png /usr/share/hokku-server/static/
 hokku/webserver/static/line_seg_5.png /usr/share/hokku-server/static/
-firmware/release/hokku-firmware_*.bin /usr/share/hokku-server/firmware/
+firmware/release/hokku-* /usr/share/hokku-server/firmware/

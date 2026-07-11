@@ -12,14 +12,17 @@ BUILDS_DIR="$REPO_ROOT/build"
 # Stage the bundled screen firmware into the source tree so debian/install can
 # ship it to /usr/share/hokku-server/firmware/. The "Flash a screen" feature
 # needs this merged image. Fail loudly if it is missing.
-FW_SRC_DIR="$REPO_ROOT/firmware/huessen_epf1301/release"
-if ! ls "$FW_SRC_DIR"/hokku-firmware_*.bin >/dev/null 2>&1; then
-    echo "ERROR: no firmware/huessen_epf1301/release/hokku-firmware_*.bin found to bundle." >&2
+FW_SRC_DIR="$REPO_ROOT/firmware/release"
+if ! ls "$FW_SRC_DIR"/hokku-huessen_epf1301-*.bin >/dev/null 2>&1; then
+    echo "ERROR: no firmware/release/hokku-huessen_epf1301-*.bin found to bundle." >&2
     echo "Build the firmware (firmware/huessen_epf1301/build.*) or fetch the release asset first." >&2
     exit 1
 fi
+# Clean the staging dir so stale versions from a previous build aren't shipped.
+rm -rf "$PKG_DIR/firmware/release"
 mkdir -p "$PKG_DIR/firmware/release"
-cp "$FW_SRC_DIR"/hokku-firmware_*.bin "$PKG_DIR/firmware/release/"
+# Bundle every built variant: the ESP32 .bin (required) plus any Bigme F7 .img.
+cp "$FW_SRC_DIR"/hokku-* "$PKG_DIR/firmware/release/"
 
 echo "Building hokku-server Debian package..."
 dpkg-buildpackage -us -uc -b
