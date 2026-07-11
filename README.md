@@ -80,7 +80,7 @@ Prefer terminal tabs, mysterious pip errors, and the satisfaction of doing thing
 - **[User manual](docs/manual.md)** — full guide to the web app, frame behaviour, and day-to-day use.
 - **[Installation](docs/install.md)** — step-by-step server + firmware setup for those who prefer the scenic route.
 - **[Dithering pipeline](docs/dithering.md)** — why it looks the way it does; failure modes and countermeasures.
-- **[Firmware documentation](firmware/README.md)** — building from source, manual flashing, developer notes.
+- **[Firmware documentation](firmware/huessen_epf1301/README.md)** — building from source, manual flashing, developer notes.
 - **[Firmware design spec](docs/firmware_design.md)** — the state-machine spec the current firmware implements.
 - **[Hardware](docs/hardware.md)** — where to buy the frame and the recommended Pi server kit.
 - **[Hardware facts](docs/hardware_facts.md)** — confirmed GPIO map, SPI config, init sequence, USB-detection findings.

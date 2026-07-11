@@ -228,7 +228,7 @@ def action_download_everything():
         print("  .deb: FAILED")
 
     # 3. Firmware merged bin.
-    # If a local build exists (firmware/release/hokku-firmware_*.bin) ask the
+    # If a local build exists (firmware/huessen_epf1301/release/hokku-firmware_*.bin) ask the
     # user whether to import it or pull the latest release from GitHub —
     # they might be running this to capture a dev build in .cache/, or to
     # refresh an old cache from the official release. Don't guess.

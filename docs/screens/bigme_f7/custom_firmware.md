@@ -3,7 +3,7 @@
 Custom firmware that turns the Bigme F7 (XRADIO XR872AT) into a first-class Hokku
 screen, at feature parity with the production ESP32 firmware: rich reporting,
 runtime configuration, USB-aware deep sleep + battery, and A/B over-the-air
-updates. Source lives in [`firmware_bigme_f7/`](../../../firmware_bigme_f7);
+updates. Source lives in [`firmware/bigme_f7/`](../../../firmware/bigme_f7);
 build notes in [`firmware_build.md`](firmware_build.md); the first working bring-up
 is in the git history (`3f21de6`, `2d4f701` … onward on branch `defl/v4`).
 

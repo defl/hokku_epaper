@@ -32,7 +32,7 @@ The goal is always the same: **our firmware's display driver should, on the pins
 - **Display controller:** UC8179C in dual-panel mode. The 13.3" panel is actually two 6.6" panels tiled side-by-side at 1200×800, each driven by its own UC8179C with a shared SPI bus and individual CS-like select pins (`CTRL1`, `CTRL2`).
 - **Palette:** 6-color ACeP (Advanced Color e-Paper) Spectra 6 — black, white, red, yellow, green, blue. No grayscale. A full refresh takes ~19 s on this hardware, which is why every bit of the init/refresh sequence matters.
 
-Full pin map (confirmed — matches both stock firmware's `gpio_config` masks and our `firmware/main/main.c`):
+Full pin map (confirmed — matches both stock firmware's `gpio_config` masks and our `firmware/huessen_epf1301/main/main.c`):
 
 | GPIO | Name | Direction | Purpose |
 |------|------|-----------|---------|

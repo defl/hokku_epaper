@@ -54,7 +54,7 @@ program it correctly for our valid AWIH header chain. Leading hypothesis: we bui
 `xr872_evb_ai` board config (flash 96 MHz + EVB read mode) rather than Bigme's, giving a wrong XIP
 read mode/clock for the Zbit part; alternatively `image_get_section_addr` fails before the console
 UART is up (its error print would be lost — consistent with the silent-then-crash boot capture).
-Current fix (`firmware_bigme_f7/main.c`, a `platform_init_level0` override that hardcodes the offset
+Current fix (`firmware/bigme_f7/main.c`, a `platform_init_level0` override that hardcodes the offset
 and force-writes `BIAS_ADDR0`) is **unverified** — needs a SPI-clip flash+observe loop to confirm.
 
 ## SWD / JTAG
@@ -84,7 +84,7 @@ PB3 is also the SDK-default SWD_SWDCLK pin (PB3 = SWDCLK). The OEM repurposes it
 
 - **PA20** (GPIOA pin 20) — USB/charge detect input, polled at 0x002CD0 in a loop
 - Logic: `HAL_GPIO_ReadPin(PORT_A, PIN_20)` result compared to zero; non-zero (HIGH) branches to a different code path — interpreted as USB present
-- **Polarity unconfirmed**; if green/off is inverted after first flash, flip `GPIO_PIN_HIGH` → `GPIO_PIN_LOW` in `led_usb_present()` in `firmware_bigme_f7/led.c`
+- **Polarity unconfirmed**; if green/off is inverted after first flash, flip `GPIO_PIN_HIGH` → `GPIO_PIN_LOW` in `led_usb_present()` in `firmware/bigme_f7/led.c`
 - The boot log shows `HAL_ADC_Init success!!` — ADC is likely used for battery voltage measurement, not for USB detect (USB detect appears to be a simple GPIO)
 - The OEM firmware uses wakeup IO 2 (`CHARGE_WAKEUP_IO_PIN_DEF=2`) for charge-triggered wakeup from deep sleep; this likely maps to PA20 via `WakeIo_To_Gpio()`
 

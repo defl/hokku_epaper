@@ -7,12 +7,12 @@ itself and writes the remaining app-chain into its inactive A/B slot. So there
 is no header parsing or slicing here.
 
 Search order:
-  1. the repo's ``firmware_bigme_f7/image/xr872/`` directory (dev tree), then
+  1. the repo's ``firmware/bigme_f7/image/xr872/`` directory (dev tree), then
   2. ``/usr/share/hokku-server/firmware/bigme_f7/`` (installed via the package).
 
 The version string has no in-image descriptor to read (AWIH carries none), so it
 comes from a ``<img>.version`` sidecar when present (packaged installs), else by
-parsing ``FIRMWARE_VERSION`` from ``firmware_bigme_f7/main.c`` in the dev tree.
+parsing ``FIRMWARE_VERSION`` from ``firmware/bigme_f7/main.c`` in the dev tree.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ from pathlib import Path
 
 # python/hokku/screens/bigme_f7/firmware.py -> repo root is parents[4]
 _REPO_ROOT = Path(__file__).resolve().parents[4]
-_DEV_IMG = _REPO_ROOT / "firmware_bigme_f7" / "image" / "xr872" / "xr_system.img"
-_DEV_MAIN_C = _REPO_ROOT / "firmware_bigme_f7" / "main.c"
+_DEV_IMG = _REPO_ROOT / "firmware" / "bigme_f7" / "image" / "xr872" / "xr_system.img"
+_DEV_MAIN_C = _REPO_ROOT / "firmware" / "bigme_f7" / "main.c"
 _INSTALLED_IMG = Path("/usr/share/hokku-server/firmware/bigme_f7/xr_system.img")
 
 
@@ -54,7 +54,7 @@ def bundled_firmware_version() -> str | None:
     """Version string of the bundled Bigme F7 image, or None if no image exists.
 
     Prefers a ``<img>.version`` sidecar (packaged installs); falls back to
-    parsing ``FIRMWARE_VERSION`` from ``firmware_bigme_f7/main.c`` (dev tree)."""
+    parsing ``FIRMWARE_VERSION`` from ``firmware/bigme_f7/main.c`` (dev tree)."""
     img = firmware_image_file()
     if img is None:
         return None

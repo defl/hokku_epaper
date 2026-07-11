@@ -13,13 +13,13 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Configure
-        run: cmake -B firmware/test/host/build firmware/test/host
+        run: cmake -B firmware/huessen_epf1301/test/host/build firmware/huessen_epf1301/test/host
 
       - name: Build
-        run: cmake --build firmware/test/host/build
+        run: cmake --build firmware/huessen_epf1301/test/host/build
 
       - name: Run tests
-        run: ctest --test-dir firmware/test/host/build --output-on-failure
+        run: ctest --test-dir firmware/huessen_epf1301/test/host/build --output-on-failure
 
   test-webserver:
     runs-on: ubuntu-latest
@@ -57,7 +57,7 @@ jobs:
           --suppress=checkersReport
           --inline-suppr
           --error-exitcode=1
-          firmware/main/
+          firmware/huessen_epf1301/main/
 
   build-firmware:
     needs: [test-firmware, lint-firmware]
@@ -71,13 +71,13 @@ jobs:
         with:
           esp_idf_version: v5.5.3
           target: esp32s3
-          path: firmware
+          path: firmware/huessen_epf1301
           command: bash ci-build.sh
 
       - uses: actions/upload-artifact@v7
         with:
           name: hokku-firmware
-          path: firmware/release/hokku-firmware_*.bin
+          path: firmware/huessen_epf1301/release/hokku-firmware_*.bin
 
   build-webserver-deb:
     needs: [test-webserver, build-firmware]

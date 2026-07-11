@@ -12,10 +12,10 @@ BUILDS_DIR="$REPO_ROOT/build"
 # Stage the bundled screen firmware into the source tree so debian/install can
 # ship it to /usr/share/hokku-server/firmware/. The "Flash a screen" feature
 # needs this merged image. Fail loudly if it is missing.
-FW_SRC_DIR="$REPO_ROOT/firmware/release"
+FW_SRC_DIR="$REPO_ROOT/firmware/huessen_epf1301/release"
 if ! ls "$FW_SRC_DIR"/hokku-firmware_*.bin >/dev/null 2>&1; then
-    echo "ERROR: no firmware/release/hokku-firmware_*.bin found to bundle." >&2
-    echo "Build the firmware (firmware/build.*) or fetch the release asset first." >&2
+    echo "ERROR: no firmware/huessen_epf1301/release/hokku-firmware_*.bin found to bundle." >&2
+    echo "Build the firmware (firmware/huessen_epf1301/build.*) or fetch the release asset first." >&2
     exit 1
 fi
 mkdir -p "$PKG_DIR/firmware/release"

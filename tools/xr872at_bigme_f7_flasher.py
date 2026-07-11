@@ -25,7 +25,7 @@ sys.stdout.reconfigure(line_buffering=True)  # type: ignore[union-attr]
 
 ROOT = pathlib.Path(__file__).parents[1]
 PHOENIXMC_DIR = res("bigme_flash_tool_dir")
-OUR_IMAGE = ROOT / "firmware_bigme_f7/image/xr872/xr_system.img"
+OUR_IMAGE = ROOT / "firmware/bigme_f7/image/xr872/xr_system.img"
 
 
 def main():

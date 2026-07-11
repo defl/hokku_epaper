@@ -1,14 +1,14 @@
 # Bigme F7 — EK79655 Init Sequence Analysis
 
 Compares the EK79655 spec, Waveshare reference driver, disassembled Bigme F7 OEM firmware,
-and our custom firmware (`firmware_bigme_f7/epd.c`).
+and our custom firmware (`firmware/bigme_f7/epd.c`).
 
 Sources:
 - **App note**: Waveshare 7.3inch e-Paper (F) Application Note Reference (Fitipower EK79655)
 - **Waveshare driver**: `EPD_7in3f.c` from github.com/waveshareteam/e-Paper
 - **Bigme F7 OEM**: disassembly of `01_boot_payload.bin` — functions `RST_pulse` (0x002071E8),
   `EPD_step2` (0x00207228), `send_image_data` (0x0020736C)
-- **Our firmware**: `firmware_bigme_f7/epd.c`
+- **Our firmware**: `firmware/bigme_f7/epd.c`
 
 ## Reset Sequence
 

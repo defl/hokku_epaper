@@ -11,7 +11,7 @@ import sys
 
 from _private import res
 
-IMAGE_PATH = pathlib.Path(__file__).parents[1] / "firmware_bigme_f7/image/xr872/xr_system.img"
+IMAGE_PATH = pathlib.Path(__file__).parents[1] / "firmware/bigme_f7/image/xr872/xr_system.img"
 
 if len(sys.argv) > 1:
     readback = pathlib.Path(sys.argv[1])

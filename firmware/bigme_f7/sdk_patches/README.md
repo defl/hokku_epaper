@@ -7,7 +7,7 @@ Apply them once to your SDK checkout before building:
 
 ```bash
 cd /path/to/xr872_sdk
-git apply /path/to/hokku_epaper/firmware_bigme_f7/sdk_patches/*.patch
+git apply /path/to/hokku_epaper/firmware/bigme_f7/sdk_patches/*.patch
 ```
 
 (They're plain unified diffs rooted at the SDK top, so `git apply` or

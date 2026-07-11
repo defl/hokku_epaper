@@ -6,7 +6,7 @@ the try-boot rollback ([`custom_firmware.md`](custom_firmware.md#boot--ab-rollba
 as the safety net. Both the firmware client and the server are model-aware, so the
 F7 and the huessen ESP32 share the same OTA plumbing.
 
-## Device side (`firmware_bigme_f7/main.c`)
+## Device side (`firmware/bigme_f7/main.c`)
 
 The frame-state advertises `"ota":1`. On a `200` poll response carrying
 `X-Firmware-Update: <version>`, `do_refresh()` ignores the image body and runs:

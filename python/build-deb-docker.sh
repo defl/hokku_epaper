@@ -23,7 +23,7 @@ docker run --rm \
         chmod a-x debian/install debian/control debian/changelog debian/hokku-server.service
         # Stage the bundled screen firmware so debian/install can ship it.
         mkdir -p firmware/release
-        cp ../firmware/release/hokku-firmware_*.bin firmware/release/
+        cp ../firmware/huessen_epf1301/release/hokku-firmware_*.bin firmware/release/
         dpkg-buildpackage -us -uc -b
         cp /build/hokku-server_*.deb /build/hokku-server_*.buildinfo /build/hokku-server_*.changes /workspace/ 2>/dev/null || true
     "

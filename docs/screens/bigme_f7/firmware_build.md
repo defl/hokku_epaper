@@ -2,7 +2,7 @@
 
 ## Build system
 
-Source lives in `firmware_bigme_f7/` (outside the SDK tree).
+Source lives in `firmware/bigme_f7/` (outside the SDK tree).
 SDK: `divadiow/xr872_sdk` cloned alongside at `../xr872_sdk`.
 
 ### One-time SDK setup
@@ -14,10 +14,10 @@ change, kept as a tracked patch. Apply it once to your SDK checkout:
 
 ```bash
 cd /path/to/xr872_sdk
-git apply /path/to/hokku_epaper/firmware_bigme_f7/sdk_patches/*.patch
+git apply /path/to/hokku_epaper/firmware/bigme_f7/sdk_patches/*.patch
 ```
 
-See [`../../firmware_bigme_f7/sdk_patches/README.md`](../../firmware_bigme_f7/sdk_patches/README.md).
+See [`../../firmware/bigme_f7/sdk_patches/README.md`](../../firmware/bigme_f7/sdk_patches/README.md).
 
 > **Switching lwIP versions needs a full SDK object clean.** The SDK compiles its
 > net stack (e.g. `ethernetif.c`) from source into the mounted checkout, and make's
@@ -38,7 +38,7 @@ docker run --rm \
     apt-get update -qq &&
     apt-get install -y -q gcc-arm-none-eabi binutils-arm-none-eabi make lib32z1 lib32stdc++6 &&
     chmod +x /xr872_sdk/tools/mkimage &&
-    cd /hokku_epaper/firmware_bigme_f7/gcc &&
+    cd /hokku_epaper/firmware/bigme_f7/gcc &&
     make image XR872_SDK=/xr872_sdk CC_DIR=/usr/bin
   "
 ```
@@ -59,10 +59,10 @@ Why lib32: `xr872_sdk/tools/mkimage` is a 32-bit Linux ELF. Requires
 After `make image`:
 
 ```
-firmware_bigme_f7/gcc/hokku_bigme_f7.axf      ~600 KB   ELF (no debug)
-firmware_bigme_f7/gcc/hokku_bigme_f7.bin       21 KB    SRAM portion
-firmware_bigme_f7/gcc/hokku_bigme_f7_xip.bin  464 KB    XIP (flash-execute) portion
-firmware_bigme_f7/image/xr872/xr_system.img     1 MB    flashable image
+firmware/bigme_f7/gcc/hokku_bigme_f7.axf      ~600 KB   ELF (no debug)
+firmware/bigme_f7/gcc/hokku_bigme_f7.bin       21 KB    SRAM portion
+firmware/bigme_f7/gcc/hokku_bigme_f7_xip.bin  464 KB    XIP (flash-execute) portion
+firmware/bigme_f7/image/xr872/xr_system.img     1 MB    flashable image
 ```
 
 ## Flash layout and why the image is always ~1 MB

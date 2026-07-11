@@ -7,6 +7,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from hokku.screens import huessen_epf1301
 from hokku.screens.bigme_f7 import bootstrap as bigme_bootstrap
 from hokku.webserver import flashing
 from hokku.webserver.app_config import AppConfig
@@ -179,6 +180,9 @@ def test_route_start_f7_starts_and_is_single_slot(app_config, tmp_path, monkeypa
         raise RuntimeError("cancelled by the operator")
 
     monkeypatch.setattr(flashing.f7_bootstrap, "bootstrap_device", slow)
+    # /flash/devices needs a bundled ESP32 firmware present (else it 503s before the
+    # busy check); provide one so we exercise the busy path, not the environment.
+    monkeypatch.setattr(huessen_epf1301, "merged_firmware_file", lambda *a, **k: img)
     state = _bare_state(app_config)
     client = _client(state, tmp_path)
 

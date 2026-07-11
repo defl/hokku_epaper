@@ -47,7 +47,7 @@ ROOT = pathlib.Path(__file__).parents[1]
 # Private resources resolved via tools/_private.py (no .private paths in tracked code)
 PHOENIXMC_DIR = res("bigme_flash_tool_dir")
 PHOENIXMC_EXE = res("bigme_flash_tool_exe")
-OUR_IMAGE = ROOT / "firmware_bigme_f7/image/xr872/xr_system.img"
+OUR_IMAGE = ROOT / "firmware/bigme_f7/image/xr872/xr_system.img"
 OEM_DUMP = res("bigme_oem_dump")
 READBACK_FILE = res("bigme_flash_tool_readback")
 

@@ -18,7 +18,7 @@ import serial  # noqa: E402
 from pywinauto import Desktop  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-IMAGE = ROOT / "firmware_bigme_f7/image/xr872/xr_system.img"
+IMAGE = ROOT / "firmware/bigme_f7/image/xr872/xr_system.img"
 BM_CLICK = 0x00F5
 WM_SETTEXT = 0x000C
 

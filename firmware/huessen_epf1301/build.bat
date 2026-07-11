@@ -13,7 +13,7 @@ cd /d "%~dp0"
 
 REM If the first argument is "build" with no other flags, force a reconfigure
 REM so the CMake timestamp is always today's date, then run the build and
-REM merge the output into a single firmware/release/hokku-firmware_<ver>.bin.
+REM merge the output into a single firmware/huessen_epf1301/release/hokku-firmware_<ver>.bin.
 if /i "%~1"=="build" if "%~2"=="" (
     %PYTHON% %IDF_PATH%\tools\idf.py reconfigure build
     if errorlevel 1 exit /b %errorlevel%

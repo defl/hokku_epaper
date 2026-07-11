@@ -5,7 +5,7 @@ flasher and the ``tools/`` CLI. ``tools/hokku_config.py`` and
 ``tools/esp32_setup.py`` import these from here — do not redefine them there.
 
 ``CONFIG_VERSION`` must match the firmware's NVS schema version (firmware
-``CONFIG_VERSION``, derived from ``firmware/VERSION``). Bump both together.
+``CONFIG_VERSION``, derived from ``firmware/huessen_epf1301/VERSION``). Bump both together.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 ESP32S3_VID = 0x303A
 ESP32S3_PID = 0x1001
 
-# NVS partition location (from firmware/partitions.csv)
+# NVS partition location (from firmware/huessen_epf1301/partitions.csv)
 NVS_OFFSET = 0x9000
 NVS_SIZE = 0x6000  # 24 KB
 

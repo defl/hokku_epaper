@@ -19,7 +19,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 from pywinauto import Desktop
 
 IMAGE_PATH = (
-    pathlib.Path(__file__).parents[1] / "firmware_bigme_f7/image/xr872/xr_system.img"
+    pathlib.Path(__file__).parents[1] / "firmware/bigme_f7/image/xr872/xr_system.img"
 ).resolve()
 
 BM_CLICK = 0x00F5

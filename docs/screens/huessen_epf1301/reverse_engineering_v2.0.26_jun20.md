@@ -149,7 +149,7 @@ That's the mechanism. The fix is what v2.0.26 does:
 3. *Then* drop CTRL1, CTRL2, and RST LOW. RST-LOW-before-power-off forces the UC8179C into its datasheet-defined hardware-reset state.
 4. *Last*, drop SYS_POWER LOW. The rail falls; the controller hits POR cleanly.
 
-Empirically, this is what makes the difference between "stuck state persists across our firmware's reboots" and "stuck state clears the next refresh." Our firmware now does this sequence byte-for-byte (see `epaper_display_dual` in `firmware/main/main.c`).
+Empirically, this is what makes the difference between "stuck state persists across our firmware's reboots" and "stuck state clears the next refresh." Our firmware now does this sequence byte-for-byte (see `epaper_display_dual` in `firmware/huessen_epf1301/main/main.c`).
 
 ### Caveats in matching it
 

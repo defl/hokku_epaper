@@ -83,9 +83,9 @@ Wait for the user to confirm the derived versions before continuing.
 
 Also show the current firmware version:
 ```
-cat firmware/VERSION
+cat firmware/huessen_epf1301/VERSION
 ```
-Note whether it has changed since the last release tag (compare `firmware/VERSION` content at HEAD vs at the last tag using `git show <last-tag>:firmware/VERSION`).
+Note whether it has changed since the last release tag (compare `firmware/huessen_epf1301/VERSION` content at HEAD vs at the last tag using `git show <last-tag>:firmware/huessen_epf1301/VERSION`).
 
 ---
 
@@ -201,7 +201,7 @@ gh run download <run-id> --name hokku-server-deb --dir "$env:TEMP\hokku-release"
 
 List the downloaded files and their sizes. Verify that exactly one `.bin` file (firmware) and one `.deb` file (webserver) are present. If anything is missing, report and stop.
 
-The firmware filename embeds the `firmware/VERSION` string (e.g., `hokku-firmware_1.2.0.bin`). Note whether this is a new firmware version compared to the previous release.
+The firmware filename embeds the `firmware/huessen_epf1301/VERSION` string (e.g., `hokku-firmware_1.2.0.bin`). Note whether this is a new firmware version compared to the previous release.
 
 ---
 
@@ -226,7 +226,7 @@ Read the CHANGELOG.md sections that span this same range (may cover multiple int
 - Omit internal refactors, test changes, and build-system tweaks unless user-visible
 - Include a **Versions** section listing:
   - App: `<git-tag>` (e.g., `v3.0.2`)
-  - Firmware: `<firmware/VERSION>` (e.g., `1.2.0`) — add "(unchanged)" if firmware version matches the previous release
+  - Firmware: `<firmware/huessen_epf1301/VERSION>` (e.g., `1.2.0`) — add "(unchanged)" if firmware version matches the previous release
 
 Present the draft release notes to the user for review and editing. Apply any edits.
 

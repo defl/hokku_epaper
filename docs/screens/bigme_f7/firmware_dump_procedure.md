@@ -165,7 +165,7 @@ Phases:
 1. Launch PhoenixMC, select COM6, open debug dialog
 2. Wait for BROM mode (`Open comm OK!`)
 3. Read 4 MB flash → `flash_A_0x0_L_0x400000.bin` in PhoenixMC dir (~5 min)
-4. Compare first 1 MB against `firmware_bigme_f7/image/xr872/xr_system.img`
+4. Compare first 1 MB against `firmware/bigme_f7/image/xr872/xr_system.img`
 5. Flash any unit's OEM image `.private/units/<serial>_<tag>/flash_full.bin` (4 MB) (~5 min). Dumps are effectively interchangeable: firmware is identical and the MAC lives in efuse (not flash), so the device keeps its own MAC / `BIGME_<MAC>` cloud ID / `XRZ_<MAC>` AP regardless. The only thing inherited from the donor dump is the in-flash config blob (`sn=` serial, prior owner's WiFi creds/email, cached picture) — overwritten on re-provision. Prefer the unit's *own* dump only to preserve its original serial/config.
 6. Click reboot, close PhoenixMC, open COM6 at 115200 baud, capture 30 s of boot output
 
@@ -199,19 +199,19 @@ completed with `VERIFICATION PASSED — all 4,194,304 bytes match OEM reference`
 
 ### Build environment
 
-A Dockerfile is provided at `firmware_bigme_f7/Dockerfile`. Build the image once:
+A Dockerfile is provided at `firmware/bigme_f7/Dockerfile`. Build the image once:
 
 ```
-docker build -t hokku-xr872-builder firmware_bigme_f7/
+docker build -t hokku-xr872-builder firmware/bigme_f7/
 ```
 
-Then build from `firmware_bigme_f7/gcc/`:
+Then build from `firmware/bigme_f7/gcc/`:
 
 ```
 docker run --rm \
   -v "$PWD:/hokku" \
   -v "/path/to/xr872_sdk:/xr872_sdk" \
-  -w /hokku/firmware_bigme_f7/gcc \
+  -w /hokku/firmware/bigme_f7/gcc \
   hokku-xr872-builder \
   make build XR872_SDK=/xr872_sdk CC_DIR=/usr/bin IMAGE_TOOL=/xr872_sdk/tools/mkimage
 ```
@@ -223,19 +223,19 @@ $xr872 = "c:/path/to/xr872_sdk"
 docker run --rm `
   -v "c:/path/to/hokku_epaper:/hokku" `
   -v "${xr872}:/xr872_sdk" `
-  -w /hokku/firmware_bigme_f7/gcc `
+  -w /hokku/firmware/bigme_f7/gcc `
   hokku-xr872-builder `
   make build XR872_SDK=/xr872_sdk CC_DIR=/usr/bin IMAGE_TOOL=/xr872_sdk/tools/mkimage
 ```
 
-Output: `firmware_bigme_f7/image/xr872/xr_system.img` (~1 MB).
+Output: `firmware/bigme_f7/image/xr872/xr_system.img` (~1 MB).
 
 **Note**: `make build` (not just `make`) is required — the `image` target (invoked by `build`)
 runs `mkimage` to produce `xr_system.img` from the linked binaries. Plain `make` only links.
 
 ## Flashing Custom Firmware
 
-To write `firmware_bigme_f7/image/xr872/xr_system.img` back to the device:
+To write `firmware/bigme_f7/image/xr872/xr_system.img` back to the device:
 
 ### Full automated flash (preferred)
 
@@ -265,7 +265,7 @@ reboot command, and captures 30 seconds of UART output.
 1. Follow steps 1–5 of the Manual Read Procedure to open the debug dialog and connect.
 2. In the FLASH section, ensure **地址** is `00000000`.
 3. Click **写入** in the FLASH row. A file-open dialog appears.
-4. Navigate to `firmware_bigme_f7/image/xr872/xr_system.img` and click Open.
+4. Navigate to `firmware/bigme_f7/image/xr872/xr_system.img` and click Open.
 5. Status changes to `Writing flash data...N%`, then `Write OK!` when done.
 6. Click **reboot** in the SYSTEM section (or power-cycle the device).
 

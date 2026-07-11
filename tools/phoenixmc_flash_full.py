@@ -19,7 +19,7 @@ from pywinauto import Desktop
 from _private import res
 
 ROOT = pathlib.Path(__file__).parents[1]
-IMAGE = ROOT / "firmware_bigme_f7" / "image" / "xr872" / "xr_system.img"
+IMAGE = ROOT / "firmware/bigme_f7" / "image" / "xr872" / "xr_system.img"
 PMC_DIR = res("bigme_flash_tool_dir")
 PMC_EXE = res("bigme_flash_tool_exe")
 BM_CLICK = 0x00F5

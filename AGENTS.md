@@ -1,6 +1,6 @@
 ﻿# Agent rules for hokku_epaper
 
-Sub-directory rules: [firmware/AGENTS.md](firmware/AGENTS.md) | [python/AGENTS.md](python/AGENTS.md)
+Sub-directory rules: [firmware/huessen_epf1301/AGENTS.md](firmware/huessen_epf1301/AGENTS.md) | [python/AGENTS.md](python/AGENTS.md)
 
 ## Firmware flashing — STOP rules (read before ANY flash)
 
@@ -111,10 +111,10 @@ Agents MUST NOT use even PATCH — that is exclusively the release track (see `/
 
 ## Versioning — firmware
 
-Firmware uses `PROTOCOL.CONFIG.N` versioning stored in `firmware/VERSION`:
+Firmware uses `PROTOCOL.CONFIG.N` versioning stored in `firmware/huessen_epf1301/VERSION`:
 - **`PROTOCOL`** — server↔client wire protocol (HTTP API between device and server). Bump only on backwards-incompatible wire-protocol changes. Agents MUST warn the human and wait for their decision before bumping.
 - **`CONFIG`** — NVS configuration schema. Bump when NVS fields are added, removed, or incompatibly changed. When bumping, also update `CONFIG_VERSION` in `tools/hokku_config.py` to the same value.
-- **`N`** — monotonic counter for all firmware changes. **Never resets.** Agents increment `N` for every firmware code change; include the updated `firmware/VERSION` in the same commit.
+- **`N`** — monotonic counter for all firmware changes. **Never resets.** Agents increment `N` for every firmware code change; include the updated `firmware/huessen_epf1301/VERSION` in the same commit.
 
 ## Tool scripts
 - All standalone Python helper/dev scripts belong in `tools/`

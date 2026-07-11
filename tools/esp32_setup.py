@@ -61,7 +61,7 @@ def _is_merged_firmware_asset(name):
 
 def resolve_firmware_dir(interactive=False):
     """Return a directory containing a merged hokku-firmware_<version>.bin.
-    Prefers the local firmware/release/ dir; falls back to downloading the
+    Prefers the local firmware/huessen_epf1301/release/ dir; falls back to downloading the
     merged release asset from GitHub into .cache/firmware/<tag>/. Returns None
     if nothing is available (no local file and no network).
 

@@ -30,7 +30,7 @@ the flash ID, writes nothing).
 ## Procedure
 
 Prereqs: the F7 on USB (CH340), and a built
-`firmware_bigme_f7/image/xr872/xr_system.img` ([`firmware_build.md`](firmware_build.md)).
+`firmware/bigme_f7/image/xr872/xr_system.img` ([`firmware_build.md`](firmware_build.md)).
 Runs on any platform (incl. the Pi) — no Windows/vendor tool needed.
 
 ```

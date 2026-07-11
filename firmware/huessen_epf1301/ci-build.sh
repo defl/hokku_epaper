@@ -8,7 +8,7 @@ idf.py reconfigure build
 VERSION=$(cat VERSION)
 
 if [ -z "$VERSION" ]; then
-    echo "ERROR: firmware/VERSION is empty"
+    echo "ERROR: firmware/huessen_epf1301/VERSION is empty"
     exit 1
 fi
 echo "Version: $VERSION"

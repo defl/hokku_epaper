@@ -50,7 +50,7 @@ from xr872_flasher import XR872Flasher  # noqa: E402
 FLASH_SIZE = 0x400000
 SLOT0_APP = BL_SIZE  # 0x8000
 OTA_SECTOR_END = OTA_ADDR + 0x1000  # 0x181000
-DEFAULT_IMAGE = _HERE.parents[0] / "firmware_bigme_f7" / "image" / "xr872" / "xr_system.img"
+DEFAULT_IMAGE = _HERE.parents[0] / "firmware/bigme_f7" / "image" / "xr872" / "xr_system.img"
 
 PROVISION_HELP = (
     "\nPOWER-CYCLE to boot (unplug/replug USB, or long-press) — sys_reboot leaves the\n"

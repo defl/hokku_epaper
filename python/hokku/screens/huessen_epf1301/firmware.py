@@ -2,7 +2,7 @@
 
 The merged ``hokku-firmware_<version>.bin`` (bootloader + partition table + app)
 is searched for in:
-  1. the repo's ``firmware/release/`` directory (dev tree), then
+  1. the repo's ``firmware/huessen_epf1301/release/`` directory (dev tree), then
   2. ``/usr/share/hokku-server/firmware/`` (installed via the Debian package).
 """
 
@@ -15,7 +15,7 @@ from .constants import APP_OFFSET
 
 # python/hokku/screens/huessen_epf1301/firmware.py -> repo root is parents[4]
 _REPO_ROOT = Path(__file__).resolve().parents[4]
-_DEV_FIRMWARE_DIR = _REPO_ROOT / "firmware" / "release"
+_DEV_FIRMWARE_DIR = _REPO_ROOT / "firmware" / "huessen_epf1301" / "release"
 _INSTALLED_FIRMWARE_DIR = Path("/usr/share/hokku-server/firmware")
 
 
