@@ -5,6 +5,28 @@
 Source lives in `firmware_bigme_f7/` (outside the SDK tree).
 SDK: `divadiow/xr872_sdk` cloned alongside at `../xr872_sdk`.
 
+### One-time SDK setup
+
+The firmware selects **lwIP 2.1.2** (SDK default is 1.4.1) via
+`__CONFIG_LWIP_VER := 20102` in `gcc/localconfig.mk` — needed for mDNS `.local`
+resolution, which only exists in lwIP >= 2.0. That also requires one SDK config
+change, kept as a tracked patch. Apply it once to your SDK checkout:
+
+```bash
+cd /path/to/xr872_sdk
+git apply /path/to/hokku_epaper/firmware_bigme_f7/sdk_patches/*.patch
+```
+
+See [`../../firmware_bigme_f7/sdk_patches/README.md`](../../firmware_bigme_f7/sdk_patches/README.md).
+
+> **Switching lwIP versions needs a full SDK object clean.** The SDK compiles its
+> net stack (e.g. `ethernetif.c`) from source into the mounted checkout, and make's
+> `.d` dependency files still point at the *old* lwIP headers — so a plain rebuild
+> relinks **stale `.o` files built against the previous lwIP**, and the mismatched
+> `pbuf_type` ABI floods `pbuf_alloc: erroneous type` at runtime (networking dead).
+> After changing `__CONFIG_LWIP_VER`, force a recompile once:
+> `find /xr872_sdk/src -name '*.o' -delete && find /xr872_sdk/src -name '*.d' -delete`.
+
 Build requires Docker (ubuntu:18.04 / GCC 6.3.1):
 
 ```bash

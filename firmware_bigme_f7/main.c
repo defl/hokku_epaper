@@ -48,7 +48,7 @@
 #define HOKKU_SERVER_URL        "http://192.168.6.111:8080/hokku/screen/"
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.1"
+#define FIRMWARE_VERSION        "1.2.2"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -615,18 +615,19 @@ static void net_cb(uint32_t event, uint32_t data, void *arg)
             hlog("hokku: WLAN connected, using DHCP\n");
             break;
         }
-        /* Static IP from config. Set addresses while the interface is down to
-         * avoid a spurious NETWORK_DOWN (IP=0) from netif_set_up(); then bring it
-         * up so netif_status_callback() fires NETWORK_UP once, cleanly. */
+        /* Static IP from config. The SDK has already brought the netif up (it
+         * started DHCP on link-up), so a bare netif_set_up() is a no-op and fires
+         * no callback. lwIP 2.x only fires the status callback (which the SDK maps
+         * to NETWORK_UP) when the address actually changes via netif_set_addr() —
+         * direct nif->ip_addr = ... does NOT trigger it. ip_2_ip4() pulls the v4
+         * address out of the dual-stack ip_addr_t union. */
         if (!ipaddr_aton(cfg->ip, &ip) || !ipaddr_aton(cfg->gw, &gw) ||
             !ipaddr_aton(cfg->nm, &nm)) {
             hlog("hokku: bad static IP in config — leaving DHCP to run\n");
             break;
         }
         dhcp_stop(nif);
-        nif->ip_addr = ip;
-        nif->netmask = nm;
-        nif->gw      = gw;
+        netif_set_addr(nif, ip_2_ip4(&ip), ip_2_ip4(&nm), ip_2_ip4(&gw));
         netif_set_up(nif);
         hlog("hokku: static IP set  %s  gw=%s\n", cfg->ip, cfg->gw);
         break;
