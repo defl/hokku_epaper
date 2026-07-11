@@ -47,6 +47,8 @@ firmware_bigme_f7/image/xr872/app_xip.bin
 firmware_bigme_f7/image/xr872/.image.cfg
 firmware_bigme_f7/image/xr872/boot_40M.bin
 firmware_bigme_f7/image/xr872/wlan_*.bin
+firmware_bigme_f7/image/xr872/xr_system.img
+firmware_bigme_f7/image/xr872/xr_system.img.version
 
 # Local toolchain / config
 FlashTools_repo/
