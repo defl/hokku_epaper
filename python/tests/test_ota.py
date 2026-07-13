@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from hokku.screens import bigme_f7, huessen_epf1301
+from hokku.screens.bigme_f7 import firmware as bigme_f7_firmware
 from hokku.screens.huessen_epf1301.constants import APP_OFFSET
 from hokku.screens.huessen_epf1301.nvs import migrate_config
 from hokku.webserver.app_config import AppConfig
@@ -213,14 +214,19 @@ def test_firmware_bin_unknown_model_404(app_config, tmp_path):
     assert client.get("/hokku/firmware.bin?model=nonesuch").status_code == 404
 
 
-def test_bigme_firmware_module_reads_repo_tree():
-    # The repo ships the built image + FIRMWARE_VERSION in main.c; the module
-    # serves the image verbatim (no slicing) and reads the version from source.
+def test_bigme_firmware_module_discovers_release_image(tmp_path, monkeypatch):
+    # The release artifact is hokku-bigme_f7-<version>.img in the shared
+    # firmware/release/ dir; the module serves it verbatim (no slicing) and
+    # parses the version from the filename (build artifacts aren't committed,
+    # so this must not depend on a real build being present on disk).
+    (tmp_path / "hokku-bigme_f7-1.2.2.img").write_bytes(b"X" * 1_000_000)
+    monkeypatch.setattr(bigme_f7_firmware, "_DEV_FIRMWARE_DIR", tmp_path)
+    monkeypatch.setattr(bigme_f7_firmware, "_INSTALLED_FIRMWARE_DIR", tmp_path / "nonexistent")
+
     img = bigme_f7.release_app_image()
-    assert img is not None and len(img) > 900_000  # ~1 MB AWIH app-chain
+    assert img == b"X" * 1_000_000
     assert img == bigme_f7.firmware_image_file().read_bytes()
-    ver = bigme_f7.bundled_firmware_version()
-    assert ver and all(part.isdigit() for part in ver.split("."))
+    assert bigme_f7.bundled_firmware_version() == "1.2.2"
 
 
 def test_status_reports_per_model_firmware_versions(app_config, tmp_path, monkeypatch):
@@ -412,6 +418,9 @@ def test_serve_binary_no_signal_when_not_capable(
     monkeypatch.setattr(
         huessen_epf1301, "release_app_header", lambda *a, **k: _make_app_header(b"9.9.9")
     )
+    # Needed for the /update POST below: it 409s ("no bundled firmware") unless
+    # a version is discoverable, which normally comes from a real release file.
+    monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "9.9.9")
     state = _state_with_image(app_config, make_test_image)
     client = _client(state, tmp_path)
     client.post("/hokku/api/screens/frame-1/update", json={"enabled": True})
