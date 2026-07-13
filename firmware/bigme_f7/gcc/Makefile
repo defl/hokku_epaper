@@ -42,6 +42,10 @@ INCLUDE_PATHS += -I$(PRJ_ROOT_PATH)
 
 DIRS_IGNORE := $(PRJ_ROOT_PATH)/gcc%
 DIRS_IGNORE += $(PRJ_ROOT_PATH)/image%
+# Host-side unit tests (test_logic.c etc.) — compiled by cmake against XR872
+# SDK mocks, NOT by this Makefile against the real SDK; must never be swept
+# into the firmware's own source discovery below.
+DIRS_IGNORE += $(PRJ_ROOT_PATH)/test%
 DIRS_IGNORE += $(ROOT_PATH)/project/common/board/%
 DIRS_IGNORE += $(PRJ_BOARD)
 
