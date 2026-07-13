@@ -21,6 +21,21 @@ jobs:
       - name: Run tests
         run: ctest --test-dir firmware/huessen_epf1301/test/host/build --output-on-failure
 
+  test-firmware-bigme:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -B firmware/bigme_f7/test/host/build firmware/bigme_f7/test/host
+
+      - name: Build
+        run: cmake --build firmware/bigme_f7/test/host/build
+
+      - name: Run tests
+        run: ctest --test-dir firmware/bigme_f7/test/host/build --output-on-failure
+
   test-webserver:
     runs-on: ubuntu-latest
 
@@ -73,6 +88,11 @@ jobs:
       # this is only a handful of C files, no headers from the SDK that calls
       # into them (command dispatch table, weak-symbol overrides), so cppcheck
       # can't see those call sites and flags every SDK entry point as dead code.
+      # test/ is excluded (-i): scanning it together with main.c makes cppcheck
+      # cross-contaminate its analysis — it picks up the host-test mocks' fixed
+      # return values (e.g. OS_MutexLock always returning OS_OK) and wrongly
+      # applies that to reasoning about main.c's real, variable-behavior
+      # conditionals ("always false"), which is only true under the mock.
       - name: Run cppcheck
         run: >
           cppcheck
@@ -85,6 +105,7 @@ jobs:
           --suppress=unusedFunction
           --inline-suppr
           --error-exitcode=1
+          -ifirmware/bigme_f7/test
           firmware/bigme_f7/
 
   build-firmware-huessen:
@@ -108,7 +129,7 @@ jobs:
           path: firmware/release/hokku-huessen_epf1301-*.bin
 
   build-firmware-bigme:
-    needs: [lint-firmware-bigme]
+    needs: [test-firmware-bigme, lint-firmware-bigme]
     runs-on: ubuntu-latest
 
     steps:
