@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test-firmware:
+  test-firmware-huessen:
     runs-on: ubuntu-latest
 
     steps:
@@ -38,7 +38,7 @@ jobs:
       - name: Run tests
         run: pytest -m "not time_intensive"
 
-  lint-firmware:
+  lint-firmware-huessen:
     runs-on: ubuntu-latest
 
     steps:
@@ -60,8 +60,35 @@ jobs:
           --error-exitcode=1
           firmware/huessen_epf1301/main/
 
+  lint-firmware-bigme:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y --no-install-recommends cppcheck
+
+      # unusedFunction is suppressed here (not on huessen_epf1301's lint job):
+      # this is only a handful of C files, no headers from the SDK that calls
+      # into them (command dispatch table, weak-symbol overrides), so cppcheck
+      # can't see those call sites and flags every SDK entry point as dead code.
+      - name: Run cppcheck
+        run: >
+          cppcheck
+          --enable=all
+          --std=c11
+          --suppress=missingIncludeSystem
+          --suppress=missingInclude
+          --suppress=checkersReport
+          --suppress=unmatchedSuppression
+          --suppress=unusedFunction
+          --inline-suppr
+          --error-exitcode=1
+          firmware/bigme_f7/
+
   build-firmware-huessen:
-    needs: [test-firmware, lint-firmware]
+    needs: [test-firmware-huessen, lint-firmware-huessen]
     runs-on: ubuntu-latest
 
     steps:
@@ -81,6 +108,7 @@ jobs:
           path: firmware/release/hokku-huessen_epf1301-*.bin
 
   build-firmware-bigme:
+    needs: [lint-firmware-bigme]
     runs-on: ubuntu-latest
 
     steps:
