@@ -195,7 +195,7 @@ Download both build artifacts from the successful CI run:
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:TEMP\hokku-release"
-gh run download <run-id> --name hokku-firmware --dir "$env:TEMP\hokku-release"
+gh run download <run-id> --name hokku-huessen_epf1301-firmware --dir "$env:TEMP\hokku-release"
 gh run download <run-id> --name hokku-server-deb --dir "$env:TEMP\hokku-release"
 ```
 

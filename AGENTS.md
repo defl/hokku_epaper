@@ -122,7 +122,7 @@ Firmware uses `PROTOCOL.CONFIG.N` versioning stored in `firmware/huessen_epf1301
 
 ## Screen naming
 
-**Rule**: Screen IDs always use `brand_model` format (e.g. `huessen_epf1301`, `bigme_f7`). This applies to directory names under `docs/screens/`, `images/screens/`, `.private/screens/`, and `python/hokku/screens/`.
+**Rule**: Screen IDs always use `brand_model` format (e.g. `huessen_epf1301`, `bigme_f7`) — the full form, never a truncated alias (`huessen`, `bigme`). This applies everywhere a screen/firmware identifier appears: directory names under `docs/screens/`, `images/screens/`, `.private/screens/`, `python/hokku/screens/`, and `firmware/`; release artifact filenames (`hokku-<brand_model>-<version>.<ext>`); and GitHub Actions — job names (`test-firmware-<brand_model>`, `lint-firmware-<brand_model>`, `build-firmware-<brand_model>`), uploaded artifact names (`hokku-<brand_model>-firmware`), and Docker image tags built for a specific model (`hokku-<brand_model>-builder`).
 
 ## Hardware
 

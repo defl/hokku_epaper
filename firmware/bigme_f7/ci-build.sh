@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build the Bigme F7 (XR872) firmware image and collect it into firmware/release/.
 #
-# Runs INSIDE the hokku-bigme-f7 builder container (GCC ARM + 32-bit libs), with
+# Runs INSIDE the hokku-bigme_f7 builder container (GCC ARM + 32-bit libs), with
 # the xr872_sdk mounted at /xr872_sdk and CWD = firmware/bigme_f7. Mirrors the
 # ESP32 ci-build.sh. See docs/screens/bigme_f7/firmware_build.md.
 set -e

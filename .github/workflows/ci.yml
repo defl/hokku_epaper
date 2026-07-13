@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test-firmware-huessen:
+  test-firmware-huessen_epf1301:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,7 +21,7 @@ jobs:
       - name: Run tests
         run: ctest --test-dir firmware/huessen_epf1301/test/host/build --output-on-failure
 
-  test-firmware-bigme:
+  test-firmware-bigme_f7:
     runs-on: ubuntu-latest
 
     steps:
@@ -53,7 +53,7 @@ jobs:
       - name: Run tests
         run: pytest -m "not time_intensive"
 
-  lint-firmware-huessen:
+  lint-firmware-huessen_epf1301:
     runs-on: ubuntu-latest
 
     steps:
@@ -75,7 +75,7 @@ jobs:
           --error-exitcode=1
           firmware/huessen_epf1301/main/
 
-  lint-firmware-bigme:
+  lint-firmware-bigme_f7:
     runs-on: ubuntu-latest
 
     steps:
@@ -108,8 +108,8 @@ jobs:
           -ifirmware/bigme_f7/test
           firmware/bigme_f7/
 
-  build-firmware-huessen:
-    needs: [test-firmware-huessen, lint-firmware-huessen]
+  build-firmware-huessen_epf1301:
+    needs: [test-firmware-huessen_epf1301, lint-firmware-huessen_epf1301]
     runs-on: ubuntu-latest
 
     steps:
@@ -125,11 +125,11 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: hokku-firmware
+          name: hokku-huessen_epf1301-firmware
           path: firmware/release/hokku-huessen_epf1301-*.bin
 
-  build-firmware-bigme:
-    needs: [test-firmware-bigme, lint-firmware-bigme]
+  build-firmware-bigme_f7:
+    needs: [test-firmware-bigme_f7, lint-firmware-bigme_f7]
     runs-on: ubuntu-latest
 
     steps:
@@ -150,25 +150,25 @@ jobs:
         run: git apply "${{ github.workspace }}"/firmware/bigme_f7/sdk_patches/*.patch
 
       - name: Build toolchain image
-        run: docker build -t hokku-bigme-f7-builder firmware/bigme_f7
+        run: docker build -t hokku-bigme_f7-builder firmware/bigme_f7
 
       - name: Build firmware
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/hokku_epaper" \
             -v "${{ github.workspace }}/xr872_sdk:/xr872_sdk" \
-            hokku-bigme-f7-builder bash -lc '
+            hokku-bigme_f7-builder bash -lc '
               cd /hokku_epaper/firmware/bigme_f7 &&
               XR872_SDK=/xr872_sdk CC_DIR=/usr/bin bash ci-build.sh
             '
 
       - uses: actions/upload-artifact@v7
         with:
-          name: hokku-bigme-f7-firmware
+          name: hokku-bigme_f7-firmware
           path: firmware/release/hokku-bigme_f7-*.img
 
   build-webserver-deb:
-    needs: [test-webserver, build-firmware-huessen, build-firmware-bigme]
+    needs: [test-webserver, build-firmware-huessen_epf1301, build-firmware-bigme_f7]
     runs-on: ubuntu-latest
 
     steps:
@@ -186,13 +186,13 @@ jobs:
       - name: Download ESP32 firmware artifact
         uses: actions/download-artifact@v7
         with:
-          name: hokku-firmware
+          name: hokku-huessen_epf1301-firmware
           path: python/firmware/release
 
       - name: Download Bigme F7 firmware artifact
         uses: actions/download-artifact@v7
         with:
-          name: hokku-bigme-f7-firmware
+          name: hokku-bigme_f7-firmware
           path: python/firmware/release
 
       - name: Build .deb

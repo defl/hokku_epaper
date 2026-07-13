@@ -2,19 +2,19 @@
 # Build the Bigme F7 (XR872) firmware via Docker and collect it into firmware/release/.
 #
 # Portable entry point (Git Bash on Windows, Linux, Raspberry Pi). Runs the
-# hokku-bigme-f7 builder image with the repo and the xr872_sdk checkout mounted,
+# hokku-bigme_f7 builder image with the repo and the xr872_sdk checkout mounted,
 # then runs ci-build.sh inside it. Equivalent to the manual docker command in
 # docs/screens/bigme_f7/firmware_build.md.
 #
 # Env overrides:
 #   XR872_SDK       path to the xr872_sdk checkout (default: sibling of the repo)
-#   BUILDER_IMAGE   builder image tag (default: hokku-bigme-f7-builder:latest)
+#   BUILDER_IMAGE   builder image tag (default: hokku-bigme_f7-builder:latest)
 set -e
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 SDK="${XR872_SDK:-$REPO/../xr872_sdk}"
-IMAGE="${BUILDER_IMAGE:-hokku-bigme-f7-builder:latest}"
+IMAGE="${BUILDER_IMAGE:-hokku-bigme_f7-builder:latest}"
 
 if [ ! -d "$SDK" ]; then
     echo "ERROR: xr872_sdk not found at '$SDK' — clone it or set XR872_SDK." >&2
