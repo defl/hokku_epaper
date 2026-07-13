@@ -55,6 +55,7 @@ jobs:
           --suppress=missingIncludeSystem
           --suppress=missingInclude
           --suppress=checkersReport
+          --suppress=unmatchedSuppression
           --inline-suppr
           --error-exitcode=1
           firmware/huessen_epf1301/main/

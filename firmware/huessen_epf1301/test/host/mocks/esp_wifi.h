@@ -16,6 +16,7 @@ typedef struct {
         bool    bssid_set;
         uint8_t channel;
         struct  { wifi_auth_mode_t authmode; } threshold;
+        struct  { bool capable; bool required; } pmf_cfg;
     } sta;
 } wifi_config_t;
 
