@@ -188,7 +188,7 @@ uint32_t hokku_battery_mv(void)          /* also used by the `cfg show` diagnost
 /* Build the compact X-Frame-State telemetry JSON (server parses ota/bat_mv/clk_now). */
 static void build_frame_state(char *buf, size_t sz)
 {
-    hokku_config_t *cfg = hokku_config_get();
+    const hokku_config_t *cfg = hokku_config_get();
     wlan_sta_ap_t   ap;
     int             rssi = 0;
     uint8_t        *hs, *he, *hc;
