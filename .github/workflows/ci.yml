@@ -60,7 +60,7 @@ jobs:
           --error-exitcode=1
           firmware/huessen_epf1301/main/
 
-  build-firmware:
+  build-firmware-huessen:
     needs: [test-firmware, lint-firmware]
     runs-on: ubuntu-latest
 
@@ -80,8 +80,46 @@ jobs:
           name: hokku-firmware
           path: firmware/release/hokku-huessen_epf1301-*.bin
 
+  build-firmware-bigme:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Third-party XR872 SDK the F7 firmware builds against — not part of this
+      # repo. Pinned so the sdk_patches/*.patch below (which assumes this exact
+      # content) keeps applying cleanly regardless of upstream changes.
+      - name: Checkout XR872 SDK
+        uses: actions/checkout@v5
+        with:
+          repository: divadiow/xr872_sdk
+          ref: 73ca68a513316fd0dee6a5f5c68870b3c52049d1
+          path: xr872_sdk
+
+      - name: Apply SDK patches
+        working-directory: xr872_sdk
+        run: git apply "${{ github.workspace }}"/firmware/bigme_f7/sdk_patches/*.patch
+
+      - name: Build toolchain image
+        run: docker build -t hokku-bigme-f7-builder firmware/bigme_f7
+
+      - name: Build firmware
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/hokku_epaper" \
+            -v "${{ github.workspace }}/xr872_sdk:/xr872_sdk" \
+            hokku-bigme-f7-builder bash -lc '
+              cd /hokku_epaper/firmware/bigme_f7 &&
+              XR872_SDK=/xr872_sdk CC_DIR=/usr/bin bash ci-build.sh
+            '
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hokku-bigme-f7-firmware
+          path: firmware/release/hokku-bigme_f7-*.img
+
   build-webserver-deb:
-    needs: [test-webserver, build-firmware]
+    needs: [test-webserver, build-firmware-huessen, build-firmware-bigme]
     runs-on: ubuntu-latest
 
     steps:
@@ -93,13 +131,19 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential debhelper dh-python python3-setuptools pybuild-plugin-pyproject
 
-      # The "Flash a screen" feature ships the merged firmware inside the .deb.
-      # debian/install picks it up from python/firmware/release/, so place the
-      # firmware built by the build-firmware job there before building.
-      - name: Download firmware artifact
+      # The "Flash a screen" feature ships both merged firmwares inside the
+      # .deb. debian/install picks up firmware/release/hokku-* wildcarded, so
+      # place both build jobs' artifacts there before building.
+      - name: Download ESP32 firmware artifact
         uses: actions/download-artifact@v7
         with:
           name: hokku-firmware
+          path: python/firmware/release
+
+      - name: Download Bigme F7 firmware artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: hokku-bigme-f7-firmware
           path: python/firmware/release
 
       - name: Build .deb
