@@ -3,10 +3,8 @@
   "venv": ".venv",
   "extraPaths": ["python"],
   "include": ["tools", "python/hokku", "python/tests"],
-  "comment": "tools/ is Windows-oriented (SD-imaging, ctypes.windll, vendor GUIs); analyze it as Windows so it type-checks the same on the Linux CI runner as on a dev machine. python/ (the server) keeps the host default. Tools importing packages that can't install on Linux (pywinauto, playwright, capstone, pyelftools) are excluded below.",
-  "executionEnvironments": [
-    { "root": "tools", "pythonPlatform": "Windows", "extraPaths": ["python"] }
-  ],
+  "comment": "pythonPlatform=Windows: the tools/ provisioning + RE scripts are Windows-oriented (SD imaging, ctypes.windll, vendor GUIs), so analyze as Windows to type-check the same on the Linux CI runner as on a dev box. python/ (the server) is cross-platform and clean under Windows too, so this is safe. Tools importing packages that can't install on Linux (pywinauto, playwright, capstone, pyelftools) are excluded below.",
+  "pythonPlatform": "Windows",
   "exclude": [
     "**/node_modules",
     "**/__pycache__",
