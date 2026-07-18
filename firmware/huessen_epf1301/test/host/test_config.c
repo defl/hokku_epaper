@@ -17,7 +17,7 @@
 
 #include "mocks/nvs_flash.h"
 
-#include "../../main/config.c"
+#include "../../../common/esp32/config.c"
 
 /* ── Minimal test framework ────────────────────────────────────────────── */
 static int g_pass = 0;

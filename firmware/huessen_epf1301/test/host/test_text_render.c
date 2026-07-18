@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "../../main/text_render.h"
+#include "../../../common/esp32/text_render.h"
 
 /* ── Minimal test framework ──────────────────────────────────────────── */
 static int g_pass = 0;

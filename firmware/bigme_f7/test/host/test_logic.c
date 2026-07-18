@@ -73,6 +73,9 @@
 
 #include "../../hokku_config.c"
 #include "../../led.c"    /* led_usb_present() -> _mock_gpio, shared with main.c below */
+#include "../../../common/all/firmware_url.c"  /* SoC-agnostic (shared with ESP32) */
+#include "../../../common/all/frame_state.c"   /* SoC-agnostic (shared with ESP32) */
+#include "../../../common/all/logbuf.c"        /* SoC-agnostic (shared with ESP32) */
 #include "../../main.c"
 
 #undef main
@@ -306,30 +309,46 @@ static void test_battery_adc_conv_failure_returns_zero(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
- *  hlog / hlog_reset — bounded, truncating log ring
+ *  hlog / hlog_reset — circular log buffer built on the shared logbuf
+ *  primitive (firmware/common/all/logbuf.c).
  * ═══════════════════════════════════════════════════════════════════════ */
 
 static void test_hlog_appends_to_ring(void)
 {
     reset_all_mocks();
+    hlog_reset();
     hlog("hello\n");
-    CHECK(g_log_len == 6 && memcmp(g_log_ring, "hello\n", 6) == 0,
-          "hlog: appends formatted text to the ring");
+    char out[32];
+    uint32_t n = logbuf_snapshot(&g_log, out, sizeof(out) - 1);
+    out[n] = '\0';
+    CHECK(logbuf_len(&g_log) == 6 && strcmp(out, "hello\n") == 0,
+          "hlog: appends formatted text to the log buffer");
 }
 static void test_hlog_reset_clears_length(void)
 {
     reset_all_mocks();
     hlog("some text\n");
     hlog_reset();
-    CHECK(g_log_len == 0, "hlog_reset: clears g_log_len");
+    CHECK(logbuf_len(&g_log) == 0, "hlog_reset: empties the log buffer");
 }
-static void test_hlog_stops_appending_once_full(void)
+static void test_hlog_evicts_oldest_when_full(void)
 {
     reset_all_mocks();
-    g_log_len = HOKKU_LOG_RING_SZ - 2; /* leave only 2 bytes of room */
-    hlog("this line is way longer than 2 bytes\n");
-    CHECK(g_log_len <= HOKKU_LOG_RING_SZ,
-          "hlog: truncates (does not overflow) when the ring is nearly full");
+    hlog_reset();
+    /* Overfill: each hlog line is capped at ~159 bytes, so >13 lines exceed the
+     * 2 KB buffer. Circular must stay bounded AND keep the most-recent line. */
+    char filler[180];
+    memset(filler, 'x', sizeof(filler));
+    filler[sizeof(filler) - 1] = '\0';
+    for (int i = 0; i < 20; i++) hlog("%s", filler);
+    hlog("TAILMARK\n");
+    CHECK(logbuf_len(&g_log) <= HOKKU_LOG_RING_SZ,
+          "hlog: stays bounded when full (no overflow)");
+    char out[HOKKU_LOG_RING_SZ + 1];
+    uint32_t n = logbuf_snapshot(&g_log, out, HOKKU_LOG_RING_SZ);
+    out[n] = '\0';
+    CHECK(strstr(out, "TAILMARK") != NULL,
+          "hlog: circular buffer retains the most-recent line when full");
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -660,7 +679,7 @@ int main(void)
 
     test_hlog_appends_to_ring();
     test_hlog_reset_clears_length();
-    test_hlog_stops_appending_once_full();
+    test_hlog_evicts_oldest_when_full();
 
     test_build_firmware_url_normal();
     test_build_firmware_url_fallback_when_no_hokku_prefix();

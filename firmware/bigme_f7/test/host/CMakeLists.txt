@@ -25,6 +25,7 @@ add_executable(test_logic
 target_include_directories(test_logic PRIVATE
     mocks               # mock XR872 SDK headers (searched first)
     ../..                # for epd.h / led.h / hokku_config.h (real, local)
+    ../../../common/all  # SoC-agnostic shared: firmware_url.h / frame_state.h
 )
 
 # ── test_config ───────────────────────────────────────────────────────────

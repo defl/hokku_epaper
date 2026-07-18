@@ -1,0 +1,51 @@
+# Target
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash — XIAO_ESP32S3 as used in clients/reterminal_e1004's Arduino build
+# reported 32 MB (see that README's footer). NOT independently re-verified
+# for this ESP-IDF port — check `esptool.py flash_id` against real hardware
+# before relying on this.
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# Console on USB Serial/JTAG (built-in USB, same as huessen_epf1301)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Partition table — single factory app, no OTA slots. This firmware does
+# NOT implement A/B OTA (matches the clients/reterminal_e1004 Arduino sketch
+# it was ported from). Per root AGENTS.md's firmware-flashing STOP rules,
+# it must NOT be flashed to a device without first adding dual-slot/A-B
+# support and a recovery hatch, or explicit human sign-off to flash without
+# them. See README.md "Status" section.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Compiler — performance build (-O2), not debug (-Og)
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# CPU — 240 MHz (ESP32-S3 max)
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Chip revision — align with huessen_epf1301's baseline until this board's
+# actual silicon revision is confirmed.
+CONFIG_ESP32S3_REV_MIN_2=y
+
+# Run code and rodata from PSRAM — eliminates flash/PSRAM XIP cache contention
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+
+# Log level
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Main task stack (display + WiFi + HTTP needs headroom)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# PSRAM (8MB octal per Seeed's reTerminal E1004 spec — "PSRAM: OPI PSRAM" is
+# mandatory per clients/reterminal_e1004/README.md; the 960 KB frame buffer
+# does not fit in internal SRAM)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# WiFi - allocate buffers in SPIRAM when possible
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y

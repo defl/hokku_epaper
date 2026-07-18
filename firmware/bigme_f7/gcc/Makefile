@@ -40,16 +40,24 @@ PRJ_BOARD := $(ROOT_PATH)/project/common/board/xr872_evb_ai
 # ----------------------------------------------------------------------------
 INCLUDE_PATHS += -I$(PRJ_ROOT_PATH)
 
+# SoC-agnostic shared code (firmware/common/all) — pure C, compiled into the F7
+# firmware alongside the ESP32 boards. See firmware/common/all/README.md.
+HOKKU_COMMON_ALL := $(abspath $(PRJ_ROOT_PATH)/../common/all)
+INCLUDE_PATHS    += -I$(HOKKU_COMMON_ALL)
+
 DIRS_IGNORE := $(PRJ_ROOT_PATH)/gcc%
 DIRS_IGNORE += $(PRJ_ROOT_PATH)/image%
 # Host-side unit tests (test_logic.c etc.) — compiled by cmake against XR872
 # SDK mocks, NOT by this Makefile against the real SDK; must never be swept
-# into the firmware's own source discovery below.
+# into the firmware's own source discovery below. This covers both the F7's own
+# test dir AND common/all/test (whose files each define main() and #include the
+# .c under test — linking them into the firmware would be fatal).
 DIRS_IGNORE += $(PRJ_ROOT_PATH)/test%
+DIRS_IGNORE += $(HOKKU_COMMON_ALL)/test%
 DIRS_IGNORE += $(ROOT_PATH)/project/common/board/%
 DIRS_IGNORE += $(PRJ_BOARD)
 
-DIRS_ALL := $(shell find $(PRJ_ROOT_PATH) $(ROOT_PATH)/project/common -type d)
+DIRS_ALL := $(shell find $(PRJ_ROOT_PATH) $(HOKKU_COMMON_ALL) $(ROOT_PATH)/project/common -type d)
 DIRS      := $(filter-out $(DIRS_IGNORE),$(DIRS_ALL))
 DIRS      += $(PRJ_BOARD)
 

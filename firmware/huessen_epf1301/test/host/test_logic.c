@@ -49,9 +49,19 @@
  * re-processing when main.c re-includes the same headers). */
 #define static
 
-#include "../../main/text_render.c"  /* font table + draw_char + draw_string */
-#include "../../main/config.c"       /* NVS config struct + load/validate    */
-#include "../../main/main.c"         /* all firmware logic                   */
+#include "../../../common/esp32/text_render.c"  /* font table + draw_char + draw_string */
+#include "../../../common/esp32/config.c"       /* NVS config struct + load/validate    */
+#include "../../../common/esp32/state.c"  /* RTC-persistent state + validation    */
+#include "../../../common/esp32/scheduler.c"  /* now_epoch / refresh_due / retry math */
+#include "../../../common/esp32/log.c"    /* log ring + level gating              */
+#include "../../../common/esp32/wifi.c"   /* WiFi connect + fast-reconnect cache  */
+#include "../../../common/esp32/net.c"    /* HTTP image fetch + header capture    */
+#include "../../../common/esp32/ota.c"    /* A/B OTA                             */
+#include "../../../common/all/firmware_url.c" /* firmware endpoint derivation      */
+#include "../../../common/all/frame_state.c"  /* X-Frame-State JSON builder         */
+#include "../../../common/all/json_util.c"    /* json_escape                        */
+#include "../../../common/all/logbuf.c"       /* log buffer primitive (two-tier log)*/
+#include "../../main/main.c"                     /* all firmware logic                   */
 
 /* ── Minimal test framework ──────────────────────────────────────────── */
 static int g_pass = 0;
@@ -278,6 +288,54 @@ static void test_btn_glitch_high_clears_count(void)
  *  Entry point
  * ═══════════════════════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════════════════════
+ *  Logger (common/esp32/log.c) integration — a single RTC-resident ring, built
+ *  on the shared logbuf primitive, written directly on every line so it
+ *  survives sleep AND an unclean crash. Exercises init → hook-append →
+ *  snapshot → reset, plus RTC survival across a simulated reboot (the ring is
+ *  reconstructed from the persisted head/used). log_vprintf is the static hook,
+ *  reachable here because `static` is neutralised.
+ * ═══════════════════════════════════════════════════════════════════════ */
+static int call_log(const char *fmt, ...)
+{
+    va_list ap; va_start(ap, fmt);
+    int n = log_vprintf(fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+static void test_logger_ring_lifecycle(void)
+{
+    s_log_ring_head = 0;   /* fresh RTC ring, as after a clean POR boot */
+    s_log_ring_used = 0;
+    hokku_log_init();      /* reconstructs the ring + allocs format scratch */
+
+    call_log("boot-line-A ");
+    call_log("boot-line-B");
+    /* Every line is written straight into the RTC ring AND its position is
+     * persisted — so head/used already reflect the content (no spill needed). */
+    CHECK(s_log_ring_used > 0, "logger: append persists ring position to RTC each line");
+
+    char body[HOKKU_LOG_MAX_UPLOAD];
+    size_t n = hokku_log_snapshot(body, sizeof(body));
+    body[n] = '\0';
+    CHECK(strcmp(body, "boot-line-A boot-line-B") == 0,
+          "logger: snapshot returns the ring contents");
+
+    /* Simulate a reboot WITHOUT a clean reset (i.e. a crash): the RAM logbuf_t
+     * is lost, but s_log_ring storage + head/used survived in RTC. Re-init must
+     * reconstruct the ring and recover the pre-crash logs. */
+    hokku_log_init();
+    call_log("+after-crash");
+    n = hokku_log_snapshot(body, sizeof(body)); body[n] = '\0';
+    CHECK(strcmp(body, "boot-line-A boot-line-B+after-crash") == 0,
+          "logger: pre-crash logs survive an unclean reboot (RTC ring)");
+
+    hokku_log_reset();     /* simulate a successful (HTTP 200) upload */
+    n = hokku_log_snapshot(body, sizeof(body)); body[n] = '\0';
+    CHECK(n == 0 && s_log_ring_used == 0, "logger: reset clears the ring after upload");
+}
+
 int main(void)
 {
     /* All mock GPIO pins start at 0 (LOW). Set defaults appropriate for the
@@ -313,6 +371,9 @@ int main(void)
     test_btn_does_not_fire_again_while_held();
     test_btn_resets_after_release();
     test_btn_glitch_high_clears_count();
+
+    /* Logger (single RTC ring) */
+    test_logger_ring_lifecycle();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

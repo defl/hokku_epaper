@@ -40,6 +40,11 @@
 #include "led.h"
 #include "hokku_config.h"
 
+/* SoC-agnostic shared code (firmware/common/all — pure C, no SDK headers). */
+#include "firmware_url.h"
+#include "frame_state.h"
+#include "logbuf.h"
+
 /* Static IP config — used when DHCP is unavailable on the network */
 #define STATIC_IP_ADDR   "192.168.6.199"
 #define STATIC_GW_ADDR   "192.168.6.254"
@@ -79,15 +84,27 @@ static OS_Mutex_t  g_ota_lock;
  * ------------------------------------------------------------------------ */
 
 /*
- * Activity log ring. Every hlog() line is echoed to the serial console AND
- * appended here; the accumulated buffer is POSTed to the server as the request
- * body on each fetch (mirrors the ESP32 firmware's RTC log ring) and reset only
- * after a 200. Truncating (not circular): once full it stops appending until the
- * next successful upload resets it — bounded and simple.
+ * Activity log. Every hlog() line is echoed to the serial console AND appended
+ * to a circular log buffer; the accumulated buffer is POSTed to the server as
+ * the request body on each fetch and reset after a 200. The F7 reboots on every
+ * hibernation wake, so a single buffer suffices (no cross-sleep carry — that's
+ * the ESP32's two-tier concern); this is the F7's own logger built on the same
+ * SoC-agnostic logbuf primitive the ESP32 logger uses (firmware/common/all).
+ * Circular: once full it evicts the oldest bytes, keeping the most-recent logs.
  */
 #define HOKKU_LOG_RING_SZ       2048U
-static char     g_log_ring[HOKKU_LOG_RING_SZ];
-static uint32_t g_log_len;
+static char     g_log_storage[HOKKU_LOG_RING_SZ];
+static logbuf_t g_log;
+/* Contiguous scratch for the POST body (the circular g_log may be wrapped). */
+static char     g_log_body[HOKKU_LOG_RING_SZ];
+
+/* Lazy one-time attach so hlog() works whether called from the firmware (after
+ * boot) or a host test (which calls hlog directly). */
+static void hlog_ensure(void)
+{
+    if (g_log.cap == 0)
+        logbuf_init(&g_log, g_log_storage, sizeof(g_log_storage));
+}
 
 static void hlog(const char *fmt, ...)
 {
@@ -95,6 +112,7 @@ static void hlog(const char *fmt, ...)
     va_list ap;
     int     n;
 
+    hlog_ensure();
     va_start(ap, fmt);
     n = vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
@@ -104,12 +122,9 @@ static void hlog(const char *fmt, ...)
         n = (int)sizeof(line) - 1;
 
     printf("%s", line);                       /* still to serial console */
-    if (g_log_len + (uint32_t)n < HOKKU_LOG_RING_SZ) {
-        memcpy(g_log_ring + g_log_len, line, (size_t)n);
-        g_log_len += (uint32_t)n;
-    }
+    logbuf_append(&g_log, line, (uint32_t)n);
 }
-static void hlog_reset(void) { g_log_len = 0; }
+static void hlog_reset(void) { hlog_ensure(); logbuf_reset(&g_log); }
 
 /*
  * Software wall-clock anchored to the server epoch (X-Server-Time-Epoch), so we
@@ -193,28 +208,38 @@ static void build_frame_state(char *buf, size_t sz)
     int             rssi = 0;
     uint8_t        *hs, *he, *hc;
     uint32_t        bat = hokku_battery_mv();
-    char            batfield[24] = "";
 
     if (wlan_sta_ap_info(&ap) == 0)
         rssi = (int)(int8_t)ap.rssi;         /* stored as signed dBm in a u8 */
 
     heap_get_space(&hs, &he, &hc);           /* free ~= end - current watermark */
 
-    if (bat > 0)
-        snprintf(batfield, sizeof(batfield), ",\"bat_mv\":%u", (unsigned)bat);
-
-    snprintf(buf, sz,
-        "{\"fw\":\"%s\",\"uptime_s\":%u,\"heap_kb\":%u,\"rssi\":%d,"
-        "\"regime\":\"%s\",\"wake\":\"%s\",\"cfg_ver\":%u,\"clk_now\":%u,\"ota\":1%s}",
-        FIRMWARE_VERSION,
-        (unsigned)OS_GetTime(),
-        (unsigned)((he - hc) / 1024),
-        rssi,
-        (cfg->power_mode == HOKKU_PWR_AWAKE || led_usb_present()) ? "usb_awake" : "battery",
-        g_wake,
-        (unsigned)HOKKU_CFG_VER,
-        (unsigned)hokku_clock_now(),
-        batfield);
+    /* Gather XR872-specific values, then hand off to the shared (SoC-agnostic)
+     * builder in common/all so the F7 reports the same schema as the ESP32
+     * boards. Fields the F7 doesn't track (boot/spurious/next_ep/sleep_err/
+     * wifi_cached) default to 0/none; bat_mv omits itself when the reading is
+     * unavailable (bat == 0 -> -1), matching the prior F7 behaviour. */
+    frame_state_t fs = {
+        .fw       = FIRMWARE_VERSION,
+        .boot     = 0,
+        .wake     = g_wake,
+        .regime   = (cfg->power_mode == HOKKU_PWR_AWAKE || led_usb_present())
+                        ? "usb_awake" : "battery",
+        .uptime_s = (long long)(unsigned)OS_GetTime(),
+        .bat_mv   = (bat > 0) ? (int)bat : -1,
+        .usb      = led_usb_present() ? "host" : "none",
+        .last_sleep = "none",
+        .rssi     = rssi,
+        .heap_kb  = (unsigned)((he - hc) / 1024),
+        .spurious = 0,
+        .cfg_ver  = (unsigned)HOKKU_CFG_VER,
+        .clk_now  = (long long)(unsigned)hokku_clock_now(),
+        .next_ep  = 0,
+        .sleep_err_known = false,
+        .sleep_err_s     = 0,
+        .wifi_cached     = false,
+    };
+    frame_state_build(buf, sz, &fs);
 }
 
 /*
@@ -322,21 +347,13 @@ static int read_resp_header_str(HTTP_SESSION_HANDLE h, const char *name, char *o
  *   "http://host:port/hokku/screen/" -> "http://host:port/hokku/firmware.bin?model=bigme_f7"
  * by keeping everything up to and including "/hokku/" and appending the OTA path.
  */
+/* Model-tagged firmware endpoint from the server base URL. Delegates to the
+ * shared (SoC-agnostic) derivation in common/all — same algorithm this used to
+ * inline (anchor on /hokku/, raw fallback). */
 static void hokku_build_firmware_url(char *out, size_t outsz)
 {
-    const char *base = hokku_config_get()->server_url;
-    const char *hk   = strstr(base, "/hokku/");
-
-    if (hk) {
-        size_t prefix = (size_t)(hk - base) + 7;    /* through "/hokku/" */
-        if (prefix < outsz) {
-            memcpy(out, base, prefix);
-            out[prefix] = '\0';
-            strncat(out, "firmware.bin?model=" SCREEN_MODEL, outsz - strlen(out) - 1);
-            return;
-        }
-    }
-    snprintf(out, outsz, "%s", base);               /* fallback: unrecognised URL shape */
+    firmware_url_build(out, outsz, hokku_config_get()->server_url,
+                       "firmware.bin?model=" SCREEN_MODEL);
 }
 
 /*
@@ -430,15 +447,16 @@ static int do_refresh(void)
 
     build_frame_state(frame_state, sizeof(frame_state));
 
-    log_sent = g_log_len;                     /* bytes delivered by this POST */
+    /* Snapshot the circular log into a contiguous body for the POST. Log the
+     * POST line first so it rides along in this upload. */
+    hlog("hokku: POST %s (log %u B)\n", cfg->server_url, (unsigned)logbuf_len(&g_log));
+    log_sent = logbuf_snapshot(&g_log, g_log_body, sizeof(g_log_body));
     memset(&params, 0, sizeof(params));
     strncpy(params.Uri, cfg->server_url, sizeof(params.Uri) - 1);
-    params.HttpVerb  = VerbPost;              /* POST so the log ring rides as the body */
+    params.HttpVerb  = VerbPost;              /* POST so the log rides as the body */
     params.nTimeout  = HTTP_TIMEOUT_S;
-    params.pData     = g_log_ring;            /* request body = accumulated activity log */
-    params.pLength   = log_sent;              /* snapshot; dropped only after a 200 */
-
-    hlog("hokku: POST %s (log %u B)\n", cfg->server_url, (unsigned)g_log_len);
+    params.pData     = g_log_body;            /* request body = accumulated activity log */
+    params.pLength   = log_sent;              /* dropped only after a 200 */
     ret = HTTPC_open(&params);
     if (ret != HTTP_CLIENT_SUCCESS) {
         hlog("hokku: HTTP open failed (%d)\n", ret);
@@ -472,14 +490,11 @@ static int do_refresh(void)
         return (info.HTTPStatusCode == 503 || info.HTTPStatusCode == 404) ? 30 : -1;
     }
 
-    /* The POST body (log) reached the server in a 200 — drop the delivered prefix,
-     * keeping anything hlog() appended during this exchange for the next upload. */
-    if (g_log_len >= log_sent) {
-        g_log_len -= log_sent;
-        memmove(g_log_ring, g_log_ring + log_sent, g_log_len);
-    } else {
-        hlog_reset();
-    }
+    /* The POST body (log) reached the server in a 200 — clear the buffer so the
+     * next cycle starts fresh. (A handful of lines logged during this exchange
+     * are dropped too; the F7 uploads every cycle so little accumulates.) */
+    hlog_reset();
+    (void)log_sent;
 
     /* Capture sleep + server clock + any OTA signal from response headers */
     char fw_update[32] = "";
