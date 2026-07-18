@@ -15,6 +15,7 @@ import threading
 from pathlib import Path
 
 from hokku.screens.registry import DISPLAY_REGISTRY
+from hokku.webserver import image_manager_single
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.image_manager_multi import MultiThreadedImageManager
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
@@ -24,16 +25,34 @@ _HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
 TOTAL_BYTES = _HUESSEN.total_bytes
 
 
-def test_single_threaded_does_not_spawn_threads(app_config: AppConfig, make_test_image):
-    """SingleThreadedImageManager.sync() runs entirely on the calling thread."""
+def test_single_threaded_renders_inline_on_calling_thread(
+    app_config: AppConfig, make_test_image, monkeypatch
+):
+    """SingleThreadedImageManager.sync() renders inline on the calling thread.
+
+    Record the thread each render actually runs on rather than sampling the
+    process-global ``threading.active_count()`` — that global count is polluted by
+    unrelated threads in the (xdist) worker process (PIL/numpy pools, other tests)
+    and was flaky. If sync rendered inline, every render ran on the test thread;
+    if it had offloaded to a worker, the idents would differ. Immune to process
+    noise.
+    """
     upload = Path(app_config.upload_dir)
     make_test_image(upload / "a.png")
     make_test_image(upload / "b.png")
 
+    real_render_one = image_manager_single.render_one
+    render_threads: list[int] = []
+
+    def recording_render_one(*args, **kwargs):
+        render_threads.append(threading.get_ident())
+        return real_render_one(*args, **kwargs)
+
+    monkeypatch.setattr(image_manager_single, "render_one", recording_render_one)
+
     mgr = SingleThreadedImageManager(app_config)
-    before = threading.active_count()
+    caller_ident = threading.get_ident()
     mgr.sync()
-    after = threading.active_count()
     mgr.shutdown()
 
     assert mgr.resolved_worker_count == 1
@@ -42,10 +61,13 @@ def test_single_threaded_does_not_spawn_threads(app_config: AppConfig, make_test
     assert rec_a is not None and rec_b is not None
     assert rec_a.convert_status == "ok"
     assert rec_b.convert_status == "ok"
-    # ``sync`` may briefly spawn helper threads inside PIL/numpy that exit
-    # before sync returns; what we care about is that no persistent worker
-    # thread is left running.
-    assert after == before, f"thread count grew during sync: before={before} after={after}"
+    # Renders actually happened (>= 2: at least one per image; the manager renders
+    # per orientation, so the exact count is an implementation detail), and every
+    # one ran on the calling thread — no worker thread was used.
+    assert len(render_threads) >= 2, f"expected renders to run, got {render_threads}"
+    assert all(t == caller_ident for t in render_threads), (
+        f"render ran off the calling thread: caller={caller_ident} renders={render_threads}"
+    )
 
 
 def test_multi_threaded_runs_in_parallel(app_config: AppConfig, monkeypatch):
