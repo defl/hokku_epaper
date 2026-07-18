@@ -385,6 +385,14 @@ def main():
         "(1200×1600, rotated 90° CCW from landscape)",
     )
     parser.add_argument(
+        "--model",
+        "-m",
+        default="huessen_epf1301",
+        metavar="MODEL",
+        help="Hardware model sent as X-Screen-Model — the model the server routes on "
+        "(e.g. huessen_epf1301, seeedstudio_e1004, bigme_f7). Default: huessen_epf1301",
+    )
+    parser.add_argument(
         "--quiet",
         "-q",
         action="store_true",
@@ -414,6 +422,7 @@ def main():
                 args.name,
                 battery_mv=args.battery,
                 sim_state=sim_state,
+                screen_model=args.model,
             )
             sleep_s = headers.get("x-sleep-seconds", "?")
             epoch = headers.get("x-server-time-epoch", "?")
