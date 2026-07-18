@@ -51,23 +51,29 @@ jobs:
       - name: Run tests
         run: ctest --test-dir firmware/seeedstudio_e1004/test/host/build --output-on-failure
 
-  # Standalone unit tests for the pure, SoC-agnostic shared code in
-  # firmware/common/all/ (firmware_url, frame_state, json_util, logbuf). These
-  # need no SDK mocks and govern code compiled into ALL three firmwares.
-  test-common-all:
+  # Unit tests for the shared firmware code, which is compiled into ALL three
+  # firmwares: common/all (pure, SoC-agnostic: firmware_url, frame_state,
+  # json_util, logbuf — no mocks) AND common/esp32 (the ESP-IDF-specific
+  # config/state/scheduler/log, tested against the shared mock kit).
+  test-firmware-common:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v5
 
-      - name: Configure
+      - name: Configure common/all
         run: cmake -B firmware/common/all/test/build firmware/common/all/test
-
-      - name: Build
+      - name: Build common/all
         run: cmake --build firmware/common/all/test/build
-
-      - name: Run tests
+      - name: Test common/all
         run: ctest --test-dir firmware/common/all/test/build --output-on-failure
+
+      - name: Configure common/esp32
+        run: cmake -B firmware/common/esp32/test/build firmware/common/esp32/test
+      - name: Build common/esp32
+        run: cmake --build firmware/common/esp32/test/build
+      - name: Test common/esp32
+        run: ctest --test-dir firmware/common/esp32/test/build --output-on-failure
 
   test-webserver:
     runs-on: ubuntu-latest
@@ -193,7 +199,8 @@ jobs:
           firmware/common/
 
   build-firmware-huessen_epf1301:
-    needs: [test-firmware-huessen_epf1301, lint-firmware-huessen_epf1301]
+    needs: [test-firmware-huessen_epf1301, lint-firmware-huessen_epf1301,
+            test-firmware-common, lint-firmware-common]
     runs-on: ubuntu-latest
 
     steps:
@@ -213,7 +220,8 @@ jobs:
           path: firmware/release/hokku-huessen_epf1301-*.bin
 
   build-firmware-seeedstudio_e1004:
-    needs: [test-firmware-seeedstudio_e1004, lint-firmware-seeedstudio_e1004]
+    needs: [test-firmware-seeedstudio_e1004, lint-firmware-seeedstudio_e1004,
+            test-firmware-common, lint-firmware-common]
     runs-on: ubuntu-latest
 
     steps:
@@ -233,7 +241,8 @@ jobs:
           path: firmware/release/hokku-seeedstudio_e1004-*.bin
 
   build-firmware-bigme_f7:
-    needs: [test-firmware-bigme_f7, lint-firmware-bigme_f7]
+    needs: [test-firmware-bigme_f7, lint-firmware-bigme_f7,
+            test-firmware-common, lint-firmware-common]
     runs-on: ubuntu-latest
 
     steps:
