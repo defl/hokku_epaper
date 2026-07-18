@@ -570,6 +570,7 @@ static void schedule_and_sleep(void)
     enter_deep_sleep(sleep_us);
 }
 
+// cppcheck-suppress unusedFunction
 void app_main(void)
 {
     int64_t boot_time = esp_timer_get_time();
