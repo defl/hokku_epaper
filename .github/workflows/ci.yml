@@ -196,6 +196,7 @@ jobs:
           --inline-suppr
           --error-exitcode=1
           -ifirmware/common/all/test
+          -ifirmware/common/esp32/test
           firmware/common/
 
   build-firmware-huessen_epf1301:
