@@ -457,7 +457,9 @@ def test_bigme_firmware_module_discovers_release_image(tmp_path, monkeypatch):
 
     img = bigme_f7.release_app_image()
     assert img == b"X" * 1_000_000
-    assert img == bigme_f7.firmware_image_file().read_bytes()
+    fw_file = bigme_f7.firmware_image_file()
+    assert fw_file is not None
+    assert img == fw_file.read_bytes()
     assert bigme_f7.bundled_firmware_version() == "1.2.2"
 
 

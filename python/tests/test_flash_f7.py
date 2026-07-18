@@ -410,7 +410,7 @@ def test_route_start_f7_no_provision_when_blank(app_config, tmp_path, monkeypatc
     img.write_bytes(b"AWIH" + b"\x00" * 32)
     monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
     monkeypatch.setattr("hokku.webserver.flask_app.bigme_firmware.firmware_image_file", lambda: img)
-    captured = {"provision": "unset"}
+    captured: dict = {"provision": "unset"}
 
     def fake_bootstrap(port, image_path, on_line, should_cancel, provision=None, **kw):
         captured["provision"] = provision

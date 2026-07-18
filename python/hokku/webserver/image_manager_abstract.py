@@ -422,8 +422,8 @@ class AbstractImageManager(ABC):
         if rec.image_width is None:
             return None
         thumb_path = self._thumb_path(rec)
+        src_path = self._upload_dir / name
         try:
-            src_path = self._upload_dir / name
             if thumb_path.exists() and thumb_path.stat().st_mtime >= src_path.stat().st_mtime:
                 return thumb_path.read_bytes()
         except OSError:
@@ -891,6 +891,7 @@ class AbstractImageManager(ABC):
         Images whose PIL dimensions were never read (corrupt / unsupported
         format) are failed immediately without going through the dispatcher.
         """
+        err = ""
         with self._db_lock:
             rec = self._records.get(name)
             if rec is None or rec.convert_status != "pending":

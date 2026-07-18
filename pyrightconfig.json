@@ -2,8 +2,12 @@
   "venvPath": ".",
   "venv": ".venv",
   "extraPaths": ["python"],
-  "include": ["tools"],
+  "include": ["tools", "python/hokku", "python/tests"],
   "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    "**/*.egg-info",
     "tools/_analyze_dll.py",
     "tools/_analyze_ref_dump.py",
     "tools/_baud_scan.py",
