@@ -36,6 +36,21 @@ jobs:
       - name: Run tests
         run: ctest --test-dir firmware/bigme_f7/test/host/build --output-on-failure
 
+  test-firmware-seeedstudio_e1004:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -B firmware/seeedstudio_e1004/test/host/build firmware/seeedstudio_e1004/test/host
+
+      - name: Build
+        run: cmake --build firmware/seeedstudio_e1004/test/host/build
+
+      - name: Run tests
+        run: ctest --test-dir firmware/seeedstudio_e1004/test/host/build --output-on-failure
+
   # Standalone unit tests for the pure, SoC-agnostic shared code in
   # firmware/common/all/ (firmware_url, frame_state, json_util, logbuf). These
   # need no SDK mocks and govern code compiled into ALL three firmwares.
@@ -92,6 +107,28 @@ jobs:
           --inline-suppr
           --error-exitcode=1
           firmware/huessen_epf1301/main/
+
+  lint-firmware-seeedstudio_e1004:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y --no-install-recommends cppcheck
+
+      - name: Run cppcheck
+        run: >
+          cppcheck
+          --enable=all
+          --std=c11
+          --suppress=missingIncludeSystem
+          --suppress=missingInclude
+          --suppress=checkersReport
+          --suppress=unmatchedSuppression
+          --inline-suppr
+          --error-exitcode=1
+          firmware/seeedstudio_e1004/main/
 
   lint-firmware-bigme_f7:
     runs-on: ubuntu-latest
@@ -175,6 +212,26 @@ jobs:
           name: hokku-huessen_epf1301-firmware
           path: firmware/release/hokku-huessen_epf1301-*.bin
 
+  build-firmware-seeedstudio_e1004:
+    needs: [test-firmware-seeedstudio_e1004, lint-firmware-seeedstudio_e1004]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.3
+          target: esp32s3
+          path: firmware/seeedstudio_e1004
+          command: bash ci-build.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hokku-seeedstudio_e1004-firmware
+          path: firmware/release/hokku-seeedstudio_e1004-*.bin
+
   build-firmware-bigme_f7:
     needs: [test-firmware-bigme_f7, lint-firmware-bigme_f7]
     runs-on: ubuntu-latest
@@ -215,7 +272,7 @@ jobs:
           path: firmware/release/hokku-bigme_f7-*.img
 
   build-webserver-deb:
-    needs: [test-webserver, build-firmware-huessen_epf1301, build-firmware-bigme_f7]
+    needs: [test-webserver, build-firmware-huessen_epf1301, build-firmware-seeedstudio_e1004, build-firmware-bigme_f7]
     runs-on: ubuntu-latest
 
     steps:
@@ -234,6 +291,12 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: hokku-huessen_epf1301-firmware
+          path: python/firmware/release
+
+      - name: Download Seeed E1004 firmware artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: hokku-seeedstudio_e1004-firmware
           path: python/firmware/release
 
       - name: Download Bigme F7 firmware artifact

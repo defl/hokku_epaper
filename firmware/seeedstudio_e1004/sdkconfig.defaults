@@ -11,14 +11,16 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 # Console on USB Serial/JTAG (built-in USB, same as huessen_epf1301)
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
-# Partition table — single factory app, no OTA slots. This firmware does
-# NOT implement A/B OTA (matches the clients/reterminal_e1004 Arduino sketch
-# it was ported from). Per root AGENTS.md's firmware-flashing STOP rules,
-# it must NOT be flashed to a device without first adding dual-slot/A-B
-# support and a recovery hatch, or explicit human sign-off to flash without
-# them. See README.md "Status" section.
+# Partition table — A/B OTA (ota_0 / ota_1 / otadata), see partitions.csv.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# OTA rollback: an OTA'd app boots PENDING_VERIFY and must call
+# esp_ota_mark_app_valid_cancel_rollback() (done after a successful refresh via
+# ota_mark_valid_if_pending); otherwise the bootloader reverts to the previous
+# slot on the next boot. Combined with button-wake (an early recovery hatch),
+# this satisfies the root AGENTS.md firmware-flashing STOP rules.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # Compiler — performance build (-O2), not debug (-Og)
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
