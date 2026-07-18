@@ -92,11 +92,6 @@ jobs:
       - name: Run tests
         run: pytest -m "not time_intensive"
 
-      # tools/ CLIs (esp32_setup, hokku_setup, hokku_config, ...) — their deps
-      # (pyserial, esptool) come with the hokku-server install above.
-      - name: Run tools tests
-        run: pytest tools/tests
-
   lint-webserver:
     runs-on: ubuntu-latest
 
@@ -118,13 +113,61 @@ jobs:
           .venv/bin/pip install ruff==0.15.14 pyright==1.1.409
 
       - name: Ruff lint
-        run: .venv/bin/ruff check python/ tools/
+        run: .venv/bin/ruff check python/
 
       - name: Ruff format check
-        run: .venv/bin/ruff format --check python/ tools/
+        run: .venv/bin/ruff format --check python/
 
       - name: Pyright
-        run: .venv/bin/pyright
+        run: .venv/bin/pyright python/hokku python/tests
+
+  test-tools:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # tools/ CLIs (esp32_setup, hokku_setup, hokku_config, ...) import the hokku
+      # package and pyserial/esptool — all pulled in by the hokku-server install.
+      - name: Install dependencies
+        run: pip install -e "python/[test]"
+
+      - name: Run tools tests
+        run: pytest tools/tests
+
+  lint-tools:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Create venv + install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e "python/[test]"
+          .venv/bin/pip install ruff==0.15.14 pyright==1.1.409
+
+      - name: Ruff lint
+        run: .venv/bin/ruff check tools/
+
+      - name: Ruff format check
+        run: .venv/bin/ruff format --check tools/
+
+      # pyrightconfig.json analyses tools/ as Windows (ctypes.windll) and excludes
+      # the tools needing packages that can't install on Linux (pywinauto, etc.).
+      - name: Pyright
+        run: .venv/bin/pyright tools
 
   lint-firmware-huessen_epf1301:
     runs-on: ubuntu-latest
@@ -316,7 +359,7 @@ jobs:
           path: firmware/release/hokku-bigme_f7-*.img
 
   build-webserver-deb:
-    needs: [test-webserver, build-firmware-huessen_epf1301, build-firmware-seeedstudio_e1004, build-firmware-bigme_f7]
+    needs: [test-webserver, lint-webserver, build-firmware-huessen_epf1301, build-firmware-seeedstudio_e1004, build-firmware-bigme_f7]
     runs-on: ubuntu-latest
 
     steps:
