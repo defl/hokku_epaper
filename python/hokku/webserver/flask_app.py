@@ -46,6 +46,7 @@ from hokku.screens.firmware_registry import (
     firmware_version_for,
     release_app_image_for,
 )
+from hokku.screens.flasher_registry import esp32_screen, esp32_screens
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState
@@ -174,8 +175,9 @@ def create_app(
 
     static_root = _resolve_static_folder()
     git_describe, git_hash = _read_git_describe()
-    # Bundled merged firmware for the "Flash a screen" feature (None if absent).
-    firmware_path = huessen_epf1301.merged_firmware_file()
+    # Legacy scalar bundled-firmware version for the status view (the huessen
+    # reference model). Per-model versions come from bundled_firmware_versions();
+    # the flash endpoints resolve firmware per requested model at flash time.
     _fw_hdr = huessen_epf1301.release_app_header()
     bundled_firmware_version: str | None = (
         _fw_hdr[48:80].split(b"\x00")[0].decode("ascii", errors="replace").strip()
@@ -363,8 +365,19 @@ def create_app(
         The device sends its current config as an X-Config-State JSON header; we
         map it forward into the new firmware's NVS schema (``migrate_config``) and
         build the partition image with the same ``build_nvs_binary`` the USB setup
-        path uses. A migration refusal is a should-never-happen bug: we record it
-        on the screen and return 422 so the device aborts and stays put."""
+        path uses. The NVS schema is per-model (an ESP32-S3 board); the model comes
+        from ``X-Screen-Model`` and defaults to huessen for existing devices that
+        predate the header. A migration refusal is a should-never-happen bug: we
+        record it on the screen and return 422 so the device aborts and stays put."""
+        model_arg = request.headers.get("X-Screen-Model")
+        model = parse_screen_model(model_arg) if model_arg else "huessen_epf1301"
+        screen = esp32_screen(model)
+        if screen is None:
+            # Only ESP32-S3 boards use the NVS firmware-config round-trip (the F7
+            # keeps config device-local). An unknown/non-NVS model is a bug.
+            logger.error("firmware-config requested for model %r with no NVS config path", model)
+            abort(404)
+
         screen_name = request.headers.get("X-Screen-Name")
         current = parse_config_state(request.headers.get("X-Config-State"))
         if not screen_name:
@@ -373,9 +386,9 @@ def create_app(
             logger.error("firmware-config from %s: missing/invalid X-Config-State", screen_name)
             return make_response("missing X-Config-State", 400)
 
-        migrated = huessen_epf1301.migrate_config(current)
+        migrated = screen.migrate_config(current)
         if migrated is None:
-            msg = f"cannot migrate config to schema v{huessen_epf1301.CONFIG_VERSION}"
+            msg = f"cannot migrate config to schema v{screen.CONFIG_VERSION}"
             state.scheduler.record_ota_error(screen_name, msg)
             return make_response(msg, 422)
 
@@ -385,8 +398,8 @@ def create_app(
             logger.info("Applying server URL override for %s: %s", screen_name, url_override)
 
         try:
-            nvs_image = huessen_epf1301.build_nvs_binary(migrated)
-        except huessen_epf1301.NvsToolUnavailable as e:
+            nvs_image = screen.build_nvs_binary(migrated)
+        except screen.NvsToolUnavailable as e:
             logger.error("firmware-config: NVS generator unavailable: %s", e)
             return make_response("NVS generator unavailable on server", 503)
         except (RuntimeError, OSError) as e:
@@ -946,12 +959,15 @@ def create_app(
         Refused (409) while a flash is in progress — scanning resets the device
         and contends for the serial port.
         """
-        if firmware_path is None:
-            logger.error("Flash scan requested but no bundled firmware available")
+        if not any(s.merged_firmware_file() for s in esp32_screens()):
+            logger.error("Flash scan requested but no bundled ESP32 firmware available")
             return jsonify({"error": "no bundled firmware available on this server"}), 503
         if state.flash_jobs.is_busy():
             logger.warning("Flash scan rejected: a flash is already in progress")
             return jsonify({"error": "a flash is in progress", "busy": True}), 409
+        # The two ESP32-S3 boards share a USB VID:PID, so a scan cannot tell them
+        # apart — any esp32 screen's scanner enumerates the same ports. The operator
+        # picks the actual model in the flash form.
         devices = huessen_epf1301.scan_devices()
         # Classify non-ESP32 ports the UI knows how to guide: a CH340 bridge is a
         # Bigme F7 (XR872), which is USB-flashed by a different (vendor-tool)
@@ -982,17 +998,27 @@ def create_app(
 
     @app.route("/hokku/api/flash/start", methods=["POST"])
     def api_flash_start():
-        """Begin flashing firmware + NVS config to a connected screen."""
-        if firmware_path is None:
-            logger.error("Flash start requested but no bundled firmware available")
-            return jsonify({"error": "no bundled firmware available on this server"}), 503
-        if not huessen_epf1301.nvs_tool_available():
+        """Begin flashing firmware + NVS config to a connected screen.
+
+        The target ESP32-S3 model comes from the request body (the two boards share
+        a USB VID:PID, so the operator's choice, not the scan, picks the flash
+        layout); it defaults to huessen for older UIs that omit it."""
+        body = request.get_json(silent=True) or {}
+        screen_model = (body.get("screen_model") or "huessen_epf1301").strip()
+        screen = esp32_screen(screen_model)
+        if screen is None:
+            logger.info("Flash start: unknown ESP32 model %r", screen_model)
+            return jsonify({"error": f"unknown ESP32 screen model {screen_model!r}"}), 400
+        model_firmware = screen.merged_firmware_file()
+        if model_firmware is None:
+            logger.error("Flash start requested but no bundled firmware for %s", screen_model)
+            return jsonify({"error": f"no bundled firmware for {screen_model} on this server"}), 503
+        if not screen.nvs_tool_available():
             logger.error("Flash start requested but esp-idf-nvs-partition-gen is not installed")
             return jsonify(
                 {"error": "NVS generator not installed (esp-idf-nvs-partition-gen)"}
             ), 503
 
-        body = request.get_json(silent=True) or {}
         port = (body.get("port") or "").strip()
         wifi_ssid1 = (body.get("wifi_ssid1") or "").strip()
         image_url = (body.get("image_url") or "").strip()
@@ -1025,7 +1051,7 @@ def create_app(
         if screen_name:
             config["screen_name"] = screen_name
 
-        job_id = state.flash_jobs.start(port, config, firmware_path)
+        job_id = state.flash_jobs.start(port, config, model_firmware, screen_model=screen_model)
         if job_id is None:
             logger.warning("Flash start rejected: a flash is already in progress")
             return jsonify({"error": "a flash is already in progress"}), 409

@@ -920,6 +920,14 @@
 
     <div id="flash-form" hidden>
       <div class="config-row">
+        <label>Screen model:</label>
+        <select id="flash-model">
+          <option value="huessen_epf1301">Huessen EPF1301 (EL133UF1, 16 MB)</option>
+          <option value="seeedstudio_e1004">Seeed reTerminal E1004 (32 MB)</option>
+        </select>
+        <span class="flash-hint">Both boards are ESP32-S3 and look identical to USB — pick the one you're flashing.</span>
+      </div>
+      <div class="config-row">
         <label>Wi-Fi network:</label>
         <input type="text" id="flash-ssid" placeholder="SSID" autocomplete="off" spellcheck="false">
       </div>
@@ -2133,7 +2141,7 @@ function setFlashStatus(msg, cls) {
 }
 
 function setFlashControlsDisabled(d) {
-  ['flash-device', 'flash-scan-btn', 'flash-go-btn', 'flash-ssid', 'flash-pass',
+  ['flash-device', 'flash-scan-btn', 'flash-go-btn', 'flash-model', 'flash-ssid', 'flash-pass',
    'flash-ssid2', 'flash-pass2', 'flash-name'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = d;
@@ -2147,6 +2155,7 @@ async function startFlash() {
   if (!ssid) { showToast('Enter a Wi-Fi network name'); return; }
   const body = {
     port: port,
+    screen_model: document.getElementById('flash-model').value,
     wifi_ssid1: ssid,
     wifi_pass1: document.getElementById('flash-pass').value,
     image_url: document.getElementById('flash-url').value,

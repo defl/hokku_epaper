@@ -1,7 +1,9 @@
-"""Detect connected EPF1301 frames and read their on-flash state.
+"""Detect connected ESP32-S3 hokku screens and read their on-flash state.
 
 All esptool access is via ``subprocess`` (never ``esptool.main()`` in-process,
 which mutates global ``sys.stdout`` and is unsafe in a threaded web server).
+Parameterised by an :class:`Esp32Spec` (VID/PID, partition offsets, config version,
+release header for the "is current" comparison).
 """
 
 from __future__ import annotations
@@ -14,25 +16,14 @@ import tempfile
 
 import serial.tools.list_ports
 
-from .constants import (
-    APP_OFFSET,
-    CONFIG_VERSION,
-    ESP32S3_PID,
-    ESP32S3_VID,
-    ESPTOOL_BAUD,
-    NVS_OFFSET,
-    NVS_SIZE,
-)
-from .firmware import release_app_header
-from .nvs import read_nvs
+from hokku.screens.esp32.firmware import release_app_header
+from hokku.screens.esp32.nvs import read_nvs
+from hokku.screens.esp32.spec import Esp32Spec
 
 logger = logging.getLogger(__name__)
 
-# esptool read covering the NVS partition through the app header in one shot.
-_READ_SIZE = (APP_OFFSET + 256) - NVS_OFFSET
 
-
-def list_serial_ports() -> list[dict]:
+def list_serial_ports(spec: Esp32Spec) -> list[dict]:
     """Return ``{port, description, vid, pid, is_esp32}`` for every serial port.
 
     ``vid``/``pid`` are raw USB ids (or None) so callers can classify the port's
@@ -45,17 +36,20 @@ def list_serial_ports() -> list[dict]:
                 "description": p.description or p.device,
                 "vid": p.vid,
                 "pid": p.pid,
-                "is_esp32": p.vid == ESP32S3_VID and p.pid == ESP32S3_PID,
+                "is_esp32": p.vid == spec.vid and p.pid == spec.pid,
             }
         )
     return ports
 
 
-def read_device_flash(port: str, timeout: int = 60) -> tuple[bytes | None, bytes | None]:
+def read_device_flash(
+    spec: Esp32Spec, port: str, timeout: int = 60
+) -> tuple[bytes | None, bytes | None]:
     """One esptool read covering the NVS partition + app header.
 
     Returns ``(nvs_bytes, app_header_bytes)`` or ``(None, None)`` on failure.
     """
+    read_size = (spec.app_offset + 256) - spec.nvs_offset
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
         tmp_path = f.name
     try:
@@ -69,10 +63,10 @@ def read_device_flash(port: str, timeout: int = 60) -> tuple[bytes | None, bytes
                 "--port",
                 port,
                 "--baud",
-                ESPTOOL_BAUD,
+                spec.baud,
                 "read-flash",
-                hex(NVS_OFFSET),
-                hex(_READ_SIZE),
+                hex(spec.nvs_offset),
+                hex(read_size),
                 tmp_path,
             ],
             capture_output=True,
@@ -83,8 +77,8 @@ def read_device_flash(port: str, timeout: int = 60) -> tuple[bytes | None, bytes
             return None, None
         with open(tmp_path, "rb") as f:
             data = f.read()
-        nvs_data = data[:NVS_SIZE]
-        app_header = data[APP_OFFSET - NVS_OFFSET :][:256]
+        nvs_data = data[: spec.nvs_size]
+        app_header = data[spec.app_offset - spec.nvs_offset :][:256]
         return nvs_data, app_header
     except (OSError, subprocess.SubprocessError):
         return None, None
@@ -108,6 +102,7 @@ def _version_from_header(header: bytes | None) -> str | None:
 
 
 def parse_device_state(
+    spec: Esp32Spec,
     nvs_data: bytes | None,
     app_header: bytes | None,
     release_header: bytes | None = None,
@@ -131,7 +126,7 @@ def parse_device_state(
     result["device_version"] = _version_from_header(app_header)
 
     if release_header is None:
-        release_header = release_app_header()
+        release_header = release_app_header(spec)
     if release_header:
         result["release_version"] = _version_from_header(release_header)
         if app_header and len(app_header) >= 256 and len(release_header) >= 256:
@@ -146,8 +141,8 @@ def parse_device_state(
                 result["firmware_current"] = "newer" if dv > rv else False
 
     if nvs_data:
-        config = read_nvs(nvs_data)
-        if config and config.get("cfg_ver") == CONFIG_VERSION:
+        config = read_nvs(spec, nvs_data)
+        if config and config.get("cfg_ver") == spec.config_version:
             result["config"] = config
             result["config_version_ok"] = True
         elif config and "cfg_ver" in config:
@@ -156,20 +151,20 @@ def parse_device_state(
     return result
 
 
-def scan_devices() -> list[dict]:
+def scan_devices(spec: Esp32Spec) -> list[dict]:
     """Enumerate all serial ports; for ESP32-S3 ports, read on-flash state.
 
     Each ESP32-S3 device is read (which resets it), so only call this when no
     flash is in progress. Returns a list of dicts (one per serial port).
     """
-    all_ports = list_serial_ports()
+    all_ports = list_serial_ports(spec)
     logger.info(
         "Scanning for screens: found %d serial port(s): %s",
         len(all_ports),
         [p["port"] for p in all_ports] or "none",
     )
 
-    release_header = release_app_header()
+    release_header = release_app_header(spec)
     devices = []
     for dev in all_ports:
         dev.update(
@@ -183,8 +178,8 @@ def scan_devices() -> list[dict]:
             }
         )
         if dev["is_esp32"]:
-            nvs_data, app_header = read_device_flash(dev["port"])
-            dev.update(parse_device_state(nvs_data, app_header, release_header))
+            nvs_data, app_header = read_device_flash(spec, dev["port"])
+            dev.update(parse_device_state(spec, nvs_data, app_header, release_header))
             state = dev
             logger.info(
                 "  %s: hokku_firmware=%s version=%s firmware_current=%s screen_name=%r",

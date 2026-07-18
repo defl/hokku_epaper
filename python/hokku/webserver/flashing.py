@@ -1,10 +1,10 @@
 """Background flash-job orchestration for the web UI.
 
-Wraps :mod:`hokku.screens.huessen_epf1301` (the pure flash ops) in a single-slot,
-thread-backed job so a long (~30-60s) flash can run while the browser polls a
-status endpoint. Only one flash may run at a time; scanning is refused while a
-flash is in progress (the serial port can only be driven by one esptool at a
-time, and flashing resets the device).
+Wraps the pure flash ops (per-model, via :mod:`hokku.screens.flasher_registry`)
+in a single-slot, thread-backed job so a long (~30-60s) flash can run while the
+browser polls a status endpoint. Only one flash may run at a time; scanning is
+refused while a flash is in progress (the serial port can only be driven by one
+esptool at a time, and flashing resets the device).
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ import threading
 import time
 from pathlib import Path
 
-from hokku.screens import huessen_epf1301
 from hokku.screens.bigme_f7 import bootstrap as f7_bootstrap
+from hokku.screens.flasher_registry import esp32_screen
 
 logger = logging.getLogger(__name__)
 
@@ -64,16 +64,28 @@ class FlashJobManager:
                 return True
             return False
 
-    def start(self, port: str, config: dict, firmware_path: Path) -> int | None:
+    def start(
+        self,
+        port: str,
+        config: dict,
+        firmware_path: Path,
+        screen_model: str = "huessen_epf1301",
+    ) -> int | None:
         """Begin a flash in a background thread. Returns the job id, or ``None``
-        if a flash is already running."""
+        if a flash is already running.
+
+        ``screen_model`` selects which ESP32-S3 screen's flash layout (flash size,
+        NVS offsets, artifact name) drives the flash — the two ESP32 boards share a
+        USB VID:PID, so the operator's model choice, not the scan, disambiguates."""
         job = self._new_job(port, kind="esp32")
         if job is None:
             return None
+        job["screen_model"] = screen_model
         job_id = job["id"]
         logger.info(
-            "Flash job #%d starting: port=%s firmware=%s screen_name=%r ssid=%r url=%s",
+            "Flash job #%d starting: model=%s port=%s firmware=%s screen_name=%r ssid=%r url=%s",
             job_id,
+            screen_model,
             port,
             Path(firmware_path).name,
             config.get("screen_name", ""),
@@ -82,7 +94,7 @@ class FlashJobManager:
         )
         self._thread = threading.Thread(
             target=self._run,
-            args=(job, port, config, firmware_path),
+            args=(job, port, config, firmware_path, screen_model),
             name=f"flash-{job_id}",
             daemon=True,
         )
@@ -146,9 +158,14 @@ class FlashJobManager:
         with self._lock:
             job["log"].append(line)
 
-    def _run(self, job: dict, port: str, config: dict, firmware_path: Path) -> None:
+    def _run(
+        self, job: dict, port: str, config: dict, firmware_path: Path, screen_model: str
+    ) -> None:
         try:
-            result = huessen_epf1301.flash_device(
+            screen = esp32_screen(screen_model)
+            if screen is None:
+                raise ValueError(f"unknown ESP32 screen model {screen_model!r}")
+            result = screen.flash_device(
                 port, config, firmware_path, on_line=lambda ln: self._append(job, ln)
             )
             duration = time.time() - job["started_at"]
@@ -184,6 +201,7 @@ class FlashJobManager:
             return {
                 "id": job["id"],
                 "kind": job.get("kind", "esp32"),
+                "screen_model": job.get("screen_model"),
                 "state": job["state"],
                 "port": job["port"],
                 "log": list(job["log"]),

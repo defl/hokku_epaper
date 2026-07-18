@@ -1,9 +1,9 @@
-"""EPF1301 (EL133UF1) Hokku frame: detection, NVS config, and USB flashing.
+"""Server-side support for the Seeed reTerminal E1004 screen (ESP32-S3).
 
-A thin binding of the shared ESP32-S3 flash/OTA/NVS layer
-(:mod:`hokku.screens.esp32`) to this board's :class:`Esp32Spec`. The public
-surface below (consumed by ``hokku.webserver`` and the ``tools/`` CLI by name) is
-unchanged; each callable is the shared implementation with ``SPEC`` pre-bound.
+The display (image serving) is a pure model-id override of huessen (identical
+wire format). Firmware/OTA serving and USB flashing bind this board's
+:class:`Esp32Spec` (32 MB flash, artifact name) to the shared ESP32-S3 layer in
+:mod:`hokku.screens.esp32`. The public surface mirrors huessen_epf1301.
 """
 
 from __future__ import annotations
@@ -24,9 +24,10 @@ from .constants import (
     NVS_OFFSET,
     NVS_SIZE,
 )
+from .display import SeeedstudioE1004Display
 
 SPEC = Esp32Spec(
-    model_id="huessen_epf1301",
+    model_id="seeedstudio_e1004",
     flash_size=constants.FLASH_SIZE,
     config_version=constants.CONFIG_VERSION,
     nvs_offset=constants.NVS_OFFSET,
@@ -76,6 +77,7 @@ __all__ = [
     "SPEC",
     "EsptoolError",
     "NvsToolUnavailable",
+    "SeeedstudioE1004Display",
     "build_nvs_binary",
     "bundled_firmware_version",
     "constants",

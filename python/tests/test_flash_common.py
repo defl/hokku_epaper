@@ -1,28 +1,32 @@
-"""Tests for the manual OTA firmware-update feature (server side).
+"""Flash / OTA tests common to all screens (model-agnostic or cross-model).
 
-Covers:
-  huessen_epf1301.release_app_image       — app-only slice of the merged firmware
-  huessen_epf1301.migrate_config          — forward config migration + refusal
-  ServeScheduler OTA pending/error — one-shot toggle, persistence, sticky error
-  GET  /hokku/firmware.bin        — app image / 404
-  GET  /hokku/firmware-config     — migrated NVS image / 400 / 422 + recorded error
-  POST /hokku/api/screens/<n>/update — toggle the pending flag
-  GET  /hokku/screen/             — X-Firmware-Update signalling (capable + pending)
+This is the "stuff for all screens" tier, mirroring the firmware's ``common/all``
+suite. It covers the parts of the flash + OTA feature that are not specific to one
+ESP32 board: the background :class:`FlashJobManager` (incl. its model dispatch),
+the model-aware ``/hokku/firmware.bin`` serving + per-model version reporting, the
+``/flash/devices`` scan classification, the ServeScheduler OTA pending/error
+bookkeeping, and the generic ``serve_binary`` OTA-update signalling.
 
-Hardware-free; the NVS-generator round-trip is skipped if the package is absent.
+Per-board ESP32 flash internals live in ``test_flash_esp32.py`` (run against both
+ESP32 screens); the Bigme F7 bootstrap lives in ``test_flash_f7.py``.
+
+Hardware-free: esptool/serial are never invoked.
 """
 
 from __future__ import annotations
 
 import json
+import threading
+import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from hokku.screens import bigme_f7, huessen_epf1301
+from hokku.screens import bigme_f7, huessen_epf1301, seeedstudio_e1004
 from hokku.screens.bigme_f7 import firmware as bigme_f7_firmware
 from hokku.screens.huessen_epf1301.constants import APP_OFFSET
-from hokku.screens.huessen_epf1301.nvs import migrate_config
+from hokku.webserver import flashing
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
 from hokku.webserver.flask_app import OTA_MAX_ATTEMPTS, create_app
@@ -68,59 +72,261 @@ def _client(state: AppState, tmp_path: Path):
     return app.test_client()
 
 
-# ── release_app_image ───────────────────────────────────────────────────────
+def _wait_until(pred, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred():
+            return
+        time.sleep(0.02)
+    raise AssertionError("condition not met within timeout")
 
 
-def test_release_app_image_slices_app_section(tmp_path):
-    # Build a minimal valid ESP image (magic=0xE9, 0 segments, no hash).
-    # Structure: 24-byte header, 0 segments, pad to 16-byte checksum alignment, 1 checksum byte.
-    # After 24-byte header, pos=24, pad=(15-24%16)%16=(15-8)%16=7, total=24+7+1=32 bytes.
-    header = bytearray(24)
-    header[0] = 0xE9  # magic
-    header[1] = 0  # segment_count = 0
-    header[23] = 0  # hash_appended = 0
-    app_bytes = bytes(header) + b"\x00" * 8  # pad(7) + checksum(1) = 8 bytes
-    assert len(app_bytes) == 32
-    merged = b"\x00" * APP_OFFSET + app_bytes + b"\xff" * 100  # trailing junk
-    (tmp_path / "hokku-huessen_epf1301-1.2.8.bin").write_bytes(merged)
-    assert huessen_epf1301.release_app_image(tmp_path) == app_bytes
+# ── FlashJobManager ─────────────────────────────────────────────────────────
 
 
-def test_release_app_image_none_when_no_firmware(tmp_path):
-    assert huessen_epf1301.release_app_image(tmp_path) is None
+def test_job_manager_no_job_status_none():
+    mgr = flashing.FlashJobManager()
+    assert mgr.status() is None
+    assert mgr.is_busy() is False
 
 
-# ── migrate_config ────────────────────────────────────────────────────────────
+def test_job_manager_runs_and_streams(monkeypatch):
+    def fake_flash(port, config, firmware_path, on_line):
+        on_line("line one")
+        on_line("line two")
+        return {"config_version_ok": True}
+
+    monkeypatch.setattr(huessen_epf1301, "flash_device", fake_flash)
+    mgr = flashing.FlashJobManager()
+    fw = Path("fw.bin")
+    job_id = mgr.start("COM9", {"wifi_ssid1": "x", "image_url": "y"}, fw)
+    assert job_id is not None
+    _wait_until(lambda: (mgr.status() or {}).get("state") != "running")
+    st = mgr.status()
+    assert st is not None
+    assert st["state"] == "done"
+    assert st["log"] == ["line one", "line two"]
+    assert st["result"] == {"config_version_ok": True}
+    assert st["finished_at"] is not None
 
 
-def test_migrate_config_identity_preserves_known_keys():
-    cfg = {
-        "wifi_ssid1": "Net",
-        "wifi_pass1": "pw",
-        "wifi_ssid2": "Backup",
-        "wifi_pass2": "pw2",
-        "image_url": "http://x/hokku/screen/",
-        "screen_name": "Den",
-        "wifi_order": 1,
-        "cfg_ver": 2,
-        "unknown_field": "dropped",
+def test_job_manager_dispatches_by_model(monkeypatch):
+    """start(screen_model=...) routes to that screen's flash_device (its spec)."""
+    calls: list[str] = []
+
+    def make_fake(name):
+        def fake_flash(port, config, firmware_path, on_line):
+            calls.append(name)
+            on_line(f"flashing {name}")
+            return {"config_version_ok": True}
+
+        return fake_flash
+
+    monkeypatch.setattr(huessen_epf1301, "flash_device", make_fake("huessen"))
+    monkeypatch.setattr(seeedstudio_e1004, "flash_device", make_fake("seeed"))
+    mgr = flashing.FlashJobManager()
+    mgr.start("COM9", {}, Path("fw.bin"), screen_model="seeedstudio_e1004")
+    _wait_until(lambda: (mgr.status() or {}).get("state") != "running")
+    st = mgr.status()
+    assert st is not None
+    assert st["state"] == "done"
+    assert st["screen_model"] == "seeedstudio_e1004"
+    assert calls == ["seeed"]
+
+
+def test_job_manager_unknown_model_errors(monkeypatch):
+    mgr = flashing.FlashJobManager()
+    mgr.start("COM9", {}, Path("fw.bin"), screen_model="nonesuch")
+    _wait_until(lambda: (mgr.status() or {}).get("state") != "running")
+    st = mgr.status()
+    assert st is not None
+    assert st["state"] == "error"
+    assert "nonesuch" in st["error"]
+
+
+def test_job_manager_rejects_concurrent(monkeypatch):
+    release = threading.Event()
+
+    def slow_flash(port, config, firmware_path, on_line):
+        on_line("working")
+        release.wait(timeout=5)
+
+    monkeypatch.setattr(huessen_epf1301, "flash_device", slow_flash)
+    mgr = flashing.FlashJobManager()
+    fw = Path("fw.bin")
+    first = mgr.start("COM9", {}, fw)
+    _wait_until(lambda: mgr.is_busy())
+    second = mgr.start("COM9", {}, fw)
+    assert first is not None
+    assert second is None  # busy
+    release.set()
+    _wait_until(lambda: not mgr.is_busy())
+
+
+def test_job_manager_records_error(monkeypatch):
+    def boom(port, config, firmware_path, on_line):
+        raise huessen_epf1301.EsptoolError("esptool exited 2")
+
+    monkeypatch.setattr(huessen_epf1301, "flash_device", boom)
+    mgr = flashing.FlashJobManager()
+    mgr.start("COM9", {}, Path("fw.bin"))
+    _wait_until(lambda: (mgr.status() or {}).get("state") != "running")
+    st = mgr.status()
+    assert st is not None
+    assert st["state"] == "error"
+    assert "esptool exited 2" in st["error"]
+    assert any("ERROR" in line for line in st["log"])
+
+
+# ── Flask flash routes ────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def flash_client(app_config):
+    clf = ImageClassifier(app_config)
+    mgr = build_manager(app_config, clf)
+    state = AppState(app_config, clf, mgr, ServeScheduler(mgr))
+    app = create_app(state)
+    app.config["TESTING"] = True
+    return app.test_client()
+
+
+def test_server_url_uses_local_ip(app_config, monkeypatch):
+    # Force IP path: no mDNS configured, so endpoint falls back to local IP.
+    cfg = replace(app_config, mdns_hostname="")
+    clf = ImageClassifier(cfg)
+    mgr = build_manager(cfg, clf)
+    state = AppState(cfg, clf, mgr, ServeScheduler(mgr))
+    app = create_app(state)
+    app.config["TESTING"] = True
+    client = app.test_client()
+
+    monkeypatch.setattr("hokku.webserver.flask_app._get_local_ip", lambda: "10.1.2.3")
+    r = client.get("/hokku/api/flash/server_url")
+    assert r.status_code == 200
+    j = r.get_json()
+    assert j["address"] == "10.1.2.3"
+    assert j["url"] == f"http://10.1.2.3:{j['port']}/hokku/screen/"
+
+
+def test_flash_start_requires_fields(flash_client):
+    r = flash_client.post("/hokku/api/flash/start", json={})
+    # 400 when firmware + NVS tool are available; 503 if either is missing.
+    # Either way the flash is not started.
+    assert r.status_code in (400, 503)
+
+
+def test_flash_start_unknown_model_400(flash_client):
+    # An unrecognised ESP32 model is rejected up front, regardless of firmware.
+    r = flash_client.post(
+        "/hokku/api/flash/start",
+        json={"screen_model": "nonesuch", "port": "COM9", "wifi_ssid1": "x", "image_url": "y"},
+    )
+    assert r.status_code == 400
+    assert "nonesuch" in r.get_json()["error"]
+
+
+def test_flash_status_starts_idle(flash_client):
+    r = flash_client.get("/hokku/api/flash/status")
+    assert r.status_code == 200
+    assert r.get_json()["state"] == "idle"
+
+
+# ── /hokku/firmware.bin (model-aware OTA image serving) ───────────────────────
+
+
+def test_firmware_bin_served(app_config, tmp_path, monkeypatch):
+    monkeypatch.setattr(huessen_epf1301, "release_app_image", lambda *a, **k: b"APPDATA")
+    client = _client(_bare_state(app_config), tmp_path)
+    r = client.get("/hokku/firmware.bin")
+    assert r.status_code == 200
+    assert r.data == b"APPDATA"
+    assert r.headers["Content-Type"] == "application/octet-stream"
+
+
+def test_firmware_bin_404_when_absent(app_config, tmp_path, monkeypatch):
+    monkeypatch.setattr(huessen_epf1301, "release_app_image", lambda *a, **k: None)
+    client = _client(_bare_state(app_config), tmp_path)
+    assert client.get("/hokku/firmware.bin").status_code == 404
+
+
+def test_firmware_bin_model_aware_dispatch(app_config, tmp_path, monkeypatch):
+    monkeypatch.setattr(huessen_epf1301, "release_app_image", lambda *a, **k: b"HUESSEN")
+    monkeypatch.setattr(seeedstudio_e1004, "release_app_image", lambda *a, **k: b"SEEED_IMG")
+    monkeypatch.setattr(bigme_f7, "release_app_image", lambda *a, **k: b"BIGME_IMG")
+    client = _client(_bare_state(app_config), tmp_path)
+    # No model -> huessen (back-compat); explicit model -> that model's bytes.
+    assert client.get("/hokku/firmware.bin").data == b"HUESSEN"
+    assert client.get("/hokku/firmware.bin?model=seeedstudio_e1004").data == b"SEEED_IMG"
+    assert client.get("/hokku/firmware.bin?model=bigme_f7").data == b"BIGME_IMG"
+    assert (
+        client.get("/hokku/firmware.bin", headers={"X-Screen-Model": "bigme_f7"}).data
+        == b"BIGME_IMG"
+    )
+
+
+def test_firmware_bin_unknown_model_404(app_config, tmp_path):
+    client = _client(_bare_state(app_config), tmp_path)
+    assert client.get("/hokku/firmware.bin?model=nonesuch").status_code == 404
+
+
+def test_bigme_firmware_module_discovers_release_image(tmp_path, monkeypatch):
+    # The release artifact is hokku-bigme_f7-<version>.img in the shared
+    # firmware/release/ dir; the module serves it verbatim (no slicing) and
+    # parses the version from the filename (build artifacts aren't committed,
+    # so this must not depend on a real build being present on disk).
+    (tmp_path / "hokku-bigme_f7-1.2.2.img").write_bytes(b"X" * 1_000_000)
+    monkeypatch.setattr(bigme_f7_firmware, "_DEV_FIRMWARE_DIR", tmp_path)
+    monkeypatch.setattr(bigme_f7_firmware, "_INSTALLED_FIRMWARE_DIR", tmp_path / "nonexistent")
+
+    img = bigme_f7.release_app_image()
+    assert img == b"X" * 1_000_000
+    assert img == bigme_f7.firmware_image_file().read_bytes()
+    assert bigme_f7.bundled_firmware_version() == "1.2.2"
+
+
+def test_status_reports_per_model_firmware_versions(app_config, tmp_path, monkeypatch):
+    monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "1.2.9")
+    monkeypatch.setattr(seeedstudio_e1004, "bundled_firmware_version", lambda *a, **k: "1.2.0")
+    monkeypatch.setattr(bigme_f7, "bundled_firmware_version", lambda *a, **k: "1.0.0")
+    client = _client(_bare_state(app_config), tmp_path)
+    body = client.get("/hokku/api/status").get_json()
+    assert body["bundled_firmware_versions"] == {
+        "huessen_epf1301": "1.2.9",
+        "seeedstudio_e1004": "1.2.0",
+        "bigme_f7": "1.0.0",
     }
-    out = migrate_config(cfg)
-    assert out is not None
-    assert out["wifi_ssid1"] == "Net"
-    assert out["image_url"] == "http://x/hokku/screen/"
-    assert out["screen_name"] == "Den"
-    assert out["wifi_order"] == 1
-    assert "unknown_field" not in out
-    # cfg_ver is stamped by build_nvs_binary, not by migrate_config.
-    assert "cfg_ver" not in out
 
 
-def test_migrate_config_refuses_incomplete_config():
-    assert migrate_config({"wifi_ssid1": "Net"}) is None  # no image_url
-    assert migrate_config({"image_url": "u"}) is None  # no ssid
-    assert migrate_config({}) is None
-    assert migrate_config("not a dict") is None  # type: ignore[arg-type]
+def test_flash_devices_classifies_bigme_f7(app_config, tmp_path, monkeypatch):
+    # firmware must be present so the /flash/devices route doesn't 503.
+    fw = tmp_path / "hokku-huessen_epf1301-1.2.9.bin"
+    fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
+    monkeypatch.setattr(huessen_epf1301, "merged_firmware_file", lambda *a, **k: fw)
+    monkeypatch.setattr(
+        huessen_epf1301,
+        "scan_devices",
+        lambda: [
+            {
+                "port": "COM7",
+                "description": "USB-SERIAL CH340",
+                "vid": 0x1A86,
+                "pid": 0x7523,
+                "is_esp32": False,
+            },
+            {
+                "port": "COM3",
+                "description": "ESP32-S3",
+                "vid": 0x303A,
+                "pid": 0x1001,
+                "is_esp32": True,
+            },
+        ],
+    )
+    client = _client(_bare_state(app_config), tmp_path)
+    devs = {d["port"]: d for d in client.get("/hokku/api/flash/devices").get_json()["devices"]}
+    assert devs["COM7"]["is_bigme_f7"] is True  # CH340 -> Bigme F7
+    assert devs["COM3"]["is_bigme_f7"] is False  # ESP32-S3 -> not F7
 
 
 # ── ServeScheduler: OTA pending flag ──────────────────────────────────────────
@@ -175,157 +381,13 @@ def test_ota_error_persists_across_reload(app_config):
     assert reloaded.screens()["a"].ota_error == "boom"
 
 
-# ── /hokku/firmware.bin ───────────────────────────────────────────────────────
-
-
-def test_firmware_bin_served(app_config, tmp_path, monkeypatch):
-    monkeypatch.setattr(huessen_epf1301, "release_app_image", lambda *a, **k: b"APPDATA")
-    client = _client(_bare_state(app_config), tmp_path)
-    r = client.get("/hokku/firmware.bin")
-    assert r.status_code == 200
-    assert r.data == b"APPDATA"
-    assert r.headers["Content-Type"] == "application/octet-stream"
-
-
-def test_firmware_bin_404_when_absent(app_config, tmp_path, monkeypatch):
-    monkeypatch.setattr(huessen_epf1301, "release_app_image", lambda *a, **k: None)
-    client = _client(_bare_state(app_config), tmp_path)
-    assert client.get("/hokku/firmware.bin").status_code == 404
-
-
-# ── model-aware firmware serving (bigme_f7) ───────────────────────────────────
-
-
-def test_firmware_bin_model_aware_dispatch(app_config, tmp_path, monkeypatch):
-    monkeypatch.setattr(huessen_epf1301, "release_app_image", lambda *a, **k: b"HUESSEN")
-    monkeypatch.setattr(bigme_f7, "release_app_image", lambda *a, **k: b"BIGME_IMG")
-    client = _client(_bare_state(app_config), tmp_path)
-    # No model -> huessen (back-compat); explicit model -> that model's bytes.
-    assert client.get("/hokku/firmware.bin").data == b"HUESSEN"
-    assert client.get("/hokku/firmware.bin?model=bigme_f7").data == b"BIGME_IMG"
-    assert (
-        client.get("/hokku/firmware.bin", headers={"X-Screen-Model": "bigme_f7"}).data
-        == b"BIGME_IMG"
-    )
-
-
-def test_firmware_bin_unknown_model_404(app_config, tmp_path):
-    client = _client(_bare_state(app_config), tmp_path)
-    assert client.get("/hokku/firmware.bin?model=nonesuch").status_code == 404
-
-
-def test_bigme_firmware_module_discovers_release_image(tmp_path, monkeypatch):
-    # The release artifact is hokku-bigme_f7-<version>.img in the shared
-    # firmware/release/ dir; the module serves it verbatim (no slicing) and
-    # parses the version from the filename (build artifacts aren't committed,
-    # so this must not depend on a real build being present on disk).
-    (tmp_path / "hokku-bigme_f7-1.2.2.img").write_bytes(b"X" * 1_000_000)
-    monkeypatch.setattr(bigme_f7_firmware, "_DEV_FIRMWARE_DIR", tmp_path)
-    monkeypatch.setattr(bigme_f7_firmware, "_INSTALLED_FIRMWARE_DIR", tmp_path / "nonexistent")
-
-    img = bigme_f7.release_app_image()
-    assert img == b"X" * 1_000_000
-    assert img == bigme_f7.firmware_image_file().read_bytes()
-    assert bigme_f7.bundled_firmware_version() == "1.2.2"
-
-
-def test_status_reports_per_model_firmware_versions(app_config, tmp_path, monkeypatch):
-    monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "1.2.9")
-    monkeypatch.setattr(bigme_f7, "bundled_firmware_version", lambda *a, **k: "1.0.0")
-    client = _client(_bare_state(app_config), tmp_path)
-    body = client.get("/hokku/api/status").get_json()
-    assert body["bundled_firmware_versions"] == {
-        "huessen_epf1301": "1.2.9",
-        "bigme_f7": "1.0.0",
-    }
-
-
-def test_flash_devices_classifies_bigme_f7(app_config, tmp_path, monkeypatch):
-    # firmware must be present so the /flash/devices route doesn't 503.
-    fw = tmp_path / "hokku-huessen_epf1301-1.2.9.bin"
-    fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
-    monkeypatch.setattr(huessen_epf1301, "merged_firmware_file", lambda *a, **k: fw)
-    monkeypatch.setattr(
-        huessen_epf1301,
-        "scan_devices",
-        lambda: [
-            {
-                "port": "COM7",
-                "description": "USB-SERIAL CH340",
-                "vid": 0x1A86,
-                "pid": 0x7523,
-                "is_esp32": False,
-            },
-            {
-                "port": "COM3",
-                "description": "ESP32-S3",
-                "vid": 0x303A,
-                "pid": 0x1001,
-                "is_esp32": True,
-            },
-        ],
-    )
-    client = _client(_bare_state(app_config), tmp_path)
-    devs = {d["port"]: d for d in client.get("/hokku/api/flash/devices").get_json()["devices"]}
-    assert devs["COM7"]["is_bigme_f7"] is True  # CH340 -> Bigme F7
-    assert devs["COM3"]["is_bigme_f7"] is False  # ESP32-S3 -> not F7
-
-
-# ── /hokku/firmware-config ────────────────────────────────────────────────────
-
-
-def test_firmware_config_missing_header_400(app_config, tmp_path):
-    client = _client(_bare_state(app_config), tmp_path)
-    r = client.get("/hokku/firmware-config", headers={"X-Screen-Name": "x"})
-    assert r.status_code == 400
-
-
-def test_firmware_config_refusal_records_error_422(app_config, tmp_path):
-    state = _bare_state(app_config)
-    client = _client(state, tmp_path)
-    # Missing image_url -> migrate_config refuses.
-    r = client.get(
-        "/hokku/firmware-config",
-        headers={"X-Screen-Name": "frame-x", "X-Config-State": json.dumps({"wifi_ssid1": "Net"})},
-    )
-    assert r.status_code == 422
-    assert state.scheduler.screens()["frame-x"].ota_error is not None
-    # And it's surfaced through the status payload.
-    status = client.get("/hokku/api/status").get_json()
-    assert status["screens"]["frame-x"]["ota_error"] is not None
-
-
-@pytest.mark.skipif(
-    not huessen_epf1301.nvs_tool_available(), reason="esp-idf-nvs-partition-gen not installed"
-)
-def test_firmware_config_returns_migrated_nvs_image(app_config, tmp_path):
-    client = _client(_bare_state(app_config), tmp_path)
-    cfg = {
-        "wifi_ssid1": "Net",
-        "wifi_pass1": "pw",
-        "image_url": "http://x/hokku/screen/",
-        "screen_name": "Den",
-        "wifi_order": 1,
-    }
-    r = client.get(
-        "/hokku/firmware-config",
-        headers={"X-Screen-Name": "Den", "X-Config-State": json.dumps(cfg)},
-    )
-    assert r.status_code == 200
-    assert len(r.data) == huessen_epf1301.NVS_SIZE
-    back = huessen_epf1301.read_nvs(r.data)
-    assert back["cfg_ver"] == huessen_epf1301.CONFIG_VERSION
-    assert back["screen_name"] == "Den"
-    assert back["image_url"] == cfg["image_url"]
-    assert back["wifi_order"] == 1
-
-
 # ── POST /hokku/api/screens/<name>/update + serve_binary signalling ───────────
 
 
 def test_update_toggle_requires_bundled_firmware(app_config, tmp_path, monkeypatch):
     # No firmware for ANY model (frame-1 hasn't reported a model yet) -> blocked.
     monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: None)
+    monkeypatch.setattr(seeedstudio_e1004, "bundled_firmware_version", lambda *a, **k: None)
     monkeypatch.setattr(bigme_f7, "bundled_firmware_version", lambda *a, **k: None)
     client = _client(_bare_state(app_config), tmp_path)
     r = client.post("/hokku/api/screens/frame-1/update", json={"enabled": True})

@@ -10,9 +10,11 @@ from __future__ import annotations
 from hokku.screens.bigme_f7.display import BigmeF7Display
 from hokku.screens.display import Display
 from hokku.screens.huessen_epf1301.display import HuessenEpf1301Display
+from hokku.screens.seeedstudio_e1004.display import SeeedstudioE1004Display
 
 _DISPLAY_CLASSES: list[type[Display]] = [
     HuessenEpf1301Display,
+    SeeedstudioE1004Display,
     BigmeF7Display,
 ]
 
