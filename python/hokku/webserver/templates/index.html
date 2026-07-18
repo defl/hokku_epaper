@@ -921,7 +921,7 @@
     <div id="flash-form" hidden>
       <div class="config-row">
         <label>Screen model:</label>
-        <select id="flash-model">
+        <select id="flash-model" onchange="onFlashModelChange()">
           <option value="huessen_epf1301">Huessen EPF1301 (EL133UF1, 16 MB)</option>
           <option value="seeedstudio_e1004">Seeed reTerminal E1004 (32 MB)</option>
         </select>
@@ -2041,7 +2041,10 @@ async function scanFlashDevices() {
   btn.disabled = true; btn.textContent = 'Scanning…';
   note.textContent = 'Scanning USB serial ports…';
   try {
-    const r = await fetch('/hokku/api/flash/devices');
+    // Judge device firmware freshness against the currently-selected model (the
+    // two ESP32 boards enumerate identically; only the version compare differs).
+    const model = (document.getElementById('flash-model') || {}).value || '';
+    const r = await fetch('/hokku/api/flash/devices' + (model ? `?model=${encodeURIComponent(model)}` : ''));
     if (r.status === 409) { showToast('A flash is in progress'); note.textContent = ''; return; }
     if (r.status === 503) {
       const j = await r.json();
@@ -2124,6 +2127,18 @@ function onFlashDeviceChange() {
       const body2 = document.getElementById('flash-second-body');
       if (body2) body2.hidden = false;
     }
+  }
+}
+
+function onFlashModelChange() {
+  // The freshness note ("up to date?") was computed for whichever model was
+  // selected at scan time. If a device is already selected, prompt a re-scan so
+  // the check reflects the newly-chosen model.
+  const sel = document.getElementById('flash-device');
+  const dev = flashDevices.find(d => d.port === (sel && sel.value));
+  if (dev && dev.is_esp32) {
+    const note = document.getElementById('flash-device-note');
+    if (note) note.textContent = 'Model changed — press Scan to re-check this device against the selected model.';
   }
 }
 

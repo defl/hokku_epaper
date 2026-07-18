@@ -156,6 +156,25 @@ _REPO_URL = "https://github.com/defl/hokku_epaper"
 # retries on the next poll and self-heals well within this budget.
 OTA_MAX_ATTEMPTS = 5
 
+# Bound concurrent NVS-partition-generator subprocesses spawned by the
+# unauthenticated /firmware-config endpoint. Without this, a burst of OTA polls
+# (or a hostile LAN client looping the endpoint) could fork unbounded Python
+# subprocesses and exhaust the appliance's CPU/PID budget, starving the real
+# image-serving path. Excess requests get a 503 and retry on the next device poll.
+OTA_NVS_MAX_CONCURRENT_BUILDS = 4
+_nvs_build_slots = threading.BoundedSemaphore(OTA_NVS_MAX_CONCURRENT_BUILDS)
+
+# Upper byte-bounds on the USB-flash config string fields (in addition to the
+# 64-byte screen_name cap enforced inline). SSID: 802.11 max; PSK: WPA2 max; URL:
+# the firmware's server-URL buffer. Rejected with 400 before the NVS generator.
+_FLASH_FIELD_MAX_BYTES = {
+    "wifi_ssid1": 32,
+    "wifi_ssid2": 32,
+    "wifi_pass1": 64,
+    "wifi_pass2": 64,
+    "image_url": 256,
+}
+
 
 def _busy_retry_seconds(config: AppConfig) -> int:
     return min(300, calculate_sleep_seconds(config))
@@ -397,15 +416,23 @@ def create_app(
             migrated["image_url"] = url_override
             logger.info("Applying server URL override for %s: %s", screen_name, url_override)
 
+        if not _nvs_build_slots.acquire(blocking=False):
+            logger.warning("firmware-config: NVS build slots exhausted, refusing %s", screen_name)
+            return make_response("server busy building NVS images, retry shortly", 503)
         try:
             nvs_image = screen.build_nvs_binary(migrated)
         except screen.NvsToolUnavailable as e:
             logger.error("firmware-config: NVS generator unavailable: %s", e)
             return make_response("NVS generator unavailable on server", 503)
         except (RuntimeError, OSError) as e:
-            msg = f"failed to build NVS image: {e}"
+            # Log the full generator error (temp paths, stderr) server-side only;
+            # the client/status gets a generic message to avoid leaking internals.
+            logger.error("firmware-config: NVS build failed for %s: %s", screen_name, e)
+            msg = "failed to build NVS image"
             state.scheduler.record_ota_error(screen_name, msg)
             return make_response(msg, 500)
+        finally:
+            _nvs_build_slots.release()
 
         resp = make_response(nvs_image)
         resp.headers["Content-Type"] = "application/octet-stream"
@@ -956,19 +983,27 @@ def create_app(
     def api_flash_devices():
         """Scan serial ports for connected screens and report their state.
 
-        Refused (409) while a flash is in progress — scanning resets the device
-        and contends for the serial port.
+        Refused (409) while a flash OR another scan is in progress — scanning
+        resets the device and drives the same serial port as a flash. The scan
+        holds the single serial slot for its whole duration so a flash cannot
+        start mid-scan.
+
+        The optional ``?model=`` selects which ESP32 screen's release the device's
+        "up to date?" freshness is judged against (the two boards enumerate
+        identically; only the version/config comparison is model-specific). It
+        defaults to the huessen reference model.
         """
         if not any(s.merged_firmware_file() for s in esp32_screens()):
             logger.error("Flash scan requested but no bundled ESP32 firmware available")
             return jsonify({"error": "no bundled firmware available on this server"}), 503
-        if state.flash_jobs.is_busy():
-            logger.warning("Flash scan rejected: a flash is already in progress")
+        if not state.flash_jobs.begin_scan():
+            logger.warning("Flash scan rejected: the serial port is busy")
             return jsonify({"error": "a flash is in progress", "busy": True}), 409
-        # The two ESP32-S3 boards share a USB VID:PID, so a scan cannot tell them
-        # apart — any esp32 screen's scanner enumerates the same ports. The operator
-        # picks the actual model in the flash form.
-        devices = huessen_epf1301.scan_devices()
+        try:
+            screen = esp32_screen(request.args.get("model")) or huessen_epf1301
+            devices = screen.scan_devices()
+        finally:
+            state.flash_jobs.end_scan()
         # Classify non-ESP32 ports the UI knows how to guide: a CH340 bridge is a
         # Bigme F7 (XR872), which is USB-flashed by a different (vendor-tool)
         # procedure, not esptool — so the UI shows F7 guidance instead of the
@@ -1038,11 +1073,24 @@ def create_app(
             )
             return jsonify({"error": "screen_name must be <= 64 bytes"}), 400
 
+        # NVS string fields are bounded by the firmware's config buffers; reject
+        # over-long values up front (like screen_name) instead of letting them
+        # fail deep in the NVS generator with an opaque error.
+        for field, limit in _FLASH_FIELD_MAX_BYTES.items():
+            if len((body.get(field) or "").encode("utf-8")) > limit:
+                logger.info("Flash start: %s exceeds %d bytes", field, limit)
+                return jsonify({"error": f"{field} must be <= {limit} bytes"}), 400
+
+        try:
+            wifi_order = int(body.get("wifi_order") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"error": "wifi_order must be an integer"}), 400
+
         config: dict = {
             "wifi_ssid1": wifi_ssid1,
             "wifi_pass1": body.get("wifi_pass1") or "",
             "image_url": image_url,
-            "wifi_order": int(body.get("wifi_order") or 0),
+            "wifi_order": wifi_order,
         }
         ssid2 = (body.get("wifi_ssid2") or "").strip()
         if ssid2:

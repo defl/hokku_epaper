@@ -27,6 +27,7 @@ from hokku.screens import bigme_f7, huessen_epf1301, seeedstudio_e1004
 from hokku.screens.bigme_f7 import firmware as bigme_f7_firmware
 from hokku.screens.huessen_epf1301.constants import APP_OFFSET
 from hokku.webserver import flashing
+from hokku.webserver import flask_app as flask_app_mod
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
 from hokku.webserver.flask_app import OTA_MAX_ATTEMPTS, create_app
@@ -178,6 +179,68 @@ def test_job_manager_records_error(monkeypatch):
     assert any("ERROR" in line for line in st["log"])
 
 
+def _slow_flash(release):
+    def slow(port, config, firmware_path, on_line):
+        on_line("working")
+        release.wait(timeout=5)
+
+    return slow
+
+
+def test_scan_holds_the_single_slot():
+    mgr = flashing.FlashJobManager()
+    assert mgr.begin_scan() is True
+    assert mgr.is_busy() is True
+    # A flash cannot start while a scan holds the serial slot (the TOCTOU fix).
+    assert mgr.start("COM9", {}, Path("fw.bin")) is None
+    # Nor can a second scan reserve it.
+    assert mgr.begin_scan() is False
+    mgr.end_scan()
+    assert mgr.is_busy() is False
+    # Slot is free again for a flash.
+    assert mgr.begin_scan() is True
+    mgr.end_scan()
+
+
+def test_flash_blocks_scan(monkeypatch):
+    release = threading.Event()
+    monkeypatch.setattr(huessen_epf1301, "flash_device", _slow_flash(release))
+    mgr = flashing.FlashJobManager()
+    mgr.start("COM9", {}, Path("fw.bin"))
+    _wait_until(lambda: mgr.is_busy())
+    assert mgr.begin_scan() is False  # scan refused while a flash runs
+    release.set()
+    _wait_until(lambda: not mgr.is_busy())
+
+
+def test_cancel_refuses_esp32_flash(monkeypatch):
+    # esptool is not interruptible, so cancel() must NOT falsely report success.
+    release = threading.Event()
+    monkeypatch.setattr(huessen_epf1301, "flash_device", _slow_flash(release))
+    mgr = flashing.FlashJobManager()
+    mgr.start("COM9", {}, Path("fw.bin"))
+    _wait_until(lambda: mgr.is_busy())
+    assert mgr.cancel() is False
+    release.set()
+    _wait_until(lambda: not mgr.is_busy())
+
+
+def test_thread_start_failure_frees_slot(monkeypatch):
+    # If the OS refuses a new thread, the job must not wedge the slot in "running".
+    def boom(self):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(threading.Thread, "start", boom)
+    mgr = flashing.FlashJobManager()
+    job_id = mgr.start("COM9", {}, Path("fw.bin"))
+    assert job_id is not None
+    st = mgr.status()
+    assert st is not None
+    assert st["state"] == "error"
+    assert "could not start" in st["error"]
+    assert mgr.is_busy() is False  # slot freed, next flash can proceed
+
+
 # ── Flask flash routes ────────────────────────────────────────────────────────
 
 
@@ -230,6 +293,119 @@ def test_flash_status_starts_idle(flash_client):
     r = flash_client.get("/hokku/api/flash/status")
     assert r.status_code == 200
     assert r.get_json()["state"] == "idle"
+
+
+def test_flash_start_dispatches_selected_model_end_to_end(app_config, tmp_path, monkeypatch):
+    """A POST with screen_model=seeedstudio_e1004 must flash with SEEED's firmware
+    file and model — the operator's selector actually drives a seeed flash, not
+    huessen's spec. This is the headline model-aware-dispatch path end to end."""
+    seeed_fw = tmp_path / "hokku-seeedstudio_e1004-1.2.0.bin"
+    seeed_fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
+    monkeypatch.setattr(seeedstudio_e1004, "merged_firmware_file", lambda *a, **k: seeed_fw)
+    monkeypatch.setattr(seeedstudio_e1004, "nvs_tool_available", lambda: True)
+    state = _bare_state(app_config)
+
+    captured: dict = {}
+
+    def fake_start(port, config, firmware_path, screen_model="huessen_epf1301"):
+        captured.update(
+            port=port, firmware_path=firmware_path, screen_model=screen_model, config=config
+        )
+        return 42
+
+    monkeypatch.setattr(state.flash_jobs, "start", fake_start)
+    client = _client(state, tmp_path)
+    r = client.post(
+        "/hokku/api/flash/start",
+        json={
+            "screen_model": "seeedstudio_e1004",
+            "port": "COM9",
+            "wifi_ssid1": "Net",
+            "image_url": "http://x/hokku/screen/",
+            "screen_name": "Den",
+        },
+    )
+    assert r.status_code == 200
+    assert r.get_json()["job_id"] == 42
+    assert captured["screen_model"] == "seeedstudio_e1004"
+    assert captured["firmware_path"] == seeed_fw  # seeed's bin, not huessen's
+    assert captured["port"] == "COM9"
+
+
+def _flash_ready_client(app_config, tmp_path, monkeypatch):
+    """A client where huessen firmware + NVS tool are present, so /flash/start
+    reaches field validation instead of short-circuiting on 503."""
+    fw = tmp_path / "hokku-huessen_epf1301-1.2.9.bin"
+    fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
+    monkeypatch.setattr(huessen_epf1301, "merged_firmware_file", lambda *a, **k: fw)
+    monkeypatch.setattr(huessen_epf1301, "nvs_tool_available", lambda: True)
+    return _client(_bare_state(app_config), tmp_path)
+
+
+def test_flash_start_rejects_oversized_field(app_config, tmp_path, monkeypatch):
+    client = _flash_ready_client(app_config, tmp_path, monkeypatch)
+    r = client.post(
+        "/hokku/api/flash/start",
+        json={"port": "COM9", "wifi_ssid1": "x" * 33, "image_url": "http://x/hokku/screen/"},
+    )
+    assert r.status_code == 400
+    assert "wifi_ssid1" in r.get_json()["error"]
+
+
+def test_flash_start_rejects_bad_wifi_order(app_config, tmp_path, monkeypatch):
+    client = _flash_ready_client(app_config, tmp_path, monkeypatch)
+    r = client.post(
+        "/hokku/api/flash/start",
+        json={
+            "port": "COM9",
+            "wifi_ssid1": "Net",
+            "image_url": "http://x/hokku/screen/",
+            "wifi_order": "not-an-int",
+        },
+    )
+    assert r.status_code == 400  # clean 400, not a 500
+
+
+def test_flash_devices_503_when_no_esp32_firmware(app_config, tmp_path, monkeypatch):
+    monkeypatch.setattr(huessen_epf1301, "merged_firmware_file", lambda *a, **k: None)
+    monkeypatch.setattr(seeedstudio_e1004, "merged_firmware_file", lambda *a, **k: None)
+    client = _client(_bare_state(app_config), tmp_path)
+    assert client.get("/hokku/api/flash/devices").status_code == 503
+
+
+def test_flash_devices_allowed_when_only_seeed_has_firmware(app_config, tmp_path, monkeypatch):
+    seeed_fw = tmp_path / "hokku-seeedstudio_e1004-1.2.0.bin"
+    seeed_fw.write_bytes(b"\x00")
+    monkeypatch.setattr(huessen_epf1301, "merged_firmware_file", lambda *a, **k: None)
+    monkeypatch.setattr(seeedstudio_e1004, "merged_firmware_file", lambda *a, **k: seeed_fw)
+    monkeypatch.setattr(huessen_epf1301, "scan_devices", lambda: [])
+    client = _client(_bare_state(app_config), tmp_path)
+    assert client.get("/hokku/api/flash/devices").status_code == 200
+
+
+def test_firmware_config_refused_when_build_slots_exhausted(app_config, tmp_path):
+    # Hold every NVS-build slot so the next /firmware-config gets a 503 instead of
+    # spawning yet another generator subprocess (the DoS guard).
+    slots = flask_app_mod._nvs_build_slots
+    held = 0
+    try:
+        while slots.acquire(blocking=False):
+            held += 1
+        assert held == flask_app_mod.OTA_NVS_MAX_CONCURRENT_BUILDS
+        client = _client(_bare_state(app_config), tmp_path)
+        r = client.get(
+            "/hokku/firmware-config",
+            headers={
+                "X-Screen-Name": "Den",
+                "X-Config-State": json.dumps(
+                    {"wifi_ssid1": "Net", "image_url": "http://x/hokku/screen/"}
+                ),
+            },
+        )
+        assert r.status_code == 503
+    finally:
+        for _ in range(held):
+            slots.release()
 
 
 # ── /hokku/firmware.bin (model-aware OTA image serving) ───────────────────────

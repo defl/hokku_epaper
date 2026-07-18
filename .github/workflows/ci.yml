@@ -92,6 +92,35 @@ jobs:
       - name: Run tests
         run: pytest -m "not time_intensive"
 
+  lint-webserver:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Mirror the local pre-commit gate: ruff + pyright out of a repo-root .venv
+      # (pyrightconfig.json points venvPath/venv at ./.venv for import resolution).
+      - name: Create venv + install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e "python/[test]"
+          .venv/bin/pip install ruff==0.15.14 pyright==1.1.409
+
+      - name: Ruff lint
+        run: .venv/bin/ruff check python/ tools/
+
+      - name: Ruff format check
+        run: .venv/bin/ruff format --check python/ tools/
+
+      - name: Pyright
+        run: .venv/bin/pyright
+
   lint-firmware-huessen_epf1301:
     runs-on: ubuntu-latest
 

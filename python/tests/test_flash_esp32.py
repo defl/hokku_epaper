@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from hokku.screens import huessen_epf1301, seeedstudio_e1004
 from hokku.screens.esp32 import nvs as esp32_nvs
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
@@ -113,14 +114,16 @@ def test_merged_firmware_file_picks_highest(esp32_mod, tmp_path):
     model = esp32_mod.SPEC.model_id
     for name in (
         f"hokku-{model}-1.2.4.bin",
+        f"hokku-{model}-1.2.9.bin",
         f"hokku-{model}-1.2.10.bin",
         "ignore.txt",
     ):
         (tmp_path / name).write_bytes(b"\x00")
     picked = esp32_mod.merged_firmware_file(tmp_path)
-    # sorted()[-1] is lexicographic, so "1.2.4" sorts after "1.2.10".
+    # Numeric compare: 1.2.10 outranks 1.2.9 (a lexicographic sort would wrongly
+    # pick 1.2.9 and silently downgrade the firmware).
     assert picked is not None
-    assert picked.name == f"hokku-{model}-1.2.4.bin"
+    assert picked.name == f"hokku-{model}-1.2.10.bin"
 
 
 def test_merged_firmware_file_none_when_empty(esp32_mod, tmp_path):
@@ -177,6 +180,42 @@ def test_migrate_config_refuses_incomplete_config(esp32_mod):
     assert esp32_mod.migrate_config({"image_url": "u"}) is None  # no ssid
     assert esp32_mod.migrate_config({}) is None
     assert esp32_mod.migrate_config("not a dict") is None  # type: ignore[arg-type]
+
+
+# ── Esp32Spec: the fields that actually differ between the two boards ──────────
+
+
+def test_seeed_and_huessen_spec_differences():
+    """Pin the ONLY real behavioral differences between the two ESP32 boards, so a
+    copy-paste in seeed's constants (e.g. a 16MB flash size) can't slip through
+    while the rest of the parametrized suite stays green on the identical fields."""
+    # Literal model ids (the parametrized tests build filenames from these, so a
+    # wrong binding would otherwise be self-consistent and undetected).
+    assert huessen_epf1301.SPEC.model_id == "huessen_epf1301"
+    assert seeedstudio_e1004.SPEC.model_id == "seeedstudio_e1004"
+    # Flash size is the one field that changes esptool's behavior and is asserted
+    # nowhere else (esptool is never invoked in these hardware-free tests).
+    assert huessen_epf1301.SPEC.flash_size == "16MB"
+    assert seeedstudio_e1004.SPEC.flash_size == "32MB"
+    # Everything the shared NVS/OTA layer relies on must stay identical.
+    for field in ("nvs_offset", "nvs_size", "app_offset", "bootloader_offset", "config_version"):
+        assert getattr(huessen_epf1301.SPEC, field) == getattr(seeedstudio_e1004.SPEC, field), field
+
+
+def test_firmware_config_unknown_model_404(app_config, tmp_path):
+    # A real but non-ESP32 model (F7 keeps config device-local) or an unknown one
+    # has no NVS config path -> 404 (mirrors firmware.bin's unknown-model 404).
+    client = _client(_bare_state(app_config), tmp_path)
+    for model in ("bigme_f7", "nonesuch"):
+        r = client.get(
+            "/hokku/firmware-config",
+            headers={
+                "X-Screen-Name": "x",
+                "X-Screen-Model": model,
+                "X-Config-State": json.dumps({"wifi_ssid1": "Net", "image_url": "u"}),
+            },
+        )
+        assert r.status_code == 404, model
 
 
 # ── /hokku/firmware-config (model-aware NVS serving) ──────────────────────────

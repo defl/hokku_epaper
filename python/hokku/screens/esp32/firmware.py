@@ -31,17 +31,37 @@ def resolve_firmware_dir(spec: Esp32Spec) -> Path | None:
     return None
 
 
+def _version_key(version: str) -> tuple:
+    """A sort key that orders firmware versions numerically, not lexicographically.
+
+    ``"1.2.10"`` must rank above ``"1.2.9"`` (a plain string sort gets this wrong
+    and would silently pick the older build). Each dotted component sorts as an
+    int when numeric; any non-numeric component sorts after all numeric ones in
+    that slot so a malformed name can never outrank a real version."""
+    key: list = []
+    for part in version.split("."):
+        key.append((0, int(part)) if part.isdigit() else (1, part))
+    return tuple(key)
+
+
 def merged_firmware_file(spec: Esp32Spec, directory: Path | None = None) -> Path | None:
     """Return the merged ``hokku-<model>-<version>.bin`` in *directory*, or None.
 
     With no argument, searches the resolved firmware dir. Picks the highest
-    version by filename sort when several are present.
+    version (compared numerically, so 1.2.10 > 1.2.9) when several are present —
+    ``firmware/release/`` is not pruned between builds, so multiple versions of a
+    model can coexist there.
     """
     if directory is None:
         directory = resolve_firmware_dir(spec)
     if directory is None or not directory.exists():
         return None
-    matches = sorted(directory.glob(spec.merged_glob))
+
+    def version_of(path: Path) -> str:
+        m = spec.merged_re.match(path.name)
+        return m.group(1) if m else ""
+
+    matches = sorted(directory.glob(spec.merged_glob), key=lambda p: _version_key(version_of(p)))
     return matches[-1] if matches else None
 
 
