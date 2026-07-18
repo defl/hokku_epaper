@@ -27,11 +27,32 @@ try:
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
-# Device detection, NVS, and flashing are delegated to the shared huessen_epf1301 lib.
+# Device detection, NVS, and flashing are delegated to the active screen module.
 from hokku.screens import huessen_epf1301
-from hokku.screens.huessen_epf1301.constants import ESP32S3_PID, ESP32S3_VID
+from hokku.screens.flasher_registry import esp32_screen
 
 logger = logging.getLogger(__name__)
+
+# The active ESP32-S3 screen. Defaults to the huessen reference model; set_model()
+# switches it. The two boards share a USB VID:PID, so the model is an explicit
+# choice (not auto-detected) — all device/NVS/flash ops delegate to SCREEN and its
+# Esp32Spec (flash size, offsets, artifact name).
+SCREEN = huessen_epf1301
+MODEL_ID = "huessen_epf1301"
+
+
+def set_model(model_id):
+    """Select the ESP32-S3 screen model for all subsequent operations.
+
+    Raises ValueError for an unknown or non-ESP32 model (e.g. the Bigme F7, which
+    has its own flash path)."""
+    global SCREEN, MODEL_ID
+    screen = esp32_screen(model_id)
+    if screen is None:
+        raise ValueError(f"unknown ESP32 screen model {model_id!r}")
+    SCREEN = screen
+    MODEL_ID = model_id
+
 
 SCRIPT_DIR = Path(__file__).parent
 LOCAL_FIRMWARE_DIR = SCRIPT_DIR.parent / "firmware" / "release"
@@ -51,16 +72,17 @@ APP_OFFSET = 0x10000
 
 
 def _merged_firmware_file(directory):
-    """Return the merged hokku-huessen_epf1301-<version>.bin in `directory`, or None."""
-    return huessen_epf1301.merged_firmware_file(directory)
+    """Return the merged hokku-<model>-<version>.bin in `directory`, or None."""
+    return SCREEN.merged_firmware_file(directory)
 
 
 def _is_merged_firmware_asset(name):
-    return name.startswith("hokku-huessen_epf1301-") and name.endswith(".bin")
+    """True for this model's merged release asset (hokku-<model>-<version>.bin)."""
+    return SCREEN.SPEC.merged_re.match(name) is not None
 
 
 def resolve_firmware_dir(interactive=False):
-    """Return a directory containing a merged hokku-huessen_epf1301-<version>.bin.
+    """Return a directory containing a merged hokku-<model>-<version>.bin.
     Prefers the local firmware/release/ dir; falls back to downloading the
     merged release asset from GitHub into .cache/firmware/<tag>/. Returns None
     if nothing is available (no local file and no network).
@@ -86,9 +108,7 @@ def resolve_firmware_dir(interactive=False):
                 break
             print(f"    Unknown choice {choice!r}; pick L or D.")
 
-    print(
-        f"  No hokku-huessen_epf1301-*.bin in {LOCAL_FIRMWARE_DIR}. Fetching latest GitHub release..."
-    )
+    print(f"  No hokku-{MODEL_ID}-*.bin in {LOCAL_FIRMWARE_DIR}. Fetching latest GitHub release...")
     try:
         release, asset = release_cache.find_latest_release_with_asset(_is_merged_firmware_asset)
     except Exception as e:
@@ -96,9 +116,9 @@ def resolve_firmware_dir(interactive=False):
         return None
 
     if release is None:
-        print("  ERROR: no GitHub release with a hokku-huessen_epf1301-*.bin asset found.")
+        print(f"  ERROR: no GitHub release with a hokku-{MODEL_ID}-*.bin asset found.")
         print("  (See 'Releasing firmware' in CLAUDE.md — the release must ship")
-        print("   a single merged hokku-huessen_epf1301-<version>.bin file.)")
+        print(f"   a single merged hokku-{MODEL_ID}-<version>.bin file.)")
         return None
 
     tag = release.get("tag_name", "latest")
@@ -133,7 +153,7 @@ def scan_devices():
     all_ports = serial.tools.list_ports.comports()
     devices = []
     for port in all_ports:
-        is_esp32 = port.vid == ESP32S3_VID and port.pid == ESP32S3_PID
+        is_esp32 = port.vid == SCREEN.SPEC.vid and port.pid == SCREEN.SPEC.pid
         device = {
             "port": port.device,
             "description": port.description or port.device,
@@ -155,7 +175,7 @@ def scan_devices():
 
 def read_device_flash(port):
     """One esptool read covering NVS partition + app header. Returns (nvs, header) or (None, None)."""
-    return huessen_epf1301.read_device_flash(port)
+    return SCREEN.read_device_flash(port)
 
 
 def parse_device_state(nvs_data, app_header):
@@ -164,9 +184,7 @@ def parse_device_state(nvs_data, app_header):
     Uses this tool's resolved firmware (FIRMWARE_DIR, which may be a GitHub
     download) as the release reference, rather than only the bundled image.
     """
-    return huessen_epf1301.parse_device_state(
-        nvs_data, app_header, release_header=_release_app_header()
-    )
+    return SCREEN.parse_device_state(nvs_data, app_header, release_header=_release_app_header())
 
 
 # -------- device selection UI --------
@@ -562,7 +580,7 @@ def _pi_config_mismatch(existing_config, pi_credentials):
 def write_config(port, config):
     print("  Writing configuration...", end=" ", flush=True)
     try:
-        huessen_epf1301.write_config(port, config)  # on_line defaults to noop — keep CLI quiet
+        SCREEN.write_config(port, config)  # on_line defaults to noop — keep CLI quiet
         print("done.")
         return True
     except Exception as e:
@@ -572,16 +590,16 @@ def write_config(port, config):
 
 
 def flash_firmware(port):
-    """Flash the merged hokku-huessen_epf1301-<version>.bin image at offset 0x0."""
+    """Flash the merged hokku-<model>-<version>.bin image at offset 0x0."""
     merged = _merged_firmware_file(FIRMWARE_DIR)
     if not merged:
-        print(f"  ERROR: No hokku-huessen_epf1301-*.bin in {FIRMWARE_DIR}.")
+        print(f"  ERROR: No hokku-{MODEL_ID}-*.bin in {FIRMWARE_DIR}.")
         print("  (See 'Releasing firmware' in CLAUDE.md — builds must produce a")
         print("   single merged firmware file.)")
         return False
 
     try:
-        huessen_epf1301.flash_firmware(port, merged, on_line=lambda ln: print(f"    {ln}"))
+        SCREEN.flash_firmware(port, merged, on_line=lambda ln: print(f"    {ln}"))
         print("  Firmware flashed successfully.")
         return True
     except Exception as e:
@@ -780,8 +798,10 @@ def _prepare(require_firmware):
     return select_device(devices)
 
 
-def run(pi_credentials=None, pi_install_ran=False):
+def run(pi_credentials=None, pi_install_ran=False, screen_model=None):
     """Full interactive menu (configure / flash / both)."""
+    if screen_model is not None:
+        set_model(screen_model)
     device = _prepare(require_firmware=False)
     if device is None:
         return 1
@@ -789,13 +809,15 @@ def run(pi_credentials=None, pi_install_ran=False):
     return 0
 
 
-def run_configure_and_flash(pi_credentials=None):
+def run_configure_and_flash(pi_credentials=None, screen_model=None):
     """Direct: prompt for config, flash firmware, then write NVS config,
     then post-flash boot check. No inner menu.
 
     Flash must happen before the NVS write: the merged firmware binary
     spans 0x0–0xFCxxx and fills the NVS gap (0x9000–0xEFFF) with 0xFF,
     so flashing after writing config would erase the NVS partition."""
+    if screen_model is not None:
+        set_model(screen_model)
     device = _prepare(require_firmware=True)
     if device is None:
         return 1
@@ -820,8 +842,10 @@ def run_configure_and_flash(pi_credentials=None):
     return 0
 
 
-def run_configure_only(pi_credentials=None):
+def run_configure_only(pi_credentials=None, screen_model=None):
     """Direct: prompt for config, write NVS, done. Does not flash."""
+    if screen_model is not None:
+        set_model(screen_model)
     device = _prepare(require_firmware=False)
     if device is None:
         return 1
@@ -851,11 +875,13 @@ def run_configure_only(pi_credentials=None):
     return 0
 
 
-def run_flash_only():
+def run_flash_only(screen_model=None):
     """Direct: flash firmware keeping existing NVS config. Post-flash boot check.
 
     The merged firmware binary fills the NVS partition range with 0xFF, so we
     read and save the existing config before flashing and restore it after."""
+    if screen_model is not None:
+        set_model(screen_model)
     device = _prepare(require_firmware=True)
     if device is None:
         return 1

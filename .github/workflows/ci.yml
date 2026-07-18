@@ -92,6 +92,11 @@ jobs:
       - name: Run tests
         run: pytest -m "not time_intensive"
 
+      # tools/ CLIs (esp32_setup, hokku_setup, hokku_config, ...) — their deps
+      # (pyserial, esptool) come with the hokku-server install above.
+      - name: Run tools tests
+        run: pytest tools/tests
+
   lint-webserver:
     runs-on: ubuntu-latest
 
