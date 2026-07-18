@@ -36,6 +36,24 @@ jobs:
       - name: Run tests
         run: ctest --test-dir firmware/bigme_f7/test/host/build --output-on-failure
 
+  # Standalone unit tests for the pure, SoC-agnostic shared code in
+  # firmware/common/all/ (firmware_url, frame_state, json_util, logbuf). These
+  # need no SDK mocks and govern code compiled into ALL three firmwares.
+  test-common-all:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -B firmware/common/all/test/build firmware/common/all/test
+
+      - name: Build
+        run: cmake --build firmware/common/all/test/build
+
+      - name: Run tests
+        run: ctest --test-dir firmware/common/all/test/build --output-on-failure
+
   test-webserver:
     runs-on: ubuntu-latest
 
@@ -107,6 +125,35 @@ jobs:
           --error-exitcode=1
           -ifirmware/bigme_f7/test
           firmware/bigme_f7/
+
+  # Lint the shared firmware code (both common/all and common/esp32). Like the
+  # bigme job, unusedFunction is suppressed — the shared functions are called
+  # from the per-screen firmwares, which cppcheck doesn't see in this scan, so
+  # every shared entry point would otherwise look dead. The common/all/test
+  # tree is excluded (host tests, not firmware sources).
+  lint-firmware-common:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y --no-install-recommends cppcheck
+
+      - name: Run cppcheck
+        run: >
+          cppcheck
+          --enable=all
+          --std=c11
+          --suppress=missingIncludeSystem
+          --suppress=missingInclude
+          --suppress=checkersReport
+          --suppress=unmatchedSuppression
+          --suppress=unusedFunction
+          --inline-suppr
+          --error-exitcode=1
+          -ifirmware/common/all/test
+          firmware/common/
 
   build-firmware-huessen_epf1301:
     needs: [test-firmware-huessen_epf1301, lint-firmware-huessen_epf1301]
