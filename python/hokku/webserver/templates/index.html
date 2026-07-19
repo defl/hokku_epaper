@@ -1129,13 +1129,6 @@
           <span id="face-clahe-keepout-label">Yes</span>
         </label>
       </div>
-      <div class="config-row">
-        <label>Face-aware cropping:</label>
-        <label class="toggle" data-tip="When enabled and the letterbox fill limit crops the image, the crop window is centered on the detected face(s) instead of the image center.&#10;Lets you push the fill limit higher on portraits without cutting off heads — a face near the top of the photo pulls the crop up, so the bottom gets cut instead.">
-          <input type="checkbox" id="face-aware-crop-enabled" onchange="document.getElementById('face-aware-crop-label').textContent=this.checked?'On':'Off';">
-          <span id="face-aware-crop-label">Off</span>
-        </label>
-      </div>
       <div class="config-row" style="position: relative;">
         <label>Preset:</label>
         <select id="face-preset"></select>
@@ -1177,13 +1170,26 @@
       </div>
     </div>
 
-    <div class="config-row">
-      <label>Letterbox fill limit:</label>
-      <span class="ctrl-tip" data-tip="How much the image may be zoomed in to eliminate thin letterbox bars.&#10;0% = always letterbox (never crop). 20% = zoom up to 20% to fill the frame.&#10;Useful for images with thin black borders from scanning or aspect-ratio mismatch.&#10;Above ~30% you may lose meaningful content at the edges.">
-        <input type="range" id="crop-to-fill-threshold" min="0" max="100" step="1" value="10"
-               oninput="document.getElementById('fill-threshold-val').textContent=this.value+'%'">
-        <span class="slider-value" id="fill-threshold-val">10%</span>
-      </span>
+    <div class="dither-advanced">
+      <div class="dither-advanced-header">
+        <h3>Cropping &amp; framing</h3>
+      </div>
+      <p class="dither-advanced-intro">Controls how images are fitted to the panel when their aspect ratio doesn't match. A higher fill limit crops more aggressively to remove letterbox bars; face-aware cropping keeps detected faces in frame when that happens.</p>
+      <div class="config-row">
+        <label>Letterbox fill limit:</label>
+        <span class="ctrl-tip" data-tip="How much the image may be zoomed in to eliminate thin letterbox bars.&#10;0% = always letterbox (never crop). 20% = zoom up to 20% to fill the frame.&#10;Useful for images with thin black borders from scanning or aspect-ratio mismatch.&#10;Above ~30% you may lose meaningful content at the edges.">
+          <input type="range" id="crop-to-fill-threshold" min="0" max="100" step="1" value="10"
+                 oninput="document.getElementById('fill-threshold-val').textContent=this.value+'%'">
+          <span class="slider-value" id="fill-threshold-val">10%</span>
+        </span>
+      </div>
+      <div class="config-row">
+        <label>Face-aware cropping:</label>
+        <label class="toggle" data-tip="When enabled and the letterbox fill limit crops the image, the crop window is centered on the detected face(s) instead of the image center.&#10;Lets you push the fill limit higher on portraits without cutting off heads — a face near the top of the photo pulls the crop up, so the bottom gets cut instead.&#10;Requires face detection to be enabled.">
+          <input type="checkbox" id="face-aware-crop-enabled" onchange="document.getElementById('face-aware-crop-label').textContent=this.checked?'On':'Off';">
+          <span id="face-aware-crop-label">Off</span>
+        </label>
+      </div>
     </div>
 
     <div class="config-row">
