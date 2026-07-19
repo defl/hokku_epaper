@@ -49,6 +49,7 @@
 #include "../../../common/esp32/net.c"
 #include "../../../common/esp32/ota.c"
 #include "../../../common/all/firmware_url.c"
+#include "../../../common/all/backoff.c"
 #include "../../../common/all/frame_state.c"
 #include "../../../common/all/json_util.c"
 #include "../../../common/all/logbuf.c"

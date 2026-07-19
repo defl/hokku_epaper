@@ -20,5 +20,6 @@ idf_component_register(
          "${HOKKU_COMMON_ALL}/frame_state.c"
          "${HOKKU_COMMON_ALL}/json_util.c"
          "${HOKKU_COMMON_ALL}/logbuf.c"
+         "${HOKKU_COMMON_ALL}/backoff.c"
     INCLUDE_DIRS "." "${HOKKU_COMMON}" "${HOKKU_COMMON_ALL}" "${CMAKE_BINARY_DIR}"
 )

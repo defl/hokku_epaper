@@ -58,6 +58,7 @@
 #include "../../../common/esp32/net.c"    /* HTTP image fetch + header capture    */
 #include "../../../common/esp32/ota.c"    /* A/B OTA                             */
 #include "../../../common/all/firmware_url.c" /* firmware endpoint derivation      */
+#include "../../../common/all/backoff.c"      /* exponential retry backoff policy   */
 #include "../../../common/all/frame_state.c"  /* X-Frame-State JSON builder         */
 #include "../../../common/all/json_util.c"    /* json_escape                        */
 #include "../../../common/all/logbuf.c"       /* log buffer primitive (two-tier log)*/

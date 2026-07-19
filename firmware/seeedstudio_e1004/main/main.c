@@ -69,6 +69,7 @@
 #include "net.h"
 #include "ota.h"
 #include "frame_state.h"
+#include "backoff.h"       /* shared exponential-retry-backoff policy (SoC-agnostic) */
 
 static const char *TAG = "e1004";
 
@@ -106,6 +107,7 @@ static const char *TAG = "e1004";
 
 /* ── Regime timings ──────────────────────────────────────────────── */
 #define REFRESH_RETRY_SECONDS   60
+#define REFRESH_RETRY_MAX_SECONDS  3600   /* backoff cap when the server stays unreachable: 1 h */
 #define SLEEP_FALLBACK_S        (3 * 3600)
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -453,11 +455,23 @@ static void build_frame_state_json(char *buf, size_t buflen,
 /* ═══════════════════════════════════════════════════════════════════
  *  Refresh — fetch (or OTA) + display + schedule the next wake.
  * ═══════════════════════════════════════════════════════════════════ */
+/* Exponential backoff for repeated "server unreachable" failures. Bumps the
+ * RTC-persistent failure streak and returns the next retry interval (60s, 120,
+ * ... capped at REFRESH_RETRY_MAX_SECONDS) via the shared SoC-agnostic policy,
+ * so a server outage doesn't reboot the device every 60s forever. The caller
+ * resets the streak to 0 on any successful server contact. */
+static int refresh_retry_backoff_seconds(void)
+{
+    uint8_t n = consecutive_refresh_failures;
+    if (consecutive_refresh_failures < 255) consecutive_refresh_failures++;
+    return hokku_backoff_seconds(n, REFRESH_RETRY_SECONDS, REFRESH_RETRY_MAX_SECONDS);
+}
+
 static void perform_refresh(const char *wake_label, int64_t boot_time_us)
 {
     if (!wifi_connect()) {
         ESP_LOGE(TAG, "WiFi connect failed");
-        schedule_retry_in(REFRESH_RETRY_SECONDS, "wifi_connect failed");
+        schedule_retry_in(refresh_retry_backoff_seconds(), "wifi_connect failed");
         return;
     }
 
@@ -502,12 +516,22 @@ static void perform_refresh(const char *wake_label, int64_t boot_time_us)
     if (!ok) {
         heap_caps_free(img);
         wifi_shutdown();
-        int retry = (sleep_seconds > 0) ? (int)sleep_seconds : REFRESH_RETRY_SECONDS;
-        schedule_retry_in(retry, "fetch failed / no image");
+        if (sleep_seconds > 0) {
+            /* Server responded (e.g. 503 busy) — it IS reachable; clear the
+             * outage streak and honour its suggested retry interval. */
+            consecutive_refresh_failures = 0;
+            schedule_retry_in((int)sleep_seconds, "server busy / no image");
+        } else {
+            /* Couldn't reach the server — back off exponentially. */
+            schedule_retry_in(refresh_retry_backoff_seconds(), "fetch failed");
+        }
         return;
     }
 
     wifi_shutdown();
+
+    /* Got an image — server reached and healthy; clear any outage streak. */
+    consecutive_refresh_failures = 0;
 
     /* Schedule the next refresh from the server's absolute clock (drift-free). */
     save_pre_sleep_epoch(server_epoch, local_at_download);

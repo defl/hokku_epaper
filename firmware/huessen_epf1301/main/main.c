@@ -169,6 +169,7 @@ static spi_device_handle_t spi_handle;
 #include "ota.h"            /* A/B OTA (shared) */
 #include "frame_state.h"    /* X-Frame-State JSON builder (SoC-agnostic) */
 #include "firmware_url.h"   /* firmware endpoint derivation (SoC-agnostic) */
+#include "backoff.h"        /* shared exponential-retry-backoff policy (SoC-agnostic) */
 #include "json_util.h"      /* json_escape (SoC-agnostic) */
 
 /* Display a text message on the e-ink screen.
@@ -1069,10 +1070,7 @@ static int refresh_retry_backoff_seconds(bool *first_of_streak)
     uint8_t n = consecutive_refresh_failures;      /* failures BEFORE this one */
     if (consecutive_refresh_failures < 255) consecutive_refresh_failures++;
     if (first_of_streak) *first_of_streak = (n == 0);
-    int secs = REFRESH_RETRY_SECONDS;
-    for (uint8_t i = 0; i < n && secs < REFRESH_RETRY_MAX_SECONDS; i++) secs *= 2;
-    if (secs > REFRESH_RETRY_MAX_SECONDS) secs = REFRESH_RETRY_MAX_SECONDS;
-    return secs;
+    return hokku_backoff_seconds(n, REFRESH_RETRY_SECONDS, REFRESH_RETRY_MAX_SECONDS);
 }
 
 static bool perform_refresh(const char *wake_label, int64_t boot_time_us)

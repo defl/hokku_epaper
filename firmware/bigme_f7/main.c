@@ -43,6 +43,7 @@
 /* SoC-agnostic shared code (firmware/common/all — pure C, no SDK headers). */
 #include "firmware_url.h"
 #include "frame_state.h"
+#include "backoff.h"
 #include "logbuf.h"
 
 /* SoC-shared XR872 code (firmware/common/xr872 — usable by any XR872/XR872AT
@@ -60,7 +61,7 @@
 #define HOKKU_SERVER_URL        "http://192.168.6.111:8080/hokku/screen/"
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.3"
+#define FIRMWARE_VERSION        "1.2.4"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -472,14 +473,26 @@ static void refresh_thread_fn(void *arg)
         g_epd_ready = 1;
     }
 
+    /* Consecutive server-unreachable failures, for exponential retry backoff.
+     * Persists across the awake loop (the churn case); on battery each
+     * hibernation wake restarts this thread and resets it, which is fine —
+     * hibernation is already low-power. */
+    unsigned refresh_failures = 0;
+
     while (1) {
         /* Hold the OTA/flash lock across the whole refresh (which may itself run
          * an OTA on X-Firmware-Update) so a console `ota` can't run concurrently. */
         OS_MutexLock(&g_ota_lock, OS_WAIT_FOREVER);
         int sleep_sec = do_refresh();          /* may reboot via OTA and never return */
         OS_MutexUnlock(&g_ota_lock);
-        if (sleep_sec < 0)
-            sleep_sec = 30;                    /* error backoff */
+        if (sleep_sec < 0) {
+            /* Couldn't reach the server — back off (shared SoC-agnostic policy):
+             * 30s, 60, 120, ... capped at 1 h, instead of hammering every 30s. */
+            sleep_sec = hokku_backoff_seconds(refresh_failures, 30, 3600);
+            if (refresh_failures < 255) refresh_failures++;
+        } else {
+            refresh_failures = 0;              /* reached the server — reset streak */
+        }
 
         if (hokku_should_sleep())
             hokku_hibernate((uint32_t)sleep_sec);   /* battery: deep sleep, restarts on wake */

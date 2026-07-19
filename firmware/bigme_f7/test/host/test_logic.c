@@ -74,6 +74,7 @@
 #include "../../../common/xr872/hokku_config.c"
 #include "../../led.c"    /* led_usb_present() -> _mock_gpio, shared with main.c below */
 #include "../../../common/all/firmware_url.c"  /* SoC-agnostic (shared with ESP32) */
+#include "../../../common/all/backoff.c"       /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/frame_state.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/logbuf.c"        /* SoC-agnostic (shared with ESP32) */
 /* Shared XR872 code (firmware/common/xr872) — included before main.c so its
