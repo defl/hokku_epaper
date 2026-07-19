@@ -23,9 +23,10 @@ add_executable(test_logic
     test_logic.c
 )
 target_include_directories(test_logic PRIVATE
-    mocks               # mock XR872 SDK headers (searched first)
-    ../..                # for epd.h / led.h / hokku_config.h (real, local)
-    ../../../common/all  # SoC-agnostic shared: firmware_url.h / frame_state.h
+    mocks                  # mock XR872 SDK headers (searched first)
+    ../..                   # for epd.h / led.h (real, local)
+    ../../../common/all     # SoC-agnostic shared: firmware_url.h / frame_state.h
+    ../../../common/xr872   # shared XR872: log.h / clock.h / http_util.h / pm.h / hokku_config.h
 )
 
 # ── test_config ───────────────────────────────────────────────────────────
@@ -36,6 +37,7 @@ add_executable(test_config
 target_include_directories(test_config PRIVATE
     mocks
     ../..
+    ../../../common/xr872   # hokku_config.h/.c moved here
 )
 
 # ── CTest integration ────────────────────────────────────────────────────

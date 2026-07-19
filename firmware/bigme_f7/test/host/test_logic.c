@@ -71,11 +71,17 @@
 #define static
 #define main hokku_main_unused
 
-#include "../../hokku_config.c"
+#include "../../../common/xr872/hokku_config.c"
 #include "../../led.c"    /* led_usb_present() -> _mock_gpio, shared with main.c below */
 #include "../../../common/all/firmware_url.c"  /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/frame_state.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/logbuf.c"        /* SoC-agnostic (shared with ESP32) */
+/* Shared XR872 code (firmware/common/xr872) — included before main.c so its
+ * (now non-static) symbols are defined when main.c references them. */
+#include "../../../common/xr872/log.c"         /* hlog + POST-body accessors */
+#include "../../../common/xr872/clock.c"       /* hokku_clock_set/now */
+#include "../../../common/xr872/http_util.c"   /* read_resp_header_uint/str */
+#include "../../../common/xr872/pm.c"          /* hokku_hibernate */
 #include "../../main.c"
 
 #undef main
@@ -342,10 +348,10 @@ static void test_hlog_evicts_oldest_when_full(void)
     filler[sizeof(filler) - 1] = '\0';
     for (int i = 0; i < 20; i++) hlog("%s", filler);
     hlog("TAILMARK\n");
-    CHECK(logbuf_len(&g_log) <= HOKKU_LOG_RING_SZ,
+    CHECK(logbuf_len(&g_log) <= HOKKU_XR872_LOG_RING_SZ,
           "hlog: stays bounded when full (no overflow)");
-    char out[HOKKU_LOG_RING_SZ + 1];
-    uint32_t n = logbuf_snapshot(&g_log, out, HOKKU_LOG_RING_SZ);
+    char out[HOKKU_XR872_LOG_RING_SZ + 1];
+    uint32_t n = logbuf_snapshot(&g_log, out, HOKKU_XR872_LOG_RING_SZ);
     out[n] = '\0';
     CHECK(strstr(out, "TAILMARK") != NULL,
           "hlog: circular buffer retains the most-recent line when full");

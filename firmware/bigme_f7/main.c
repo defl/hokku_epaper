@@ -45,6 +45,13 @@
 #include "frame_state.h"
 #include "logbuf.h"
 
+/* SoC-shared XR872 code (firmware/common/xr872 — usable by any XR872/XR872AT
+ * screen): activity log, software clock, HTTP-header helpers, hibernation. */
+#include "log.h"
+#include "clock.h"
+#include "http_util.h"
+#include "pm.h"
+
 /* Static IP config — used when DHCP is unavailable on the network */
 #define STATIC_IP_ADDR   "192.168.6.199"
 #define STATIC_GW_ADDR   "192.168.6.254"
@@ -80,71 +87,10 @@ static int         g_epd_ready = 0;
 static OS_Mutex_t  g_ota_lock;
 
 /* --------------------------------------------------------------------------
- * Reporting (Phase 1): activity log ring + software wall-clock + frame-state.
+ * Reporting: wake reason, battery, and frame-state telemetry. The activity log
+ * (hlog) and the software wall-clock (hokku_clock_*) are now shared XR872 code
+ * in firmware/common/xr872 (log.h / clock.h).
  * ------------------------------------------------------------------------ */
-
-/*
- * Activity log. Every hlog() line is echoed to the serial console AND appended
- * to a circular log buffer; the accumulated buffer is POSTed to the server as
- * the request body on each fetch and reset after a 200. The F7 reboots on every
- * hibernation wake, so a single buffer suffices (no cross-sleep carry — that's
- * the ESP32's two-tier concern); this is the F7's own logger built on the same
- * SoC-agnostic logbuf primitive the ESP32 logger uses (firmware/common/all).
- * Circular: once full it evicts the oldest bytes, keeping the most-recent logs.
- */
-#define HOKKU_LOG_RING_SZ       2048U
-static char     g_log_storage[HOKKU_LOG_RING_SZ];
-static logbuf_t g_log;
-/* Contiguous scratch for the POST body (the circular g_log may be wrapped). */
-static char     g_log_body[HOKKU_LOG_RING_SZ];
-
-/* Lazy one-time attach so hlog() works whether called from the firmware (after
- * boot) or a host test (which calls hlog directly). */
-static void hlog_ensure(void)
-{
-    if (g_log.cap == 0)
-        logbuf_init(&g_log, g_log_storage, sizeof(g_log_storage));
-}
-
-static void hlog(const char *fmt, ...)
-{
-    char    line[160];
-    va_list ap;
-    int     n;
-
-    hlog_ensure();
-    va_start(ap, fmt);
-    n = vsnprintf(line, sizeof(line), fmt, ap);
-    va_end(ap);
-    if (n < 0)
-        return;
-    if (n > (int)sizeof(line) - 1)
-        n = (int)sizeof(line) - 1;
-
-    printf("%s", line);                       /* still to serial console */
-    logbuf_append(&g_log, line, (uint32_t)n);
-}
-static void hlog_reset(void) { hlog_ensure(); logbuf_reset(&g_log); }
-
-/*
- * Software wall-clock anchored to the server epoch (X-Server-Time-Epoch), so we
- * can report clk_now without an RTC. base==0 means never synced. Good enough for
- * the always-on loop; Phase 3 will back this with the RTC across hibernation.
- */
-static uint32_t g_clk_epoch_base;    /* server epoch captured at last sync */
-static uint32_t g_clk_uptime_base;   /* OS_GetTime() (secs) at last sync */
-
-static void hokku_clock_set(uint32_t server_epoch)
-{
-    g_clk_epoch_base  = server_epoch;
-    g_clk_uptime_base = OS_GetTime();
-}
-static uint32_t hokku_clock_now(void)
-{
-    if (g_clk_epoch_base == 0)
-        return 0;
-    return g_clk_epoch_base + (OS_GetTime() - g_clk_uptime_base);
-}
 
 /* SDK SRAM heap span (same accessor the `heap` console command uses). */
 extern void heap_get_space(uint8_t **start, uint8_t **end, uint8_t **current);
@@ -289,58 +235,8 @@ static int         g_rollback_armed = 0;
 static uint32_t g_b0_rst_src, g_b0_boot_flag, g_b0_boot_arg, g_b0_wdg_cfg;
 #endif
 
-/*
- * Read a numeric response header. The SDK's HTTPClientFindFirstHeader only sets
- * the search clue; HTTPClientGetNextHeader actually returns the matched text
- * (which may include the "Name:" prefix, so we skip past any ':'). Returns 1 and
- * writes *out on success. (The prior code called only FindFirstHeader and never
- * read the value, so X-Sleep-Seconds silently fell back to the default.)
- */
-static int read_resp_header_uint(HTTP_SESSION_HANDLE h, const char *name, uint32_t *out)
-{
-    char   v[48];
-    UINT32 len = sizeof(v);
-    int    ok = 0;
-
-    HTTPClientFindFirstHeader(h, (char *)name, v, &len);
-    len = sizeof(v);
-    if (HTTPClientGetNextHeader(h, v, &len) == HTTP_CLIENT_SUCCESS) {
-        char *p = strchr(v, ':');
-        p = p ? p + 1 : v;
-        while (*p == ' ' || *p == '\t')
-            p++;
-        *out = (uint32_t)strtoul(p, NULL, 10);
-        ok = 1;
-    }
-    HTTPClientFindCloseHeader(h);
-    return ok;
-}
-
-/* Read a string response header into out[]. Returns 1 if a non-empty value was found. */
-static int read_resp_header_str(HTTP_SESSION_HANDLE h, const char *name, char *out, size_t outsz)
-{
-    char   v[64];
-    UINT32 len = sizeof(v);
-    int    ok = 0;
-
-    out[0] = '\0';
-    HTTPClientFindFirstHeader(h, (char *)name, v, &len);
-    len = sizeof(v);
-    if (HTTPClientGetNextHeader(h, v, &len) == HTTP_CLIENT_SUCCESS) {
-        char *p = strchr(v, ':');
-        p = p ? p + 1 : v;
-        while (*p == ' ' || *p == '\t')
-            p++;
-        strncpy(out, p, outsz - 1);
-        out[outsz - 1] = '\0';
-        for (int i = (int)strlen(out) - 1; i >= 0 &&
-             (out[i] == '\r' || out[i] == '\n' || out[i] == ' '); i--)
-            out[i] = '\0';
-        ok = (out[0] != '\0');
-    }
-    HTTPClientFindCloseHeader(h);
-    return ok;
-}
+/* read_resp_header_uint / read_resp_header_str are now shared XR872 code in
+ * firmware/common/xr872/http_util.h. */
 
 /*
  * Derive the firmware.bin URL from the configured screen server_url, e.g.
@@ -441,7 +337,7 @@ static int do_refresh(void)
     char            buf[512];
     char            frame_state[384];
     UINT32          bytes_streamed = 0;
-    UINT32          log_sent;
+    uint32_t        log_sent;                 /* bytes snapshotted for the POST body */
     int             sleep_sec = (int)cfg->default_sleep_s;
     int             ret;
 
@@ -449,13 +345,13 @@ static int do_refresh(void)
 
     /* Snapshot the circular log into a contiguous body for the POST. Log the
      * POST line first so it rides along in this upload. */
-    hlog("hokku: POST %s (log %u B)\n", cfg->server_url, (unsigned)logbuf_len(&g_log));
-    log_sent = logbuf_snapshot(&g_log, g_log_body, sizeof(g_log_body));
+    hlog("hokku: POST %s (log %u B)\n", cfg->server_url, (unsigned)hlog_len());
+    const char *log_body = hlog_snapshot(&log_sent);
     memset(&params, 0, sizeof(params));
     strncpy(params.Uri, cfg->server_url, sizeof(params.Uri) - 1);
     params.HttpVerb  = VerbPost;              /* POST so the log rides as the body */
     params.nTimeout  = HTTP_TIMEOUT_S;
-    params.pData     = g_log_body;            /* request body = accumulated activity log */
+    params.pData     = (void *)log_body;      /* request body = accumulated activity log */
     params.pLength   = log_sent;              /* dropped only after a 200 */
     ret = HTTPC_open(&params);
     if (ret != HTTP_CLIENT_SUCCESS) {
@@ -553,24 +449,7 @@ static int do_refresh(void)
     return sleep_sec;
 }
 
-/*
- * Deep sleep until the next refresh, then WAKE = full restart (hibernation). The
- * device re-runs the whole boot flow (rollback-commit, config, WiFi, fetch) on
- * wake, so no state needs retaining across sleep beyond the flash config. Does not
- * return; if pm_enter_mode somehow fails, fall back to a clean reboot.
- */
-static void hokku_hibernate(uint32_t sleep_s)
-{
-    if (sleep_s < 5)
-        sleep_s = 5;
-    if (sleep_s > 60000)                       /* HAL wake timer tops out ~18.6 h */
-        sleep_s = 60000;
-    hlog("hokku: battery mode — hibernating %u s (wake -> full reboot)\n", (unsigned)sleep_s);
-    OS_MSleep(60);                             /* let the log line flush over UART */
-    HAL_Wakeup_SetTimer_Sec(sleep_s);
-    pm_enter_mode(PM_MODE_HIBERNATION);
-    HAL_WDG_Reboot();                          /* unreached on success */
-}
+/* hokku_hibernate() is now shared XR872 code in firmware/common/xr872/pm.h. */
 
 /* True when the device should deep-sleep (vs stay awake) between refreshes. */
 static int hokku_should_sleep(void)
