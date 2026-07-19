@@ -116,6 +116,17 @@ Firmware uses `PROTOCOL.CONFIG.N` versioning stored in `firmware/huessen_epf1301
 - **`CONFIG`** — NVS configuration schema. Bump when NVS fields are added, removed, or incompatibly changed. When bumping, also update `CONFIG_VERSION` in `tools/hokku_config.py` to the same value.
 - **`N`** — monotonic counter for all firmware changes. **Never resets.** Agents increment `N` for every firmware code change; include the updated `firmware/huessen_epf1301/VERSION` in the same commit.
 
+## Firmware — verify before push
+
+Changing firmware C — **especially shared `firmware/common/`** — requires running the
+**host test suite** locally before `git push`, not just an ESP-IDF/`idf.py` build. The
+ESP-IDF build uses the real IDF headers, so it will NOT catch a newly-called IDF symbol
+that the host mocks lack — that only fails later in CI's `test-firmware-*` jobs with
+`-Werror=implicit-function-declaration`. For `common` and each affected screen:
+`cmake -B <testdir>/build <testdir> && cmake --build <testdir>/build && ctest --test-dir <testdir>/build`
+(on Windows/MSVC add `-C Debug` to ctest). When you call a new esp-idf function, add a
+stub for it under `firmware/common/esp32/test/mocks/`.
+
 ## Tool scripts
 - All standalone Python helper/dev scripts belong in `tools/`
 - Do not create or leave `.py` files in the repo root
