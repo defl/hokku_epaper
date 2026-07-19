@@ -356,8 +356,11 @@ def test_bootstrap_provisions_config_via_brom_and_wifi_for_fresh_unit(tmp_path, 
     img.write_bytes(b"AWIH" + b"\x00" * 32)
     records: list[bool] = []
     _stub_import_tools(monkeypatch, records)
-    ff = _FakeFlasher()  # fresh unit (config sector all 0xFF)
-    monkeypatch.setattr(bigme_bootstrap, "_software_entry", lambda *a, **k: ff)
+    ff = _FakeFlasher()  # fresh/stock unit (config sector all 0xFF)
+    # A stock unit ignores `upgrade` and is caught by hand -> _catch_entry, so the
+    # console Wi-Fi step is expected (it isn't already running Hokku firmware).
+    monkeypatch.setattr(bigme_bootstrap, "_software_entry", lambda *a, **k: None)
+    monkeypatch.setattr(bigme_bootstrap, "_catch_entry", lambda *a, **k: ff)
     calls = {"n": 0, "prov": None}
 
     def fake_prov(port, prov, on_line, should_cancel, serial):
@@ -408,6 +411,31 @@ def test_bootstrap_skips_console_wifi_when_already_provisioned(tmp_path, monkeyp
     assert on_flash["server_url"] == "http://new/hokku/screen/"
     assert calls["n"] == 0  # already had Wi-Fi -> no console step
     assert any("existing wi-fi" in ln.lower() for ln in lines)
+
+
+def test_bootstrap_via_upgrade_skips_console_even_without_v2_config(tmp_path, monkeypatch):
+    # The SmallOne case: the unit runs Hokku firmware (so `upgrade` catches it), but
+    # its on-flash config blob is old/absent (no valid v2). It must STILL skip the
+    # console Wi-Fi step — running Hokku firmware means its Wi-Fi is in sysinfo.
+    img = tmp_path / "x.img"
+    img.write_bytes(b"AWIH" + b"\x00" * 32)
+    records: list[bool] = []
+    _stub_import_tools(monkeypatch, records)
+    ff = _FakeFlasher()  # config sector all 0xFF (no valid v2 blob)
+    monkeypatch.setattr(bigme_bootstrap, "_software_entry", lambda *a, **k: ff)  # upgrade catches
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        bigme_bootstrap,
+        "_provision_over_console",
+        lambda *a, **k: calls.__setitem__("n", calls["n"] + 1),
+    )
+    prov = {"ssid": "Net", "psk": "pw", "name": "Renamed", "server_url": "http://x/hokku/screen/"}
+    lines: list[str] = []
+    bigme_bootstrap.bootstrap_device("COM7", img, lines.append, lambda: False, provision=prov)
+
+    on_flash = f7cfg.config_from_blob(f7cfg.read_fdcm_data(bytes(ff.cfg_sector)) or b"")
+    assert on_flash is not None and on_flash["screen_name"] == "Renamed"  # config via BROM
+    assert calls["n"] == 0  # entered via `upgrade` -> console skipped
 
 
 def test_bootstrap_skips_provision_when_none(tmp_path, monkeypatch):

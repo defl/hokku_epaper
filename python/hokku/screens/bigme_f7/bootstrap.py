@@ -288,6 +288,9 @@ def bootstrap_device(
     on_line("Trying software BROM entry via `upgrade` (no action needed if this unit")
     on_line("already runs Hokku firmware)...")
     f = _software_entry(port, writer, should_cancel, XR872Flasher, send_upgrade_command, 6)
+    # Entering via `upgrade` means the unit already runs Hokku firmware, so its
+    # Wi-Fi is already in sysinfo — no console Wi-Fi step is needed after the write.
+    entered_via_upgrade = f is not None
 
     # Phase B — manual mask-BROM catch (stock unit; no software way in).
     if f is None:
@@ -331,9 +334,12 @@ def bootstrap_device(
     on_line("")
     on_line("DONE — Hokku firmware in slot 0 (bootloader + OEM slot untouched).")
 
-    # Wi-Fi is only needed for a FRESH unit (no prior config blob). An already-
-    # provisioned unit keeps its sysinfo Wi-Fi, so skip the fragile console step.
-    needs_wifi = bool(provision and provision.get("ssid") and not had_existing_cfg)
+    # Wi-Fi is only needed for a genuinely FRESH unit. A unit we entered via
+    # `upgrade` (already running Hokku firmware) or that already had a config blob
+    # keeps its sysinfo Wi-Fi — skip the fragile console step for it.
+    needs_wifi = bool(
+        provision and provision.get("ssid") and not entered_via_upgrade and not had_existing_cfg
+    )
     if needs_wifi:
         on_line("Fresh unit — setting Wi-Fi over the console (config already on flash)...")
         try:
