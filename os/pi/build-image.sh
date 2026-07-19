@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build the Hokku appliance image using pi-gen.
 #
-# Prerequisites: Docker must be running.
+# Prerequisites: Docker must be running (unless PIGEN_DOCKER=0, see below).
 # Run from the repo root:  bash os/pi/build-image.sh
 #
 # Environment overrides:
@@ -9,6 +9,18 @@
 #   DEB_INSTALLER  — path to hokku-installer_*.deb (default: build/hokku-installer_*.deb)
 #   SKIP_WHEELS    — set to 1 to skip downloading arm64 wheels (use cached ones)
 #   PIGEN_DIR      — pi-gen clone directory (default: .pigen)
+#   PIGEN_DOCKER   — 1 (default) runs pi-gen's build-docker.sh, for a normal
+#                    dev machine. Set to 0 to run pi-gen's plain build.sh
+#                    directly on the host instead (needs sudo + pi-gen's
+#                    native deps — quilt, debootstrap, qemu-user-binfmt,
+#                    arch-test, etc. — see .pigen/depends after cloning).
+#                    Use this on GitHub Actions runners: build-docker.sh's
+#                    binfmt_misc registration doesn't reliably propagate
+#                    into its own nested --privileged container there, so
+#                    pi-gen's arch-test fails even with a seemingly-working
+#                    host-level qemu/binfmt setup. Building directly on the
+#                    runner (a real, unnested Linux kernel) sidesteps that
+#                    entirely. Confirmed necessary by repeated failed CI runs.
 
 set -e
 
@@ -129,13 +141,21 @@ chmod +x "$PIGEN_DIR/stage0/00-aaa-fix-keys/00-run.sh"
 
 # ── build ────────────────────────────────────────────────────────────────────
 
-echo ""
-echo "Starting pi-gen Docker build..."
-echo "This typically takes 20–60 minutes."
-echo ""
-
 cd "$PIGEN_DIR"
-bash build-docker.sh
+
+if [ "${PIGEN_DOCKER:-1}" = "1" ]; then
+    echo ""
+    echo "Starting pi-gen Docker build..."
+    echo "This typically takes 20–60 minutes."
+    echo ""
+    bash build-docker.sh
+else
+    echo ""
+    echo "Starting pi-gen native build (PIGEN_DOCKER=0, no Docker)..."
+    echo "This typically takes 20–60 minutes."
+    echo ""
+    sudo ./build.sh
+fi
 
 # ── collect output ───────────────────────────────────────────────────────────
 

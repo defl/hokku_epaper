@@ -104,42 +104,34 @@ jobs:
       # ── build the image ────────────────────────────────────────────────────
 
       - name: Install host dependencies
-        # qemu-user-binfmt: NOT for its own binfmt_misc registration (that
-        # doesn't reliably work on GH-hosted runners — see below), but
-        # because build-docker.sh's preflight check literally does
-        # `which qemu-aarch64` and hard-fails if that binary isn't on PATH,
-        # regardless of whether emulation actually works. This package is
-        # the one that provides an unsuffixed /usr/bin/qemu-aarch64 (unlike
-        # qemu-user-static, which only ships -static-suffixed binaries).
+        # PIGEN_DOCKER=0 (native build, no Docker) — build-docker.sh's own
+        # binfmt_misc registration doesn't reliably propagate into its own
+        # nested --privileged container on GitHub-hosted runners: pi-gen's
+        # arch-test keeps reporting arm64 unsupported (native AND emulated)
+        # even after a seemingly-successful registration, and even with
+        # docker/setup-qemu-action added on top. Building directly on the
+        # runner's own (real, unnested) kernel sidesteps the whole problem.
+        # Confirmed necessary by five separate failed CI runs iterating on
+        # the Docker path before switching to this.
         #
-        # No docker.io — GitHub-hosted ubuntu-latest runners ship Docker
-        # (Engine + containerd.io) pre-installed; apt-get install docker.io
-        # conflicts with the already-installed containerd.io and fails the
-        # whole step. Confirmed by an actual CI run.
+        # Package list is pi-gen's own native dependency list — see
+        # .pigen/depends after the clone in build-image.sh (not committed
+        # here since .pigen is cloned fresh each run).
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            git python3-pip qemu-user-binfmt
-
-      # The actual WORKING arm64 emulation comes from here, not from the
-      # qemu-user-binfmt package above — build-docker.sh's own manual
-      # binfmt_misc registration doesn't reliably work inside GitHub-hosted
-      # runners' sandboxed environment (pi-gen's arch-test still reports
-      # arm64 unsupported, native and emulated, after that registration).
-      # docker/setup-qemu-action (tonistiigi/binfmt) is the standard, proven
-      # fix for that specific limitation. Both steps are needed: this one
-      # confirmed necessary by one failed run, qemu-user-binfmt above
-      # confirmed necessary by a different failed run without it.
-      - name: Set up QEMU (arm64 emulation)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
+            git python3-pip quilt parted coreutils qemu-user-binfmt \
+            debootstrap zerofree zip dosfstools e2fsprogs libcap2-bin \
+            libarchive-tools rsync xz-utils curl xxd file kmod bc gpg \
+            pigz arch-test
 
       - name: Build appliance image
         # No DEB_SERVER/DEB_INSTALLER override needed — build-image.sh already
         # auto-globs build/hokku-{server,installer}_*.deb for the just-downloaded
         # files (there's exactly one of each at this point in the job).
         run: bash os/pi/build-image.sh
+        env:
+          PIGEN_DOCKER: "0"
 
       - name: Find built image
         id: find-image
