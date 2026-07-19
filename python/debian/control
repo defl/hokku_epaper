@@ -7,7 +7,7 @@ Standards-Version: 4.6.0
 
 Package: hokku-server
 Architecture: all
-Depends: python3, ${misc:Depends},
+Depends: ${python3:Depends}, ${misc:Depends},
  python3-flask,
  python3-pil,
  python3-numpy,
@@ -22,11 +22,14 @@ Depends: python3, ${misc:Depends},
 # script. python3-serial (pyserial) provides serial-port enumeration for the
 # screen-flashing feature.
 #
-# Do NOT add ${python3:Depends} here. pybuild-plugin-pyproject reads
-# pyproject.toml's dependencies list and dh_python3 maps esptool -> the Debian
-# "esptool" package, which is absent from many apt sources, making the .deb
-# uninstallable ("Depends: esptool but it is not installable"). The pip-only
-# deps above are handled by postinst, so the Depends list below is authoritative.
+# ${python3:Depends} MUST stay here: dh_python3 only processes a package (byte-
+# compile + install the module into dist-packages) when the package is named
+# python3-* or carries this substvar. Removing it makes dh_python3 skip the
+# package entirely, so the hokku module never ships and the service dies with
+# "No module named 'hokku'". To stop dh_python3 from turning pyproject.toml's
+# pip-only deps (esptool, numba, ...) into apt Depends — esptool maps to a Debian
+# package absent from many apt sources, making the .deb uninstallable — we pass
+# --no-guessing-deps in debian/rules. The manual list below is authoritative.
 Description: Spectra 6 e-ink image server for Hokku/Huessen frames
  Converts and serves images for Hokku e-paper frames using
  Floyd-Steinberg dithering to the 6-color Spectra 6 palette.
