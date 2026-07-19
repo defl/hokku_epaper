@@ -118,25 +118,29 @@ jobs:
         # .pigen/depends after the clone in build-image.sh (not committed
         # here since .pigen is cloned fresh each run).
         #
-        # qemu-user-static was tried alongside qemu-user-binfmt (debootstrap
-        # specifically looks for a -static-suffixed qemu-aarch64-static
-        # binary, which qemu-user-binfmt doesn't provide) but the two
-        # packages directly Conflict: in the Debian archive — can't install
-        # both. Fix: keep qemu-user-binfmt only (arch-test already passes
-        # with it alone) and symlink its qemu-aarch64 binary to the
-        # -static name debootstrap expects, satisfying both without the
-        # conflicting package. Confirmed necessary by an actual failed run.
+        # qemu-user-static, NOT qemu-user-binfmt (they Conflict:, can't
+        # install both). qemu-user-binfmt registers a WRAPPER as the
+        # binfmt_misc interpreter (/usr/libexec/qemu-binfmt/aarch64-binfmt-P,
+        # flags PO) — a dynamically-linked script, confirmed via
+        # /proc/sys/fs/binfmt_misc/qemu-aarch64 on an actual run. debootstrap
+        # copies that interpreter INTO the target chroot and execs it there,
+        # where the target has no shared libraries yet — hence "Unable to
+        # execute target architecture". qemu-user-static's binaries are
+        # genuinely statically linked (that's the whole point of the
+        # package name) and self-register directly, no wrapper — exactly
+        # what a chroot-based cross-bootstrap needs. No symlink needed
+        # either: the package already provides /usr/bin/qemu-aarch64-static
+        # under that exact name.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            git python3-pip quilt parted coreutils qemu-user-binfmt \
+            git python3-pip quilt parted coreutils qemu-user-static \
             debootstrap zerofree zip dosfstools e2fsprogs libcap2-bin \
             libarchive-tools rsync xz-utils curl xxd file kmod bc gpg \
             pigz arch-test
-          sudo ln -sf "$(command -v qemu-aarch64)" /usr/bin/qemu-aarch64-static
-          ls -l /usr/bin/qemu-aarch64 /usr/bin/qemu-aarch64-static
+          ls -l /usr/bin/qemu-aarch64-static
           cat /proc/sys/fs/binfmt_misc/qemu-aarch64 || true
-          arch-test aarch64 && echo "arch-test aarch64: OK"
+          arch-test arm64 && echo "arch-test arm64: OK"
 
       - name: Build appliance image
         # No DEB_SERVER/DEB_INSTALLER override needed — build-image.sh already
