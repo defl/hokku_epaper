@@ -1165,14 +1165,11 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
     heap_caps_free(img);
     ESP_LOGI(TAG, "Image displayed.");
 
-    /* Warn (but don't auto-restart) on stuck display. Per the new design,
-     * recovery from wedged controllers is a user action (button press
-     * triggers the fresh-restart path). */
-    if (gpio_get_level(PIN_EPAPER_BUSY) == 0) {
-        ESP_LOGE(TAG, "Post-refresh: BUSY still LOW — display may be wedged. "
-                      "Press button or power-cycle to recover.");
-    }
-
+    /* No post-display BUSY check here: split_and_display's shutdown sequence
+     * switches BUSY to OUTPUT and drives it LOW to bleed the signal line, so
+     * reading the pin now would always read our own low output — a false
+     * "display may be wedged". A genuinely stuck panel is caught during the
+     * refresh by epaper_wait_busy()'s "BUSY timeout!". */
     log_level_apply(usb_host_present());
     return true;
 }
