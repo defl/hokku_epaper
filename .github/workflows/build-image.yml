@@ -116,11 +116,18 @@ jobs:
         #
         # Package list is pi-gen's own native dependency list — see
         # .pigen/depends after the clone in build-image.sh (not committed
-        # here since .pigen is cloned fresh each run).
+        # here since .pigen is cloned fresh each run). qemu-user-static is
+        # ALSO needed alongside qemu-user-binfmt: arch-test passed with just
+        # qemu-user-binfmt, but debootstrap's actual foreign-arch bootstrap
+        # then failed ("Unable to execute target architecture") — it
+        # specifically looks for the -static-suffixed qemu-aarch64-static
+        # binary to copy into the target rootfs, which qemu-user-binfmt
+        # doesn't provide. Confirmed by an actual failed run without it.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            git python3-pip quilt parted coreutils qemu-user-binfmt \
+            git python3-pip quilt parted coreutils \
+            qemu-user-binfmt qemu-user-static \
             debootstrap zerofree zip dosfstools e2fsprogs libcap2-bin \
             libarchive-tools rsync xz-utils curl xxd file kmod bc gpg \
             pigz arch-test
