@@ -24,8 +24,23 @@ from pathlib import Path
 
 import pytest
 
+from hokku.webserver.app_config import AppConfig
+
 _REPO = Path(__file__).resolve().parents[2]
 _TEST_IMAGES = _REPO / "images" / "test"
+
+
+def test_committed_dev_config_is_valid():
+    """The committed test_server/config.json parses and points at real images, so
+    ``hokku-server test_server/config.json`` (and the boot test below) actually work.
+    Fast + hermetic — no subprocess, so it guards the committed file on every run."""
+    cfg = AppConfig.load(_REPO / "test_server" / "config.json")
+    assert cfg.port == 8080
+    # upload_dir is repo-relative ("images/test") — resolve it from the repo root.
+    upload = _REPO / cfg.upload_dir
+    assert upload.is_dir(), f"committed upload_dir does not resolve: {upload}"
+    assert any(upload.iterdir()), "committed upload_dir has no images"
+    assert cfg.image_config_default is not None  # defaults materialised from the schema
 
 
 def _free_port() -> int:
