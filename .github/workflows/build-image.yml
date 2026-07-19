@@ -110,10 +110,15 @@ jobs:
         # -static-suffixed binaries and doesn't self-register, so
         # build-docker.sh fails its own preflight check without ever
         # reaching the actual build. Confirmed by an actual local run.
+        #
+        # No docker.io here — GitHub-hosted ubuntu-latest runners ship Docker
+        # (Engine + containerd.io) pre-installed; apt-get install docker.io
+        # conflicts with the already-installed containerd.io and fails the
+        # whole step. Confirmed by an actual CI run.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            git docker.io python3-pip qemu-user-binfmt binfmt-support
+            git python3-pip qemu-user-binfmt binfmt-support
 
       - name: Build appliance image
         # No DEB_SERVER/DEB_INSTALLER override needed — build-image.sh already
