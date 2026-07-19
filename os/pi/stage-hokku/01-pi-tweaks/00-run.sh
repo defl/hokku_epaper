@@ -58,6 +58,21 @@ APT::Periodic::Update-Package-Lists "7";
 APT::Periodic::Unattended-Upgrade "7";
 APTEOF
 
+# cloud-init: disable entirely. pi-gen's stage2/04-cloud-init stage installs
+# and enables it by default (aimed at generic cloud/NoCloud provisioning),
+# but this appliance has its own provisioning mechanism (hokku-installer's
+# captive-portal wizard) and no cloud provider — cloud-init has nothing to
+# do here. Left enabled, it spends ~120s every boot retrying an OpenStack/
+# EC2-style metadata service that doesn't exist (169.254.169.254), visibly
+# delaying the setup AP coming up. Confirmed live, twice, on real hardware.
+# /etc/cloud/cloud-init.disabled is the official, documented way to turn it
+# off — cloud-init's systemd generator checks for this file and skips
+# enabling any of its several units (cloud-init-local, cloud-init,
+# cloud-config, cloud-final), which is more robust than disabling each
+# unit individually (the generator can re-enable them at boot otherwise).
+mkdir -p "${ROOTFS_DIR}/etc/cloud"
+touch "${ROOTFS_DIR}/etc/cloud/cloud-init.disabled"
+
 on_chroot << 'EOF'
 set -e
 
