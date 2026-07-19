@@ -9,6 +9,7 @@ from pathlib import Path
 
 from hokku.screens import huessen_epf1301
 from hokku.screens.bigme_f7 import bootstrap as bigme_bootstrap
+from hokku.screens.bigme_f7 import config as f7cfg
 from hokku.webserver import flashing
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
@@ -220,9 +221,26 @@ class _FakeFlasher:
 
     def __init__(self, *a, **k):
         self.closed = False
+        # In-memory model of the 0x340000 config sector (default 0xFF = fresh unit).
+        self.cfg_sector = bytearray(b"\xff" * 0x1000)
 
     def sync(self, **k):
         return type(self).sync_result
+
+    def read_sector(self, addr, length):
+        if addr == 0x340000:
+            return bytes(self.cfg_sector[:length])
+        return b"\xff" * length
+
+    def erase_flash(self, addr, etype):
+        if addr == 0x340000:
+            self.cfg_sector = bytearray(b"\xff" * 0x1000)
+        return True
+
+    def write_sector(self, addr, data):
+        if addr == 0x340000:
+            self.cfg_sector[: len(data)] = data
+        return True
 
     def close(self):
         self.closed = True
@@ -332,12 +350,14 @@ def test_console_safe_token():
     assert not bigme_bootstrap.console_safe_token("")
 
 
-def test_bootstrap_provisions_when_given(tmp_path, monkeypatch):
+def test_bootstrap_provisions_config_via_brom_and_wifi_for_fresh_unit(tmp_path, monkeypatch):
+
     img = tmp_path / "x.img"
     img.write_bytes(b"AWIH" + b"\x00" * 32)
     records: list[bool] = []
     _stub_import_tools(monkeypatch, records)
-    monkeypatch.setattr(bigme_bootstrap, "_software_entry", lambda *a, **k: _FakeFlasher())
+    ff = _FakeFlasher()  # fresh unit (config sector all 0xFF)
+    monkeypatch.setattr(bigme_bootstrap, "_software_entry", lambda *a, **k: ff)
     calls = {"n": 0, "prov": None}
 
     def fake_prov(port, prov, on_line, should_cancel, serial):
@@ -346,11 +366,48 @@ def test_bootstrap_provisions_when_given(tmp_path, monkeypatch):
         on_line("provisioned")
 
     monkeypatch.setattr(bigme_bootstrap, "_provision_over_console", fake_prov)
-    prov = {"ssid": "Net", "psk": "pw", "name": "kitchen", "server_url": "http://x/"}
+    prov = {"ssid": "Net", "psk": "pw", "name": "kitchen", "server_url": "http://x/hokku/screen/"}
     lines: list[str] = []
     bigme_bootstrap.bootstrap_device("COM7", img, lines.append, lambda: False, provision=prov)
+
+    # Config (name + URL) was written to the 0x340000 FDCM sector over BROM...
+    on_flash = f7cfg.config_from_blob(f7cfg.read_fdcm_data(bytes(ff.cfg_sector)) or b"")
+    assert on_flash is not None
+    assert on_flash["screen_name"] == "kitchen"
+    assert on_flash["server_url"] == "http://x/hokku/screen/"
+    # ...and a FRESH unit still gets Wi-Fi over the console.
     assert calls["n"] == 1
     assert calls["prov"] == prov
+
+
+def test_bootstrap_skips_console_wifi_when_already_provisioned(tmp_path, monkeypatch):
+
+    img = tmp_path / "x.img"
+    img.write_bytes(b"AWIH" + b"\x00" * 32)
+    records: list[bool] = []
+    _stub_import_tools(monkeypatch, records)
+    ff = _FakeFlasher()
+    # Pre-provisioned unit: a valid config blob already on the sector.
+    ff.cfg_sector[:0x1000] = f7cfg.build_fdcm_block(
+        f7cfg.build_config_blob("http://old/hokku/screen/", "OldName")
+    ).ljust(0x1000, b"\xff")
+    monkeypatch.setattr(bigme_bootstrap, "_software_entry", lambda *a, **k: ff)
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        bigme_bootstrap,
+        "_provision_over_console",
+        lambda *a, **k: calls.__setitem__("n", calls["n"] + 1),
+    )
+    prov = {"ssid": "Net", "psk": "pw", "name": "Renamed", "server_url": "http://new/hokku/screen/"}
+    lines: list[str] = []
+    bigme_bootstrap.bootstrap_device("COM7", img, lines.append, lambda: False, provision=prov)
+
+    # Rename applied over BROM; server URL updated; console Wi-Fi step SKIPPED.
+    on_flash = f7cfg.config_from_blob(f7cfg.read_fdcm_data(bytes(ff.cfg_sector)) or b"")
+    assert on_flash is not None and on_flash["screen_name"] == "Renamed"
+    assert on_flash["server_url"] == "http://new/hokku/screen/"
+    assert calls["n"] == 0  # already had Wi-Fi -> no console step
+    assert any("existing wi-fi" in ln.lower() for ln in lines)
 
 
 def test_bootstrap_skips_provision_when_none(tmp_path, monkeypatch):

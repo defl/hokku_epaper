@@ -25,6 +25,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from hokku.screens.bigme_f7.config import write_config_via_brom
+
 # python/hokku/screens/bigme_f7/bootstrap.py -> repo root is parents[4]
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _TOOLS = _REPO_ROOT / "tools"
@@ -300,6 +302,7 @@ def bootstrap_device(
     # Write. flash_slot0 prints its own progress and raises SystemExit via die() on
     # ANY safety-check failure, which leaves slot 1 (OEM) bootable. reboot=False:
     # sys_reboot only re-enters BROM on this chip, so the operator power-cycles.
+    had_existing_cfg = False
     try:
         try:
             with contextlib.redirect_stdout(writer):
@@ -308,17 +311,42 @@ def bootstrap_device(
         except SystemExit as e:
             writer.flush()
             raise RuntimeError(f"safety check aborted the write: {e}") from e
+        # Provision the app config (server URL + screen name) over the SAME BROM
+        # session — deterministic, so it can't race the booted firmware's console
+        # (which is only alive briefly between the device's ~180 s hibernations).
+        # Wi-Fi lives in sysinfo, untouched by the reflash, so a re-provisioned
+        # unit keeps its Wi-Fi and needs no console step at all.
+        if provision and (provision.get("server_url") or provision.get("name")):
+            on_line("Provisioning config over BROM (no power-cycle/console needed)...")
+            _cfg, had_existing_cfg = write_config_via_brom(
+                f,
+                on_line,
+                server_url=provision.get("server_url"),
+                screen_name=provision.get("name"),
+            )
     finally:
         with contextlib.suppress(Exception):
             f.close()
 
     on_line("")
     on_line("DONE — Hokku firmware in slot 0 (bootloader + OEM slot untouched).")
-    if provision:
-        _provision_over_console(port, provision, on_line, should_cancel, serial)
+
+    # Wi-Fi is only needed for a FRESH unit (no prior config blob). An already-
+    # provisioned unit keeps its sysinfo Wi-Fi, so skip the fragile console step.
+    needs_wifi = bool(provision and provision.get("ssid") and not had_existing_cfg)
+    if needs_wifi:
+        on_line("Fresh unit — setting Wi-Fi over the console (config already on flash)...")
+        try:
+            _provision_over_console(port, provision, on_line, should_cancel, serial)
+        except RuntimeError as e:
+            # Config is already persisted via BROM; a Wi-Fi console miss is non-fatal.
+            on_line(f"NOTE: Wi-Fi not set over console ({e}).")
+            on_line("Set it after boot over the console (115200): `wifi <ssid> <pw>`.")
+    elif provision:
+        on_line("Config provisioned to flash. POWER-CYCLE the unit (unplug/replug) to boot it.")
+        on_line("It keeps its existing Wi-Fi and comes straight back online under the new name.")
     else:
-        on_line("Next: POWER-CYCLE the unit (unplug/replug, or long-press) to boot it.")
-        on_line("An already-provisioned unit boots straight back online; a fresh unit needs")
-        on_line("Wi-Fi set over the console (115200): `wifi <ssid> <pw>`, then `cfg save`.")
-        on_line("Details: docs/screens/bigme_f7/bootstrap.md")
+        on_line("POWER-CYCLE the unit (unplug/replug, or long-press) to boot it.")
+        on_line("A fresh unit needs Wi-Fi + server set over the console (115200):")
+        on_line("`wifi <ssid> <pw>`, then `cfg save`. Details: docs/screens/bigme_f7/bootstrap.md")
     return {"ok": True}
