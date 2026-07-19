@@ -11,7 +11,7 @@ docker run --rm ^
     --volume "%REPO_ROOT%:/workspace" ^
     --workdir /workspace/python ^
     debian:bookworm ^
-    bash -c "set -e && apt-get update -qq && apt-get install -y --no-install-recommends build-essential debhelper dh-python python3 python3-setuptools pybuild-plugin-pyproject && cp -a /workspace /build && cd /build/python && chmod a-x debian/install debian/control debian/changelog debian/hokku-server.service && rm -rf firmware/release && mkdir -p firmware/release && cp ../firmware/release/hokku-* firmware/release/ && dpkg-buildpackage -us -uc -b && cp /build/hokku-server_*.deb /build/hokku-server_*.buildinfo /build/hokku-server_*.changes /workspace/ 2>/dev/null || true"
+    bash -c "set -e && apt-get update -qq && apt-get install -y --no-install-recommends build-essential debhelper dh-python python3 python3-setuptools pybuild-plugin-pyproject && cp -a /workspace /build && cd /build/python && chmod a-x debian/install debian/control debian/changelog debian/hokku-server.service && rm -rf firmware/release && mkdir -p firmware/release && cp ../firmware/release/hokku-* firmware/release/ && rm -rf default_image && mkdir -p default_image && cp ../images/logo/logo_alt_white.png default_image/ && dpkg-buildpackage -us -uc -b && cp /build/hokku-server_*.deb /build/hokku-server_*.buildinfo /build/hokku-server_*.changes /workspace/ 2>/dev/null || true"
 
 if errorlevel 1 (
     echo Error: Docker build failed.

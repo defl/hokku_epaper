@@ -25,6 +25,10 @@ docker run --rm \
         rm -rf firmware/release
         mkdir -p firmware/release
         cp ../firmware/release/hokku-* firmware/release/
+        # Stage the default placeholder image the same way.
+        rm -rf default_image
+        mkdir -p default_image
+        cp ../images/logo/logo_alt_white.png default_image/
         dpkg-buildpackage -us -uc -b
         cp /build/hokku-server_*.deb /build/hokku-server_*.buildinfo /build/hokku-server_*.changes /workspace/ 2>/dev/null || true
     "

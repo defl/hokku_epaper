@@ -392,6 +392,14 @@ jobs:
           name: hokku-bigme_f7-firmware
           path: python/firmware/release
 
+      # Default placeholder image, same reasoning as the firmware staging
+      # above: debian/install can only reference paths inside python/, not
+      # the repo root, so stage it in before building.
+      - name: Stage default placeholder image
+        run: |
+          mkdir -p python/default_image
+          cp images/logo/logo_alt_white.png python/default_image/
+
       - name: Build .deb
         working-directory: python
         run: dpkg-buildpackage -us -uc -b
