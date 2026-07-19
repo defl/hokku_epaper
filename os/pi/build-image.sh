@@ -13,7 +13,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# SCRIPT_DIR is os/pi — two levels below the repo root (unlike the old
+# one-level image/ layout), so climb up twice.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # ── locate .deb packages ─────────────────────────────────────────────────────
 
