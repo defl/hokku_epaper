@@ -104,22 +104,32 @@ jobs:
       # ── build the image ────────────────────────────────────────────────────
 
       - name: Install host dependencies
-        # No docker.io here — GitHub-hosted ubuntu-latest runners ship Docker
+        # qemu-user-binfmt: NOT for its own binfmt_misc registration (that
+        # doesn't reliably work on GH-hosted runners — see below), but
+        # because build-docker.sh's preflight check literally does
+        # `which qemu-aarch64` and hard-fails if that binary isn't on PATH,
+        # regardless of whether emulation actually works. This package is
+        # the one that provides an unsuffixed /usr/bin/qemu-aarch64 (unlike
+        # qemu-user-static, which only ships -static-suffixed binaries).
+        #
+        # No docker.io — GitHub-hosted ubuntu-latest runners ship Docker
         # (Engine + containerd.io) pre-installed; apt-get install docker.io
         # conflicts with the already-installed containerd.io and fails the
         # whole step. Confirmed by an actual CI run.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends git python3-pip
+          sudo apt-get install -y --no-install-recommends \
+            git python3-pip qemu-user-binfmt
 
-      # apt-get install qemu-user-binfmt + build-docker.sh's own manual
-      # binfmt_misc registration is exactly what pi-gen expects on a normal
-      # Linux host, but does NOT reliably work inside GitHub-hosted runners'
-      # sandboxed environment — pi-gen's own arch-test (native AND emulated)
-      # fails there even after a successful-looking registration. This is a
-      # known GH Actions limitation; docker/setup-qemu-action is the
-      # standard, proven fix (uses tonistiigi/binfmt, not raw apt-get).
-      # Confirmed necessary by an actual failed CI run without it.
+      # The actual WORKING arm64 emulation comes from here, not from the
+      # qemu-user-binfmt package above — build-docker.sh's own manual
+      # binfmt_misc registration doesn't reliably work inside GitHub-hosted
+      # runners' sandboxed environment (pi-gen's arch-test still reports
+      # arm64 unsupported, native and emulated, after that registration).
+      # docker/setup-qemu-action (tonistiigi/binfmt) is the standard, proven
+      # fix for that specific limitation. Both steps are needed: this one
+      # confirmed necessary by one failed run, qemu-user-binfmt above
+      # confirmed necessary by a different failed run without it.
       - name: Set up QEMU (arm64 emulation)
         uses: docker/setup-qemu-action@v3
         with:
