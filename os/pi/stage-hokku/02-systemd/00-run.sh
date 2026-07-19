@@ -36,6 +36,25 @@ systemctl enable hokku-wifi-watchdog 2>/dev/null || \
     echo "WARNING: hokku-wifi-watchdog.service missing (check installer .deb packaging)"
 systemctl disable hokku-server || true
 
+# Set a placeholder WiFi regulatory domain at image-build time. Without
+# ANY country set, the radio comes up rfkill soft-blocked — confirmed live
+# on real hardware — which means the setup AP (ap_manager.start_ap()) can
+# never come up, and hokku-installer crash-loops retrying it forever. A
+# real country is only ever set later, by the wizard itself
+# (system_config.set_wifi_country(), installer/hokku/installer/flask_app.py)
+# once the user submits the setup form — but that form can only be reached
+# THROUGH the setup AP, which needs the radio unblocked FIRST. This breaks
+# that chicken-and-egg deadlock; the wizard overwrites it with the user's
+# real country as soon as setup completes, same as the original live-only
+# fix this session applied by hand to the very first debugging session
+# (there, the appliance instead had a stock, previously-configured Pi OS
+# image with a real value already present; this bakes an equivalent
+# default into the image itself so a *never-configured* Pi doesn't deadlock).
+# Not set via pi-gen's own config-level WPA_COUNTRY (see os/pi/config's
+# comment — an empty value there hits a pi-gen conditional bug); raspi-config
+# directly instead, matching exactly what the wizard itself calls.
+raspi-config nonint do_wifi_country US 2>/dev/null || true
+
 rm -f /etc/ssh/sshd_config.d/rename_user.conf /etc/profile.d/userconfig.sh 2>/dev/null
 systemctl mask userconfig.service 2>/dev/null || true
 systemctl enable getty@tty1.service 2>/dev/null || true
