@@ -128,9 +128,17 @@ jobs:
         # execute target architecture". qemu-user-static's binaries are
         # genuinely statically linked (that's the whole point of the
         # package name) and self-register directly, no wrapper — exactly
-        # what a chroot-based cross-bootstrap needs. No symlink needed
-        # either: the package already provides /usr/bin/qemu-aarch64-static
-        # under that exact name.
+        # what a chroot-based cross-bootstrap needs. No symlink needed for
+        # debootstrap itself: the package already provides
+        # /usr/bin/qemu-aarch64-static under that exact name.
+        #
+        # pi-gen's own dependencies_check() (separate from debootstrap)
+        # additionally hard-requires a tool literally named "qemu-arm" on
+        # PATH (from .pigen/depends: qemu-arm:qemu-user-binfmt) — the 32-bit
+        # ARM binary, unsuffixed, regardless of build arch. qemu-user-static
+        # only ships qemu-arm-static (suffixed). Unlike the debootstrap
+        # case, this check is a bare `hash qemu-arm` — it never executes the
+        # binary — so a symlink is fine here.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -138,7 +146,8 @@ jobs:
             debootstrap zerofree zip dosfstools e2fsprogs libcap2-bin \
             libarchive-tools rsync xz-utils curl xxd file kmod bc gpg \
             pigz arch-test
-          ls -l /usr/bin/qemu-aarch64-static
+          sudo ln -sf /usr/bin/qemu-arm-static /usr/bin/qemu-arm
+          ls -l /usr/bin/qemu-aarch64-static /usr/bin/qemu-arm
           cat /proc/sys/fs/binfmt_misc/qemu-aarch64 || true
           arch-test arm64 && echo "arch-test arm64: OK"
 
