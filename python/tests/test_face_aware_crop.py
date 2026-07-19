@@ -1,12 +1,15 @@
 """Tests for face-aware cropping.
 
 Unit tests (always fast — synthetic images/bboxes only):
-  - _face_centered_crop_offset centers on the face union and clamps to range.
-  - A face near the top of a very tall source pulls the crop up (bottom gets
-    cut, not the head) compared to a plain center-crop.
-  - Multiple faces: the offset centers on their union, not just the first one.
+  - _face_centered_crop_offset: interior (unclamped) offset follows the exact
+    centering formula on both axes, and both top/bottom clamps fire.
+  - Multiple faces: the offset follows the union centroid, NOT just the first
+    face and NOT a plain center-crop (guarded against both).
+  - End-to-end: a face patch near the top of a tall image is cropped away by a
+    plain center-crop but kept in frame with face-aware cropping (asserted on
+    the actual rendered pixels).
   - No offset when crop_anchor_bboxes_norm is falsy (plain center-crop, same
-    as today's behaviour).
+    as today's behaviour — pixel-identical).
   - face_crop_bboxes is included in ScreenImageConfig.cache_slug() only when set
     (keeps existing cache slugs stable for everyone with the feature off).
   - AppConfig.classifier_face_aware_crop_enabled round-trips and defaults to False.
@@ -23,6 +26,7 @@ import shutil
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -100,13 +104,46 @@ def test_offset_shifts_toward_face_near_bottom():
     assert y_off == pytest.approx(200.0)
 
 
-def test_offset_centers_on_union_of_multiple_faces():
-    """Two faces far apart: offset centers on their union's centroid, not either face alone."""
-    a = BoundingBox(x=0.0, y=0.4, w=0.1, h=0.1)  # spans x in [0.0, 0.1]
-    b = BoundingBox(x=0.9, y=0.4, w=0.1, h=0.1)  # spans x in [0.9, 1.0]
-    x_off, _ = _face_centered_crop_offset((a, b), 300.0, 100.0, 100.0, 100.0)
-    # Union centroid x = (0.0 + 1.0)/2 = 0.5 -> 150 in scaled space -> centered crop
-    assert x_off == pytest.approx(100.0)  # (300-100)/2, same as plain center in this symmetric case
+def test_offset_interior_unclamped_uses_centering_formula():
+    """A face above center, with room on both sides so no clamp fires, must
+    land at exactly ``face_cy - visible/2`` — the actual centering formula,
+    distinct from a plain center-crop."""
+    # scaled_h=400, visible_h=100 -> clamp range [0, 300]. Face centroid y=0.4
+    # -> face_cy=160 -> desired = 160 - 50 = 110 (interior, unclamped).
+    bbox = BoundingBox(x=0.3, y=0.35, w=0.4, h=0.1)  # centroid y = 0.40
+    _, y_off = _face_centered_crop_offset((bbox,), 100.0, 400.0, 100.0, 100.0)
+    assert y_off == pytest.approx(110.0)
+    # Guard: this must NOT equal the plain center-crop offset (400-100)/2 = 150,
+    # so the test would fail if the function ignored the bbox.
+    assert y_off != pytest.approx(150.0)
+
+
+def test_offset_shifts_horizontally_toward_off_center_face():
+    """A face left-of-center pulls the crop window left (interior, unclamped),
+    exercising the x axis rather than only the symmetric case."""
+    # scaled_w=400, visible_w=100 -> clamp range [0, 300]. Face centroid x=0.3
+    # -> face_cx=120 -> desired = 120 - 50 = 70 (interior); center would be 150.
+    bbox = BoundingBox(x=0.25, y=0.4, w=0.1, h=0.2)  # centroid x = 0.30
+    x_off, _ = _face_centered_crop_offset((bbox,), 400.0, 100.0, 100.0, 100.0)
+    assert x_off == pytest.approx(70.0)
+    assert x_off != pytest.approx(150.0)
+
+
+def test_offset_centers_on_union_not_first_face():
+    """Two faces both above center: the offset must follow the union centroid,
+    NOT just the first bbox and NOT the plain center-crop. This fails if the
+    function looks at only one face or ignores the boxes entirely."""
+    # scaled_h=400, visible_h=100. Faces span y in [0.10,0.20] and [0.30,0.40];
+    # union min_y=0.10, max_y=0.40 -> union centroid = 0.25 -> face_cy=100 ->
+    # desired = 100 - 50 = 50 (interior, unclamped).
+    a = BoundingBox(x=0.3, y=0.10, w=0.4, h=0.10)  # first face, centroid y=0.15
+    b = BoundingBox(x=0.3, y=0.30, w=0.4, h=0.10)  # second face, centroid y=0.35
+    _, y_off = _face_centered_crop_offset((a, b), 100.0, 400.0, 100.0, 100.0)
+    assert y_off == pytest.approx(50.0)
+    # If it centered on only the first face: face_cy=60 -> 10, not 50.
+    assert y_off != pytest.approx(10.0)
+    # If it ignored the boxes (plain center): 150, not 50.
+    assert y_off != pytest.approx(150.0)
 
 
 # ── integration: face-aware crop keeps the face patch in frame ──────────────
@@ -122,22 +159,30 @@ def _patch_image(w: int, h: int, bg=(200, 100, 50), patch_box=None, patch_color=
     return img
 
 
-def _contains_color(indices, color_idx) -> bool:
-    return bool((indices == color_idx).any())
-
-
 def test_face_aware_crop_keeps_top_face_patch_in_frame():
-    """Without face-aware cropping, a plain center-crop of a very tall image
-    cuts off a face patch near the top. With face-aware cropping (bbox
-    matching the patch), the patch survives into the rendered canvas."""
+    """End-to-end through the real renderer: a plain center-crop of a very
+    tall image drops a patch near the top, but face-aware cropping keeps it.
+
+    The image is a uniform background with one distinct-coloured patch. The
+    background dithers to a single palette index everywhere, so:
+      - patch cropped out  -> the render is uniform (1 unique index),
+      - patch kept in frame -> the render has >=2 unique indices.
+    This asserts the patch's actual presence/absence in the rendered pixels
+    without depending on which palette index the patch maps to.
+    """
     w, h = 100, 300
     # Patch occupies rows [20, 40) -- a "face" near the top of a tall photo.
+    # Green is far from the orange-brown background in the panel palette, so it
+    # survives the noop dither as a distinct index.
     img = _patch_image(w, h, patch_box=(30, 20, 70, 40))
     cfg = _noop_cfg()
     bbox = BoundingBox(x=30 / w, y=20 / h, w=40 / w, h=20 / h)
 
-    # threshold big enough to force use_cover for a 100x300 image on a 100x100 canvas
-    # (zoom_ratio = scale_cover/scale_fit - 1 = 1.0/0.333 - 1 = 2.0)
+    # threshold big enough to force use_cover for a 100x300 image on a 100x100
+    # canvas (zoom_ratio = scale_cover/scale_fit - 1 = 1.0/0.333 - 1 = 2.0).
+    # Plain center-crop keeps scaled rows [100, 200); the patch at [20, 40) is
+    # cropped away. Face-aware crop clamps the window up to rows [0, 100),
+    # keeping the patch.
     threshold = 2.0
 
     without_anchor = _render_indices(img, cfg, "portrait", 100, 100, threshold)
@@ -145,27 +190,12 @@ def test_face_aware_crop_keeps_top_face_patch_in_frame():
         img, cfg, "portrait", 100, 100, threshold, crop_anchor_bboxes_norm=(bbox,)
     )
 
-    # noop dither maps each palette entry to nearest; just check raw presence
-    # by re-deriving what index the patch color would map to via a direct
-    # crop instead of relying on palette internals: compare against a
-    # reference plain-PIL crop for each offset.
-    scale_cover = max(100 / w, 100 / h)
-    scaled_h = round(h * scale_cover)
-    center_y_off = (scaled_h - 100) // 2
-    face_cy = (20 / h + 40 / h) / 2 * scaled_h
-    anchor_y_off = max(0.0, min(face_cy - 50.0, max(0.0, scaled_h - 100.0)))
-
-    # The patch (scaled rows [20,40)) must NOT intersect the plain center-crop
-    # window, but MUST intersect the face-anchored crop window.
-    assert not (center_y_off < 40 and center_y_off + 100 > 20), (
-        "test setup invalid: plain center-crop unexpectedly overlaps the patch"
+    assert np.unique(without_anchor).size == 1, (
+        "plain center-crop should have cropped the top patch away (uniform render)"
     )
-    assert anchor_y_off < 40 and anchor_y_off + 100 > 20, (
-        "test setup invalid: face-anchored crop unexpectedly misses the patch"
+    assert np.unique(with_anchor).size >= 2, (
+        "face-aware crop should have kept the top patch in frame"
     )
-
-    # Sanity: the two renders actually differ (different crop windows -> different pixels).
-    assert not (without_anchor == with_anchor).all()
 
 
 def test_no_crop_anchor_falls_back_to_center_crop():
