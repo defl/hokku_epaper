@@ -22,6 +22,7 @@ RTC_NOINIT_ATTR int32_t  last_sleep_err_s;
 RTC_NOINIT_ATTR bool     last_sleep_err_known;
 
 RTC_NOINIT_ATTR uint8_t  consecutive_spurious_resets;
+RTC_NOINIT_ATTR uint8_t  consecutive_refresh_failures;
 RTC_NOINIT_ATTR uint8_t  last_sleep_mode;
 RTC_NOINIT_ATTR uint8_t  pending_action;
 
@@ -47,6 +48,7 @@ void hokku_state_validate(void)
         last_sleep_err_s = 0;
         last_sleep_err_known = false;
         consecutive_spurious_resets = 0;
+        consecutive_refresh_failures = 0;
         last_sleep_mode = LAST_SLEEP_MODE_NONE;
         pending_action = ACTION_NONE;
         s_log_ring_head = 0;

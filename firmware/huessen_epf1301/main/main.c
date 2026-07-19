@@ -131,6 +131,7 @@ static const char *TAG = "hokku";
  * server returned nonsense sleep_seconds). Applied as the next
  * next_refresh_epoch so the regime loops don't hot-retry at 100 ms. */
 #define REFRESH_RETRY_SECONDS           60
+#define REFRESH_RETRY_MAX_SECONDS       3600  /* backoff cap when the server stays unreachable: 1 h */
 #define SERVER_BUSY_DISPLAY_THRESHOLD_S 20
 
 /* A freshly-OTA'd (pending-verify) app that fails its FIRST refresh gets rolled
@@ -1055,6 +1056,25 @@ static void enter_deep_sleep(int64_t sleep_us)
  * slot flip, rollback-commit) is shared, in common/esp32/ota.c. huessen passes
  * its display_message as the progress callback. */
 
+/* Exponential backoff for repeated "server unreachable" failures (WiFi down or
+ * download failed). Bumps the RTC-persistent failure streak and returns the next
+ * retry interval, doubling from REFRESH_RETRY_SECONDS and capped at
+ * REFRESH_RETRY_MAX_SECONDS: 60s, 120, 240, ... 3600. Without this a server
+ * outage reboots the device + re-renders the panel every 60s indefinitely
+ * (battery, flash-wear, e-paper wear). The caller resets the streak to 0 on any
+ * successful server contact. Returns true via *first_of_streak on the first
+ * failure so the caller can draw the error once and stay silent afterward. */
+static int refresh_retry_backoff_seconds(bool *first_of_streak)
+{
+    uint8_t n = consecutive_refresh_failures;      /* failures BEFORE this one */
+    if (consecutive_refresh_failures < 255) consecutive_refresh_failures++;
+    if (first_of_streak) *first_of_streak = (n == 0);
+    int secs = REFRESH_RETRY_SECONDS;
+    for (uint8_t i = 0; i < n && secs < REFRESH_RETRY_MAX_SECONDS; i++) secs *= 2;
+    if (secs > REFRESH_RETRY_MAX_SECONDS) secs = REFRESH_RETRY_MAX_SECONDS;
+    return secs;
+}
+
 static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 {
     /* Enable INFO logging for the duration of the refresh so diagnostics
@@ -1070,16 +1090,21 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 
     if (!wifi_connect()) {
         ESP_LOGE(TAG, "WiFi connect failed");
-        char wifi_err_msg[256];
-        snprintf(wifi_err_msg, sizeof(wifi_err_msg),
-                 "WiFi connect failed.\n"
-                 "\n"
-                 "Will retry in %d s.\n"
-                 "Press button to\n"
-                 "try again now.",
-                 REFRESH_RETRY_SECONDS);
-        display_message(wifi_err_msg);
-        schedule_retry_in(REFRESH_RETRY_SECONDS, "wifi_connect failed");
+        bool first;
+        int backoff = refresh_retry_backoff_seconds(&first);
+        /* Draw the error only on the first failure of a streak — re-rendering
+         * the panel on every backed-off retry wastes battery + e-paper. */
+        if (first) {
+            char wifi_err_msg[256];
+            snprintf(wifi_err_msg, sizeof(wifi_err_msg),
+                     "WiFi connect failed.\n"
+                     "\n"
+                     "Retrying (backing off).\n"
+                     "Press button to\n"
+                     "try again now.");
+            display_message(wifi_err_msg);
+        }
+        schedule_retry_in(backoff, "wifi_connect failed");
         log_level_apply(usb_host_present());
         return false;
     }
@@ -1132,8 +1157,10 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 
     if (!img) {
         if (http_status == 503 && sleep_seconds > 0) {
-            /* Server busy (converting images, cache warming, etc.) —
-             * use the server-suggested retry interval from X-Sleep-Seconds. */
+            /* Server busy (converting images, cache warming, etc.) — it IS
+             * reachable, so clear the outage streak and use the server-suggested
+             * retry interval from X-Sleep-Seconds. */
+            consecutive_refresh_failures = 0;
             if (sleep_seconds > SERVER_BUSY_DISPLAY_THRESHOLD_S) {
                 char msg[128];
                 snprintf(msg, sizeof(msg),
@@ -1148,24 +1175,33 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
             /* ≤ threshold: silent — leave current display untouched. */
             schedule_retry_in((int)sleep_seconds, "server busy (503)");
         } else {
-            /* Real failure: network error, non-503, or 503 without header. */
-            char msg[384];
-            snprintf(msg, sizeof(msg),
-                     "Image download failed.\n"
-                     "\n"
-                     "Tried to connect to:\n"
-                     "%s\n"
-                     "\n"
-                     "Will retry in %d s.\n"
-                     "Press reset to try\n"
-                     "again now.",
-                     config.image_url, REFRESH_RETRY_SECONDS);
-            display_message(msg);
-            schedule_retry_in(REFRESH_RETRY_SECONDS, "download failed");
+            /* Real failure: network error, non-503, or 503 without header.
+             * Back off exponentially and draw the error only once per streak so
+             * a server outage doesn't reboot + re-render every 60 s forever. */
+            bool first;
+            int backoff = refresh_retry_backoff_seconds(&first);
+            if (first) {
+                char msg[384];
+                snprintf(msg, sizeof(msg),
+                         "Image download failed.\n"
+                         "\n"
+                         "Tried to connect to:\n"
+                         "%s\n"
+                         "\n"
+                         "Retrying (backing off).\n"
+                         "Press reset to try\n"
+                         "again now.",
+                         config.image_url);
+                display_message(msg);
+            }
+            schedule_retry_in(backoff, "download failed");
         }
         log_level_apply(usb_host_present());
         return false;
     }
+
+    /* Got an image — server reached and healthy; clear any outage streak. */
+    consecutive_refresh_failures = 0;
 
     ESP_LOGI(TAG, "Displaying image...");
     split_and_display(img);

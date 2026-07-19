@@ -69,6 +69,13 @@ extern int32_t  last_sleep_err_s;
 extern bool     last_sleep_err_known;
 
 extern uint8_t  consecutive_spurious_resets;
+
+/* Count of consecutive failed refreshes because the server was unreachable
+ * (WiFi down or download failed). Drives exponential retry backoff so a server
+ * outage doesn't make the device reboot + re-render the panel every 60 s
+ * forever. Reset to 0 on any successful server contact. */
+extern uint8_t  consecutive_refresh_failures;
+
 extern uint8_t  last_sleep_mode;    /* LAST_SLEEP_MODE_* */
 extern uint8_t  pending_action;     /* ACTION_* */
 
