@@ -70,6 +70,7 @@ def _decision_to_screen_image_config(
         orientation=orientation,
         crop_to_fill_threshold=decision.crop_to_fill_threshold,
         clahe_keepout_bboxes=decision.clahe_keepout_bboxes,
+        face_crop_bboxes=decision.face_crop_bboxes,
         screen_model=model,
     )
 
@@ -971,6 +972,7 @@ class AbstractImageManager(ABC):
             tuple(asdict(b) for b in cfg.clahe_keepout_bboxes)
             if cfg.clahe_keepout_bboxes
             else None,
+            tuple(asdict(b) for b in cfg.face_crop_bboxes) if cfg.face_crop_bboxes else None,
         )
         logger.debug("Submitted %r for dithering (%s, %s)", name, cfg.screen_model, cfg.orientation)
         self._dispatch_render(

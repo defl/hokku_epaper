@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "refresh_image_at_time": [
     "0600",
     "1200",
@@ -43,6 +43,7 @@
   "classifier_bw_detect_enabled": true,
   "classifier_face_detect_enabled": true,
   "classifier_face_detect_clahe_keepout": true,
+  "classifier_face_aware_crop_enabled": false,
   "mdns_hostname": "hokku",
   "flash_wifi_ssid": "",
   "flash_wifi_pass": "",

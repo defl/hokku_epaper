@@ -30,6 +30,34 @@ if TYPE_CHECKING:
     from hokku.screens.display import Display
 
 
+def _face_centered_crop_offset(
+    bboxes_norm: tuple[BoundingBox, ...],
+    scaled_w: float,
+    scaled_h: float,
+    visible_w: float,
+    visible_h: float,
+) -> tuple[float, float]:
+    """Crop offset (top-left corner, in scaled-image pixel space) that centers
+    the union of all detected faces in the visible window, clamped to the
+    valid cover-crop range ``[0, scaled_dim - visible_dim]``.
+
+    Centering on the face union's centroid rather than the canvas naturally
+    biases which side gets cut: a face near the top of the source photo pulls
+    the crop window up too, so it's the *bottom* of the frame that's cropped
+    away, not the head.
+    """
+    min_x = min(b.x for b in bboxes_norm)
+    min_y = min(b.y for b in bboxes_norm)
+    max_x = max(b.x + b.w for b in bboxes_norm)
+    max_y = max(b.y + b.h for b in bboxes_norm)
+    face_cx = (min_x + max_x) / 2.0 * scaled_w
+    face_cy = (min_y + max_y) / 2.0 * scaled_h
+
+    x_off = max(0.0, min(face_cx - visible_w / 2.0, max(0.0, scaled_w - visible_w)))
+    y_off = max(0.0, min(face_cy - visible_h / 2.0, max(0.0, scaled_h - visible_h)))
+    return x_off, y_off
+
+
 def transform_bboxes_to_canvas_norm(
     bboxes_norm: tuple[BoundingBox, ...] | None,
     orig_w: int,
@@ -40,6 +68,7 @@ def transform_bboxes_to_canvas_norm(
     crop_to_fill_threshold: float = 0.0,
     *,
     panel_rotated: bool = True,
+    crop_anchor_bboxes_norm: tuple[BoundingBox, ...] | None = None,
 ) -> list[tuple[float, float, float, float]]:
     """Convert face bboxes from original-image normalised coords to coords
     normalised against the rendered **preview PNG** (the PNG returned by
@@ -50,6 +79,10 @@ def transform_bboxes_to_canvas_norm(
     Mirrors the fit/cover scaling in ``_prepare_canvas``. Result is normalised
     against the *visible* dimensions so it lines up with the PNG the browser
     actually displays.
+
+    ``crop_anchor_bboxes_norm``, when given, must match whatever was passed
+    as ``_prepare_canvas``'s ``crop_anchor_bboxes_norm`` for this same render
+    (face-aware crop), so the overlay lines up with the actual crop offset.
     """
     if not bboxes_norm:
         return []
@@ -68,8 +101,13 @@ def transform_bboxes_to_canvas_norm(
     if use_cover:
         scaled_w = max(visible_w, math.ceil(orig_w * scale_cover))
         scaled_h = max(visible_h, math.ceil(orig_h * scale_cover))
-        x_off = (scaled_w - visible_w) // 2
-        y_off = (scaled_h - visible_h) // 2
+        if crop_anchor_bboxes_norm:
+            x_off, y_off = _face_centered_crop_offset(
+                crop_anchor_bboxes_norm, scaled_w, scaled_h, visible_w, visible_h
+            )
+        else:
+            x_off = (scaled_w - visible_w) // 2
+            y_off = (scaled_h - visible_h) // 2
     else:
         scaled_w = orig_w * scale_fit
         scaled_h = orig_h * scale_fit
@@ -228,6 +266,7 @@ class AbstractImageRenderer(ABC):
         *,
         release_input: bool = False,
         clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
+        crop_anchor_bboxes_norm: tuple[BoundingBox, ...] | None = None,
     ) -> tuple[NDArray[np.uint8], NDArray[np.bool_]]:
         """Fit-or-crop → PIL enhancements → rotate.
 
@@ -238,6 +277,10 @@ class AbstractImageRenderer(ABC):
         clahe_keepout_bboxes_norm: [(x, y, w, h), ...] in [0, 1] relative to the original image.
         Converted to canvas pixel coordinates and passed to
         _apply_prepare_enhancements to scope CLAHE away from the face regions.
+
+        crop_anchor_bboxes_norm: face bboxes (same [0, 1]-normalised format) to
+        center the cover-crop window on instead of the image center — "face-aware
+        cropping". Only affects the ``use_cover`` branch; ignored while letterboxing.
         """
         portrait = orientation == "portrait"
         if self._display.panel_rotated:
@@ -260,8 +303,14 @@ class AbstractImageRenderer(ABC):
             img_scaled = img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
             if release_input:
                 img.close()
-            x_off = (scaled_w - visible_w) // 2
-            y_off = (scaled_h - visible_h) // 2
+            if crop_anchor_bboxes_norm:
+                x_off_f, y_off_f = _face_centered_crop_offset(
+                    crop_anchor_bboxes_norm, scaled_w, scaled_h, visible_w, visible_h
+                )
+                x_off, y_off = int(x_off_f), int(y_off_f)
+            else:
+                x_off = (scaled_w - visible_w) // 2
+                y_off = (scaled_h - visible_h) // 2
             composed = img_scaled.crop((x_off, y_off, x_off + visible_w, y_off + visible_h))
             img_scaled.close()
             padding_mask = np.zeros((visible_h, visible_w), dtype=bool)
@@ -333,6 +382,7 @@ class AbstractImageRenderer(ABC):
         *,
         release_input: bool = False,
         clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
+        crop_anchor_bboxes_norm: tuple[BoundingBox, ...] | None = None,
     ) -> NDArray[np.uint8]:
         """Render to palette indices.
 
@@ -349,6 +399,7 @@ class AbstractImageRenderer(ABC):
         orientation: Orientation,
         crop_to_fill_threshold: float = 0.0,
         clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
+        crop_anchor_bboxes_norm: tuple[BoundingBox, ...] | None = None,
     ) -> bytes:
         """Full-resolution panel → wire bytes."""
         idx = self.render_indices(
@@ -360,6 +411,7 @@ class AbstractImageRenderer(ABC):
             crop_to_fill_threshold,
             release_input=True,
             clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
+            crop_anchor_bboxes_norm=crop_anchor_bboxes_norm,
         )
         return self._display.indices_to_panel_bytes(idx)
 
@@ -371,6 +423,7 @@ class AbstractImageRenderer(ABC):
         max_side_px: int = 800,
         crop_to_fill_threshold: float = 0.0,
         clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
+        crop_anchor_bboxes_norm: tuple[BoundingBox, ...] | None = None,
     ) -> bytes:
         """Smaller panel → PNG preview bytes."""
         cw, ch = self._preview_canvas_dims(orientation, max_side_px)
@@ -382,6 +435,7 @@ class AbstractImageRenderer(ABC):
             ch,
             crop_to_fill_threshold,
             clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
+            crop_anchor_bboxes_norm=crop_anchor_bboxes_norm,
         )
         preview_rgb = self._display.indices_to_preview_rgb(idx)
         return self._encode_panel_rgb_to_png(preview_rgb, orientation, self._display.panel_rotated)

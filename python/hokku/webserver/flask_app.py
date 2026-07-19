@@ -894,7 +894,9 @@ def create_app(
     def api_dither_preview():
         """Render a one-off dithered preview for a given image + image_config.
 
-        Body: {name: str, image: ImageConfig dict}. Returns PNG bytes.
+        Body: {name: str, image: ImageConfig dict, clahe_keepout?: bool,
+        face_aware_crop?: bool}. Returns PNG bytes. ``clahe_keepout`` and
+        ``face_aware_crop`` default to the saved config when omitted.
         The ``X-Face-Bboxes`` response header carries face bboxes already
         transformed into the rendered preview's coordinate space (JSON list
         of [x, y, w, h] tuples, each normalised 0..1 against the preview
@@ -941,6 +943,11 @@ def create_app(
         )
         keepout = face_bboxes_orig if (face_bboxes_orig and use_clahe_keepout) else None
 
+        use_face_aware_crop = body.get(
+            "face_aware_crop", state.config.classifier_face_aware_crop_enabled
+        )
+        crop_anchor = face_bboxes_orig if (face_bboxes_orig and use_face_aware_crop) else None
+
         # Render in the image's native orientation. NEUTRAL/unknown falls back
         # to LANDSCAPE since the renderer needs a concrete orientation.
         render_orientation = Orientation.LANDSCAPE
@@ -959,6 +966,7 @@ def create_app(
                 cfg,
                 render_orientation,
                 clahe_keepout_bboxes_norm=keepout,
+                crop_anchor_bboxes_norm=crop_anchor,
             )
         logger.debug("Preview done: %r", name)
 
@@ -971,6 +979,7 @@ def create_app(
             preview_display.panel_h,
             state.config.crop_to_fill_threshold,
             panel_rotated=preview_display.panel_rotated,
+            crop_anchor_bboxes_norm=crop_anchor,
         )
 
         resp = _png_response(png)

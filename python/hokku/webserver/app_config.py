@@ -24,7 +24,7 @@ from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 
 logger = logging.getLogger(__name__)
 
-_CURRENT_VERSION = 7
+_CURRENT_VERSION = 8
 
 
 def _migrate_v1_to_v2(d: dict) -> dict:
@@ -70,6 +70,12 @@ def _migrate_v6_to_v7(d: dict) -> dict:
     return d
 
 
+def _migrate_v7_to_v8(d: dict) -> dict:
+    """Add classifier_face_aware_crop_enabled (default False — opt-in)."""
+    d.setdefault("classifier_face_aware_crop_enabled", False)
+    return d
+
+
 # v(N) → v(N+1) upgrade functions. Populated as the schema evolves.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     1: _migrate_v1_to_v2,
@@ -78,6 +84,7 @@ _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     4: _migrate_v4_to_v5,
     5: _migrate_v5_to_v6,
     6: _migrate_v6_to_v7,
+    7: _migrate_v7_to_v8,
 }
 
 
@@ -122,6 +129,10 @@ class AppConfig:
     )
     classifier_face_detect_enabled: bool = True
     classifier_face_detect_clahe_keepout: bool = True
+    #: When a photo has detected face(s), center the crop-to-fill window on
+    #: them instead of the image center ("face-aware cropping") so an
+    #: aggressive crop doesn't cut off heads. Opt-in — off by default.
+    classifier_face_aware_crop_enabled: bool = False
     image_config_face: ImageConfig = field(
         default_factory=lambda: PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
     )
@@ -147,6 +158,7 @@ class AppConfig:
             "classifier_bw_detect_enabled": self.classifier_bw_detect_enabled,
             "classifier_face_detect_enabled": self.classifier_face_detect_enabled,
             "classifier_face_detect_clahe_keepout": self.classifier_face_detect_clahe_keepout,
+            "classifier_face_aware_crop_enabled": self.classifier_face_aware_crop_enabled,
             "crop_to_fill_threshold": self.crop_to_fill_threshold,
         }
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))

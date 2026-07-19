@@ -1129,6 +1129,13 @@
           <span id="face-clahe-keepout-label">Yes</span>
         </label>
       </div>
+      <div class="config-row">
+        <label>Face-aware cropping:</label>
+        <label class="toggle" data-tip="When enabled and the letterbox fill limit crops the image, the crop window is centered on the detected face(s) instead of the image center.&#10;Lets you push the fill limit higher on portraits without cutting off heads — a face near the top of the photo pulls the crop up, so the bottom gets cut instead.">
+          <input type="checkbox" id="face-aware-crop-enabled" onchange="document.getElementById('face-aware-crop-label').textContent=this.checked?'On':'Off';">
+          <span id="face-aware-crop-label">Off</span>
+        </label>
+      </div>
       <div class="config-row" style="position: relative;">
         <label>Preset:</label>
         <select id="face-preset"></select>
@@ -1597,6 +1604,10 @@ function resetPipelineToDefault() {
   document.getElementById('face-clahe-keepout-enabled').checked = faceClaheKeeout;
   document.getElementById('face-clahe-keepout-label').textContent = faceClaheKeeout ? 'Yes' : 'No';
 
+  const faceAwareCrop = !!configDefaults.classifier_face_aware_crop_enabled;
+  document.getElementById('face-aware-crop-enabled').checked = faceAwareCrop;
+  document.getElementById('face-aware-crop-label').textContent = faceAwareCrop ? 'On' : 'Off';
+
   const fillPct = Math.round((configDefaults.crop_to_fill_threshold ?? 0.10) * 100);
   document.getElementById('crop-to-fill-threshold').value = fillPct;
   document.getElementById('fill-threshold-val').textContent = fillPct + '%';
@@ -1912,7 +1923,12 @@ async function runDitherPreview(panelId) {
     const resp = await fetch('/hokku/api/dither/preview', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: filename, image: _getState(panelId), clahe_keepout: document.getElementById('face-clahe-keepout-enabled').checked}),
+      body: JSON.stringify({
+        name: filename,
+        image: _getState(panelId),
+        clahe_keepout: document.getElementById('face-clahe-keepout-enabled').checked,
+        face_aware_crop: document.getElementById('face-aware-crop-enabled').checked,
+      }),
     });
     if (!resp.ok) {
       let err = `HTTP ${resp.status}`;
@@ -2393,6 +2409,7 @@ async function saveConfig() {
     image_config_bw: bwDitherState,
     classifier_face_detect_enabled: document.getElementById('face-detect-enabled').checked,
     classifier_face_detect_clahe_keepout: document.getElementById('face-clahe-keepout-enabled').checked,
+    classifier_face_aware_crop_enabled: document.getElementById('face-aware-crop-enabled').checked,
     image_config_face: faceDitherState,
   };
   try {
@@ -3224,6 +3241,9 @@ async function loadConfig() {
     const faceClaheKeeout = cfg.classifier_face_detect_clahe_keepout !== false;
     document.getElementById('face-clahe-keepout-enabled').checked = faceClaheKeeout;
     document.getElementById('face-clahe-keepout-label').textContent = faceClaheKeeout ? 'Yes' : 'No';
+    const faceAwareCrop = !!cfg.classifier_face_aware_crop_enabled;
+    document.getElementById('face-aware-crop-enabled').checked = faceAwareCrop;
+    document.getElementById('face-aware-crop-label').textContent = faceAwareCrop ? 'On' : 'Off';
 
     const autoClear = !!cfg.auto_clear_cache;
     document.getElementById('auto-clear-cache').checked = autoClear;

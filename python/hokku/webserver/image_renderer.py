@@ -446,6 +446,7 @@ class ImageRenderer(AbstractImageRenderer):
         *,
         release_input: bool = False,
         clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
+        crop_anchor_bboxes_norm: tuple[BoundingBox, ...] | None = None,
     ) -> np.ndarray:
         arr, padding_mask = self._prepare_canvas(
             img,
@@ -456,6 +457,7 @@ class ImageRenderer(AbstractImageRenderer):
             crop_to_fill_threshold,
             release_input=release_input,
             clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
+            crop_anchor_bboxes_norm=crop_anchor_bboxes_norm,
         )
 
         sat_space = cfg.adaptive_saturate_space

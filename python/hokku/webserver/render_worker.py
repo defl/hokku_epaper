@@ -7,7 +7,7 @@ at import time — this avoids pickling large objects across the IPC boundary.
 Public interface
 ----------------
 render_one(image_path, image_config_dict, orientation, crop_to_fill_threshold,
-           face_bbox)
+           clahe_keepout_bboxes, face_crop_bboxes)
     → (panel_bytes: bytes, preview_bytes: bytes)
 
 Why dicts, not dataclasses?
@@ -27,6 +27,7 @@ def render_one(
     orientation: str,
     crop_to_fill_threshold: float = 0.0,
     clahe_keepout_bboxes: tuple[dict, ...] | None = None,
+    face_crop_bboxes: tuple[dict, ...] | None = None,
 ) -> tuple[bytes, bytes]:
     """Render one image inside a worker process.
 
@@ -48,6 +49,10 @@ def render_one(
     clahe_keepout_bboxes:
         BoundingBox instances as dicts (asdict result) of detected faces,
         or None.  Passed to the renderer to scope CLAHE away from the faces.
+    face_crop_bboxes:
+        BoundingBox instances as dicts (asdict result) of detected faces,
+        or None.  When set, the cover-crop window is centered on the union of
+        these faces instead of the image center ("face-aware cropping").
 
     Returns
     -------
@@ -88,6 +93,15 @@ def render_one(
         except (KeyError, TypeError, ValueError):
             bboxes_norm = None
 
+    crop_anchor_norm = None
+    if face_crop_bboxes:
+        try:
+            crop_anchor_norm = tuple(
+                BoundingBox(x=b["x"], y=b["y"], w=b["w"], h=b["h"]) for b in face_crop_bboxes
+            )
+        except (KeyError, TypeError, ValueError):
+            crop_anchor_norm = None
+
     with open_image_for_render(Path(image_path)) as img:
         panel_bytes = renderer.render_panel_bytes(
             img,
@@ -95,6 +109,7 @@ def render_one(
             orientation,  # type: ignore[arg-type]
             crop_to_fill_threshold,
             clahe_keepout_bboxes_norm=bboxes_norm,
+            crop_anchor_bboxes_norm=crop_anchor_norm,
         )
     preview_bytes = preview_png_from_panel_bytes(panel_bytes, orientation, display)  # type: ignore[arg-type]
     return panel_bytes, preview_bytes
