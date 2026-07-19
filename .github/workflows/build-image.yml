@@ -104,21 +104,26 @@ jobs:
       # ── build the image ────────────────────────────────────────────────────
 
       - name: Install host dependencies
-        # qemu-user-binfmt (NOT qemu-user-static) — pi-gen's build-docker.sh
-        # explicitly checks `which qemu-aarch64` (unsuffixed) and auto-
-        # registers binfmt_misc itself; qemu-user-static ships only
-        # -static-suffixed binaries and doesn't self-register, so
-        # build-docker.sh fails its own preflight check without ever
-        # reaching the actual build. Confirmed by an actual local run.
-        #
         # No docker.io here — GitHub-hosted ubuntu-latest runners ship Docker
         # (Engine + containerd.io) pre-installed; apt-get install docker.io
         # conflicts with the already-installed containerd.io and fails the
         # whole step. Confirmed by an actual CI run.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            git python3-pip qemu-user-binfmt binfmt-support
+          sudo apt-get install -y --no-install-recommends git python3-pip
+
+      # apt-get install qemu-user-binfmt + build-docker.sh's own manual
+      # binfmt_misc registration is exactly what pi-gen expects on a normal
+      # Linux host, but does NOT reliably work inside GitHub-hosted runners'
+      # sandboxed environment — pi-gen's own arch-test (native AND emulated)
+      # fails there even after a successful-looking registration. This is a
+      # known GH Actions limitation; docker/setup-qemu-action is the
+      # standard, proven fix (uses tonistiigi/binfmt, not raw apt-get).
+      # Confirmed necessary by an actual failed CI run without it.
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Build appliance image
         # No DEB_SERVER/DEB_INSTALLER override needed — build-image.sh already
