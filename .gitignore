@@ -29,6 +29,7 @@ python/.pybuild/
 python/build/
 python/dist/
 python/firmware/
+python/default_image/
 python/*.egg-info/
 python/debian/hokku-server/
 python/debian/.debhelper/

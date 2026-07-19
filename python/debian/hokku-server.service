@@ -32,6 +32,11 @@ StateDirectory=hokku hokku/numba_cache
 CacheDirectory=hokku
 Restart=on-failure
 RestartSec=30
+# hokku-server is the memory-heavy workload on this appliance (numba JIT,
+# image decode/dither) — make it the OOM killer's preferred target so a
+# memory crunch kills this, not sshd/NetworkManager/hokku-installer. 1000 is
+# the maximum score; always considered first.
+OOMScoreAdjust=1000
 
 [Install]
 WantedBy=multi-user.target

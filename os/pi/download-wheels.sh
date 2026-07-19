@@ -1,7 +1,7 @@
 #!/bin/bash
 # Download arm64 pip wheels for pre-baking into the Pi image.
 # Run on the CI host (x86_64) before building the image.
-# Outputs wheel files to DEST (default: image/stage-hokku/files/wheels/).
+# Outputs wheel files to DEST (default: os/pi/stage-hokku/files/wheels/).
 #
 # We split downloads into two groups:
 #   binary  — packages with C/Rust extensions that need the right arch

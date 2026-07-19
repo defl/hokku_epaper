@@ -2,7 +2,7 @@
 # Build the Hokku appliance image using pi-gen.
 #
 # Prerequisites: Docker must be running.
-# Run from the repo root:  bash image/build-image.sh
+# Run from the repo root:  bash os/pi/build-image.sh
 #
 # Environment overrides:
 #   DEB_SERVER     — path to hokku-server_*.deb  (default: build/hokku-server_*.deb)

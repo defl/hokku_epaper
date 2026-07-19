@@ -9,4 +9,14 @@ chmod 700 /var/lib/hokku-installer
 chmod +x /usr/lib/hokku-installer/wifi-watchdog.sh 2>/dev/null || true
 chmod +x /usr/lib/hokku-installer/reset.sh         2>/dev/null || true
 
+# The dnsmasq Debian package (a declared dependency, needed for the `dnsmasq`
+# binary) auto-enables its own dnsmasq.service on install. That instance
+# grabs port 53 before our own `dnsmasq --conf-file=...` process (started by
+# hokku-installer to serve DHCP+DNS for the setup AP) gets a chance to bind
+# it. Losing that race kills our instance silently, so the setup AP hands out
+# no DHCP leases and the wizard at 192.168.11.1 is unreachable. Disable and
+# mask the packaged unit so ours is the only dnsmasq that ever runs.
+systemctl disable --now dnsmasq.service 2>/dev/null || true
+systemctl mask dnsmasq.service 2>/dev/null || true
+
 #DEBHELPER#

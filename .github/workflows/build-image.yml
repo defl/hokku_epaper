@@ -1,7 +1,15 @@
 name: Build Appliance Image
 
-# Manual trigger only — image builds take 20-60 minutes and are only needed
-# for releases. Use this when you want a fresh .img.xz for flashing.
+# Runs on two triggers:
+#   - workflow_dispatch: manual, for a fresh .img.xz to test with. Optionally
+#     pin server_run_id/installer_run_id to build from specific ci.yml runs
+#     instead of the latest successful one.
+#   - release (published): automatic — attaches the built .img.xz to the
+#     release as a downloadable asset, built from the .deb artifacts that
+#     came from the SAME commit the release was tagged at (not just
+#     "whatever ci.yml run happens to be newest", which can race or point at
+#     unrelated later commits).
+# Image builds take 20-60 minutes.
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +19,8 @@ on:
       installer_run_id:
         description: "CI run ID to fetch hokku-installer-deb from (leave blank = same as above)"
         required: false
+  release:
+    types: [published]
 
 jobs:
   build-image:
@@ -22,33 +32,61 @@ jobs:
       - uses: actions/checkout@v5
 
       # ── fetch the pre-built .deb packages ─────────────────────────────────
-      # Download the most recent successful deb artifacts from the ci.yml workflow.
+      # Resolution order per package:
+      #   1. explicit *_run_id input (manual dispatch override)
+      #   2. release event: the ci.yml run for the release's own commit —
+      #      never "latest", which could be a later, unrelated commit
+      #   3. otherwise: latest successful ci.yml run
+      # installer_run_id defaults to whatever server_run_id resolved to
+      # (documented in the input description as "leave blank = same as above").
 
-      - name: Find latest successful CI run with deb artifacts
+      - name: Resolve CI run IDs for deb artifacts
         id: find-run
         uses: actions/github-script@v7
         with:
           script: |
-            const { data: runs } = await github.rest.actions.listWorkflowRuns({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'ci.yml',
-              status: 'success',
-              per_page: 5
-            });
-            if (!runs.workflow_runs.length) {
-              core.setFailed('No successful ci.yml runs found');
-              return;
+            const inputs = context.payload.inputs || {};
+            const isRelease = context.eventName === 'release';
+            const headSha = isRelease ? context.sha : null;
+
+            async function resolveRunId(explicit) {
+              if (explicit) {
+                console.log(`Using explicit run id: ${explicit}`);
+                return explicit;
+              }
+              const params = {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'ci.yml',
+                status: 'success',
+                per_page: 5,
+              };
+              if (headSha) params.head_sha = headSha;
+              const { data: runs } = await github.rest.actions.listWorkflowRuns(params);
+              if (!runs.workflow_runs.length) {
+                throw new Error(headSha
+                  ? `No successful ci.yml run found for commit ${headSha}`
+                  : 'No successful ci.yml runs found');
+              }
+              const runId = runs.workflow_runs[0].id;
+              console.log(`Resolved ci.yml run id: ${runId}${headSha ? ` (commit ${headSha})` : ' (latest successful)'}`);
+              return runId;
             }
-            const runId = runs.workflow_runs[0].id;
-            core.setOutput('run_id', runId);
-            console.log(`Using CI run ID: ${runId}`);
+
+            try {
+              const serverRunId = await resolveRunId(inputs.server_run_id);
+              const installerRunId = await resolveRunId(inputs.installer_run_id || serverRunId);
+              core.setOutput('server_run_id', serverRunId);
+              core.setOutput('installer_run_id', installerRunId);
+            } catch (err) {
+              core.setFailed(err.message);
+            }
 
       - name: Download hokku-server-deb
         uses: actions/download-artifact@v7
         with:
           name: hokku-server-deb
-          run-id: ${{ steps.find-run.outputs.run_id }}
+          run-id: ${{ steps.find-run.outputs.server_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: build/
 
@@ -56,7 +94,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: hokku-installer-deb
-          run-id: ${{ steps.find-run.outputs.run_id }}
+          run-id: ${{ steps.find-run.outputs.installer_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: build/
 
@@ -72,10 +110,10 @@ jobs:
             git docker.io python3-pip qemu-user-static binfmt-support
 
       - name: Build appliance image
-        run: bash image/build-image.sh
-        env:
-          DEB_SERVER: "${{ github.workspace }}/build/hokku-server_${{ steps.find-run.outputs.run_id }}_all.deb"
-          # Wildcards don't expand in env vars; build-image.sh finds debs via glob.
+        # No DEB_SERVER/DEB_INSTALLER override needed — build-image.sh already
+        # auto-globs build/hokku-{server,installer}_*.deb for the just-downloaded
+        # files (there's exactly one of each at this point in the job).
+        run: bash os/pi/build-image.sh
 
       - name: Find built image
         id: find-image
@@ -85,10 +123,16 @@ jobs:
           echo "name=$(basename "$img")" >> "$GITHUB_OUTPUT"
           du -sh "$img"
 
-      # ── upload as artifact and (optionally) attach to a release ───────────
+      # ── upload as artifact, and attach to the release when release-triggered ──
 
       - uses: actions/upload-artifact@v7
         with:
           name: hokku-appliance-image
           path: build/*.img.xz
           retention-days: 14
+
+      - name: Attach image to GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "${{ steps.find-image.outputs.path }}" --clobber

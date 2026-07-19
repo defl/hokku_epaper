@@ -23,6 +23,14 @@ fi
 mkdir -p /var/lib/hokku/images /var/lib/hokku/cache
 chown -R hokku:hokku /var/lib/hokku
 
+# Seed a default placeholder image so a freshly installed/flashed appliance
+# has something to show before the user uploads their own photos. Done here
+# (package-install time), not in a service ExecStartPre that runs on every
+# start, so a user who deletes it stays deleted — it never comes back.
+# cp -n: don't clobber if somehow already present (e.g. package reinstall).
+cp -n /usr/share/hokku-server/logo_alt_white.png /var/lib/hokku/images/ 2>/dev/null || true
+chown hokku:hokku /var/lib/hokku/images/logo_alt_white.png 2>/dev/null || true
+
 # Install pillow-heif via pip if not available as system package
 if ! python3 -c "import pillow_heif" 2>/dev/null; then
     echo "Installing pillow-heif via pip..."
