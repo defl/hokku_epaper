@@ -134,6 +134,9 @@ jobs:
             libarchive-tools rsync xz-utils curl xxd file kmod bc gpg \
             pigz arch-test
           sudo ln -sf "$(command -v qemu-aarch64)" /usr/bin/qemu-aarch64-static
+          ls -l /usr/bin/qemu-aarch64 /usr/bin/qemu-aarch64-static
+          cat /proc/sys/fs/binfmt_misc/qemu-aarch64 || true
+          arch-test aarch64 && echo "arch-test aarch64: OK"
 
       - name: Build appliance image
         # No DEB_SERVER/DEB_INSTALLER override needed — build-image.sh already
@@ -142,6 +145,14 @@ jobs:
         run: bash os/pi/build-image.sh
         env:
           PIGEN_DOCKER: "0"
+
+      - name: Dump debootstrap log on failure
+        if: failure()
+        run: |
+          find .pigen/work -name 'debootstrap.log' -exec echo "=== {} ===" \; -exec cat {} \; 2>&1 || true
+          find .pigen/work -name '*.log' -newer .pigen/config 2>/dev/null | while read -r f; do
+            echo "=== $f (tail) ==="; tail -100 "$f"
+          done
 
       - name: Find built image
         id: find-image
