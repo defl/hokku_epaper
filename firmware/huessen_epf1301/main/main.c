@@ -133,6 +133,13 @@ static const char *TAG = "hokku";
 #define REFRESH_RETRY_SECONDS           60
 #define SERVER_BUSY_DISPLAY_THRESHOLD_S 20
 
+/* A freshly-OTA'd (pending-verify) app that fails its FIRST refresh gets rolled
+ * back on the next reboot. That first refresh can miss on a one-off transient
+ * (typically mDNS-resolution warmup -> HTTP_CONNECT on a fresh boot), so retry
+ * a few times before giving up rather than waste an otherwise-good OTA. */
+#define OTA_PENDING_VERIFY_REFRESH_ATTEMPTS 3
+#define OTA_PENDING_VERIFY_RETRY_DELAY_MS   2000
+
 /* Safety cap — prevent spurious wakes (USB host disconnect resetting the
  * chip, brownouts, silicon quirks) from burning through the battery via
  * repeated boot cycles. After MAX_SPURIOUS_RESETS in a row, fall through
@@ -1457,7 +1464,22 @@ void app_main(void)
         bool refreshed = perform_refresh(label, boot_time);
         /* A successful refresh proves a freshly-OTA'd app can reach the server
          * and drive the display — confirm it so the bootloader stops watching
-         * for a rollback. No-op on a normally-booted (non-pending) app. */
+         * for a rollback. No-op on a normally-booted (non-pending) app.
+         *
+         * When we are pending-verify and the first refresh missed (usually a
+         * one-off mDNS-warmup hiccup on a fresh boot), retry a few times before
+         * giving up — otherwise the next reboot rolls back an otherwise-good
+         * OTA. Non-pending boots don't retry here; a failed refresh takes the
+         * usual 60 s schedule_retry_in path. */
+        for (int attempt = 2;
+             !refreshed && attempt <= OTA_PENDING_VERIFY_REFRESH_ATTEMPTS
+                 && ota_is_pending_verify();
+             attempt++) {
+            ESP_LOGW(TAG, "Pending-verify: refresh failed, retry %d/%d before rollback",
+                     attempt, OTA_PENDING_VERIFY_REFRESH_ATTEMPTS);
+            vTaskDelay(pdMS_TO_TICKS(OTA_PENDING_VERIFY_RETRY_DELAY_MS));
+            refreshed = perform_refresh(label, boot_time);
+        }
         if (refreshed) {
             ota_mark_valid_if_pending();
         }

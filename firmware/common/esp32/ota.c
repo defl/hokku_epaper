@@ -247,3 +247,15 @@ void ota_mark_valid_if_pending(void)
     }
 #endif
 }
+
+bool ota_is_pending_verify(void)
+{
+#ifdef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t st;
+    return running && esp_ota_get_state_partition(running, &st) == ESP_OK
+        && st == ESP_OTA_IMG_PENDING_VERIFY;
+#else
+    return false;
+#endif
+}

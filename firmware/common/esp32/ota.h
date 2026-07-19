@@ -30,3 +30,10 @@ bool perform_ota(const char *target_version, const char *base_url,
  * the bootloader's pending rollback). Call only after a successful refresh —
  * i.e. once the new firmware has proven it can reach the server and display. */
 void ota_mark_valid_if_pending(void);
+
+/* True if this boot is a freshly-OTA'd app awaiting verification (i.e. it will
+ * be rolled back on the next reboot unless it confirms itself first). Lets the
+ * caller retry a failed first refresh before giving up, so a transient (e.g.
+ * mDNS resolution warmup) doesn't waste a good OTA. Always false when rollback
+ * is disabled. */
+bool ota_is_pending_verify(void);
