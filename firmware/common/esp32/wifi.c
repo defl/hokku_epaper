@@ -11,7 +11,7 @@
 #include "esp_netif.h"
 #include "esp_log.h"
 
-#define WIFI_CONNECT_TIMEOUT_MS  8000   /* per-network attempt; two networks = 16 s worst case */
+#define WIFI_CONNECT_TIMEOUT_MS  15000  /* per-network attempt; WPA3-SAE assoc + DHCP can be slow on mesh APs */
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
@@ -76,6 +76,14 @@ bool wifi_connect(void)
 
     WIFI_TRY(esp_wifi_set_mode(WIFI_MODE_STA));
     WIFI_TRY(esp_wifi_start());
+
+    /* Disable modem power-save for the connect/fetch window. The default
+     * WIFI_PS_MIN_MODEM dozes the radio between DTIM beacons, which on some APs
+     * (mesh nodes especially) delays or drops the DHCP OFFER/ACK so GOT_IP never
+     * arrives within WIFI_CONNECT_TIMEOUT_MS even though L2 association and the
+     * AP-side lease both succeed. We are fully awake here and deep-sleep with the
+     * radio off afterward, so keeping the radio awake now costs no battery. */
+    esp_wifi_set_ps(WIFI_PS_NONE);
 
     /* Determine which network to try first based on the configured strategy.
      * WIFI_ORDER_LAST_FIRST: start with whichever network last succeeded.
