@@ -1,0 +1,8 @@
+{
+  "version": 7,
+  "upload_dir": "images/test",
+  "cache_dir": "test_server/cache",
+  "port": 8080,
+  "poll_interval_seconds": 10,
+  "mdns_hostname": "hokku-test"
+}

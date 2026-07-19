@@ -13,7 +13,14 @@ serve_scheduler.json
 # Debian build artifacts (land in builds/, never the repo root)
 /builds/
 build/
-test_server/
+# test_server/: commit the portable config + README + an empty cache/ dir, and
+# ignore local runtime state (rendered cache, local overrides, logs).
+test_server/*
+!test_server/config.json
+!test_server/README.md
+!test_server/cache/
+test_server/cache/*
+!test_server/cache/.gitkeep
 *.deb
 *.buildinfo
 *.changes
