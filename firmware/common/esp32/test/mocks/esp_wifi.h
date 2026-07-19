@@ -8,6 +8,8 @@ typedef enum { WIFI_AUTH_OPEN = 0, WIFI_AUTH_WPA2_PSK = 3 } wifi_auth_mode_t;
 typedef int wifi_interface_t;
 #define WIFI_IF_STA ((wifi_interface_t)0)
 
+typedef enum { WIFI_PS_NONE = 0, WIFI_PS_MIN_MODEM, WIFI_PS_MAX_MODEM } wifi_ps_type_t;
+
 typedef struct {
     struct {
         uint8_t ssid[32];
@@ -36,6 +38,7 @@ static inline int esp_wifi_set_config(wifi_interface_t i, wifi_config_t *c) {
     (void)i; (void)c; return 0;
 }
 static inline int esp_wifi_start(void)      { return 0; }
+static inline int esp_wifi_set_ps(wifi_ps_type_t t) { (void)t; return 0; }
 static inline int esp_wifi_connect(void)    { return 0; }
 static inline int esp_wifi_disconnect(void) { return 0; }
 static inline int esp_wifi_stop(void)       { return 0; }
