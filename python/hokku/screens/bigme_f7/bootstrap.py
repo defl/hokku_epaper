@@ -40,23 +40,60 @@ def tooling_available() -> bool:
 
 
 class _LineWriter(io.TextIOBase):
-    """A text sink that forwards complete lines to ``emit`` (for redirect_stdout)."""
+    """A text sink that forwards complete lines to ``emit`` (for redirect_stdout).
+
+    Reentrancy-guarded: this sink is installed as ``sys.stdout``, so an ``emit``
+    callback that itself prints (the obvious thing for a CLI caller to pass) would
+    re-enter :meth:`write` and recurse until ``RecursionError`` — which in practice
+    aborted a flash immediately after the BROM was caught.
+
+    Nested writes therefore bypass the line buffer and go straight to the real
+    interpreter stdout: they stay visible, but they are never fed back through
+    ``emit`` (appending them to the buffer instead just turns the recursion into
+    an equally fatal infinite loop, since draining re-emits what the callback
+    printed).
+    """
 
     def __init__(self, emit: Callable[[str], None]) -> None:
         self._emit = emit
         self._buf = ""
+        self._emitting = False
 
-    def write(self, s: str) -> int:  # type: ignore[override]
-        self._buf += s
+    def _write_passthrough(self, s: str) -> None:
+        """Send text emitted from *inside* the callback to the real stdout."""
+        with contextlib.suppress(Exception):
+            if sys.__stdout__ is not None:
+                sys.__stdout__.write(s)
+
+    def _drain(self, final: bool = False) -> None:
+        """Emit buffered lines. Callers must hold the reentrancy guard."""
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
             self._emit(line.rstrip("\r"))
+        if final and self._buf:
+            self._emit(self._buf.rstrip("\r"))
+            self._buf = ""
+
+    def write(self, s: str) -> int:  # type: ignore[override]
+        if self._emitting:  # the callback itself printed — don't re-enter emit
+            self._write_passthrough(s)
+            return len(s)
+        self._buf += s
+        self._emitting = True
+        try:
+            self._drain()
+        finally:
+            self._emitting = False
         return len(s)
 
     def flush(self) -> None:
-        if self._buf:
-            self._emit(self._buf.rstrip("\r"))
-            self._buf = ""
+        if self._emitting or not self._buf:
+            return
+        self._emitting = True
+        try:
+            self._drain(final=True)
+        finally:
+            self._emitting = False
 
 
 def _import_tools():
