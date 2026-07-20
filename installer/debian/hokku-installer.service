@@ -1,10 +1,18 @@
 [Unit]
 Description=Hokku First-Boot Setup Wizard
-# Only run if setup has NOT been completed yet.
+# Only run if setup has NOT been completed yet. hokku-server's own unit has
+# the complementary condition (ConditionPathExists=|... same sentinel), so
+# the two are already mutually exclusive without an explicit Conflicts= —
+# confirmed live, hard, on real hardware: Conflicts= is bidirectional and
+# gets resolved during systemd's transaction-verification phase, BEFORE
+# either unit's own ConditionPathExists is evaluated. Since both units are
+# WantedBy=multi-user.target and therefore queued together on every boot,
+# this Conflicts= caused hokku-server to be silently dropped from the boot
+# transaction entirely (zero journal entries — not even a condition-skip
+# message) rather than started, even once its own condition genuinely
+# passed. Removed; the Conditions alone are sufficient.
 ConditionPathExists=!/var/lib/hokku-installer/setup_complete
 After=network.target
-# Don't fight with hokku-server over the network interface.
-Conflicts=hokku-server.service
 
 [Service]
 Type=simple
