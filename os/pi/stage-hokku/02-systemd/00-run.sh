@@ -69,4 +69,20 @@ raspi-config nonint do_wifi_country US 2>/dev/null || true
 rm -f /etc/ssh/sshd_config.d/rename_user.conf /etc/profile.d/userconfig.sh 2>/dev/null
 systemctl mask userconfig.service 2>/dev/null || true
 systemctl enable getty@tty1.service 2>/dev/null || true
+
+# Belt-and-suspenders on the credential itself, not just the dialog. Stock
+# Raspberry Pi OS (Bookworm/Trixie) is known to ship the first-boot account
+# locked by design (the hardcoded pi/raspberry credentials were deliberately
+# removed; userconf-pi's first-boot flow is the sanctioned way to unlock it)
+# — masking userconfig.service above suppresses the interactive dialog but
+# also means the *only* thing that would otherwise unlock the account never
+# runs. pi-gen's own FIRST_USER_NAME/FIRST_USER_PASS (os/pi/config) SHOULD
+# already create a working, unlocked "hokku" account independent of any of
+# this — but confirmed live, hard, repeatedly on real hardware (this session,
+# after fixing an unrelated plink input-pacing bug that was masking the real
+# behavior as apparent hangs): the console consistently and quickly rejects
+# hokku/hokku with "Login incorrect". Force it directly here so there's no
+# ambiguity about which mechanism is supposed to own it.
+echo "hokku:hokku" | chpasswd
+passwd -u hokku 2>/dev/null || true
 EOF
