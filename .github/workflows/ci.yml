@@ -404,6 +404,53 @@ jobs:
         working-directory: python
         run: dpkg-buildpackage -us -uc -b
 
+      # Guard the two ways this package has silently shipped broken:
+      #  1. dh_python3 guessing pyproject.toml's deps into Depends. esptool maps to
+      #     a Debian package absent from many apt sources, so the .deb refuses to
+      #     install ("Depends: esptool but it is not installable"). Prevented by
+      #     --no-guessing-deps in debian/rules; those deps are pip-installed by postinst.
+      #  2. "Fixing" (1) by dropping ${python3:Depends} from debian/control, which makes
+      #     dh_python3 skip the package entirely ("no package to act on"), so the hokku
+      #     module never ships and the service dies with "No module named 'hokku'".
+      # Both produced a green build and a package that failed only on the target.
+      - name: Verify .deb dependencies and contents
+        run: |
+          set -euo pipefail
+          deb=$(ls hokku-server_*.deb)
+          echo "Verifying $deb"
+          depends=$(dpkg-deb -f "$deb" Depends)
+          echo "Depends: $depends"
+
+          # These are pip-installed by postinst and must never appear as apt deps.
+          pip_only="esptool esp-idf-nvs-partition-gen numba opencv-python-headless"
+          pip_only="$pip_only pillow-heif pillow-avif-plugin pillow-jxl-plugin"
+          pip_only="$pip_only colour-science resvg-py zeroconf"
+
+          # Exact package-name match, so python3-numba wouldn't false-positive on numba.
+          fail=0
+          for dep in $(printf '%s\n' "$depends" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]].*//'); do
+            for bad in $pip_only; do
+              if [ "$dep" = "$bad" ]; then
+                echo "::error::pip-only dependency '$dep' leaked into Depends. dh_python3 guessed it from pyproject.toml — keep --no-guessing-deps in python/debian/rules." >&2
+                fail=1
+              fi
+            done
+          done
+
+          # The Python package must actually ship, i.e. dh_python3 processed the package.
+          # Capture the listing first and match with a here-string: piping into `grep -q`
+          # makes grep exit early, SIGPIPEs dpkg-deb, and under `pipefail` that reads as
+          # "not found" — which would fail the build on a perfectly good package.
+          contents=$(dpkg-deb -c "$deb")
+          if ! grep -q 'usr/lib/python3/dist-packages/hokku/__init__.py' <<<"$contents"; then
+            echo "::error::hokku module missing from the .deb — dh_python3 skipped the package. python/debian/control must keep \${python3:Depends} in Depends." >&2
+            grep dist-packages <<<"$contents" | head -20 >&2 || true
+            fail=1
+          fi
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "OK: no pip-only deps in Depends; hokku module present."
+
       - name: Collect artifacts
         run: |
           mkdir -p build
