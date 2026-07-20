@@ -34,7 +34,18 @@ set -e
 systemctl enable hokku-installer
 systemctl enable hokku-wifi-watchdog 2>/dev/null || \
     echo "WARNING: hokku-wifi-watchdog.service missing (check installer .deb packaging)"
-systemctl disable hokku-server || true
+
+# Leave hokku-server ENABLED (its postinst-created WantedBy=multi-user.target
+# symlink). Its own unit file already gates startup timing via
+# ConditionPathExists=|/var/lib/hokku-installer/setup_complete (an OR against
+# ConditionPathExists=|!/var/lib/hokku-installer for plain apt installs) — a
+# Condition only skips an *attempted* start, so if this unit were disabled
+# here instead, nothing would ever pull it into multi-user.target again after
+# the wizard finishes (confirmed live: the setup wizard's _apply_settings()/
+# mark_setup_complete() never calls `systemctl enable hokku-server`, only
+# touches the sentinel file the Condition checks). An earlier version of this
+# script *did* disable it here to stop it starting before setup, which
+# silently broke hokku-server permanently post-setup on real hardware.
 
 # Set a placeholder WiFi regulatory domain at image-build time. Without
 # ANY country set, the radio comes up rfkill soft-blocked — confirmed live
