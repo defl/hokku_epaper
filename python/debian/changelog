@@ -1,3 +1,10 @@
+hokku-server (4.0.1~dev.184-1) unstable; urgency=medium
+
+  * docs: repair all broken internal links after the docs/screens/ reorg
+  * docs(seeedstudio_e1004): credit @TaichungLester's PR #16 panel bring-up
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 20 Jul 2026 23:19:37 -0500
+
 hokku-server (4.0.1~dev.70-1) unstable; urgency=medium
 
   * fix(ota): serve exact app image size; parse ESP image header to strip 0xFF padding and otadata

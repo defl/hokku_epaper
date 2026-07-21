@@ -397,7 +397,7 @@ three-line metric summary.
 ## 6. Reference numbers
 
 Benchmark results for all production presets are kept in
-[docs/dithering.md § 13](dithering.md#13-benchmark-results).
+[docs/dithering.md § 13](../../dithering.md#13-benchmark-results).
 
 ---
 

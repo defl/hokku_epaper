@@ -17,7 +17,7 @@ cd /path/to/xr872_sdk
 git apply /path/to/hokku_epaper/firmware/bigme_f7/sdk_patches/*.patch
 ```
 
-See [`../../firmware/bigme_f7/sdk_patches/README.md`](../../firmware/bigme_f7/sdk_patches/README.md).
+See [`../../firmware/bigme_f7/sdk_patches/README.md`](../../../firmware/bigme_f7/sdk_patches/README.md).
 
 > **Switching lwIP versions needs a full SDK object clean.** The SDK compiles its
 > net stack (e.g. `ethernetif.c`) from source into the mounted checkout, and make's

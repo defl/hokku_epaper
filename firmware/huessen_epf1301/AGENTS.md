@@ -58,7 +58,7 @@ Examples:
 - `hard_reset` after flashing ESP32 automatically
 
 ## Reverse-engineering notes
-- Stock firmware findings: `docs/reverse_engineering_overview.md` + per-version files
+- Stock firmware findings: `docs/screens/huessen_epf1301/reverse_engineering_overview.md` + per-version files
 - New RE pass → update existing docs or add `docs/reverse_engineering_v<VER>_<DATE>.md`
 - Binaries and scratch notes stay in `.private/`; digested findings go in `docs/`
-- Hardware facts: `docs/hardware_facts.md` (may be inaccurate — treat with caution)
+- Hardware facts: `docs/screens/huessen_epf1301/hardware_facts.md` (may be inaccurate — treat with caution)

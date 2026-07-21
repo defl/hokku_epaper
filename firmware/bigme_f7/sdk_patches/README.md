@@ -1,7 +1,7 @@
 # SDK patches for the Bigme F7 firmware
 
 The F7 firmware builds against a pinned `xr872_sdk` checkout (see
-[`../../docs/screens/bigme_f7/firmware_build.md`](../../docs/screens/bigme_f7/firmware_build.md)).
+[`../../docs/screens/bigme_f7/firmware_build.md`](../../../docs/screens/bigme_f7/firmware_build.md)).
 A few one-line SDK config changes are needed that don't belong in our source tree.
 Apply them once to your SDK checkout before building:
 

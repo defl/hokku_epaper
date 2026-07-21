@@ -56,13 +56,13 @@ Three tabs: **Images** (your photo library — upload, preview, manage), **Scree
 
 **Frame side** — a Hokku Designs / Huessen 13.3" six-colour e-ink frame (ESP32-S3 inside), a data-capable USB-C cable for first-time setup, and a 2.4 GHz WiFi network.
 
-See **[Hardware](docs/hardware.md)** for where to buy the frame and the recommended Pi kit.
+See **[Hardware](docs/screens/huessen_epf1301/hardware.md)** for where to buy the frame and the recommended Pi kit.
 
 ## Installation
 
 <img src="images/frame_x_pi.png" width="500">
 
-Hokku loves Pi! If you need to pick one up, the **[hardware guide](docs/hardware.md)** has a tested parts list that arrives next-day in the US. Connect both to your computer, run `hokku_setup.bat`, and the guided installer takes care of the rest.
+Hokku loves Pi! If you need to pick one up, the **[hardware guide](docs/screens/huessen_epf1301/hardware.md)** has a tested parts list that arrives next-day in the US. Connect both to your computer, run `hokku_setup.bat`, and the guided installer takes care of the rest.
 
 Prefer terminal tabs, mysterious pip errors, and the satisfaction of doing things the hard way? We've got you covered: **[Manual installation guide](docs/install.md)**.
 
@@ -81,9 +81,9 @@ Prefer terminal tabs, mysterious pip errors, and the satisfaction of doing thing
 - **[Installation](docs/install.md)** — step-by-step server + firmware setup for those who prefer the scenic route.
 - **[Dithering pipeline](docs/dithering.md)** — why it looks the way it does; failure modes and countermeasures.
 - **[Firmware documentation](firmware/huessen_epf1301/README.md)** — building from source, manual flashing, developer notes.
-- **[Firmware design spec](docs/firmware_design.md)** — the state-machine spec the current firmware implements.
-- **[Hardware](docs/hardware.md)** — where to buy the frame and the recommended Pi server kit.
-- **[Hardware facts](docs/hardware_facts.md)** — confirmed GPIO map, SPI config, init sequence, USB-detection findings.
+- **[Firmware design spec](docs/screens/huessen_epf1301/firmware_design.md)** — the state-machine spec the current firmware implements.
+- **[Hardware](docs/screens/huessen_epf1301/hardware.md)** — where to buy the frame and the recommended Pi server kit.
+- **[Hardware facts](docs/screens/huessen_epf1301/hardware_facts.md)** — confirmed GPIO map, SPI config, init sequence, USB-detection findings.
 - **[Changelog](CHANGELOG.md)** — release history.
 - **[Disclaimer](DISCLAIMER.md)** — warranty (none), intended use, reverse-engineering notes, privacy.
 

@@ -13,9 +13,12 @@ battery ADC, GPIO/SPI init, and the deep-sleep state machine. Everything else is
 (pure C, shared with the XR872 F7 too).
 
 The panel driver/register values originate from Seeed's own `Seeed_GxEPD2`
-T133A01 driver (via the Arduino client in
-[`clients/reterminal_e1004/`](../../clients/reterminal_e1004/), PR #16 / issue
-#14).
+T133A01 driver, by way of the Arduino reTerminal E1004 client contributed by
+[@TaichungLester](https://github.com/TaichungLester) in
+[PR #16](https://github.com/defl/hokku_epaper/pull/16) (see also
+[issue #14](https://github.com/defl/hokku_epaper/issues/14)). That PR was closed
+in favour of rebuilding the client on the shared ESP-IDF `firmware/common/`
+foundation, but its panel bring-up work is what this driver is based on.
 
 ## Status — read before flashing
 
@@ -23,8 +26,8 @@ T133A01 driver (via the Arduino client in
 - The shared logic is unit-tested on the host (`test/host/`) and exercised by
   huessen's suite; the whole firmware compiles + links in CI via the real
   ESP-IDF toolchain.
-- The panel register values + pinout carry the Arduino sketch's real-hardware
-  verification (`clients/reterminal_e1004/`).
+- The panel register values + pinout carry the real-hardware verification of the
+  Arduino sketch from [PR #16](https://github.com/defl/hokku_epaper/pull/16).
 - **Not** hardware-confirmed: the ESP-IDF SPI/DC/DMA plumbing on real silicon,
   and the **battery divider ratio** (GPIO1 ADC × 2.0 — see
   [`docs/screens/seeedstudio_e1004/hardware_guesses.md`](../../docs/screens/seeedstudio_e1004/hardware_guesses.md)).

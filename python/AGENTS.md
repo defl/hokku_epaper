@@ -46,9 +46,9 @@ Add a one-liner changelog entry for each push. Include the version file changes 
 ## Dithering
 - Pipeline documented in `docs/dithering.md` — keep in sync on any change to algorithms, palette, saturation/vividness knobs, B&W detection, or cache versioning
 - Benchmark reference numbers in `docs/dithering.md` section 13 — re-run `test_dither_quality_metrics` and update table when pipeline changes
-- Metric definitions in `docs/image_quality.md` — cross-reference, do not duplicate
+- Metric definitions in `docs/screens/huessen_epf1301/image_quality.md` — cross-reference, do not duplicate
 
 ## Image quality metrics
-- Comparator: `hokku_server/image_quality.py`, documented in `docs/image_quality.md`
+- Comparator: `hokku_server/image_quality.py`, documented in `docs/screens/huessen_epf1301/image_quality.md`
 - Tests: `tests/test_image_quality.py`
-- Update `docs/image_quality.md` (including reference numbers) when adding/removing/changing metrics
+- Update `docs/screens/huessen_epf1301/image_quality.md` (including reference numbers) when adding/removing/changing metrics

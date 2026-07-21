@@ -41,7 +41,7 @@ Key areas to audit:
 - Installation steps in `docs/install.md` and `docs/manual.md`
 - Any version-specific version numbers embedded in docs
 - Pipeline or algorithm descriptions in `docs/dithering.md` — compare against `python/hokku/webserver/` code
-- Metric definitions in `docs/image_quality.md` — compare against `python/hokku/webserver/image_quality.py`
+- Metric definitions in `docs/screens/huessen_epf1301/image_quality.md` — compare against `python/hokku/webserver/image_quality.py`
 
 For each proposed change, show the user the before/after diff and wait for confirmation before applying it. If no changes are needed, say so and continue.
 
