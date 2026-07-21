@@ -24,9 +24,26 @@ them.
 
 The frame this project started with, and the one with the most hours on it. Sold
 under both the **Hokku Designs** and **Huessen** brands — identical hardware,
-different retailer. Around $280–380 depending on where you buy.
+different retailer.
 
-**→ [Retailers, prices, and what to check before buying](screens/huessen_epf1301/hardware.md)**
+The Wayfair listing is the one confirmed to contain the exact hardware this
+firmware targets; the others are likely the same but have not been independently
+verified.
+
+| Retailer | Listing | Price | Confirmed |
+|----------|---------|------:|:---------:|
+| Amazon | [Hokku Designs 13.3" WiFi E-Paper Art Photo Frame](https://amzn.to/3Rs4DXs) | | |
+| Wayfair | [Hokku Designs 13.3" WiFi E-Paper Art Photo Frame](https://www.wayfair.com/decor-pillows/pdp/hokku-designs-133-inch-wifi-epaper-art-photo-frame-w115006181.html) | $280 | ✓ |
+| Macy's | [Huessen 13.3" WiFi E-Paper Art Digital Photo Frame](https://www.macys.com/shop/product/huessen-13.3-inch-wifi-epaper-art-digital-photo-frame?ID=23769763) | $320 | |
+| Best Buy | [Huessen 13.3" WiFi E-Paper Art Photo Frame](https://www.bestbuy.com/product/huessen-13-3-inch-wifi-epaper-art-photo-frame/J3KVWY3Q9L) | $350 | |
+| eco4life | [13.3" WiFi E-Ink Art Photo Frame](https://mall.eco4lifehome.com/products/13-3-inch-wifi-e-ink-art-photo-frame-smart-epaper-digital-display-with-app-control-cloud-sync-no-glare-no-light-pollution-ultra-low-power-ideal-for-home-office-decor) | $380 | |
+
+**What to check before buying**
+
+- **Size**: 13.3". Smaller or larger frames from the same brand family are different hardware and are not compatible.
+- **Six colours**: the listing should mention red, yellow, blue and green as well as black and white. Black/white or black/white/red frames use different display technology and are not compatible.
+- **WiFi**: 2.4 GHz. The frame does not support 5 GHz networks.
+
 **→ [Full documentation for this screen](screens/huessen_epf1301/README.md)**
 
 ---
@@ -75,14 +92,15 @@ the usual marketplaces.
 A 13.3" Spectra 6 panel on a Seeed XIAO ESP32-S3, on the reTerminal E-Series
 baseboard. Same panel family and resolution as the Hokku/Huessen frame.
 
-- **Product page**: [seeedstudio.com/reTerminal-E1004](https://www.seeedstudio.com/reTerminal-E1004-p-6692.html)
-- **Details**: [full documentation](screens/seeedstudio_e1004/README.md) ·
-  [hardware facts](screens/seeedstudio_e1004/hardware_facts.md) ·
-  [firmware notes](../firmware/seeedstudio_e1004/README.md)
+| Retailer | Listing |
+|----------|---------|
+| Seeed Studio | [reTerminal E1004](https://www.seeedstudio.com/reTerminal-E1004-p-6692.html) |
 
 The panel bring-up work this port is based on was contributed by
 [@TaichungLester](https://github.com/TaichungLester) in
 [PR #16](https://github.com/defl/hokku_epaper/pull/16).
+
+**→ [Full documentation for this screen](screens/seeedstudio_e1004/README.md)**
 
 ---
 
@@ -134,9 +152,9 @@ A few notes:
 cables are common and won't work; if nothing appears when you plug in, try
 another cable.
 
-If you buy a frame from a listing not covered here, or get one working that isn't
-on this page, please [open an issue](https://github.com/defl/hokku_epaper/issues)
-— it'll get added either way.
+If you buy from a listing not covered here — or get a frame working that isn't on
+this page at all — please [open an issue](https://github.com/defl/hokku_epaper/issues)
+with what you bought and whether it worked. It'll get added either way.
 
 ---
 

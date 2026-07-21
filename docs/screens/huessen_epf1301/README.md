@@ -12,7 +12,7 @@ battery reporting, deep sleep, diagnostics, and the full conversion pipeline.
 
 | | |
 |---|---|
-| **Buy** | [Retailers and prices](hardware.md) · [hardware overview](../../hardware.md) |
+| **Buy** | [Retailers, prices and what to check](../../hardware.md#hokku--huessen-133) |
 | **Install** | [Appliance image](../../appliance.md) (easiest) · [manual install](../../install.md) |
 | **Use** | [User manual](../../manual.md) |
 
@@ -22,7 +22,6 @@ future firmware updates go [over the air](../../manual.md) from the web app.
 ## Documentation
 
 **Using it**
-- [Hardware and where to buy](hardware.md) — retailers, prices, what to check
 - [Image quality](image_quality.md) — how this panel renders, measured
 
 **Developing**

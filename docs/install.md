@@ -13,7 +13,7 @@
 
 ## What you need
 
-**A computer to run the server on.** This can be anything on your local network — a Raspberry Pi, a spare laptop, a NAS, a desktop that's always on. A Raspberry Pi Zero 2 W is the most popular choice because it's cheap, silent, uses almost no power, and is more than fast enough. The server needs to be reachable by the frame at all times, so something that stays on makes more sense than a laptop you close. See [hardware.md](screens/huessen_epf1301/hardware.md) for the recommended Pi kit and where to buy.
+**A computer to run the server on.** This can be anything on your local network — a Raspberry Pi, a spare laptop, a NAS, a desktop that's always on. A Raspberry Pi Zero 2 W is the most popular choice because it's cheap, silent, uses almost no power, and is more than fast enough. The server needs to be reachable by the frame at all times, so something that stays on makes more sense than a laptop you close. See [hardware.md](hardware.md#the-server) for the recommended Pi kit and where to buy.
 
 **A frame.** Any screen Hokku supports — see the [hardware guide](hardware.md) for the full list, what each costs, and where to buy. The 13.3" Hokku / Huessen frame is the original and the most thoroughly tested; the 7.3" Bigme F7 is the cheapest. Pre-built firmware ships for each, so you don't need to worry about the hardware details.
 

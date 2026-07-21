@@ -12,7 +12,7 @@ network with the server running.
 ## What you need
 
 - **A Raspberry Pi Zero 2 W** (the recommended board — see the
-  [hardware guide](screens/huessen_epf1301/hardware.md) for a tested kit).
+  [hardware guide](hardware.md#the-server) for a tested kit).
   Any Pi that runs 64-bit Raspberry Pi OS will work; the Zero 2 W is the one
   the image is built and tested against.
 - **A microSD card**, 8 GB or larger. The image expands to about 3.9 GB.
