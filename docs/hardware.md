@@ -8,7 +8,7 @@ photo library.
 
 | Frame | Size | Panel | Board | Status |
 |---|---|---|---|---|
-| [**Hokku / Huessen 13.3"**](screens/huessen_epf1301/hardware.md) | 13.3" | Spectra 6, 1200×1600 | ESP32-S3 | ✅ Fully supported — the original, most thoroughly tested |
+| [**Hokku / Huessen 13.3"**](#hokku--huessen-133) | 13.3" | Spectra 6, 1200×1600 | ESP32-S3 | ✅ Fully supported — the original, most thoroughly tested |
 | [**Bigme F7**](#bigme-f7) | 7.3" | Spectra 6, 800×480 | XR872AT | ✅ Supported — proven end-to-end on real hardware |
 | [**Seeed reTerminal E1004**](#seeed-reterminal-e1004) | 13.3" | Spectra 6, 1200×1600 | ESP32-S3 | ⚠️ Experimental — builds and passes tests, **never run on real hardware** |
 
@@ -27,6 +27,7 @@ under both the **Hokku Designs** and **Huessen** brands — identical hardware,
 different retailer. Around $280–380 depending on where you buy.
 
 **→ [Retailers, prices, and what to check before buying](screens/huessen_epf1301/hardware.md)**
+**→ [Full documentation for this screen](screens/huessen_epf1301/README.md)**
 
 ---
 
@@ -43,8 +44,14 @@ F7 Ultra, F7 SE and F7+ — per the manufacturer's own FCC equivalence letter
 (FCC ID `2A8EM-F7`) these **share identical PCB and hardware** and differ only by
 sales region. Buy whichever variant is cheapest or available where you are.
 
-Sold by Bigme (Bigme Cloud Literacy Technology Co., Ltd.) and the usual
-marketplaces.
+| Retailer | Listing |
+|----------|---------|
+| Amazon | [Bigme F7 7.3" colour e-ink frame](https://amzn.to/4wL9dPm) |
+
+Made by Bigme Cloud Literacy Technology Co., Ltd.; also sold directly and through
+the usual marketplaces.
+
+**→ [Full documentation for this screen](screens/bigme_f7/README.md)**
 
 > **Read before you buy:** turning a stock F7 into a Hokku frame requires a
 > one-time USB flash that replaces the vendor firmware, and it is a more involved
@@ -69,7 +76,8 @@ A 13.3" Spectra 6 panel on a Seeed XIAO ESP32-S3, on the reTerminal E-Series
 baseboard. Same panel family and resolution as the Hokku/Huessen frame.
 
 - **Product page**: [seeedstudio.com/reTerminal-E1004](https://www.seeedstudio.com/reTerminal-E1004-p-6692.html)
-- **Details**: [hardware facts](screens/seeedstudio_e1004/hardware_facts.md) ·
+- **Details**: [full documentation](screens/seeedstudio_e1004/README.md) ·
+  [hardware facts](screens/seeedstudio_e1004/hardware_facts.md) ·
   [firmware notes](../firmware/seeedstudio_e1004/README.md)
 
 The panel bring-up work this port is based on was contributed by
@@ -112,7 +120,7 @@ A few notes:
 - The case (row 2) does **not** include the board — it pairs with the kit above.
 - The USB-C cable must be data-capable (not charge-only). The linked cable supports 10 Gbps / 3 A and works reliably for flashing.
 
-> The Amazon links above are affiliate links. Clicking them costs you absolutely nothing extra — the price is identical either way. I get a few percent from Amazon, and if enough people do this, maybe one day there'll be enough in the jar to add the next screen to the lineup.
+> The Amazon links on this page — both the kit above and the frame listings — are affiliate links. Clicking them costs you absolutely nothing extra: the price is identical either way. I get a few percent from Amazon, and if enough people do this, maybe one day there'll be enough in the jar to add the next screen to the lineup.
 
 ---
 

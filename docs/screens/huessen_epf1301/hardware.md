@@ -9,10 +9,11 @@
 
 This project is built for the **Hokku Designs / Huessen 13.3" WiFi E-Paper Art Photo Frame** — a six-colour Spectra 6 e-ink display with an ESP32-S3 inside. It is sold under two brand names depending on the retailer: **Hokku Designs** and **Huessen**. The hardware is identical.
 
-The following retailers stock it. The Wayfair listing is the one confirmed to contain the exact hardware this firmware targets. The others are likely the same but have not been independently verified.
+The following retailers stock it. The Wayfair listing is the one confirmed to contain the exact hardware this firmware targets; the others are likely the same but have not been independently verified. The Amazon link is an affiliate link — it costs you nothing extra.
 
 | Retailer | Listing | Price | Confirmed |
 |----------|---------|------:|:---------:|
+| Amazon | [Hokku Designs 13.3" WiFi E-Paper Art Photo Frame](https://amzn.to/3Rs4DXs) | | |
 | Wayfair | [Hokku Designs 13.3" WiFi E-Paper Art Photo Frame](https://www.wayfair.com/decor-pillows/pdp/hokku-designs-133-inch-wifi-epaper-art-photo-frame-w115006181.html) | $280 | ✓ |
 | Macy's | [Huessen 13.3" WiFi E-Paper Art Digital Photo Frame](https://www.macys.com/shop/product/huessen-13.3-inch-wifi-epaper-art-digital-photo-frame?ID=23769763) | $320 | |
 | Best Buy | [Huessen 13.3" WiFi E-Paper Art Photo Frame](https://www.bestbuy.com/product/huessen-13-3-inch-wifi-epaper-art-photo-frame/J3KVWY3Q9L) | $350 | |
