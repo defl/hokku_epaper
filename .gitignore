@@ -73,3 +73,6 @@ settings_win.ini
 
 # Editor / IDE
 .vscode/
+
+# pi-gen clone created by os/pi/build-image.sh (an embedded git repo)
+.pigen/

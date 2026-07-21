@@ -8,7 +8,12 @@ CONFIG_IDF_TARGET="esp32s3"
 CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
-# Console on USB Serial/JTAG (built-in USB, same as huessen_epf1301)
+# Console on USB Serial/JTAG (built-in USB, same as huessen_epf1301).
+# KNOWN ISSUE (issue #14): on real E1004 hardware this does NOT deliver app
+# logs — the native USB port shows the ROM banner and then goes silent for the
+# rest of boot, under both `idf.py monitor` and a raw reset capture. The device
+# is fine (the panel renders); the output may be landing on the physical UART0
+# pins instead. Unresolved — see the README before debugging over USB.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # Partition table — A/B OTA (ota_0 / ota_1 / otadata), see partitions.csv.

@@ -23,13 +23,19 @@
  * cross-reference in huessen's hardware_guesses.md). Panel init sequence +
  * register values are from Seeed's own GxEPD2_T133A01 driver.
  *
- * STATUS: builds in CI (ESP-IDF), host-tested, but UNFLASHED on real E1004
- * hardware. The panel register values/pinout carry the Arduino sketch's
- * real-hardware verification (clients/reterminal_e1004); the ESP-IDF plumbing
- * and the battery divider ratio are not yet hardware-confirmed. A/B OTA + the
- * early recovery via button-wake satisfy the root AGENTS.md flashing STOP rules,
- * but confirm the battery divider and do a scope/serial bring-up before relying
- * on a fleet deployment.
+ * STATUS: confirmed working on real E1004 hardware once (issue #14) — flash,
+ * WiFi, server fetch, correct panel render and battery reporting, which
+ * validates the ESP-IDF SPI/DC/DMA plumbing and the 2.0x battery divider.
+ * Deep sleep over days, OTA and full-discharge battery behaviour are still
+ * unproven, so treat this as experimental rather than fleet-ready. A/B OTA +
+ * the early recovery via button-wake satisfy the root AGENTS.md flashing STOP
+ * rules.
+ *
+ * KNOWN ISSUE: app logs do not reach the native USB console despite
+ * CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y — the ROM banner appears, then silence
+ * for the rest of boot. Possibly routed to the physical UART0 pins instead
+ * (the Arduino reference example mentions Serial0). Use the panel and the
+ * server-side X-Frame-State / log ring for bring-up diagnostics.
  */
 
 #include <string.h>

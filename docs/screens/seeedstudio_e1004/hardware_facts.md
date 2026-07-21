@@ -40,7 +40,10 @@ sibling-board-derived values that are not E1004-confirmed belong in
 ## Battery voltage sense (CONFIRMED — corroborated by Seeed ESPHome cookbook + Zephyr E-Series devicetree + the community Arduino port that was hardware-tested end-to-end)
 - **ADC pin**: GPIO1 (ESP32-S3 ADC1_CH0). RTC-capable.
 - **Divider-enable pin**: GPIO21, active-HIGH — must be driven HIGH to read the battery; otherwise the divider path is disconnected. RTC-capable. Drive LOW before sleep to avoid leaking through the divider.
-- **Divider ratio**: 2.0× (10 kΩ / 10 kΩ). Vbatt = Vadc × 2.
+- **Divider ratio**: 2.0× (10 kΩ / 10 kΩ). Vbatt = Vadc × 2. Corroborated on a
+  real E1004 running this firmware — the frame reported a plausible battery %
+  in the dashboard ([issue #14](https://github.com/defl/hokku_epaper/issues/14)).
+  That is a sanity check, not a metered calibration across the discharge curve.
 - Sources: https://wiki.seeedstudio.com/reterminal_e10xx_with_esphome_advanced/ ; Zephyr `boards/seeed/reterminal_e1002` devicetree (shared baseboard).
 
 ## RTC-wake-capable GPIOs

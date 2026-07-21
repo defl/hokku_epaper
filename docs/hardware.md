@@ -10,7 +10,7 @@ photo library.
 |---|---|---|---|---|
 | [**Hokku / Huessen 13.3"**](#hokku--huessen-133) | 13.3" | from ~$279 | ESP32-S3 | ✅ Fully supported — the original, most thoroughly tested |
 | [**Bigme F7**](#bigme-f7) | 7.3" | ~$99 | XR872AT | ✅ Supported — proven end-to-end on real hardware |
-| [**Seeed reTerminal E1004**](#seeed-reterminal-e1004) | 13.3" | ~$288 | ESP32-S3 | ⚠️ Experimental — builds and passes tests, **never run on real hardware** |
+| [**Seeed reTerminal E1004**](#seeed-reterminal-e1004) | 13.3" | ~$288 | ESP32-S3 | ⚠️ Experimental — confirmed working on real hardware once |
 
 All three use **E Ink Spectra 6** — the same six-ink family (black, white, yellow,
 red, blue, green), so the same photo library and conversion pipeline serves all of
@@ -83,12 +83,16 @@ the usual marketplaces.
 
 ## Seeed reTerminal E1004
 
-> ⚠️ **Experimental — not hardware-verified.** The firmware compiles, links
-> against the real ESP-IDF toolchain in CI, and passes the host test suite, but
-> **it has never been flashed to a physical E1004.** The panel registers and
-> pinout come from Seeed's own driver and a community Arduino port; the ESP-IDF
-> SPI/DMA plumbing and the battery divider ratio are unverified on silicon. If
-> you own one, [we'd love to hear how it goes](https://github.com/defl/hokku_epaper/issues).
+> ⚠️ **Experimental — confirmed on hardware once.** A first end-to-end run on a
+> physical E1004 is confirmed
+> ([issue #14](https://github.com/defl/hokku_epaper/issues/14)): flash, WiFi,
+> server fetch, correct panel render and battery reporting all worked, so the
+> ESP-IDF SPI/DMA plumbing and the ×2.0 battery divider check out. That is one
+> unit in one session — deep sleep over days, OTA and full-discharge battery
+> behaviour are still unproven, and app logs do not reach the native USB serial
+> console (see the
+> [screen page](screens/seeedstudio_e1004/README.md#serial-console-known-issue)).
+> More reports [very welcome](https://github.com/defl/hokku_epaper/issues).
 
 A 13.3" Spectra 6 panel on a Seeed XIAO ESP32-S3, on the reTerminal E-Series
 baseboard. Same panel family and resolution as the Hokku/Huessen frame.

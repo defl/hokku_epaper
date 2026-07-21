@@ -31,10 +31,11 @@ differ from the original factory firmware.
 
 **Support maturity varies sharply by model.** The Hokku / Huessen
 13.3" frame and the Bigme F7 have both been run end-to-end on real
-hardware. The **Seeed reTerminal E1004 has never been flashed to a
-physical device** — its firmware builds and passes host tests, but no
-part of it has been confirmed on silicon. Treat it as untested code,
-not a supported configuration.
+hardware over an extended period. The **Seeed reTerminal E1004 has been
+confirmed working on a physical device exactly once** — flash, WiFi,
+server fetch, panel render and battery reporting all verified in a
+single session. Longer-term behaviour (deep sleep over days, OTA,
+a full battery discharge) is still unproven. Treat it as experimental.
 
 **Before flashing, back up the factory firmware from your frame.** A
 complete flash dump can be restored if anything goes wrong, but only

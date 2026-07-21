@@ -28,8 +28,9 @@ Raspberry Pi into a photo frame server without ever opening a terminal.**
 
 > **Alpha, and it means it.** Support maturity varies by screen: the
 > Hokku / Huessen frame and the Bigme F7 have been run end-to-end on real
-> hardware; the **Seeed reTerminal E1004 has never been flashed to a physical
-> device.** See [Hardware](docs/hardware.md) for per-screen status.
+> hardware for a long time; the **Seeed reTerminal E1004 has been confirmed
+> working on real hardware exactly once.** See [Hardware](docs/hardware.md) for
+> per-screen status.
 
 ---
 
@@ -123,11 +124,14 @@ A 13.3" Spectra 6 panel on a Seeed XIAO ESP32-S3. The firmware is a thin board
 layer over the shared `firmware/common/` modules, so it inherits feature parity
 with the huessen frame for free.
 
-**It has never been flashed to real hardware.** It builds against the real
-ESP-IDF toolchain in CI and passes the host test suite; the panel registers and
-pinout come from Seeed's own driver and a community Arduino port, but the
-ESP-IDF SPI/DMA plumbing and the battery divider ratio are unconfirmed on
-silicon. If you own one, reports are very welcome.
+**Confirmed working on real hardware once**
+([issue #14](https://github.com/defl/hokku_epaper/issues/14)): built with
+ESP-IDF v5.5.5, flashed over USB, then WiFi, server fetch, a correctly coloured
+and oriented photo on the panel, and battery reporting in the dashboard — which
+validates the ESP-IDF SPI/DMA plumbing and the ×2.0 battery divider. One unit,
+one session: deep sleep over days, OTA and full-discharge battery behaviour are
+still unproven, and app logs do not reach the native USB serial console. More
+reports very welcome.
 
 The panel bring-up work it is based on was contributed by
 [@TaichungLester](https://github.com/TaichungLester) in
@@ -168,7 +172,8 @@ locally and biases the crop to keep them in frame.
   rollback on a pending-verify boot, and version/build headers sent to the
   server.
 - **bigme_f7 1.2.5** — new: full custom firmware for the XR872AT.
-- **seeedstudio_e1004 1.2.1** — new, and unflashed on real hardware.
+- **seeedstudio_e1004 1.2.1** — new, and now confirmed working on real
+  hardware once ([issue #14](https://github.com/defl/hokku_epaper/issues/14)).
 
 Firmware is now built from a shared foundation: `firmware/common/all` (pure C,
 every screen), `firmware/common/esp32` (ESP-IDF) and `firmware/common/xr872`.
@@ -184,7 +189,9 @@ and `installer`. Every internal link in the repository was checked and repaired.
 
 ### Known issues and caveats
 
-- The **Seeed reTerminal E1004 is unproven on hardware** — treat it as untested.
+- The **Seeed reTerminal E1004 has one confirmed hardware run**, not a long
+  track record — treat it as experimental. Its app logs also do not reach the
+  native USB serial console; watch the panel instead.
 - The **web app has no authentication.** Anyone who can reach port 8080 can
   manage your library and frames. Fine on a trusted home network; do not expose
   it to the internet.
