@@ -4,27 +4,29 @@ A 13.3" E Ink Spectra 6 panel (T133A01, 1200×1600) on a Seeed XIAO ESP32-S3
 mounted on the reTerminal E-Series baseboard — same panel family and resolution
 as the Hokku/Huessen frame, on open, documented hardware.
 
-> ## ⚠️ Experimental — never run on real hardware
+> ## ⚠️ Confirmed on hardware once, lightly tested
 >
-> The firmware compiles, links against the real ESP-IDF toolchain in CI, and
-> passes the host test suite. **It has never been flashed to a physical E1004.**
+> A first end-to-end run on a physical E1004 is confirmed
+> ([issue #14](https://github.com/defl/hokku_epaper/issues/14)): built with
+> ESP-IDF v5.5.5, flashed over USB, then WiFi + server fetch + a photo rendered
+> with correct colours and orientation, and the frame registered in the dashboard
+> with a sane battery reading — so the ESP-IDF SPI/DC/DMA plumbing and the ×2.0
+> battery divider both check out.
 >
-> - The panel registers and pinout come from Seeed's own `Seeed_GxEPD2` driver
->   and a community Arduino port that *was* hardware-tested.
-> - **Unverified on silicon:** the ESP-IDF SPI/DC/DMA plumbing, and the battery
->   divider ratio (GPIO1 ADC × 2.0 — see [hardware guesses](hardware_guesses.md)).
+> That is **one unit, one session** — not the long-running fleet history behind
+> the huessen frame and the Bigme F7. Deep sleep over days, OTA and battery
+> behaviour over a full discharge are still unproven.
 >
-> If you own one, please try it and
-> [tell us how it went](https://github.com/defl/hokku_epaper/issues) — that's the
-> one thing standing between this and full support.
+> **Known issue:** app logs do not reach the native USB serial console. See
+> [serial console](#serial-console-known-issue) below.
 
 ## Documentation
 
 - [Hardware facts](hardware_facts.md) — confirmed from Seeed's wiki and driver:
   SoC, panel, GPIO map, expansion header
 - [Hardware guesses](hardware_guesses.md) — inferences not yet E1004-confirmed,
-  including the battery divider and the USB-detect behaviour that does **not**
-  carry over from the huessen frame
+  including the USB-detect behaviour that does **not** carry over from the
+  huessen frame
 - [Firmware source and build](../../../firmware/seeedstudio_e1004/README.md)
 
 ## How it's built
@@ -56,3 +58,24 @@ Arduino client.
 
 The panel's native nibble encoding matches Hokku's wire format exactly, so no
 colour remapping is needed when driving it.
+
+## Serial console (known issue)
+
+The firmware is built with `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` (the same
+setting the huessen frame uses, where it works). On the E1004, the native USB
+port shows the ROM bootloader banner and then goes **completely silent** for the
+rest of boot — no second-stage bootloader line, no app logs. Reproduced with
+both `idf.py monitor` and a raw reset-pulse capture.
+
+The device is not hung: the panel renders normally throughout, which is how the
+first hardware run was verified at all. Only the log stream is missing. The
+Arduino reference example for this board notes that diagnostic output goes out
+`Serial0` / UART0, so the likely explanation is that the console ends up on the
+physical UART0 pins rather than the USB Serial/JTAG peripheral — but that has
+not been confirmed with a probe on the header.
+
+**If you are bringing this board up, do not read silence on the USB port as a
+crash.** Watch the panel, or use the frame's own diagnostics instead: the
+firmware keeps a log ring and reports state to the server via `X-Frame-State`,
+both visible in the web app. Reported in
+[issue #14](https://github.com/defl/hokku_epaper/issues/14).

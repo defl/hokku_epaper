@@ -22,16 +22,30 @@ foundation, but its panel bring-up work is what this driver is based on.
 
 ## Status — read before flashing
 
-**Host-tested and CI-built (ESP-IDF), but UNFLASHED on real E1004 hardware.**
+**Confirmed on real E1004 hardware once** — see
+[issue #14](https://github.com/defl/hokku_epaper/issues/14).
+- Built with ESP-IDF v5.5.5 (`idf.py set-target esp32s3 && idf.py build`),
+  flashed over USB, provisioned with
+  `tools/hokku_config.py set --ssid ... --url ... --name ...`. WiFi connected,
+  the server fetch succeeded, and the panel rendered a photo with correct
+  colours and orientation (no rotation or mirroring needed). The frame
+  registered in the dashboard with a sane battery %, so the **×2.0 battery
+  divider** on GPIO1 and the **ESP-IDF SPI/DC/DMA plumbing** are both confirmed.
 - The shared logic is unit-tested on the host (`test/host/`) and exercised by
   huessen's suite; the whole firmware compiles + links in CI via the real
   ESP-IDF toolchain.
-- The panel register values + pinout carry the real-hardware verification of the
-  Arduino sketch from [PR #16](https://github.com/defl/hokku_epaper/pull/16).
-- **Not** hardware-confirmed: the ESP-IDF SPI/DC/DMA plumbing on real silicon,
-  and the **battery divider ratio** (GPIO1 ADC × 2.0 — see
-  [`docs/screens/seeedstudio_e1004/hardware_guesses.md`](../../docs/screens/seeedstudio_e1004/hardware_guesses.md)).
-  Do a scope/serial bring-up and confirm the divider before a fleet deployment.
+- **Still unproven:** deep sleep across days, an OTA on this board, and battery
+  behaviour over a full discharge. One unit, one session — not a track record.
+
+**Known issue — no app logs on the native USB console.** With
+`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` (the same setting huessen uses, where it
+works) the native USB port emits the ROM bootloader banner and then goes silent
+for the whole boot, under both `idf.py monitor` and a raw reset-pulse capture.
+The device is *not* hung — the panel renders normally. The Arduino reference
+example notes diagnostic output going out `Serial0`/UART0 on this board, so the
+console may be landing on the physical UART0 pins; unconfirmed. During bring-up,
+watch the panel and the server-side `X-Frame-State` / log ring rather than the
+USB port.
 
 **Flashing safety (root `AGENTS.md` STOP rules):** this firmware now has **A/B
 OTA with bootloader rollback** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`, ota_0/
