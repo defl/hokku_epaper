@@ -21,6 +21,15 @@ Depends: ${python3:Depends}, ${misc:Depends},
 # required modules). They are installed automatically via pip by the postinst
 # script. python3-serial (pyserial) provides serial-port enumeration for the
 # screen-flashing feature.
+#
+# ${python3:Depends} MUST stay here: dh_python3 only processes a package (byte-
+# compile + install the module into dist-packages) when the package is named
+# python3-* or carries this substvar. Removing it makes dh_python3 skip the
+# package entirely, so the hokku module never ships and the service dies with
+# "No module named 'hokku'". To stop dh_python3 from turning pyproject.toml's
+# pip-only deps (esptool, numba, ...) into apt Depends — esptool maps to a Debian
+# package absent from many apt sources, making the .deb uninstallable — we pass
+# --no-guessing-deps in debian/rules. The manual list below is authoritative.
 Description: Spectra 6 e-ink image server for Hokku/Huessen frames
  Converts and serves images for Hokku e-paper frames using
  Floyd-Steinberg dithering to the 6-color Spectra 6 palette.

@@ -24,6 +24,17 @@ mkdir -p "$PKG_DIR/firmware/release"
 # Bundle every built variant: the ESP32 .bin (required) plus any Bigme F7 .img.
 cp "$FW_SRC_DIR"/hokku-* "$PKG_DIR/firmware/release/"
 
+# Stage the default placeholder image the same way — debian/install can only
+# reference paths inside the source tree (python/), not the repo root.
+LOGO_SRC="$REPO_ROOT/images/logo/logo_alt_white.png"
+if [ ! -f "$LOGO_SRC" ]; then
+    echo "ERROR: $LOGO_SRC not found (default placeholder image)." >&2
+    exit 1
+fi
+rm -rf "$PKG_DIR/default_image"
+mkdir -p "$PKG_DIR/default_image"
+cp "$LOGO_SRC" "$PKG_DIR/default_image/"
+
 echo "Building hokku-server Debian package..."
 dpkg-buildpackage -us -uc -b
 

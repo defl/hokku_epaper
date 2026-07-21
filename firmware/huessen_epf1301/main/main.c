@@ -51,8 +51,8 @@
 #include "nvs_flash.h"
 #include "esp_timer.h"
 #include "esp_app_desc.h"
-#include "esp_ota_ops.h"
-#include "esp_partition.h"
+/* esp_ota_ops.h / esp_partition.h no longer included here — OTA + partition
+ * access moved to common/esp32/ota.c. */
 
 /* Private IDF API — µs since last power-on, spanning deep sleep and
  * esp_restart(). No public replacement exists in current IDF. */
@@ -101,8 +101,8 @@ static const char *TAG = "hokku";
 #define COLOR_WHITE_BYTE   0x11
 
 /* ── Network / timeouts ──────────────────────────────────────────── */
-#define WIFI_CONNECT_TIMEOUT_MS  8000   /* per-network attempt; two networks = 16 s worst case */
-#define HTTP_TIMEOUT_MS          30000
+/* WIFI_CONNECT_TIMEOUT_MS lives in common/esp32/wifi.c;
+ * HTTP_TIMEOUT_MS lives in common/esp32/net.h */
 
 /* ── Battery ─────────────────────────────────────────────────────── */
 #define BATT_LOW_MV        3400
@@ -131,118 +131,46 @@ static const char *TAG = "hokku";
  * server returned nonsense sleep_seconds). Applied as the next
  * next_refresh_epoch so the regime loops don't hot-retry at 100 ms. */
 #define REFRESH_RETRY_SECONDS           60
+#define REFRESH_RETRY_MAX_SECONDS       3600  /* backoff cap when the server stays unreachable: 1 h */
 #define SERVER_BUSY_DISPLAY_THRESHOLD_S 20
+
+/* A freshly-OTA'd (pending-verify) app that fails its FIRST refresh gets rolled
+ * back on the next reboot. That first refresh can miss on a one-off transient
+ * (typically mDNS-resolution warmup -> HTTP_CONNECT on a fresh boot), so retry
+ * a few times before giving up rather than waste an otherwise-good OTA. */
+#define OTA_PENDING_VERIFY_REFRESH_ATTEMPTS 3
+#define OTA_PENDING_VERIFY_RETRY_DELAY_MS   2000
 
 /* Safety cap — prevent spurious wakes (USB host disconnect resetting the
  * chip, brownouts, silicon quirks) from burning through the battery via
  * repeated boot cycles. After MAX_SPURIOUS_RESETS in a row, fall through
  * to the full awake window instead of short-pathing back to sleep so the
- * user has a reflash window. */
-#define MAX_SPURIOUS_RESETS  3
-
-/* ── RTC memory (survives deep sleep + esp_restart) ──────────────────
- *
- * RTC_NOINIT_ATTR (not RTC_DATA_ATTR): initialisers are NOT respected,
- * section is not reloaded on any reset. On true POR the values are
- * garbage — the rtc_magic check inside app_main catches that and
- * zero-initialises everything exactly once.
- *
- * RTC_DATA_ATTR would be wrong: it's re-initialised on every esp_restart,
- * which was the root cause of the "boot_count always 1, clk_now always 0"
- * bug in the pre-redesign firmware. See docs/hardware_facts.md deep-sleep notes. */
-#define RTC_MAGIC 0x484F4B55  /* "HOKU" — validates RTC memory after POR / flash */
-
-RTC_NOINIT_ATTR static uint32_t rtc_magic;
-RTC_NOINIT_ATTR static uint32_t boot_count;
-
-/* Cached WiFi state for fast reconnect */
-RTC_NOINIT_ATTR static uint8_t  wifi_channel;
-RTC_NOINIT_ATTR static uint8_t  wifi_bssid[6];
-RTC_NOINIT_ATTR static bool     has_wifi_cache;
-RTC_NOINIT_ATTR static uint8_t  last_wifi_index;  /* 0 or 1 — which network last succeeded */
-
-/* Most-recent battery reading, passed to the server in X-Frame-State. */
-RTC_NOINIT_ATTR static uint16_t last_battery_mv;
-
-/* Last server-provided sleep interval (seconds), in case the next boot's
- * download fails and we need a fallback. */
-RTC_NOINIT_ATTR static int32_t  last_sleep_seconds;
-
-/* Next-refresh schedule expressed as absolute server epoch seconds.
- * This is the canonical schedule anchor — we compute deep-sleep
- * duration from (next_refresh_epoch - now_epoch), not from relative
- * time-since-download. That way display + awake time doesn't drift
- * the next-wake moment later each cycle. 0 = not scheduled. */
-RTC_NOINIT_ATTR static int64_t  next_refresh_epoch;
-
-/* Pre-sleep server-epoch snapshot, used to compute "actual vs expected
- * sleep duration" on the next wake for the sleep_err_s diagnostic.
- * 0 = not yet measured (reported as JSON null in X-Frame-State). */
-RTC_NOINIT_ATTR static int64_t  pre_sleep_server_epoch;
-RTC_NOINIT_ATTR static int32_t  last_sleep_err_s;
-RTC_NOINIT_ATTR static bool     last_sleep_err_known;  /* true once we've recorded at least one error */
-
-/* Spurious-wake safety counter. */
-RTC_NOINIT_ATTR static uint8_t  consecutive_spurious_resets;
-
-/* How the previous boot ended — set before every esp_restart() or deep
- * sleep entry, read by the next boot's X-Frame-State. */
-#define LAST_SLEEP_MODE_NONE            0  /* POR / fresh flash */
-#define LAST_SLEEP_MODE_TIMER_WAKE      1  /* timer-triggered restart from deep sleep */
-#define LAST_SLEEP_MODE_BUTTON_WAKE     2  /* button-triggered restart from deep sleep */
-#define LAST_SLEEP_MODE_USB_PLUG        3  /* USB plug wake from deep sleep (no restart) */
-#define LAST_SLEEP_MODE_BUTTON_USB      4  /* button pressed in USB_AWAKE */
-#define LAST_SLEEP_MODE_BUTTON_BATT     5  /* button pressed in BATTERY_IDLE */
-#define LAST_SLEEP_MODE_USB_SCHED       6  /* scheduled refresh restart from USB_AWAKE */
-#define LAST_SLEEP_MODE_SPURIOUS        7  /* spurious deep-sleep wake restart */
-#define LAST_SLEEP_MODE_POST_REFRESH    8  /* restart after perform_refresh completed */
-RTC_NOINIT_ATTR static uint8_t  last_sleep_mode;
-
-/* What this boot must do. Set before every esp_restart(); cleared early
- * in app_main so a crashing boot doesn't loop on the same action. */
-#define ACTION_NONE          0  /* POR / no instruction — treat as first boot */
-#define ACTION_REFRESH       1  /* call perform_refresh() then restart */
-#define ACTION_ENTER_REGIME  2  /* skip refresh, enter regime based on USB state */
-RTC_NOINIT_ATTR static uint8_t  pending_action;
-
-/* ── Log ring buffer (6 KB, RTC slow memory — survives deep sleep) ──
- *
- * Captures ESP-IDF log output via log_ring_vprintf so each refresh
- * cycle's diagnostics can be uploaded to the server. The ring is
- * RTC_NOINIT_ATTR (same as all other RTC vars here) and is validated by
- * the rtc_magic check: on POR both head and used are zeroed there. */
-#define LOG_RING_SIZE 6144
-RTC_NOINIT_ATTR static char     s_log_ring[LOG_RING_SIZE];
-RTC_NOINIT_ATTR static uint16_t s_log_ring_head;  /* next write position */
-RTC_NOINIT_ATTR static uint16_t s_log_ring_used;  /* bytes currently held */
-static portMUX_TYPE s_log_ring_mux = portMUX_INITIALIZER_UNLOCKED;
+ * user has a reflash window. (MAX_SPURIOUS_RESETS lives in state.h.) */
 
 /* ── Forward declarations ────────────────────────────────────────── */
 static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_data);
 static void split_and_display(const uint8_t *img);
-static void log_level_apply(bool usb_awake);
 
 /* ── Shared globals ──────────────────────────────────────────────── */
 static spi_device_handle_t spi_handle;
-static EventGroupHandle_t  wifi_events;
-#define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
 
-/* Set by wifi_connect() on each successful connect: true iff the fast-
- * reconnect path (cached BSSID + channel) actually worked. False if we
- * fell through to full scan, or if this is a first-time connect. Read by
- * build_frame_state_json to surface the hit-rate to the server. */
-static bool last_wifi_used_cache = false;
-
-/* Runtime regime string — set when entering USB_AWAKE / BATTERY_IDLE so
- * the frame-state builder can report what state the firmware is in RIGHT
- * NOW (the `wake` field says how we got here; this says what we're doing).
- * "boot" during early init before regime dispatch. */
-static const char *current_regime = "boot";
+/* current_regime (the "what we're doing right now" string for X-Frame-State)
+ * is shared state, defined in state.c; set by the regime code below.
+ * last_wifi_used_cache lives in wifi.c. */
 
 #include "version.h"
 #include "config.h"
 #include "text_render.h"
+#include "state.h"          /* RTC-persistent state + validation (shared) */
+#include "scheduler.h"      /* next-refresh scheduling math (shared) */
+#include "log.h"            /* diagnostic log ring + level gating (shared) */
+#include "wifi.h"           /* WiFi connect + fast-reconnect cache (shared) */
+#include "net.h"            /* HTTP image fetch + header capture (shared) */
+#include "ota.h"            /* A/B OTA (shared) */
+#include "frame_state.h"    /* X-Frame-State JSON builder (SoC-agnostic) */
+#include "firmware_url.h"   /* firmware endpoint derivation (SoC-agnostic) */
+#include "backoff.h"        /* shared exponential-retry-backoff policy (SoC-agnostic) */
+#include "json_util.h"      /* json_escape (SoC-agnostic) */
 
 /* Display a text message on the e-ink screen.
  * Buffer layout is identical to an image: first 480K = panel 1 (600 wide),
@@ -725,243 +653,14 @@ static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_
     ESP_LOGI(TAG, "Display done");
 }
 
-/* ═══════════════════════════════════════════════════════════════════
- *  WiFi
- * ═══════════════════════════════════════════════════════════════════ */
-
-static void wifi_event_handler(void *arg, esp_event_base_t base,
-                               int32_t id, void *data)
-{
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        xEventGroupSetBits(wifi_events, WIFI_FAIL_BIT);
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
-        /* Set the bit BEFORE logging: fwrite in log_ring_vprintf can block if
-         * the USB CDC TX buffer is full, which would prevent the bit from ever
-         * being set and make wifi_connect() time out even though we have an IP. */
-        xEventGroupSetBits(wifi_events, WIFI_CONNECTED_BIT);
-        ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&e->ip_info.ip));
-    }
-}
-
-static bool wifi_inited = false;
-
-static void wifi_init_once(void)
-{
-    if (wifi_inited) return;
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    esp_event_handler_instance_t h1, h2;
-    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL, &h1);
-    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL, &h2);
-    wifi_inited = true;
-}
-
-/* Helper: check ESP-IDF error, log and return false on failure (non-fatal).
- * Used inside wifi_connect to avoid ESP_ERROR_CHECK panic-on-error — a
- * transient WiFi driver hiccup would otherwise crash the USB_AWAKE regime
- * that's supposed to stay alive forever. */
-#define WIFI_TRY(expr) do {                                             \
-    esp_err_t __err = (expr);                                           \
-    if (__err != ESP_OK) {                                              \
-        ESP_LOGW(TAG, "%s -> %s (continuing)", #expr, esp_err_to_name(__err)); \
-        return false;                                                   \
-    }                                                                   \
-} while (0)
-
-static bool wifi_connect(void)
-{
-    /* Create-once and reuse. Previously allocated a fresh EventGroup on
-     * every call, which leaked one per button-press in the first-boot
-     * window. */
-    if (wifi_events == NULL) {
-        wifi_events = xEventGroupCreate();
-    } else {
-        xEventGroupClearBits(wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
-    }
-    wifi_init_once();
-
-    WIFI_TRY(esp_wifi_set_mode(WIFI_MODE_STA));
-    WIFI_TRY(esp_wifi_start());
-
-    /* Determine which network to try first based on the configured strategy.
-     * WIFI_ORDER_LAST_FIRST: start with whichever network last succeeded.
-     * WIFI_ORDER_PRIMARY_FIRST (default): always start with slot 0.
-     * The BSSID cache is applied only when idx == last_wifi_index. */
-    int first = (config.wifi_order == WIFI_ORDER_LAST_FIRST) ? (int)last_wifi_index : 0;
-    for (int step = 0; step < 2; step++) {
-        int idx = (first + step) % 2;
-        if (config.wifi_ssid[idx][0] == '\0') continue;
-
-        /* WIFI_AUTH_OPEN accepts any auth level the AP advertises. Previously
-         * hard-coded WPA2_PSK which silently failed on WPA3-only APs.
-         * pmf_cfg.capable=true is required for WPA3-SAE: without it the GTK
-         * broadcast key is not set up and DHCP DISCOVER (broadcast) is
-         * silently dropped by the AP even though L2 association succeeds.
-         * required=false keeps WPA2-only AP compatibility. */
-        wifi_config_t wifi_cfg = {
-            .sta = {
-                .threshold.authmode = WIFI_AUTH_OPEN,
-                .pmf_cfg = { .capable = true, .required = false },
-            },
-        };
-        /* strncpy with n == sizeof(dst) leaves the last byte unwritten for a
-         * source of exactly that length — force NUL so the WiFi stack never
-         * reads past the buffer. */
-        strncpy((char *)wifi_cfg.sta.ssid, config.wifi_ssid[idx], sizeof(wifi_cfg.sta.ssid) - 1);
-        wifi_cfg.sta.ssid[sizeof(wifi_cfg.sta.ssid) - 1] = '\0';
-        strncpy((char *)wifi_cfg.sta.password, config.wifi_pass[idx], sizeof(wifi_cfg.sta.password) - 1);
-        wifi_cfg.sta.password[sizeof(wifi_cfg.sta.password) - 1] = '\0';
-
-        /* Use cached channel/BSSID only for the network that last succeeded */
-        if (has_wifi_cache && wifi_channel > 0 && idx == last_wifi_index) {
-            wifi_cfg.sta.channel = wifi_channel;
-            memcpy(wifi_cfg.sta.bssid, wifi_bssid, 6);
-            wifi_cfg.sta.bssid_set = true;
-            ESP_LOGI(TAG, "WiFi fast reconnect ch=%d (net %d)", wifi_channel, idx);
-        }
-
-        WIFI_TRY(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
-        xEventGroupClearBits(wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
-        WIFI_TRY(esp_wifi_connect());
-
-        EventBits_t bits = xEventGroupWaitBits(wifi_events,
-            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-            pdFALSE, pdFALSE, pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_MS));
-
-        if (bits & WIFI_CONNECTED_BIT) {
-            wifi_ap_record_t ap;
-            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-                wifi_channel = ap.primary;
-                memcpy(wifi_bssid, ap.bssid, 6);
-                has_wifi_cache = true;
-            }
-            last_wifi_used_cache = wifi_cfg.sta.bssid_set;
-            last_wifi_index = (uint8_t)idx;
-            return true;
-        }
-
-        /* Cache miss: retry this network with a full scan before moving on */
-        if (wifi_cfg.sta.bssid_set) {
-            ESP_LOGW(TAG, "Fast reconnect failed for net %d, retrying with full scan...", idx);
-            has_wifi_cache = false;
-            esp_wifi_disconnect();
-
-            wifi_cfg.sta.channel = 0;
-            wifi_cfg.sta.bssid_set = false;
-            WIFI_TRY(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
-            xEventGroupClearBits(wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
-            WIFI_TRY(esp_wifi_connect());
-
-            bits = xEventGroupWaitBits(wifi_events,
-                WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-                pdFALSE, pdFALSE, pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_MS));
-
-            if (bits & WIFI_CONNECTED_BIT) {
-                wifi_ap_record_t ap;
-                if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-                    wifi_channel = ap.primary;
-                    memcpy(wifi_bssid, ap.bssid, 6);
-                    has_wifi_cache = true;
-                }
-                last_wifi_used_cache = false;
-                last_wifi_index = (uint8_t)idx;
-                return true;
-            }
-        }
-
-        /* If there's another network to try, disconnect cleanly before it */
-        int next_idx = (first + step + 1) % 2;
-        if (step < 1 && config.wifi_ssid[next_idx][0] != '\0') {
-            ESP_LOGW(TAG, "WiFi net %d failed, trying net %d...", idx, next_idx);
-            esp_wifi_disconnect();
-        }
-    }
-
-    ESP_LOGE(TAG, "WiFi connect failed");
-    return false;
-}
-
-static void wifi_shutdown(void)
-{
-    esp_wifi_disconnect();
-    esp_wifi_stop();
-}
+/* WiFi (dual-network connect + BSSID fast-reconnect cache) is shared, in
+ * common/esp32/wifi.c — see wifi.h. */
 
 /* ═══════════════════════════════════════════════════════════════════
  *  HTTP Image Download (reads X-Sleep-Seconds header)
  * ═══════════════════════════════════════════════════════════════════ */
 
-typedef struct {
-    uint8_t *buf;
-    size_t   received;
-    size_t   capacity;
-    /* Response-header captures, populated from HTTP_EVENT_ON_HEADER in
-     * http_event_handler and read by download_image after perform().
-     *
-     * HISTORY: this used to be done via esp_http_client_get_header() after
-     * perform() returned. That was always wrong — that function reads
-     * REQUEST headers, not response headers, so we silently ignored every
-     * X-Sleep-Seconds / X-Server-Time-Epoch the server sent. Scheduled
-     * wakes relied on last_sleep_seconds fallback or 3h default; the user-
-     * visible symptom was "scheduled refresh didn't happen". Fixed by
-     * capturing directly from the event stream. */
-    char     sleep_seconds_hdr[32];
-    char     server_epoch_hdr[32];
-    /* X-Firmware-Update: <version> — present when the server wants this device
-     * to perform an OTA update. The body (image) is ignored when set. */
-    char     fw_update_hdr[48];
-} http_download_ctx_t;
-
-static esp_err_t http_event_handler(esp_http_client_event_t *evt)
-{
-    http_download_ctx_t *ctx = (http_download_ctx_t *)evt->user_data;
-    if (!ctx) return ESP_OK;
-
-    switch (evt->event_id) {
-        case HTTP_EVENT_ON_CONNECTED:
-            /* Reset buffer on each new connection (handles redirects).
-             * Without this, a 308 redirect's body accumulates before the
-             * real image data, causing a size mismatch. Header captures
-             * reset too so we only see the final response's values. */
-            ctx->received = 0;
-            ctx->sleep_seconds_hdr[0] = '\0';
-            ctx->server_epoch_hdr[0]  = '\0';
-            ctx->fw_update_hdr[0]     = '\0';
-            break;
-        case HTTP_EVENT_ON_HEADER:
-            if (evt->header_key && evt->header_value) {
-                if (strcasecmp(evt->header_key, "X-Sleep-Seconds") == 0) {
-                    strncpy(ctx->sleep_seconds_hdr, evt->header_value,
-                            sizeof(ctx->sleep_seconds_hdr) - 1);
-                    ctx->sleep_seconds_hdr[sizeof(ctx->sleep_seconds_hdr) - 1] = '\0';
-                } else if (strcasecmp(evt->header_key, "X-Server-Time-Epoch") == 0) {
-                    strncpy(ctx->server_epoch_hdr, evt->header_value,
-                            sizeof(ctx->server_epoch_hdr) - 1);
-                    ctx->server_epoch_hdr[sizeof(ctx->server_epoch_hdr) - 1] = '\0';
-                } else if (strcasecmp(evt->header_key, "X-Firmware-Update") == 0) {
-                    strncpy(ctx->fw_update_hdr, evt->header_value,
-                            sizeof(ctx->fw_update_hdr) - 1);
-                    ctx->fw_update_hdr[sizeof(ctx->fw_update_hdr) - 1] = '\0';
-                }
-            }
-            break;
-        case HTTP_EVENT_ON_DATA:
-            if (ctx->received + evt->data_len <= ctx->capacity) {
-                memcpy(ctx->buf + ctx->received, evt->data, evt->data_len);
-                ctx->received += evt->data_len;
-            }
-            break;
-        default:
-            break;
-    }
-    return ESP_OK;
-}
+/* http_event_handler + the download context are shared, in common/esp32/net.c. */
 
 /* Build a compact JSON payload describing the frame's current state.
  * Sent as X-Frame-State on every HTTP call so the server can display
@@ -997,62 +696,48 @@ static void build_frame_state_json(char *buf, size_t buflen,
                                    const char *wake_label,
                                    int64_t boot_time_us)
 {
-    int rssi = 0;
+    /* Gather board/SoC-specific values here, then hand off to the shared
+     * (SoC-agnostic) builder in common/all so all firmwares emit one schema. */
     wifi_ap_record_t ap;
-    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-        rssi = ap.rssi;
-    }
-
-    size_t free_heap = esp_get_free_heap_size();
+    int rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
 
     const esp_app_desc_t *app = esp_app_get_description();
-    const char *fw = (app && app->version[0]) ? app->version : "unknown";
-
-    const char *usb = (gpio_get_level(PIN_USB_DETECT) == 0) ? "host" : "none";
 
     /* Firmware's current wall-clock time from its system clock. Set via
      * settimeofday() from each X-Server-Time-Epoch response; survives
      * deep sleep + esp_restart (RTC-backed). 0 = never set. */
     time_t clk_now_t = time(NULL);
-    int64_t clk_now = (clk_now_t < 1577836800) ? 0 : (int64_t)clk_now_t;
 
-    const char *last_sleep_str =
-        (last_sleep_mode == LAST_SLEEP_MODE_TIMER_WAKE)   ? "timer_wake" :
-        (last_sleep_mode == LAST_SLEEP_MODE_BUTTON_WAKE)  ? "button_wake" :
-        (last_sleep_mode == LAST_SLEEP_MODE_USB_PLUG)     ? "usb_plug" :
-        (last_sleep_mode == LAST_SLEEP_MODE_BUTTON_USB)   ? "button_usb" :
-        (last_sleep_mode == LAST_SLEEP_MODE_BUTTON_BATT)  ? "button_batt" :
-        (last_sleep_mode == LAST_SLEEP_MODE_USB_SCHED)    ? "usb_sched" :
-        (last_sleep_mode == LAST_SLEEP_MODE_SPURIOUS)     ? "spurious" :
-        (last_sleep_mode == LAST_SLEEP_MODE_POST_REFRESH) ? "post_refresh" :
-        "none";
-
-    int64_t uptime_s = (esp_timer_get_time() - boot_time_us) / 1000000LL;
-
-    /* sleep_err_s: always emitted, as either an int or JSON null. */
-    char sleep_err_buf[16];
-    if (last_sleep_err_known) {
-        snprintf(sleep_err_buf, sizeof(sleep_err_buf), "%d", (int)last_sleep_err_s);
-    } else {
-        strcpy(sleep_err_buf, "null");
-    }
-
-    snprintf(buf, buflen,
-        "{\"fw\":\"%s\",\"boot\":%u,\"wake\":\"%s\",\"regime\":\"%s\","
-        "\"uptime_s\":%lld,\"bat_mv\":%d,\"usb\":\"%s\","
-        "\"last_sleep\":\"%s\",\"rssi\":%d,\"heap_kb\":%u,"
-        "\"spurious\":%u,\"cfg_ver\":%u,\"clk_now\":%lld,"
-        "\"next_ep\":%lld,\"sleep_err_s\":%s,\"wifi_cached\":%s,"
-        "\"ota\":1}",
-        fw, (unsigned)boot_count, wake_label, current_regime,
-        (long long)uptime_s, (int)last_battery_mv, usb,
-        last_sleep_str, rssi, (unsigned)(free_heap / 1024u),
-        (unsigned)consecutive_spurious_resets,
-        (unsigned)config.cfg_ver, (long long)clk_now,
-        /* negative = tick-based retry pending; report 0 (unscheduled) to server */
-        (long long)(next_refresh_epoch > 0 ? next_refresh_epoch : 0LL),
-        sleep_err_buf,
-        last_wifi_used_cache ? "true" : "false");
+    frame_state_t fs = {
+        .fw       = (app && app->version[0]) ? app->version : "unknown",
+        .boot     = (unsigned)boot_count,
+        .wake     = wake_label,
+        .regime   = current_regime,
+        .uptime_s = (esp_timer_get_time() - boot_time_us) / 1000000LL,
+        .bat_mv   = (int)last_battery_mv,   /* always >= 0 → always emitted */
+        .usb      = (gpio_get_level(PIN_USB_DETECT) == 0) ? "host" : "none",
+        .last_sleep =
+            (last_sleep_mode == LAST_SLEEP_MODE_TIMER_WAKE)   ? "timer_wake" :
+            (last_sleep_mode == LAST_SLEEP_MODE_BUTTON_WAKE)  ? "button_wake" :
+            (last_sleep_mode == LAST_SLEEP_MODE_USB_PLUG)     ? "usb_plug" :
+            (last_sleep_mode == LAST_SLEEP_MODE_BUTTON_USB)   ? "button_usb" :
+            (last_sleep_mode == LAST_SLEEP_MODE_BUTTON_BATT)  ? "button_batt" :
+            (last_sleep_mode == LAST_SLEEP_MODE_USB_SCHED)    ? "usb_sched" :
+            (last_sleep_mode == LAST_SLEEP_MODE_SPURIOUS)     ? "spurious" :
+            (last_sleep_mode == LAST_SLEEP_MODE_POST_REFRESH) ? "post_refresh" :
+            "none",
+        .rssi     = rssi,
+        .heap_kb  = (unsigned)(esp_get_free_heap_size() / 1024u),
+        .spurious = (unsigned)consecutive_spurious_resets,
+        .cfg_ver  = (unsigned)config.cfg_ver,
+        .clk_now  = (clk_now_t < 1577836800) ? 0 : (long long)clk_now_t,
+        /* negative next_refresh_epoch = tick-based retry pending; report 0 */
+        .next_ep  = (long long)(next_refresh_epoch > 0 ? next_refresh_epoch : 0LL),
+        .sleep_err_known = last_sleep_err_known,
+        .sleep_err_s     = (int)last_sleep_err_s,
+        .wifi_cached     = last_wifi_used_cache,
+    };
+    frame_state_build(buf, buflen, &fs);
 }
 
 /* Download image and extract X-Sleep-Seconds + X-Server-Time-Epoch headers.
@@ -1067,158 +752,33 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
                                const char *wake_label,
                                int64_t boot_time_us)
 {
+    /* Board bits (image size + PSRAM alloc + the frame-state gatherer) live
+     * here; the HTTP transport + header capture + clock sync are shared, in
+     * common/esp32/net.c (hokku_http_fetch_image). */
     uint8_t *buf = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
     if (!buf) {
         ESP_LOGE(TAG, "Failed to allocate image buffer from PSRAM");
         return NULL;
     }
 
-    http_download_ctx_t ctx = { .buf = buf, .received = 0, .capacity = TOTAL_IMAGE_SIZE };
-
-    esp_http_client_config_t http_cfg = {
-        .url = config.image_url,
-        .event_handler = http_event_handler,
-        .user_data = &ctx,
-        .timeout_ms = HTTP_TIMEOUT_MS,
-        .buffer_size = 4096,
-    };
-
-    esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
-    if (!client) {
-        ESP_LOGE(TAG, "esp_http_client_init failed (OOM?)");
-        heap_caps_free(buf);
-        return NULL;
-    }
-
-    /* Switch to POST so the ring-buffer log can travel as the request body. */
-    esp_http_client_set_method(client, HTTP_METHOD_POST);
-
-    /* Send screen identity so the server can identify this device */
-    if (config.screen_name[0] != '\0') {
-        esp_http_client_set_header(client, "X-Screen-Name", config.screen_name);
-    }
-    esp_http_client_set_header(client, "X-Screen-Model", SCREEN_MODEL);
-
-    /* Full device state in a single compact JSON header. The server
-     * stores the whole dict per screen for the dashboard Details view. */
     char frame_state[384];
     build_frame_state_json(frame_state, sizeof(frame_state),
                            wake_label ? wake_label : "unknown",
                            boot_time_us);
-    esp_http_client_set_header(client, "X-Frame-State", frame_state);
 
-    /* Firmware version and build timestamp so the server can show update
-     * warnings in the dashboard without needing to read the device's flash. */
-    const esp_app_desc_t *_app = esp_app_get_description();
-    const char *_fw_ver = (_app && _app->version[0]) ? _app->version : "unknown";
-    esp_http_client_set_header(client, "X-Firmware-Version", _fw_ver);
-    esp_http_client_set_header(client, "X-Firmware-Build", FW_BUILD_TIMESTAMP);
-
-    /* Attach ring-buffer log as POST body (plain text).
-     * Snapshot head/used atomically (tiny critical section), then copy
-     * outside the lock so we don't hold interrupts off across 6 KB. */
-    char *log_body = NULL;
-    int   log_body_len = 0;
-    uint16_t snap_head, snap_used;
-    taskENTER_CRITICAL(&s_log_ring_mux);
-    snap_head = s_log_ring_head;
-    snap_used = s_log_ring_used;
-    taskEXIT_CRITICAL(&s_log_ring_mux);
-    if (snap_used > 0) {
-        log_body = malloc(snap_used);
-        if (log_body) {
-            uint16_t start = (snap_used < LOG_RING_SIZE) ? 0 : snap_head;
-            for (uint16_t i = 0; i < snap_used; i++) {
-                log_body[i] = s_log_ring[(start + i) % LOG_RING_SIZE];
-            }
-            log_body_len = (int)snap_used;
-        }
-    }
-    if (log_body) {
-        esp_http_client_set_header(client, "Content-Type", "text/plain");
-        esp_http_client_set_post_field(client, log_body, log_body_len);
-    }
-
-    esp_err_t err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-
-    /* Headers captured by http_event_handler during the response. Reading
-     * them here (after perform() completes) is safe because we copied
-     * into ctx, not stored pointers into esp_http_client's internals. */
-    if (ctx.sleep_seconds_hdr[0] != '\0' && out_sleep_seconds != NULL) {
-        int32_t secs = atoi(ctx.sleep_seconds_hdr);
-        if (secs > 0) {
-            *out_sleep_seconds = secs;
-            ESP_LOGI(TAG, "X-Sleep-Seconds: %d", secs);
-        } else {
-            ESP_LOGW(TAG, "X-Sleep-Seconds present but non-positive: '%s' (parsed=%d)",
-                     ctx.sleep_seconds_hdr, (int)secs);
-        }
-    } else {
-        ESP_LOGW(TAG, "X-Sleep-Seconds header missing from response (status=%d)", status);
-    }
-    if (ctx.server_epoch_hdr[0] != '\0' && out_server_epoch != NULL) {
-        int64_t epoch = atoll(ctx.server_epoch_hdr);
-        if (epoch > 0) {
-            *out_server_epoch = epoch;
-            /* Set the firmware's system clock to server time. Backed by the
-             * RTC slow clock — survives deep sleep + esp_restart. On the
-             * next X-Frame-State we report time(NULL) directly and the
-             * server sees actual drift. */
-            struct timeval tv = { .tv_sec = (time_t)epoch, .tv_usec = 0 };
-            settimeofday(&tv, NULL);
-            /* Log the absolute wallclock we just set (human-readable) so
-             * it's obvious in serial output what time the chip now thinks
-             * it is. */
-            struct tm t;
-            gmtime_r(&tv.tv_sec, &t);
-            char timestamp[40];
-            strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S UTC", &t);
-            ESP_LOGI(TAG, "X-Server-Time-Epoch: %lld — system clock set to %s",
-                     epoch, timestamp);
-        } else {
-            ESP_LOGW(TAG, "X-Server-Time-Epoch present but non-positive: '%s'", ctx.server_epoch_hdr);
-        }
-    } else {
-        ESP_LOGW(TAG, "X-Server-Time-Epoch header missing from response (status=%d)", status);
-    }
-
-    /* Surface any OTA-update request the server attached. Captured regardless
-     * of status (the server only sends it on the 200 image response). */
-    if (out_fw_update && fw_update_buflen > 0) {
-        out_fw_update[0] = '\0';
-        if (ctx.fw_update_hdr[0] != '\0') {
-            strncpy(out_fw_update, ctx.fw_update_hdr, fw_update_buflen - 1);
-            out_fw_update[fw_update_buflen - 1] = '\0';
-            ESP_LOGI(TAG, "X-Firmware-Update: %s (server requested OTA)", out_fw_update);
-        }
-    }
-
-    esp_http_client_cleanup(client);
-    free(log_body);
-
-    if (err != ESP_OK || status != 200) {
-        ESP_LOGE(TAG, "HTTP download failed: err=%s status=%d", esp_err_to_name(err), status);
-        if (out_http_status) *out_http_status = status;
+    hokku_fetch_out_t out = {
+        .out_sleep_seconds = out_sleep_seconds,
+        .out_server_epoch  = out_server_epoch,
+        .out_http_status   = out_http_status,
+        .out_fw_update     = out_fw_update,
+        .fw_update_buflen  = fw_update_buflen,
+    };
+    if (!hokku_http_fetch_image(buf, TOTAL_IMAGE_SIZE, config.image_url,
+                                config.screen_name, SCREEN_MODEL, frame_state,
+                                FW_BUILD_TIMESTAMP, &out)) {
         heap_caps_free(buf);
         return NULL;
     }
-
-    /* Log upload succeeded with the image: reset the ring buffer so the
-     * next cycle starts fresh rather than re-uploading the same content. */
-    taskENTER_CRITICAL(&s_log_ring_mux);
-    s_log_ring_head = 0;
-    s_log_ring_used = 0;
-    taskEXIT_CRITICAL(&s_log_ring_mux);
-
-    if (ctx.received != TOTAL_IMAGE_SIZE) {
-        ESP_LOGE(TAG, "Image size mismatch: got %d, expected %d", (int)ctx.received, TOTAL_IMAGE_SIZE);
-        heap_caps_free(buf);
-        return NULL;
-    }
-
-    if (out_http_status) *out_http_status = status;
-    ESP_LOGI(TAG, "Downloaded %d bytes", (int)ctx.received);
     return buf;
 }
 
@@ -1396,131 +956,14 @@ static bool button1_pressed_debounced(void)
     return false;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
- *  Schedule helpers (server-epoch anchored)
- * ═══════════════════════════════════════════════════════════════════ */
-
-/* Current time from the firmware's system clock. Returns 0 if the clock
- * has never been set (pre-2020 epoch). */
-static time_t now_epoch(void)
-{
-    time_t t = time(NULL);
-    return (t < 1577836800) ? 0 : t;
-}
-
-/* True if the scheduled next-refresh moment has passed (or isn't set).
- *
- * next_refresh_epoch encoding:
- *   0         → not scheduled; always due (first boot, no server contact yet)
- *   positive  → absolute server-epoch seconds; compare against time(NULL)
- *   negative  → tick-based deadline: esp_timer_get_time() µs stored negated.
- *               Used when the clock was unset at schedule_retry_in() time.
- *               esp_timer_get_time() is monotonic across esp_restart(). */
-static bool refresh_due(void)
-{
-    if (next_refresh_epoch == 0) return true;
-    if (next_refresh_epoch < 0)
-        return esp_timer_get_time() >= -next_refresh_epoch;
-    time_t now = now_epoch();
-    if (now == 0) return false;           /* epoch-based delay set, but clock not yet synced */
-    return now >= next_refresh_epoch;
-}
-
-/* Reschedule the next refresh N seconds from now. Used on refresh-failure
- * paths (WiFi down, server unreachable, server returned nonsense
- * sleep_seconds) to keep the regime loops from hot-retrying at 100 ms.
- * Logs the delay so the reason is clear in the serial output. */
-static void schedule_retry_in(int seconds, const char *reason)
-{
-    time_t now = now_epoch();
-    if (now > 0) {
-        next_refresh_epoch = (int64_t)now + seconds;
-    } else {
-        /* No epoch clock yet. Encode a tick-based deadline as a negative
-         * value so refresh_due() can honour the delay without needing the
-         * clock. esp_timer_get_time() is monotonic across esp_restart().
-         * Negative values are unambiguous: real epochs are ~1.7e9, tick
-         * deadlines for any plausible uptime fit in ~1e12 µs (11 days). */
-        next_refresh_epoch = -(esp_timer_get_time() + (int64_t)seconds * 1000000LL);
-    }
-    /* No fresh pre_sleep_server_epoch either — clear it so the next
-     * boot doesn't log a bogus sleep_err_s. */
-    pre_sleep_server_epoch = 0;
-    last_sleep_err_known = false;
-    ESP_LOGW(TAG, "Refresh retry in %d s (%s)", seconds, reason);
-}
-
-/* ═══════════════════════════════════════════════════════════════════
- *  Logging regime control
- * ═══════════════════════════════════════════════════════════════════ */
-
-/* Runtime log gating per the spec: logs on in USB_AWAKE, off on battery.
- * esp_log_level_set at NONE silences ESP_LOGI/W/E/D calls immediately. */
-static void log_level_apply(bool usb_awake)
-{
-    esp_log_level_set("*", usb_awake ? ESP_LOG_INFO : ESP_LOG_NONE);
-}
-
-/* Dual-output vprintf hook: forwards to the original serial vprintf AND
- * appends to the RTC ring buffer so logs survive deep sleep and can be
- * uploaded on the next server connection.
- *
- * Format buffers live in PSRAM (off the caller's stack, off DRAM). A pool
- * of LOG_BUF_COUNT slots lets concurrent callers — typically the main task
- * and the WiFi/lwIP system-event task — each claim their own buffer without
- * contention. A tiny critical section claims a free slot; vsnprintf/fwrite
- * run outside any lock; the ring write and slot release share one final
- * critical section. If all slots are busy (requires 3+ simultaneous callers,
- * essentially unreachable) the call falls back to serial-only vprintf. */
-#define LOG_BUF_COUNT 2
-#define LOG_BUF_SIZE  512
-
-static char         *s_log_bufs[LOG_BUF_COUNT];
-static volatile bool s_log_buf_used[LOG_BUF_COUNT];
-
-static int log_ring_vprintf(const char *fmt, va_list args)
-{
-    int slot = -1;
-    taskENTER_CRITICAL(&s_log_ring_mux);
-    for (int i = 0; i < LOG_BUF_COUNT; i++) {
-        if (!s_log_buf_used[i]) { s_log_buf_used[i] = true; slot = i; break; }
-    }
-    taskEXIT_CRITICAL(&s_log_ring_mux);
-
-    if (slot < 0) return vprintf(fmt, args);  /* all slots busy — serial only */
-
-    int len = vsnprintf(s_log_bufs[slot], LOG_BUF_SIZE, fmt, args);
-    if (len < 0) len = 0;
-    if (len >= LOG_BUF_SIZE) len = LOG_BUF_SIZE - 1;
-
-    if (len > 0) fwrite(s_log_bufs[slot], 1, (size_t)len, stdout);
-
-    taskENTER_CRITICAL(&s_log_ring_mux);
-    for (int i = 0; i < len; i++) {
-        s_log_ring[s_log_ring_head] = s_log_bufs[slot][i];
-        s_log_ring_head = (s_log_ring_head + 1) % LOG_RING_SIZE;
-        if (s_log_ring_used < LOG_RING_SIZE) s_log_ring_used++;
-    }
-    s_log_buf_used[slot] = false;
-    taskEXIT_CRITICAL(&s_log_ring_mux);
-
-    return len;
-}
+/* Schedule helpers (now_epoch / refresh_due / schedule_retry_in) are shared,
+ * in scheduler.c. Log ring + level gating (log_ring_vprintf / hokku_log_init /
+ * log_level_apply) are shared, in log.c. save_pre_sleep_epoch is shared,
+ * in scheduler.c. All operate on the RTC state in state.h. */
 
 /* ═══════════════════════════════════════════════════════════════════
  *  Deep sleep entry
  * ═══════════════════════════════════════════════════════════════════ */
-
-static void save_pre_sleep_epoch(int64_t server_epoch, int64_t local_time_at_download_us)
-{
-    if (server_epoch <= 0) {
-        pre_sleep_server_epoch = 0;
-        last_sleep_err_known = false;
-        return;
-    }
-    int64_t delta_s = (esp_timer_get_time() - local_time_at_download_us) / 1000000LL;
-    pre_sleep_server_epoch = server_epoch + delta_s;
-}
 
 /* Configure EXT1 wake on GPIO 1 (next-image button) + GPIO 14 (USB plug),
  * arm the timer for the scheduled refresh, then esp_deep_sleep_start().
@@ -1610,264 +1053,24 @@ static void enter_deep_sleep(int64_t sleep_us)
  *  Any failure aborts safely: the running slot + NVS are left intact.
  * ═══════════════════════════════════════════════════════════════════ */
 
-/* Derive a sibling endpoint URL from config.image_url (".../hokku/screen[/]"),
- * e.g. leaf="firmware.bin" -> ".../hokku/firmware.bin". */
-static void build_firmware_url(char *out, size_t outlen, const char *leaf)
+/* The full A/B OTA implementation (config migration, app image, NVS rewrite,
+ * slot flip, rollback-commit) is shared, in common/esp32/ota.c. huessen passes
+ * its display_message as the progress callback. */
+
+/* Exponential backoff for repeated "server unreachable" failures (WiFi down or
+ * download failed). Bumps the RTC-persistent failure streak and returns the next
+ * retry interval, doubling from REFRESH_RETRY_SECONDS and capped at
+ * REFRESH_RETRY_MAX_SECONDS: 60s, 120, 240, ... 3600. Without this a server
+ * outage reboots the device + re-renders the panel every 60s indefinitely
+ * (battery, flash-wear, e-paper wear). The caller resets the streak to 0 on any
+ * successful server contact. Returns true via *first_of_streak on the first
+ * failure so the caller can draw the error once and stay silent afterward. */
+static int refresh_retry_backoff_seconds(bool *first_of_streak)
 {
-    char base[sizeof(config.image_url)];
-    strncpy(base, config.image_url, sizeof(base) - 1);
-    base[sizeof(base) - 1] = '\0';
-    size_t n = strlen(base);
-    while (n > 0 && base[n - 1] == '/') base[--n] = '\0';       /* trailing '/' */
-    while (n > 0 && base[n - 1] != '/') base[--n] = '\0';       /* last segment */
-    snprintf(out, outlen, "%s%s", base, leaf);
-}
-
-/* Minimal JSON string-escaper: handles '"' and '\\', drops control chars. */
-static void json_escape(char *dst, size_t dstlen, const char *src)
-{
-    size_t j = 0;
-    for (size_t i = 0; src[i] != '\0'; i++) {
-        unsigned char c = (unsigned char)src[i];
-        if (c == '"' || c == '\\') {
-            if (j + 2 >= dstlen) break;
-            dst[j++] = '\\';
-            dst[j++] = (char)c;
-        } else if (c < 0x20) {
-            continue;
-        } else {
-            if (j + 1 >= dstlen) break;
-            dst[j++] = (char)c;
-        }
-    }
-    dst[j] = '\0';
-}
-
-/* Build the X-Config-State header: the device's current NVS config as JSON so
- * the server can migrate it forward into the new firmware's schema. */
-static void build_config_state_json(char *out, size_t outlen)
-{
-    char s1[2 * 33], p1[2 * 65], s2[2 * 33], p2[2 * 65], url[2 * 257], name[2 * 65];
-    json_escape(s1,   sizeof(s1),   config.wifi_ssid[0]);
-    json_escape(p1,   sizeof(p1),   config.wifi_pass[0]);
-    json_escape(s2,   sizeof(s2),   config.wifi_ssid[1]);
-    json_escape(p2,   sizeof(p2),   config.wifi_pass[1]);
-    json_escape(url,  sizeof(url),  config.image_url);
-    json_escape(name, sizeof(name), config.screen_name);
-    snprintf(out, outlen,
-        "{\"wifi_ssid1\":\"%s\",\"wifi_pass1\":\"%s\","
-        "\"wifi_ssid2\":\"%s\",\"wifi_pass2\":\"%s\","
-        "\"image_url\":\"%s\",\"screen_name\":\"%s\","
-        "\"wifi_order\":%u,\"cfg_ver\":%u}",
-        s1, p1, s2, p2, url, name,
-        (unsigned)config.wifi_order, (unsigned)config.cfg_ver);
-}
-
-/* ── fetch migrated NVS config image into a RAM buffer ── */
-typedef struct { uint8_t *buf; size_t len; size_t cap; bool ok; } ota_buf_ctx_t;
-
-static esp_err_t ota_buf_event_handler(esp_http_client_event_t *evt)
-{
-    ota_buf_ctx_t *ctx = (ota_buf_ctx_t *)evt->user_data;
-    if (!ctx) return ESP_OK;
-    if (evt->event_id == HTTP_EVENT_ON_CONNECTED) {
-        ctx->len = 0;  /* reset on (re)connect so a redirect doesn't accumulate */
-    } else if (evt->event_id == HTTP_EVENT_ON_DATA && evt->data_len > 0) {
-        if (ctx->len + (size_t)evt->data_len > ctx->cap) { ctx->ok = false; return ESP_FAIL; }
-        memcpy(ctx->buf + ctx->len, evt->data, evt->data_len);
-        ctx->len += evt->data_len;
-    }
-    return ESP_OK;
-}
-
-static bool ota_fetch_config(uint8_t **out, size_t *out_len)
-{
-    char url[sizeof(config.image_url) + 32];
-    build_firmware_url(url, sizeof(url), "firmware-config");
-    char cfgstate[1280];
-    build_config_state_json(cfgstate, sizeof(cfgstate));
-
-    size_t cap = 64 * 1024;
-    uint8_t *buf = malloc(cap);
-    if (!buf) { ESP_LOGE(TAG, "OTA: config buffer OOM"); return false; }
-    ota_buf_ctx_t ctx = { .buf = buf, .len = 0, .cap = cap, .ok = true };
-
-    esp_http_client_config_t cfg = {
-        .url = url, .event_handler = ota_buf_event_handler, .user_data = &ctx,
-        .timeout_ms = HTTP_TIMEOUT_MS, .buffer_size = 4096,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) { free(buf); return false; }
-    if (config.screen_name[0] != '\0') {
-        esp_http_client_set_header(client, "X-Screen-Name", config.screen_name);
-    }
-    esp_http_client_set_header(client, "X-Config-State", cfgstate);
-
-    esp_err_t perr = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
-
-    if (perr != ESP_OK || status != 200 || !ctx.ok || ctx.len == 0) {
-        ESP_LOGE(TAG, "OTA config fetch failed: err=%s status=%d ok=%d len=%u",
-                 esp_err_to_name(perr), status, (int)ctx.ok, (unsigned)ctx.len);
-        free(buf);
-        return false;
-    }
-    ESP_LOGI(TAG, "OTA migrated config received: %u bytes", (unsigned)ctx.len);
-    *out = buf;
-    *out_len = ctx.len;
-    return true;
-}
-
-/* ── stream the app image into the inactive OTA slot ── */
-typedef struct { esp_ota_handle_t handle; size_t written; bool ok; } ota_write_ctx_t;
-
-static esp_err_t ota_app_event_handler(esp_http_client_event_t *evt)
-{
-    ota_write_ctx_t *ctx = (ota_write_ctx_t *)evt->user_data;
-    if (!ctx) return ESP_OK;
-    if (evt->event_id == HTTP_EVENT_ON_DATA && ctx->ok && evt->data_len > 0) {
-        esp_err_t e = esp_ota_write(ctx->handle, evt->data, evt->data_len);
-        if (e != ESP_OK) {
-            ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(e));
-            ctx->ok = false;
-            return e;
-        }
-        ctx->written += evt->data_len;
-    }
-    return ESP_OK;
-}
-
-/* Download + write + validate the app image into the next OTA partition.
- * Does NOT set the boot partition — that happens after the NVS flash. */
-static bool ota_write_app(void)
-{
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    const esp_partition_t *update  = esp_ota_get_next_update_partition(NULL);
-    if (!update) { ESP_LOGE(TAG, "OTA: no next update partition"); return false; }
-    ESP_LOGI(TAG, "OTA target: %s @ 0x%lx (running: %s)",
-             update->label, (unsigned long)update->address,
-             running ? running->label : "?");
-
-    esp_ota_handle_t handle = 0;
-    esp_err_t e = esp_ota_begin(update, OTA_SIZE_UNKNOWN, &handle);
-    if (e != ESP_OK) { ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(e)); return false; }
-
-    char url[sizeof(config.image_url) + 32];
-    build_firmware_url(url, sizeof(url), "firmware.bin");
-    ota_write_ctx_t ctx = { .handle = handle, .written = 0, .ok = true };
-    esp_http_client_config_t cfg = {
-        .url = url, .event_handler = ota_app_event_handler, .user_data = &ctx,
-        .timeout_ms = HTTP_TIMEOUT_MS, .buffer_size = 4096,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) { esp_ota_abort(handle); return false; }
-    esp_err_t perr = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
-
-    if (perr != ESP_OK || status != 200 || !ctx.ok) {
-        ESP_LOGE(TAG, "OTA app download failed: err=%s status=%d ok=%d written=%u",
-                 esp_err_to_name(perr), status, (int)ctx.ok, (unsigned)ctx.written);
-        esp_ota_abort(handle);
-        return false;
-    }
-    e = esp_ota_end(handle);  /* validates the image (magic, checksum, signature) */
-    if (e != ESP_OK) { ESP_LOGE(TAG, "esp_ota_end (validate): %s", esp_err_to_name(e)); return false; }
-    ESP_LOGI(TAG, "OTA app written + validated: %u bytes", (unsigned)ctx.written);
-    return true;
-}
-
-/* Rewrite the NVS partition with a server-provided partition image (same bytes
- * the USB setup path flashes). NVS is released first; we restart right after. */
-static bool ota_flash_nvs(const uint8_t *img, size_t len)
-{
-    const esp_partition_t *nvs_part =
-        esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, NULL);
-    if (!nvs_part) { ESP_LOGE(TAG, "OTA: NVS partition not found"); return false; }
-    if (len == 0 || len > nvs_part->size) {
-        ESP_LOGE(TAG, "OTA: NVS image size %u invalid (partition %u)",
-                 (unsigned)len, (unsigned)nvs_part->size);
-        return false;
-    }
-    nvs_flash_deinit();  /* release before raw rewrite; ignore error if not init'd */
-    esp_err_t e = esp_partition_erase_range(nvs_part, 0, nvs_part->size);
-    if (e != ESP_OK) { ESP_LOGE(TAG, "OTA: NVS erase: %s", esp_err_to_name(e)); return false; }
-    e = esp_partition_write(nvs_part, 0, img, len);
-    if (e != ESP_OK) { ESP_LOGE(TAG, "OTA: NVS write: %s", esp_err_to_name(e)); return false; }
-
-    uint8_t *check = malloc(len);
-    if (check) {
-        bool match = (esp_partition_read(nvs_part, 0, check, len) == ESP_OK)
-                     && (memcmp(check, img, len) == 0);
-        free(check);
-        if (!match) { ESP_LOGE(TAG, "OTA: NVS verify mismatch"); return false; }
-    }
-    ESP_LOGI(TAG, "OTA: NVS partition rewritten (%u bytes)", (unsigned)len);
-    return true;
-}
-
-/* Perform the full OTA. Assumes WiFi is up. On success, reboots into the new
- * slot and never returns. On failure, returns false (caller schedules a retry).
- * target_version is informational (the server picks the actual bytes). */
-static bool perform_ota(const char *target_version)
-{
-    ESP_LOGI(TAG, "OTA starting -> %s", target_version);
-    display_message("Updating firmware...\n\nDo not unplug.\nThe screen will\nrestart itself.");
-
-    /* 1. Migrated NVS config (held in RAM; flashed only after the app image is
-     *    downloaded + validated, so a failed download never touches NVS). */
-    uint8_t *nvs_img = NULL;
-    size_t   nvs_len = 0;
-    if (!ota_fetch_config(&nvs_img, &nvs_len)) {
-        display_message("Firmware update\nfailed.\n\n(config migration)\n\nWill retry later.");
-        return false;
-    }
-
-    /* 2. App image -> inactive slot (validated by esp_ota_end). */
-    if (!ota_write_app()) {
-        free(nvs_img);
-        display_message("Firmware update\nfailed.\n\n(download)\n\nWill retry later.");
-        return false;
-    }
-
-    /* 3. Rewrite NVS with the migrated config. */
-    if (!ota_flash_nvs(nvs_img, nvs_len)) {
-        free(nvs_img);
-        display_message("Firmware update\nfailed.\n\n(config write)\n\nWill retry later.");
-        return false;
-    }
-    free(nvs_img);
-
-    /* 4. Flip the boot partition and restart into the new slot. */
-    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
-    esp_err_t e = esp_ota_set_boot_partition(next);
-    if (e != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ota_set_boot_partition: %s", esp_err_to_name(e));
-        display_message("Firmware update\nfailed.\n\n(commit)\n\nWill retry later.");
-        return false;
-    }
-    ESP_LOGI(TAG, "OTA complete — rebooting into %s", next ? next->label : "new slot");
-    display_message("Update complete.\n\nRestarting...");
-    vTaskDelay(pdMS_TO_TICKS(800));
-    esp_restart();
-    return true;  /* unreachable */
-}
-
-/* If this boot is a freshly-OTA'd app awaiting verification, confirm it (cancels
- * the bootloader's pending rollback). Called only after a successful refresh —
- * i.e. once we've proven the new firmware can reach the server and display. */
-static void ota_mark_valid_if_pending(void)
-{
-#ifdef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    esp_ota_img_states_t st;
-    if (running && esp_ota_get_state_partition(running, &st) == ESP_OK
-        && st == ESP_OTA_IMG_PENDING_VERIFY) {
-        esp_err_t e = esp_ota_mark_app_valid_cancel_rollback();
-        ESP_LOGI(TAG, "OTA pending-verify confirmed -> mark valid: %s", esp_err_to_name(e));
-    }
-#endif
+    uint8_t n = consecutive_refresh_failures;      /* failures BEFORE this one */
+    if (consecutive_refresh_failures < 255) consecutive_refresh_failures++;
+    if (first_of_streak) *first_of_streak = (n == 0);
+    return hokku_backoff_seconds(n, REFRESH_RETRY_SECONDS, REFRESH_RETRY_MAX_SECONDS);
 }
 
 static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
@@ -1885,16 +1088,21 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 
     if (!wifi_connect()) {
         ESP_LOGE(TAG, "WiFi connect failed");
-        char wifi_err_msg[256];
-        snprintf(wifi_err_msg, sizeof(wifi_err_msg),
-                 "WiFi connect failed.\n"
-                 "\n"
-                 "Will retry in %d s.\n"
-                 "Press button to\n"
-                 "try again now.",
-                 REFRESH_RETRY_SECONDS);
-        display_message(wifi_err_msg);
-        schedule_retry_in(REFRESH_RETRY_SECONDS, "wifi_connect failed");
+        bool first;
+        int backoff = refresh_retry_backoff_seconds(&first);
+        /* Draw the error only on the first failure of a streak — re-rendering
+         * the panel on every backed-off retry wastes battery + e-paper. */
+        if (first) {
+            char wifi_err_msg[256];
+            snprintf(wifi_err_msg, sizeof(wifi_err_msg),
+                     "WiFi connect failed.\n"
+                     "\n"
+                     "Retrying (backing off).\n"
+                     "Press button to\n"
+                     "try again now.");
+            display_message(wifi_err_msg);
+        }
+        schedule_retry_in(backoff, "wifi_connect failed");
         log_level_apply(usb_host_present());
         return false;
     }
@@ -1910,7 +1118,8 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
      * success it reboots into the new slot and never returns. */
     if (fw_update_ver[0] != '\0') {
         if (img) { heap_caps_free(img); img = NULL; }
-        bool ota_ok = perform_ota(fw_update_ver);  /* returns only on failure */
+        bool ota_ok = perform_ota(fw_update_ver, config.image_url, config.screen_name,
+                                  SCREEN_MODEL, display_message);  /* returns only on failure */
         wifi_shutdown();
         gpio_set_level(PIN_WIFI_LED, 0);
         if (!ota_ok) {
@@ -1946,8 +1155,10 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 
     if (!img) {
         if (http_status == 503 && sleep_seconds > 0) {
-            /* Server busy (converting images, cache warming, etc.) —
-             * use the server-suggested retry interval from X-Sleep-Seconds. */
+            /* Server busy (converting images, cache warming, etc.) — it IS
+             * reachable, so clear the outage streak and use the server-suggested
+             * retry interval from X-Sleep-Seconds. */
+            consecutive_refresh_failures = 0;
             if (sleep_seconds > SERVER_BUSY_DISPLAY_THRESHOLD_S) {
                 char msg[128];
                 snprintf(msg, sizeof(msg),
@@ -1962,38 +1173,44 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
             /* ≤ threshold: silent — leave current display untouched. */
             schedule_retry_in((int)sleep_seconds, "server busy (503)");
         } else {
-            /* Real failure: network error, non-503, or 503 without header. */
-            char msg[384];
-            snprintf(msg, sizeof(msg),
-                     "Image download failed.\n"
-                     "\n"
-                     "Tried to connect to:\n"
-                     "%s\n"
-                     "\n"
-                     "Will retry in %d s.\n"
-                     "Press reset to try\n"
-                     "again now.",
-                     config.image_url, REFRESH_RETRY_SECONDS);
-            display_message(msg);
-            schedule_retry_in(REFRESH_RETRY_SECONDS, "download failed");
+            /* Real failure: network error, non-503, or 503 without header.
+             * Back off exponentially and draw the error only once per streak so
+             * a server outage doesn't reboot + re-render every 60 s forever. */
+            bool first;
+            int backoff = refresh_retry_backoff_seconds(&first);
+            if (first) {
+                char msg[384];
+                snprintf(msg, sizeof(msg),
+                         "Image download failed.\n"
+                         "\n"
+                         "Tried to connect to:\n"
+                         "%s\n"
+                         "\n"
+                         "Retrying (backing off).\n"
+                         "Press reset to try\n"
+                         "again now.",
+                         config.image_url);
+                display_message(msg);
+            }
+            schedule_retry_in(backoff, "download failed");
         }
         log_level_apply(usb_host_present());
         return false;
     }
+
+    /* Got an image — server reached and healthy; clear any outage streak. */
+    consecutive_refresh_failures = 0;
 
     ESP_LOGI(TAG, "Displaying image...");
     split_and_display(img);
     heap_caps_free(img);
     ESP_LOGI(TAG, "Image displayed.");
 
-    /* Warn (but don't auto-restart) on stuck display. Per the new design,
-     * recovery from wedged controllers is a user action (button press
-     * triggers the fresh-restart path). */
-    if (gpio_get_level(PIN_EPAPER_BUSY) == 0) {
-        ESP_LOGE(TAG, "Post-refresh: BUSY still LOW — display may be wedged. "
-                      "Press button or power-cycle to recover.");
-    }
-
+    /* No post-display BUSY check here: split_and_display's shutdown sequence
+     * switches BUSY to OUTPUT and drives it LOW to bleed the signal line, so
+     * reading the pin now would always read our own low output — a false
+     * "display may be wedged". A genuinely stuck panel is caught during the
+     * refresh by epaper_wait_busy()'s "BUSY timeout!". */
     log_level_apply(usb_host_present());
     return true;
 }
@@ -2116,40 +1333,14 @@ void app_main(void)
     /* ── Step 1: validate RTC state ─────────────────────────────────
      *
      * rtc_magic lives in RTC_NOINIT memory — garbage on POR, intact
-     * across deep sleep + esp_restart. First time we see it mismatch,
-     * zero everything including the wallclock offset. */
-    if (rtc_magic != RTC_MAGIC) {
-        rtc_magic = 0;
-        boot_count = 0;
-        wifi_channel = 0;
-        memset(wifi_bssid, 0, sizeof(wifi_bssid));
-        has_wifi_cache = false;
-        last_wifi_index = 0;
-        last_battery_mv = 0;
-        last_sleep_seconds = 0;
-        next_refresh_epoch = 0;
-        pre_sleep_server_epoch = 0;
-        last_sleep_err_s = 0;
-        last_sleep_err_known = false;
-        consecutive_spurious_resets = 0;
-        last_sleep_mode = LAST_SLEEP_MODE_NONE;
-        pending_action = ACTION_NONE;
-        s_log_ring_head = 0;
-        s_log_ring_used = 0;
-        struct timeval tv = {0, 0};
-        settimeofday(&tv, NULL);
-    }
-    rtc_magic = RTC_MAGIC;  /* validate for the rest of this boot chain */
+     * across deep sleep + esp_restart. On the first mismatch this zeroes
+     * everything including the wallclock offset, then stamps the magic. */
+    hokku_state_validate();
 
     /* Install dual-output log hook: serial + RTC ring buffer. Done here,
      * after RTC validation but before any log output, so every message
      * from this point forward is captured. Format buffers are in PSRAM. */
-    bool log_bufs_ok = true;
-    for (int i = 0; i < LOG_BUF_COUNT; i++) {
-        s_log_bufs[i] = heap_caps_malloc(LOG_BUF_SIZE, MALLOC_CAP_SPIRAM);
-        if (!s_log_bufs[i]) { log_bufs_ok = false; break; }
-    }
-    if (log_bufs_ok) esp_log_set_vprintf(log_ring_vprintf);
+    hokku_log_init();
 
     ESP_LOGI(TAG, "Firmware %s  built %s", FW_VERSION_STRING, FW_BUILD_TIMESTAMP);
 
@@ -2307,7 +1498,22 @@ void app_main(void)
         bool refreshed = perform_refresh(label, boot_time);
         /* A successful refresh proves a freshly-OTA'd app can reach the server
          * and drive the display — confirm it so the bootloader stops watching
-         * for a rollback. No-op on a normally-booted (non-pending) app. */
+         * for a rollback. No-op on a normally-booted (non-pending) app.
+         *
+         * When we are pending-verify and the first refresh missed (usually a
+         * one-off mDNS-warmup hiccup on a fresh boot), retry a few times before
+         * giving up — otherwise the next reboot rolls back an otherwise-good
+         * OTA. Non-pending boots don't retry here; a failed refresh takes the
+         * usual 60 s schedule_retry_in path. */
+        for (int attempt = 2;
+             !refreshed && attempt <= OTA_PENDING_VERIFY_REFRESH_ATTEMPTS
+                 && ota_is_pending_verify();
+             attempt++) {
+            ESP_LOGW(TAG, "Pending-verify: refresh failed, retry %d/%d before rollback",
+                     attempt, OTA_PENDING_VERIFY_REFRESH_ATTEMPTS);
+            vTaskDelay(pdMS_TO_TICKS(OTA_PENDING_VERIFY_RETRY_DELAY_MS));
+            refreshed = perform_refresh(label, boot_time);
+        }
         if (refreshed) {
             ota_mark_valid_if_pending();
         }

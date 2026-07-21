@@ -920,6 +920,14 @@
 
     <div id="flash-form" hidden>
       <div class="config-row">
+        <label>Screen model:</label>
+        <select id="flash-model" onchange="onFlashModelChange()">
+          <option value="huessen_epf1301">Huessen EPF1301 (EL133UF1, 16 MB)</option>
+          <option value="seeedstudio_e1004">Seeed reTerminal E1004 (32 MB)</option>
+        </select>
+        <span class="flash-hint">Both boards are ESP32-S3 and look identical to USB — pick the one you're flashing.</span>
+      </div>
+      <div class="config-row">
         <label>Wi-Fi network:</label>
         <input type="text" id="flash-ssid" placeholder="SSID" autocomplete="off" spellcheck="false">
       </div>
@@ -1162,13 +1170,26 @@
       </div>
     </div>
 
-    <div class="config-row">
-      <label>Letterbox fill limit:</label>
-      <span class="ctrl-tip" data-tip="How much the image may be zoomed in to eliminate thin letterbox bars.&#10;0% = always letterbox (never crop). 20% = zoom up to 20% to fill the frame.&#10;Useful for images with thin black borders from scanning or aspect-ratio mismatch.&#10;Above ~30% you may lose meaningful content at the edges.">
-        <input type="range" id="crop-to-fill-threshold" min="0" max="100" step="1" value="10"
-               oninput="document.getElementById('fill-threshold-val').textContent=this.value+'%'">
-        <span class="slider-value" id="fill-threshold-val">10%</span>
-      </span>
+    <div class="dither-advanced">
+      <div class="dither-advanced-header">
+        <h3>Cropping &amp; framing</h3>
+      </div>
+      <p class="dither-advanced-intro">Controls how images are fitted to the panel when their aspect ratio doesn't match. A higher fill limit crops more aggressively to remove letterbox bars; face-aware cropping keeps detected faces in frame when that happens.</p>
+      <div class="config-row">
+        <label>Letterbox fill limit:</label>
+        <span class="ctrl-tip" data-tip="How much the image may be zoomed in to eliminate thin letterbox bars.&#10;0% = always letterbox (never crop). 20% = zoom up to 20% to fill the frame.&#10;Useful for images with thin black borders from scanning or aspect-ratio mismatch.&#10;Above ~30% you may lose meaningful content at the edges.">
+          <input type="range" id="crop-to-fill-threshold" min="0" max="100" step="1" value="10"
+                 oninput="document.getElementById('fill-threshold-val').textContent=this.value+'%'">
+          <span class="slider-value" id="fill-threshold-val">10%</span>
+        </span>
+      </div>
+      <div class="config-row">
+        <label>Face-aware cropping:</label>
+        <label class="toggle" data-tip="When enabled and the letterbox fill limit crops the image, the crop window is centered on the detected face(s) instead of the image center.&#10;Lets you push the fill limit higher on portraits without cutting off heads — a face near the top of the photo pulls the crop up, so the bottom gets cut instead.&#10;Requires face detection to be enabled.">
+          <input type="checkbox" id="face-aware-crop-enabled" onchange="document.getElementById('face-aware-crop-label').textContent=this.checked?'On':'Off';">
+          <span id="face-aware-crop-label">Off</span>
+        </label>
+      </div>
     </div>
 
     <div class="config-row">
@@ -1589,6 +1610,10 @@ function resetPipelineToDefault() {
   document.getElementById('face-clahe-keepout-enabled').checked = faceClaheKeeout;
   document.getElementById('face-clahe-keepout-label').textContent = faceClaheKeeout ? 'Yes' : 'No';
 
+  const faceAwareCrop = !!configDefaults.classifier_face_aware_crop_enabled;
+  document.getElementById('face-aware-crop-enabled').checked = faceAwareCrop;
+  document.getElementById('face-aware-crop-label').textContent = faceAwareCrop ? 'On' : 'Off';
+
   const fillPct = Math.round((configDefaults.crop_to_fill_threshold ?? 0.10) * 100);
   document.getElementById('crop-to-fill-threshold').value = fillPct;
   document.getElementById('fill-threshold-val').textContent = fillPct + '%';
@@ -1904,7 +1929,12 @@ async function runDitherPreview(panelId) {
     const resp = await fetch('/hokku/api/dither/preview', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: filename, image: _getState(panelId), clahe_keepout: document.getElementById('face-clahe-keepout-enabled').checked}),
+      body: JSON.stringify({
+        name: filename,
+        image: _getState(panelId),
+        clahe_keepout: document.getElementById('face-clahe-keepout-enabled').checked,
+        face_aware_crop: document.getElementById('face-aware-crop-enabled').checked,
+      }),
     });
     if (!resp.ok) {
       let err = `HTTP ${resp.status}`;
@@ -2033,7 +2063,10 @@ async function scanFlashDevices() {
   btn.disabled = true; btn.textContent = 'Scanning…';
   note.textContent = 'Scanning USB serial ports…';
   try {
-    const r = await fetch('/hokku/api/flash/devices');
+    // Judge device firmware freshness against the currently-selected model (the
+    // two ESP32 boards enumerate identically; only the version compare differs).
+    const model = (document.getElementById('flash-model') || {}).value || '';
+    const r = await fetch('/hokku/api/flash/devices' + (model ? `?model=${encodeURIComponent(model)}` : ''));
     if (r.status === 409) { showToast('A flash is in progress'); note.textContent = ''; return; }
     if (r.status === 503) {
       const j = await r.json();
@@ -2119,6 +2152,18 @@ function onFlashDeviceChange() {
   }
 }
 
+function onFlashModelChange() {
+  // The freshness note ("up to date?") was computed for whichever model was
+  // selected at scan time. If a device is already selected, prompt a re-scan so
+  // the check reflects the newly-chosen model.
+  const sel = document.getElementById('flash-device');
+  const dev = flashDevices.find(d => d.port === (sel && sel.value));
+  if (dev && dev.is_esp32) {
+    const note = document.getElementById('flash-device-note');
+    if (note) note.textContent = 'Model changed — press Scan to re-check this device against the selected model.';
+  }
+}
+
 function toggleFlashSecondWifi() {
   const toggle = document.getElementById('flash-second-toggle');
   const body = document.getElementById('flash-second-body');
@@ -2133,7 +2178,7 @@ function setFlashStatus(msg, cls) {
 }
 
 function setFlashControlsDisabled(d) {
-  ['flash-device', 'flash-scan-btn', 'flash-go-btn', 'flash-ssid', 'flash-pass',
+  ['flash-device', 'flash-scan-btn', 'flash-go-btn', 'flash-model', 'flash-ssid', 'flash-pass',
    'flash-ssid2', 'flash-pass2', 'flash-name'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = d;
@@ -2147,6 +2192,7 @@ async function startFlash() {
   if (!ssid) { showToast('Enter a Wi-Fi network name'); return; }
   const body = {
     port: port,
+    screen_model: document.getElementById('flash-model').value,
     wifi_ssid1: ssid,
     wifi_pass1: document.getElementById('flash-pass').value,
     image_url: document.getElementById('flash-url').value,
@@ -2369,6 +2415,7 @@ async function saveConfig() {
     image_config_bw: bwDitherState,
     classifier_face_detect_enabled: document.getElementById('face-detect-enabled').checked,
     classifier_face_detect_clahe_keepout: document.getElementById('face-clahe-keepout-enabled').checked,
+    classifier_face_aware_crop_enabled: document.getElementById('face-aware-crop-enabled').checked,
     image_config_face: faceDitherState,
   };
   try {
@@ -2504,6 +2551,22 @@ function formatBattery(s) {
   return `<span style="color:${colour};font-weight:600" title="${volts} V (${s.battery_mv} mV)">${pct}%</span>`;
 }
 
+// Compare dotted numeric versions ("1.2.10" > "1.2.9"). Returns >0 if a is newer
+// than b, <0 if older, 0 if equal/incomparable. Non-numeric parts sort as 0, and a
+// shorter version is padded ("1.2" == "1.2.0"), so an unparseable version never
+// spuriously reads as an upgrade.
+function compareVersions(a, b) {
+  if (!a || !b) return 0;
+  const pa = String(a).split('.'), pb = String(b).split('.');
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const x = parseInt(pa[i], 10) || 0;
+    const y = parseInt(pb[i], 10) || 0;
+    if (x !== y) return x > y ? 1 : -1;
+  }
+  return 0;
+}
+
 function renderScreens(screens, bundledFirmwareVersions) {
   // Bundled version for a screen's OWN model (or null if that model has none).
   const bundledFor = n => {
@@ -2527,10 +2590,13 @@ function renderScreens(screens, bundledFirmwareVersions) {
   // Collect screens with outdated firmware.
   // frame_state.fw has carried the version string since early firmware; use it as source of truth.
   const screenFwVersion = n => (screens[n].state && screens[n].state.fw) || screens[n].firmware_version;
-  // Outdated = running version differs from THIS screen's model's bundled version.
+  // Outdated = this screen's model's bundled version is strictly NEWER than what the
+  // screen runs. A plain !== also fires when the screen is AHEAD of the server (a dev
+  // unit flashed by hand), which advertised a downgrade as "new version available"
+  // and would have pushed an older build if the operator hit update.
   const outdated = names.filter(n => {
     const v = screenFwVersion(n), b = bundledFor(n);
-    return v && b && v !== b;
+    return v && b && compareVersions(b, v) > 0;
   });
 
   let html = '';
@@ -2868,7 +2934,7 @@ async function showScreenDetails(name) {
   const bundledForThis = (s.screen_model && lastBundledFirmwareVersions[s.screen_model]) || null;
   keys.forEach(k => {
     let val = formatStateValue(k, s.state[k], s.state);
-    if (k === 'fw' && bundledForThis && s.state[k] !== bundledForThis) {
+    if (k === 'fw' && bundledForThis && compareVersions(bundledForThis, s.state[k]) > 0) {
       val += ` <span style="color:#a33;font-weight:600">→ new version available: ${bundledForThis}</span>`;
     }
     rows += `<tr><td>${k}</td><td>${val}</td></tr>`;
@@ -3200,6 +3266,9 @@ async function loadConfig() {
     const faceClaheKeeout = cfg.classifier_face_detect_clahe_keepout !== false;
     document.getElementById('face-clahe-keepout-enabled').checked = faceClaheKeeout;
     document.getElementById('face-clahe-keepout-label').textContent = faceClaheKeeout ? 'Yes' : 'No';
+    const faceAwareCrop = !!cfg.classifier_face_aware_crop_enabled;
+    document.getElementById('face-aware-crop-enabled').checked = faceAwareCrop;
+    document.getElementById('face-aware-crop-label').textContent = faceAwareCrop ? 'On' : 'Off';
 
     const autoClear = !!cfg.auto_clear_cache;
     document.getElementById('auto-clear-cache').checked = autoClear;

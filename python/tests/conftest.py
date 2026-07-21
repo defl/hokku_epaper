@@ -21,12 +21,29 @@ if str(_REPO_ROOT) not in sys.path:
 # PIL.Image.open() works on .heic files in the slow visual tests.
 register_heif_opener()
 
+from hokku.screens import huessen_epf1301, seeedstudio_e1004
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.image_config import ImageConfig
 from hokku.webserver.image_manager_abstract import AbstractImageManager
 from hokku.webserver.image_manager_multi import MultiThreadedImageManager
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
+
+
+@pytest.fixture(
+    params=[huessen_epf1301, seeedstudio_e1004],
+    ids=["huessen_epf1301", "seeedstudio_e1004"],
+)
+def esp32_mod(request):
+    """Each of the two ESP32-S3 screen modules (huessen, seeed) in turn.
+
+    The two boards share the entire flash / NVS / OTA / firmware-config code path
+    (only flash size and artifact name differ), so every ESP32 flash-layer test is
+    run against both — mirroring the firmware's ``common/esp32`` shared test suite.
+    The Bigme F7 (XR872) is deliberately excluded: it has its own bootstrap +
+    device-local config path, tested separately in ``test_flash_f7.py``.
+    """
+    return request.param
 
 
 @pytest.fixture

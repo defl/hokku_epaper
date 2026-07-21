@@ -46,6 +46,7 @@ from hokku.screens.firmware_registry import (
     firmware_version_for,
     release_app_image_for,
 )
+from hokku.screens.flasher_registry import esp32_screen, esp32_screens
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState
@@ -155,6 +156,25 @@ _REPO_URL = "https://github.com/defl/hokku_epaper"
 # retries on the next poll and self-heals well within this budget.
 OTA_MAX_ATTEMPTS = 5
 
+# Bound concurrent NVS-partition-generator subprocesses spawned by the
+# unauthenticated /firmware-config endpoint. Without this, a burst of OTA polls
+# (or a hostile LAN client looping the endpoint) could fork unbounded Python
+# subprocesses and exhaust the appliance's CPU/PID budget, starving the real
+# image-serving path. Excess requests get a 503 and retry on the next device poll.
+OTA_NVS_MAX_CONCURRENT_BUILDS = 4
+_nvs_build_slots = threading.BoundedSemaphore(OTA_NVS_MAX_CONCURRENT_BUILDS)
+
+# Upper byte-bounds on the USB-flash config string fields (in addition to the
+# 64-byte screen_name cap enforced inline). SSID: 802.11 max; PSK: WPA2 max; URL:
+# the firmware's server-URL buffer. Rejected with 400 before the NVS generator.
+_FLASH_FIELD_MAX_BYTES = {
+    "wifi_ssid1": 32,
+    "wifi_ssid2": 32,
+    "wifi_pass1": 64,
+    "wifi_pass2": 64,
+    "image_url": 256,
+}
+
 
 def _busy_retry_seconds(config: AppConfig) -> int:
     return min(300, calculate_sleep_seconds(config))
@@ -174,8 +194,9 @@ def create_app(
 
     static_root = _resolve_static_folder()
     git_describe, git_hash = _read_git_describe()
-    # Bundled merged firmware for the "Flash a screen" feature (None if absent).
-    firmware_path = huessen_epf1301.merged_firmware_file()
+    # Legacy scalar bundled-firmware version for the status view (the huessen
+    # reference model). Per-model versions come from bundled_firmware_versions();
+    # the flash endpoints resolve firmware per requested model at flash time.
     _fw_hdr = huessen_epf1301.release_app_header()
     bundled_firmware_version: str | None = (
         _fw_hdr[48:80].split(b"\x00")[0].decode("ascii", errors="replace").strip()
@@ -363,8 +384,19 @@ def create_app(
         The device sends its current config as an X-Config-State JSON header; we
         map it forward into the new firmware's NVS schema (``migrate_config``) and
         build the partition image with the same ``build_nvs_binary`` the USB setup
-        path uses. A migration refusal is a should-never-happen bug: we record it
-        on the screen and return 422 so the device aborts and stays put."""
+        path uses. The NVS schema is per-model (an ESP32-S3 board); the model comes
+        from ``X-Screen-Model`` and defaults to huessen for existing devices that
+        predate the header. A migration refusal is a should-never-happen bug: we
+        record it on the screen and return 422 so the device aborts and stays put."""
+        model_arg = request.headers.get("X-Screen-Model")
+        model = parse_screen_model(model_arg) if model_arg else "huessen_epf1301"
+        screen = esp32_screen(model)
+        if screen is None:
+            # Only ESP32-S3 boards use the NVS firmware-config round-trip (the F7
+            # keeps config device-local). An unknown/non-NVS model is a bug.
+            logger.error("firmware-config requested for model %r with no NVS config path", model)
+            abort(404)
+
         screen_name = request.headers.get("X-Screen-Name")
         current = parse_config_state(request.headers.get("X-Config-State"))
         if not screen_name:
@@ -373,9 +405,9 @@ def create_app(
             logger.error("firmware-config from %s: missing/invalid X-Config-State", screen_name)
             return make_response("missing X-Config-State", 400)
 
-        migrated = huessen_epf1301.migrate_config(current)
+        migrated = screen.migrate_config(current)
         if migrated is None:
-            msg = f"cannot migrate config to schema v{huessen_epf1301.CONFIG_VERSION}"
+            msg = f"cannot migrate config to schema v{screen.CONFIG_VERSION}"
             state.scheduler.record_ota_error(screen_name, msg)
             return make_response(msg, 422)
 
@@ -384,15 +416,23 @@ def create_app(
             migrated["image_url"] = url_override
             logger.info("Applying server URL override for %s: %s", screen_name, url_override)
 
+        if not _nvs_build_slots.acquire(blocking=False):
+            logger.warning("firmware-config: NVS build slots exhausted, refusing %s", screen_name)
+            return make_response("server busy building NVS images, retry shortly", 503)
         try:
-            nvs_image = huessen_epf1301.build_nvs_binary(migrated)
-        except huessen_epf1301.NvsToolUnavailable as e:
+            nvs_image = screen.build_nvs_binary(migrated)
+        except screen.NvsToolUnavailable as e:
             logger.error("firmware-config: NVS generator unavailable: %s", e)
             return make_response("NVS generator unavailable on server", 503)
         except (RuntimeError, OSError) as e:
-            msg = f"failed to build NVS image: {e}"
+            # Log the full generator error (temp paths, stderr) server-side only;
+            # the client/status gets a generic message to avoid leaking internals.
+            logger.error("firmware-config: NVS build failed for %s: %s", screen_name, e)
+            msg = "failed to build NVS image"
             state.scheduler.record_ota_error(screen_name, msg)
             return make_response(msg, 500)
+        finally:
+            _nvs_build_slots.release()
 
         resp = make_response(nvs_image)
         resp.headers["Content-Type"] = "application/octet-stream"
@@ -854,7 +894,9 @@ def create_app(
     def api_dither_preview():
         """Render a one-off dithered preview for a given image + image_config.
 
-        Body: {name: str, image: ImageConfig dict}. Returns PNG bytes.
+        Body: {name: str, image: ImageConfig dict, clahe_keepout?: bool,
+        face_aware_crop?: bool}. Returns PNG bytes. ``clahe_keepout`` and
+        ``face_aware_crop`` default to the saved config when omitted.
         The ``X-Face-Bboxes`` response header carries face bboxes already
         transformed into the rendered preview's coordinate space (JSON list
         of [x, y, w, h] tuples, each normalised 0..1 against the preview
@@ -901,6 +943,11 @@ def create_app(
         )
         keepout = face_bboxes_orig if (face_bboxes_orig and use_clahe_keepout) else None
 
+        use_face_aware_crop = body.get(
+            "face_aware_crop", state.config.classifier_face_aware_crop_enabled
+        )
+        crop_anchor = face_bboxes_orig if (face_bboxes_orig and use_face_aware_crop) else None
+
         # Render in the image's native orientation. NEUTRAL/unknown falls back
         # to LANDSCAPE since the renderer needs a concrete orientation.
         render_orientation = Orientation.LANDSCAPE
@@ -919,6 +966,7 @@ def create_app(
                 cfg,
                 render_orientation,
                 clahe_keepout_bboxes_norm=keepout,
+                crop_anchor_bboxes_norm=crop_anchor,
             )
         logger.debug("Preview done: %r", name)
 
@@ -931,6 +979,7 @@ def create_app(
             preview_display.panel_h,
             state.config.crop_to_fill_threshold,
             panel_rotated=preview_display.panel_rotated,
+            crop_anchor_bboxes_norm=crop_anchor,
         )
 
         resp = _png_response(png)
@@ -943,16 +992,27 @@ def create_app(
     def api_flash_devices():
         """Scan serial ports for connected screens and report their state.
 
-        Refused (409) while a flash is in progress — scanning resets the device
-        and contends for the serial port.
+        Refused (409) while a flash OR another scan is in progress — scanning
+        resets the device and drives the same serial port as a flash. The scan
+        holds the single serial slot for its whole duration so a flash cannot
+        start mid-scan.
+
+        The optional ``?model=`` selects which ESP32 screen's release the device's
+        "up to date?" freshness is judged against (the two boards enumerate
+        identically; only the version/config comparison is model-specific). It
+        defaults to the huessen reference model.
         """
-        if firmware_path is None:
-            logger.error("Flash scan requested but no bundled firmware available")
+        if not any(s.merged_firmware_file() for s in esp32_screens()):
+            logger.error("Flash scan requested but no bundled ESP32 firmware available")
             return jsonify({"error": "no bundled firmware available on this server"}), 503
-        if state.flash_jobs.is_busy():
-            logger.warning("Flash scan rejected: a flash is already in progress")
+        if not state.flash_jobs.begin_scan():
+            logger.warning("Flash scan rejected: the serial port is busy")
             return jsonify({"error": "a flash is in progress", "busy": True}), 409
-        devices = huessen_epf1301.scan_devices()
+        try:
+            screen = esp32_screen(request.args.get("model")) or huessen_epf1301
+            devices = screen.scan_devices()
+        finally:
+            state.flash_jobs.end_scan()
         # Classify non-ESP32 ports the UI knows how to guide: a CH340 bridge is a
         # Bigme F7 (XR872), which is USB-flashed by a different (vendor-tool)
         # procedure, not esptool — so the UI shows F7 guidance instead of the
@@ -982,17 +1042,27 @@ def create_app(
 
     @app.route("/hokku/api/flash/start", methods=["POST"])
     def api_flash_start():
-        """Begin flashing firmware + NVS config to a connected screen."""
-        if firmware_path is None:
-            logger.error("Flash start requested but no bundled firmware available")
-            return jsonify({"error": "no bundled firmware available on this server"}), 503
-        if not huessen_epf1301.nvs_tool_available():
+        """Begin flashing firmware + NVS config to a connected screen.
+
+        The target ESP32-S3 model comes from the request body (the two boards share
+        a USB VID:PID, so the operator's choice, not the scan, picks the flash
+        layout); it defaults to huessen for older UIs that omit it."""
+        body = request.get_json(silent=True) or {}
+        screen_model = (body.get("screen_model") or "huessen_epf1301").strip()
+        screen = esp32_screen(screen_model)
+        if screen is None:
+            logger.info("Flash start: unknown ESP32 model %r", screen_model)
+            return jsonify({"error": f"unknown ESP32 screen model {screen_model!r}"}), 400
+        model_firmware = screen.merged_firmware_file()
+        if model_firmware is None:
+            logger.error("Flash start requested but no bundled firmware for %s", screen_model)
+            return jsonify({"error": f"no bundled firmware for {screen_model} on this server"}), 503
+        if not screen.nvs_tool_available():
             logger.error("Flash start requested but esp-idf-nvs-partition-gen is not installed")
             return jsonify(
                 {"error": "NVS generator not installed (esp-idf-nvs-partition-gen)"}
             ), 503
 
-        body = request.get_json(silent=True) or {}
         port = (body.get("port") or "").strip()
         wifi_ssid1 = (body.get("wifi_ssid1") or "").strip()
         image_url = (body.get("image_url") or "").strip()
@@ -1012,11 +1082,24 @@ def create_app(
             )
             return jsonify({"error": "screen_name must be <= 64 bytes"}), 400
 
+        # NVS string fields are bounded by the firmware's config buffers; reject
+        # over-long values up front (like screen_name) instead of letting them
+        # fail deep in the NVS generator with an opaque error.
+        for field, limit in _FLASH_FIELD_MAX_BYTES.items():
+            if len((body.get(field) or "").encode("utf-8")) > limit:
+                logger.info("Flash start: %s exceeds %d bytes", field, limit)
+                return jsonify({"error": f"{field} must be <= {limit} bytes"}), 400
+
+        try:
+            wifi_order = int(body.get("wifi_order") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"error": "wifi_order must be an integer"}), 400
+
         config: dict = {
             "wifi_ssid1": wifi_ssid1,
             "wifi_pass1": body.get("wifi_pass1") or "",
             "image_url": image_url,
-            "wifi_order": int(body.get("wifi_order") or 0),
+            "wifi_order": wifi_order,
         }
         ssid2 = (body.get("wifi_ssid2") or "").strip()
         if ssid2:
@@ -1025,7 +1108,7 @@ def create_app(
         if screen_name:
             config["screen_name"] = screen_name
 
-        job_id = state.flash_jobs.start(port, config, firmware_path)
+        job_id = state.flash_jobs.start(port, config, model_firmware, screen_model=screen_model)
         if job_id is None:
             logger.warning("Flash start rejected: a flash is already in progress")
             return jsonify({"error": "a flash is already in progress"}), 409

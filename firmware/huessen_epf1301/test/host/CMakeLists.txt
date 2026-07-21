@@ -26,14 +26,24 @@ if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Werror=implicit-function-declaration)
 endif()
 
+# Shared ESP32 modules now live in firmware/common/esp32/ (compiled into both
+# the huessen and seeed firmwares). Relative to this test dir that is
+# ../../../common/esp32.
+set(HOKKU_COMMON ../../../common/esp32)
+set(HOKKU_COMMON_ALL ../../../common/all)
+# Shared ESP-IDF mock kit + MSVC POSIX shims (relocated from this dir so the
+# seeed host tests reuse them). ${HOKKU_TEST} on the include path resolves the
+# firmware sources' `#include "mocks/..."` and `driver/...` lines.
+set(HOKKU_TEST ../../../common/esp32/test)
+
 # ── test_text_render ──────────────────────────────────────────────────────
 # Pure test: no ESP-IDF dependencies.
 add_executable(test_text_render
     test_text_render.c
-    ../../main/text_render.c
+    ${HOKKU_COMMON}/text_render.c
 )
 target_include_directories(test_text_render PRIVATE
-    ../../main          # for text_render.h
+    ${HOKKU_COMMON}     # for text_render.h
 )
 
 # ── test_logic ────────────────────────────────────────────────────────────
@@ -44,12 +54,15 @@ add_executable(test_logic
     test_logic.c
 )
 target_include_directories(test_logic PRIVATE
-    mocks               # mock ESP-IDF headers (searched first)
-    ../../main          # for text_render.h included by main.c
+    ${HOKKU_TEST}/mocks # mock ESP-IDF headers (bare "driver/gpio.h" etc.)
+    ${HOKKU_TEST}       # resolves the "mocks/..."-prefixed includes
+    ${HOKKU_COMMON}     # config.h / text_render.h / state.h / scheduler.h / log.h
+    ${HOKKU_COMMON_ALL} # frame_state.h / firmware_url.h / json_util.h
+    ../../main          # for any board-local headers
     ${CMAKE_BINARY_DIR} # for generated version.h
 )
 if (WIN32)
-    target_include_directories(test_logic PRIVATE win_compat)
+    target_include_directories(test_logic PRIVATE ${HOKKU_TEST}/win_compat)
 endif()
 
 # ── test_config ───────────────────────────────────────────────────────────
@@ -58,12 +71,14 @@ add_executable(test_config
     test_config.c
 )
 target_include_directories(test_config PRIVATE
-    mocks
+    ${HOKKU_TEST}/mocks
+    ${HOKKU_TEST}
+    ${HOKKU_COMMON}
     ../../main
     ${CMAKE_BINARY_DIR} # for generated version.h
 )
 if (WIN32)
-    target_include_directories(test_config PRIVATE win_compat)
+    target_include_directories(test_config PRIVATE ${HOKKU_TEST}/win_compat)
 endif()
 
 # ── CTest integration ────────────────────────────────────────────────────

@@ -52,6 +52,9 @@ class ImageClassifierDecision:
     image_config: ImageConfig
     crop_to_fill_threshold: float
     clahe_keepout_bboxes: tuple[BoundingBox, ...] | None
+    #: Face bboxes to center the cover-crop window on ("face-aware cropping"),
+    #: or None when the feature or face detection is disabled.
+    face_crop_bboxes: tuple[BoundingBox, ...] | None
 
 
 class ImageClassifier:
@@ -92,10 +95,12 @@ class ImageClassifier:
         cfg = self._config
         chosen, face_bboxes = self._classify(path, sha1)
         keepout = face_bboxes if cfg.classifier_face_detect_clahe_keepout else None
+        crop_bboxes = face_bboxes if cfg.classifier_face_aware_crop_enabled else None
         return ImageClassifierDecision(
             image_config=chosen,
             crop_to_fill_threshold=cfg.crop_to_fill_threshold,
             clahe_keepout_bboxes=keepout,
+            face_crop_bboxes=crop_bboxes,
         )
 
     def observations_for(self, sha1: str) -> Observations:

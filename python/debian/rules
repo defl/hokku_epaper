@@ -3,3 +3,12 @@ export PYBUILD_DISABLE=test
 export PYBUILD_SYSTEM=pyproject
 %:
 	dh $@ --with python3 --buildsystem=pybuild
+
+# Don't let dh_python3 turn pyproject.toml's dependencies (which include pip-only
+# packages such as esptool/numba, installed by postinst) into apt Depends. esptool
+# maps to a Debian package that's absent from many apt sources, which made the .deb
+# uninstallable. The manual Depends list in debian/control is authoritative; here we
+# keep dh_python3 running (so it still byte-compiles and installs the hokku module)
+# but stop it guessing dependencies from the wheel metadata.
+override_dh_python3:
+	dh_python3 --no-guessing-deps

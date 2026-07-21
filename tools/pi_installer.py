@@ -1669,7 +1669,7 @@ def fetch_latest_appliance_image() -> "Path | None":
     asset = release_cache.find_asset(rel, _appliance_image_matches)
     if asset is None:
         print(f"  No appliance image (.img.xz) found in release {tag}.")
-        print("  Build one with:  bash image/build-image.sh")
+        print("  Build one with:  bash os/pi/build-image.sh")
         return None
     return release_cache.ensure_cached_asset(asset, CACHE_DIR, label=f"(release {tag})")
 

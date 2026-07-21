@@ -70,6 +70,7 @@ def _decision_to_screen_image_config(
         orientation=orientation,
         crop_to_fill_threshold=decision.crop_to_fill_threshold,
         clahe_keepout_bboxes=decision.clahe_keepout_bboxes,
+        face_crop_bboxes=decision.face_crop_bboxes,
         screen_model=model,
     )
 
@@ -192,15 +193,12 @@ class AbstractImageManager(ABC):
         """
         with self._db_lock:
             self._reconcile_with_disk()
-            # If no renders are inflight and the current batch is done, reset
-            # progress for the new sync cycle. This ensures _progress accurately
-            # reflects only the work being done in THIS cycle, not accumulating
-            # stale state from previous completed batches.
-            if (
-                not self._inflight
-                and self._progress.done >= self._progress.total
-                and self._progress.total > 0
-            ):
+            # A batch is complete once nothing is in flight — reset progress then,
+            # regardless of the done/total tally. Gating on done >= total could
+            # leave the counter wedged below total forever if any completion path
+            # discharges _inflight without bumping done (a self-healing safety net;
+            # the primary paths keep done and total in lock-step).
+            if not self._inflight and self._progress.total > 0:
                 self._progress = ConversionProgress(current_name=None, done=0, total=0)
                 self._batch_failed = 0
 
@@ -422,8 +420,8 @@ class AbstractImageManager(ABC):
         if rec.image_width is None:
             return None
         thumb_path = self._thumb_path(rec)
+        src_path = self._upload_dir / name
         try:
-            src_path = self._upload_dir / name
             if thumb_path.exists() and thumb_path.stat().st_mtime >= src_path.stat().st_mtime:
                 return thumb_path.read_bytes()
         except OSError:
@@ -891,6 +889,7 @@ class AbstractImageManager(ABC):
         Images whose PIL dimensions were never read (corrupt / unsupported
         format) are failed immediately without going through the dispatcher.
         """
+        err = ""
         with self._db_lock:
             rec = self._records.get(name)
             if rec is None or rec.convert_status != "pending":
@@ -958,6 +957,11 @@ class AbstractImageManager(ABC):
         slug = cfg.cache_slug()
         if self._panel_path(rec.name_hash, slug).exists():
             self._set_orientation_slug(name, cfg.screen_model, cfg.orientation, slug)
+            if update_status:
+                # The primary render is already cached (no render dispatched), so
+                # _on_render_done won't run for it — complete the lifecycle here or
+                # the image stays 'pending'/in-flight and the progress counter wedges.
+                self._complete_cached_primary(name)
             return
         render_args = (
             str(self._upload_dir / name),
@@ -968,6 +972,7 @@ class AbstractImageManager(ABC):
             tuple(asdict(b) for b in cfg.clahe_keepout_bboxes)
             if cfg.clahe_keepout_bboxes
             else None,
+            tuple(asdict(b) for b in cfg.face_crop_bboxes) if cfg.face_crop_bboxes else None,
         )
         logger.debug("Submitted %r for dithering (%s, %s)", name, cfg.screen_model, cfg.orientation)
         self._dispatch_render(
@@ -991,6 +996,25 @@ class AbstractImageManager(ABC):
                 return
             new_slugs = {**cur.slugs, key: slug}
             self._records[name] = replace(cur, slugs=new_slugs)
+            self._save_db()
+
+    def _complete_cached_primary(self, name: str) -> None:
+        """Advance the lifecycle for a primary (image, model) whose render was a
+        cache hit: pending -> ok, discharge ``_inflight``, bump the progress counter.
+        Mirrors _on_render_done's success path, which never runs when no render is
+        dispatched. Idempotent — a no-op if the real render path already completed it.
+        """
+        with self._db_lock:
+            if name not in self._inflight:
+                return
+            self._inflight.discard(name)
+            cur = self._records.get(name)
+            if cur is not None and cur.convert_status == "pending":
+                self._records[name] = replace(cur, convert_status="ok", convert_error=None)
+            done = self._progress.done + 1
+            self._progress = replace(self._progress, done=done)
+            if done >= self._progress.total:
+                self._log_batch_complete()
             self._save_db()
 
     def _on_render_done(

@@ -11,10 +11,11 @@ model means implementing the two functions and adding one entry here.
 
 from __future__ import annotations
 
-from hokku.screens import bigme_f7, huessen_epf1301
+from hokku.screens import bigme_f7, huessen_epf1301, seeedstudio_e1004
 
 _PROVIDERS = {
     "huessen_epf1301": huessen_epf1301,
+    "seeedstudio_e1004": seeedstudio_e1004,
     "bigme_f7": bigme_f7,
 }
 

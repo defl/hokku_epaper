@@ -25,6 +25,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from hokku.screens.bigme_f7.config import write_config_via_brom
+
 # python/hokku/screens/bigme_f7/bootstrap.py -> repo root is parents[4]
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _TOOLS = _REPO_ROOT / "tools"
@@ -38,23 +40,60 @@ def tooling_available() -> bool:
 
 
 class _LineWriter(io.TextIOBase):
-    """A text sink that forwards complete lines to ``emit`` (for redirect_stdout)."""
+    """A text sink that forwards complete lines to ``emit`` (for redirect_stdout).
+
+    Reentrancy-guarded: this sink is installed as ``sys.stdout``, so an ``emit``
+    callback that itself prints (the obvious thing for a CLI caller to pass) would
+    re-enter :meth:`write` and recurse until ``RecursionError`` — which in practice
+    aborted a flash immediately after the BROM was caught.
+
+    Nested writes therefore bypass the line buffer and go straight to the real
+    interpreter stdout: they stay visible, but they are never fed back through
+    ``emit`` (appending them to the buffer instead just turns the recursion into
+    an equally fatal infinite loop, since draining re-emits what the callback
+    printed).
+    """
 
     def __init__(self, emit: Callable[[str], None]) -> None:
         self._emit = emit
         self._buf = ""
+        self._emitting = False
 
-    def write(self, s: str) -> int:  # type: ignore[override]
-        self._buf += s
+    def _write_passthrough(self, s: str) -> None:
+        """Send text emitted from *inside* the callback to the real stdout."""
+        with contextlib.suppress(Exception):
+            if sys.__stdout__ is not None:
+                sys.__stdout__.write(s)
+
+    def _drain(self, final: bool = False) -> None:
+        """Emit buffered lines. Callers must hold the reentrancy guard."""
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
             self._emit(line.rstrip("\r"))
+        if final and self._buf:
+            self._emit(self._buf.rstrip("\r"))
+            self._buf = ""
+
+    def write(self, s: str) -> int:  # type: ignore[override]
+        if self._emitting:  # the callback itself printed — don't re-enter emit
+            self._write_passthrough(s)
+            return len(s)
+        self._buf += s
+        self._emitting = True
+        try:
+            self._drain()
+        finally:
+            self._emitting = False
         return len(s)
 
     def flush(self) -> None:
-        if self._buf:
-            self._emit(self._buf.rstrip("\r"))
-            self._buf = ""
+        if self._emitting or not self._buf:
+            return
+        self._emitting = True
+        try:
+            self._drain(final=True)
+        finally:
+            self._emitting = False
 
 
 def _import_tools():
@@ -286,6 +325,9 @@ def bootstrap_device(
     on_line("Trying software BROM entry via `upgrade` (no action needed if this unit")
     on_line("already runs Hokku firmware)...")
     f = _software_entry(port, writer, should_cancel, XR872Flasher, send_upgrade_command, 6)
+    # Entering via `upgrade` means the unit already runs Hokku firmware, so its
+    # Wi-Fi is already in sysinfo — no console Wi-Fi step is needed after the write.
+    entered_via_upgrade = f is not None
 
     # Phase B — manual mask-BROM catch (stock unit; no software way in).
     if f is None:
@@ -300,6 +342,7 @@ def bootstrap_device(
     # Write. flash_slot0 prints its own progress and raises SystemExit via die() on
     # ANY safety-check failure, which leaves slot 1 (OEM) bootable. reboot=False:
     # sys_reboot only re-enters BROM on this chip, so the operator power-cycles.
+    had_existing_cfg = False
     try:
         try:
             with contextlib.redirect_stdout(writer):
@@ -308,17 +351,45 @@ def bootstrap_device(
         except SystemExit as e:
             writer.flush()
             raise RuntimeError(f"safety check aborted the write: {e}") from e
+        # Provision the app config (server URL + screen name) over the SAME BROM
+        # session — deterministic, so it can't race the booted firmware's console
+        # (which is only alive briefly between the device's ~180 s hibernations).
+        # Wi-Fi lives in sysinfo, untouched by the reflash, so a re-provisioned
+        # unit keeps its Wi-Fi and needs no console step at all.
+        if provision and (provision.get("server_url") or provision.get("name")):
+            on_line("Provisioning config over BROM (no power-cycle/console needed)...")
+            _cfg, had_existing_cfg = write_config_via_brom(
+                f,
+                on_line,
+                server_url=provision.get("server_url"),
+                screen_name=provision.get("name"),
+            )
     finally:
         with contextlib.suppress(Exception):
             f.close()
 
     on_line("")
     on_line("DONE — Hokku firmware in slot 0 (bootloader + OEM slot untouched).")
-    if provision:
-        _provision_over_console(port, provision, on_line, should_cancel, serial)
+
+    # Wi-Fi is only needed for a genuinely FRESH unit. A unit we entered via
+    # `upgrade` (already running Hokku firmware) or that already had a config blob
+    # keeps its sysinfo Wi-Fi — skip the fragile console step for it.
+    needs_wifi = bool(
+        provision and provision.get("ssid") and not entered_via_upgrade and not had_existing_cfg
+    )
+    if needs_wifi:
+        on_line("Fresh unit — setting Wi-Fi over the console (config already on flash)...")
+        try:
+            _provision_over_console(port, provision, on_line, should_cancel, serial)
+        except RuntimeError as e:
+            # Config is already persisted via BROM; a Wi-Fi console miss is non-fatal.
+            on_line(f"NOTE: Wi-Fi not set over console ({e}).")
+            on_line("Set it after boot over the console (115200): `wifi <ssid> <pw>`.")
+    elif provision:
+        on_line("Config provisioned to flash. POWER-CYCLE the unit (unplug/replug) to boot it.")
+        on_line("It keeps its existing Wi-Fi and comes straight back online under the new name.")
     else:
-        on_line("Next: POWER-CYCLE the unit (unplug/replug, or long-press) to boot it.")
-        on_line("An already-provisioned unit boots straight back online; a fresh unit needs")
-        on_line("Wi-Fi set over the console (115200): `wifi <ssid> <pw>`, then `cfg save`.")
-        on_line("Details: docs/screens/bigme_f7/bootstrap.md")
+        on_line("POWER-CYCLE the unit (unplug/replug, or long-press) to boot it.")
+        on_line("A fresh unit needs Wi-Fi + server set over the console (115200):")
+        on_line("`wifi <ssid> <pw>`, then `cfg save`. Details: docs/screens/bigme_f7/bootstrap.md")
     return {"ok": True}

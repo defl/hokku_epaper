@@ -49,3 +49,10 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
 # SNTP
 CONFIG_LWIP_SNTP_MAX_SERVERS=2
+
+# DHCP — skip the post-ACK gratuitous-ARP duplicate-address check. On mesh APs
+# with client isolation / proxy-ARP the check stalls, so the lease is granted
+# by the router but the STA never binds and IP_EVENT_STA_GOT_IP never fires
+# (association succeeds, DHCP ACK arrives, then bind hangs). Disabling it makes
+# the STA bind immediately on ACK.
+CONFIG_LWIP_DHCP_DOES_NOT_CHECK_OFFERED_IP=y

@@ -40,6 +40,19 @@
 #include "led.h"
 #include "hokku_config.h"
 
+/* SoC-agnostic shared code (firmware/common/all — pure C, no SDK headers). */
+#include "firmware_url.h"
+#include "frame_state.h"
+#include "backoff.h"
+#include "logbuf.h"
+
+/* SoC-shared XR872 code (firmware/common/xr872 — usable by any XR872/XR872AT
+ * screen): activity log, software clock, HTTP-header helpers, hibernation. */
+#include "log.h"
+#include "clock.h"
+#include "http_util.h"
+#include "pm.h"
+
 /* Static IP config — used when DHCP is unavailable on the network */
 #define STATIC_IP_ADDR   "192.168.6.199"
 #define STATIC_GW_ADDR   "192.168.6.254"
@@ -48,7 +61,7 @@
 #define HOKKU_SERVER_URL        "http://192.168.6.111:8080/hokku/screen/"
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.2"
+#define FIRMWARE_VERSION        "1.2.5"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -75,61 +88,10 @@ static int         g_epd_ready = 0;
 static OS_Mutex_t  g_ota_lock;
 
 /* --------------------------------------------------------------------------
- * Reporting (Phase 1): activity log ring + software wall-clock + frame-state.
+ * Reporting: wake reason, battery, and frame-state telemetry. The activity log
+ * (hlog) and the software wall-clock (hokku_clock_*) are now shared XR872 code
+ * in firmware/common/xr872 (log.h / clock.h).
  * ------------------------------------------------------------------------ */
-
-/*
- * Activity log ring. Every hlog() line is echoed to the serial console AND
- * appended here; the accumulated buffer is POSTed to the server as the request
- * body on each fetch (mirrors the ESP32 firmware's RTC log ring) and reset only
- * after a 200. Truncating (not circular): once full it stops appending until the
- * next successful upload resets it — bounded and simple.
- */
-#define HOKKU_LOG_RING_SZ       2048U
-static char     g_log_ring[HOKKU_LOG_RING_SZ];
-static uint32_t g_log_len;
-
-static void hlog(const char *fmt, ...)
-{
-    char    line[160];
-    va_list ap;
-    int     n;
-
-    va_start(ap, fmt);
-    n = vsnprintf(line, sizeof(line), fmt, ap);
-    va_end(ap);
-    if (n < 0)
-        return;
-    if (n > (int)sizeof(line) - 1)
-        n = (int)sizeof(line) - 1;
-
-    printf("%s", line);                       /* still to serial console */
-    if (g_log_len + (uint32_t)n < HOKKU_LOG_RING_SZ) {
-        memcpy(g_log_ring + g_log_len, line, (size_t)n);
-        g_log_len += (uint32_t)n;
-    }
-}
-static void hlog_reset(void) { g_log_len = 0; }
-
-/*
- * Software wall-clock anchored to the server epoch (X-Server-Time-Epoch), so we
- * can report clk_now without an RTC. base==0 means never synced. Good enough for
- * the always-on loop; Phase 3 will back this with the RTC across hibernation.
- */
-static uint32_t g_clk_epoch_base;    /* server epoch captured at last sync */
-static uint32_t g_clk_uptime_base;   /* OS_GetTime() (secs) at last sync */
-
-static void hokku_clock_set(uint32_t server_epoch)
-{
-    g_clk_epoch_base  = server_epoch;
-    g_clk_uptime_base = OS_GetTime();
-}
-static uint32_t hokku_clock_now(void)
-{
-    if (g_clk_epoch_base == 0)
-        return 0;
-    return g_clk_epoch_base + (OS_GetTime() - g_clk_uptime_base);
-}
 
 /* SDK SRAM heap span (same accessor the `heap` console command uses). */
 extern void heap_get_space(uint8_t **start, uint8_t **end, uint8_t **current);
@@ -193,28 +155,38 @@ static void build_frame_state(char *buf, size_t sz)
     int             rssi = 0;
     uint8_t        *hs, *he, *hc;
     uint32_t        bat = hokku_battery_mv();
-    char            batfield[24] = "";
 
     if (wlan_sta_ap_info(&ap) == 0)
         rssi = (int)(int8_t)ap.rssi;         /* stored as signed dBm in a u8 */
 
     heap_get_space(&hs, &he, &hc);           /* free ~= end - current watermark */
 
-    if (bat > 0)
-        snprintf(batfield, sizeof(batfield), ",\"bat_mv\":%u", (unsigned)bat);
-
-    snprintf(buf, sz,
-        "{\"fw\":\"%s\",\"uptime_s\":%u,\"heap_kb\":%u,\"rssi\":%d,"
-        "\"regime\":\"%s\",\"wake\":\"%s\",\"cfg_ver\":%u,\"clk_now\":%u,\"ota\":1%s}",
-        FIRMWARE_VERSION,
-        (unsigned)OS_GetTime(),
-        (unsigned)((he - hc) / 1024),
-        rssi,
-        (cfg->power_mode == HOKKU_PWR_AWAKE || led_usb_present()) ? "usb_awake" : "battery",
-        g_wake,
-        (unsigned)HOKKU_CFG_VER,
-        (unsigned)hokku_clock_now(),
-        batfield);
+    /* Gather XR872-specific values, then hand off to the shared (SoC-agnostic)
+     * builder in common/all so the F7 reports the same schema as the ESP32
+     * boards. Fields the F7 doesn't track (boot/spurious/next_ep/sleep_err/
+     * wifi_cached) default to 0/none; bat_mv omits itself when the reading is
+     * unavailable (bat == 0 -> -1), matching the prior F7 behaviour. */
+    frame_state_t fs = {
+        .fw       = FIRMWARE_VERSION,
+        .boot     = 0,
+        .wake     = g_wake,
+        .regime   = (cfg->power_mode == HOKKU_PWR_AWAKE || led_usb_present())
+                        ? "usb_awake" : "battery",
+        .uptime_s = (long long)(unsigned)OS_GetTime(),
+        .bat_mv   = (bat > 0) ? (int)bat : -1,
+        .usb      = led_usb_present() ? "host" : "none",
+        .last_sleep = "none",
+        .rssi     = rssi,
+        .heap_kb  = (unsigned)((he - hc) / 1024),
+        .spurious = 0,
+        .cfg_ver  = (unsigned)HOKKU_CFG_VER,
+        .clk_now  = (long long)(unsigned)hokku_clock_now(),
+        .next_ep  = 0,
+        .sleep_err_known = false,
+        .sleep_err_s     = 0,
+        .wifi_cached     = false,
+    };
+    frame_state_build(buf, sz, &fs);
 }
 
 /*
@@ -264,79 +236,21 @@ static int         g_rollback_armed = 0;
 static uint32_t g_b0_rst_src, g_b0_boot_flag, g_b0_boot_arg, g_b0_wdg_cfg;
 #endif
 
-/*
- * Read a numeric response header. The SDK's HTTPClientFindFirstHeader only sets
- * the search clue; HTTPClientGetNextHeader actually returns the matched text
- * (which may include the "Name:" prefix, so we skip past any ':'). Returns 1 and
- * writes *out on success. (The prior code called only FindFirstHeader and never
- * read the value, so X-Sleep-Seconds silently fell back to the default.)
- */
-static int read_resp_header_uint(HTTP_SESSION_HANDLE h, const char *name, uint32_t *out)
-{
-    char   v[48];
-    UINT32 len = sizeof(v);
-    int    ok = 0;
-
-    HTTPClientFindFirstHeader(h, (char *)name, v, &len);
-    len = sizeof(v);
-    if (HTTPClientGetNextHeader(h, v, &len) == HTTP_CLIENT_SUCCESS) {
-        char *p = strchr(v, ':');
-        p = p ? p + 1 : v;
-        while (*p == ' ' || *p == '\t')
-            p++;
-        *out = (uint32_t)strtoul(p, NULL, 10);
-        ok = 1;
-    }
-    HTTPClientFindCloseHeader(h);
-    return ok;
-}
-
-/* Read a string response header into out[]. Returns 1 if a non-empty value was found. */
-static int read_resp_header_str(HTTP_SESSION_HANDLE h, const char *name, char *out, size_t outsz)
-{
-    char   v[64];
-    UINT32 len = sizeof(v);
-    int    ok = 0;
-
-    out[0] = '\0';
-    HTTPClientFindFirstHeader(h, (char *)name, v, &len);
-    len = sizeof(v);
-    if (HTTPClientGetNextHeader(h, v, &len) == HTTP_CLIENT_SUCCESS) {
-        char *p = strchr(v, ':');
-        p = p ? p + 1 : v;
-        while (*p == ' ' || *p == '\t')
-            p++;
-        strncpy(out, p, outsz - 1);
-        out[outsz - 1] = '\0';
-        for (int i = (int)strlen(out) - 1; i >= 0 &&
-             (out[i] == '\r' || out[i] == '\n' || out[i] == ' '); i--)
-            out[i] = '\0';
-        ok = (out[0] != '\0');
-    }
-    HTTPClientFindCloseHeader(h);
-    return ok;
-}
+/* read_resp_header_uint / read_resp_header_str are now shared XR872 code in
+ * firmware/common/xr872/http_util.h. */
 
 /*
  * Derive the firmware.bin URL from the configured screen server_url, e.g.
  *   "http://host:port/hokku/screen/" -> "http://host:port/hokku/firmware.bin?model=bigme_f7"
  * by keeping everything up to and including "/hokku/" and appending the OTA path.
  */
+/* Model-tagged firmware endpoint from the server base URL. Delegates to the
+ * shared (SoC-agnostic) derivation in common/all — same algorithm this used to
+ * inline (anchor on /hokku/, raw fallback). */
 static void hokku_build_firmware_url(char *out, size_t outsz)
 {
-    const char *base = hokku_config_get()->server_url;
-    const char *hk   = strstr(base, "/hokku/");
-
-    if (hk) {
-        size_t prefix = (size_t)(hk - base) + 7;    /* through "/hokku/" */
-        if (prefix < outsz) {
-            memcpy(out, base, prefix);
-            out[prefix] = '\0';
-            strncat(out, "firmware.bin?model=" SCREEN_MODEL, outsz - strlen(out) - 1);
-            return;
-        }
-    }
-    snprintf(out, outsz, "%s", base);               /* fallback: unrecognised URL shape */
+    firmware_url_build(out, outsz, hokku_config_get()->server_url,
+                       "firmware.bin?model=" SCREEN_MODEL);
 }
 
 /*
@@ -424,21 +338,22 @@ static int do_refresh(void)
     char            buf[512];
     char            frame_state[384];
     UINT32          bytes_streamed = 0;
-    UINT32          log_sent;
+    uint32_t        log_sent;                 /* bytes snapshotted for the POST body */
     int             sleep_sec = (int)cfg->default_sleep_s;
     int             ret;
 
     build_frame_state(frame_state, sizeof(frame_state));
 
-    log_sent = g_log_len;                     /* bytes delivered by this POST */
+    /* Snapshot the circular log into a contiguous body for the POST. Log the
+     * POST line first so it rides along in this upload. */
+    hlog("hokku: POST %s (log %u B)\n", cfg->server_url, (unsigned)hlog_len());
+    const char *log_body = hlog_snapshot(&log_sent);
     memset(&params, 0, sizeof(params));
     strncpy(params.Uri, cfg->server_url, sizeof(params.Uri) - 1);
-    params.HttpVerb  = VerbPost;              /* POST so the log ring rides as the body */
+    params.HttpVerb  = VerbPost;              /* POST so the log rides as the body */
     params.nTimeout  = HTTP_TIMEOUT_S;
-    params.pData     = g_log_ring;            /* request body = accumulated activity log */
-    params.pLength   = log_sent;              /* snapshot; dropped only after a 200 */
-
-    hlog("hokku: POST %s (log %u B)\n", cfg->server_url, (unsigned)g_log_len);
+    params.pData     = (void *)log_body;      /* request body = accumulated activity log */
+    params.pLength   = log_sent;              /* dropped only after a 200 */
     ret = HTTPC_open(&params);
     if (ret != HTTP_CLIENT_SUCCESS) {
         hlog("hokku: HTTP open failed (%d)\n", ret);
@@ -472,14 +387,11 @@ static int do_refresh(void)
         return (info.HTTPStatusCode == 503 || info.HTTPStatusCode == 404) ? 30 : -1;
     }
 
-    /* The POST body (log) reached the server in a 200 — drop the delivered prefix,
-     * keeping anything hlog() appended during this exchange for the next upload. */
-    if (g_log_len >= log_sent) {
-        g_log_len -= log_sent;
-        memmove(g_log_ring, g_log_ring + log_sent, g_log_len);
-    } else {
-        hlog_reset();
-    }
+    /* The POST body (log) reached the server in a 200 — clear the buffer so the
+     * next cycle starts fresh. (A handful of lines logged during this exchange
+     * are dropped too; the F7 uploads every cycle so little accumulates.) */
+    hlog_reset();
+    (void)log_sent;
 
     /* Capture sleep + server clock + any OTA signal from response headers */
     char fw_update[32] = "";
@@ -538,24 +450,7 @@ static int do_refresh(void)
     return sleep_sec;
 }
 
-/*
- * Deep sleep until the next refresh, then WAKE = full restart (hibernation). The
- * device re-runs the whole boot flow (rollback-commit, config, WiFi, fetch) on
- * wake, so no state needs retaining across sleep beyond the flash config. Does not
- * return; if pm_enter_mode somehow fails, fall back to a clean reboot.
- */
-static void hokku_hibernate(uint32_t sleep_s)
-{
-    if (sleep_s < 5)
-        sleep_s = 5;
-    if (sleep_s > 60000)                       /* HAL wake timer tops out ~18.6 h */
-        sleep_s = 60000;
-    hlog("hokku: battery mode — hibernating %u s (wake -> full reboot)\n", (unsigned)sleep_s);
-    OS_MSleep(60);                             /* let the log line flush over UART */
-    HAL_Wakeup_SetTimer_Sec(sleep_s);
-    pm_enter_mode(PM_MODE_HIBERNATION);
-    HAL_WDG_Reboot();                          /* unreached on success */
-}
+/* hokku_hibernate() is now shared XR872 code in firmware/common/xr872/pm.h. */
 
 /* True when the device should deep-sleep (vs stay awake) between refreshes. */
 static int hokku_should_sleep(void)
@@ -578,14 +473,26 @@ static void refresh_thread_fn(void *arg)
         g_epd_ready = 1;
     }
 
+    /* Consecutive server-unreachable failures, for exponential retry backoff.
+     * Persists across the awake loop (the churn case); on battery each
+     * hibernation wake restarts this thread and resets it, which is fine —
+     * hibernation is already low-power. */
+    unsigned refresh_failures = 0;
+
     while (1) {
         /* Hold the OTA/flash lock across the whole refresh (which may itself run
          * an OTA on X-Firmware-Update) so a console `ota` can't run concurrently. */
         OS_MutexLock(&g_ota_lock, OS_WAIT_FOREVER);
         int sleep_sec = do_refresh();          /* may reboot via OTA and never return */
         OS_MutexUnlock(&g_ota_lock);
-        if (sleep_sec < 0)
-            sleep_sec = 30;                    /* error backoff */
+        if (sleep_sec < 0) {
+            /* Couldn't reach the server — back off (shared SoC-agnostic policy):
+             * 30s, 60, 120, ... capped at 1 h, instead of hammering every 30s. */
+            sleep_sec = hokku_backoff_seconds(refresh_failures, 30, 3600);
+            if (refresh_failures < 255) refresh_failures++;
+        } else {
+            refresh_failures = 0;              /* reached the server — reset streak */
+        }
 
         if (hokku_should_sleep())
             hokku_hibernate((uint32_t)sleep_sec);   /* battery: deep sleep, restarts on wake */

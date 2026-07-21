@@ -1,10 +1,10 @@
 """Background flash-job orchestration for the web UI.
 
-Wraps :mod:`hokku.screens.huessen_epf1301` (the pure flash ops) in a single-slot,
-thread-backed job so a long (~30-60s) flash can run while the browser polls a
-status endpoint. Only one flash may run at a time; scanning is refused while a
-flash is in progress (the serial port can only be driven by one esptool at a
-time, and flashing resets the device).
+Wraps the pure flash ops (per-model, via :mod:`hokku.screens.flasher_registry`)
+in a single-slot, thread-backed job so a long (~30-60s) flash can run while the
+browser polls a status endpoint. Only one flash may run at a time; scanning is
+refused while a flash is in progress (the serial port can only be driven by one
+esptool at a time, and flashing resets the device).
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ import threading
 import time
 from pathlib import Path
 
-from hokku.screens import huessen_epf1301
 from hokku.screens.bigme_f7 import bootstrap as f7_bootstrap
+from hokku.screens.flasher_registry import esp32_screen
 
 logger = logging.getLogger(__name__)
 
@@ -30,20 +30,42 @@ class FlashJobManager:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._job: dict | None = None
+        # A scan drives the same serial port as a flash but is not a job (no
+        # thread, no log). It must still hold the single slot so a flash cannot
+        # start mid-scan and have two esptools fight over one device.
+        self._scanning = False
+
+    def _slot_taken(self) -> bool:
+        """Whether the single serial slot is held (caller must hold ``_lock``)."""
+        return self._scanning or (self._job is not None and self._job["state"] == "running")
 
     def is_busy(self) -> bool:
         with self._lock:
-            return self._job is not None and self._job["state"] == "running"
+            return self._slot_taken()
 
-    def _new_job(self, port: str, kind: str) -> dict | None:
-        """Create the single in-flight job (caller holds no lock). Returns the job
-        dict, or ``None`` if one is already running."""
+    def begin_scan(self) -> bool:
+        """Reserve the serial slot for a scan. Returns False (and reserves nothing)
+        if a flash or another scan already holds it. Pair with :meth:`end_scan`."""
         with self._lock:
-            if self._job is not None and self._job["state"] == "running":
+            if self._slot_taken():
+                return False
+            self._scanning = True
+            return True
+
+    def end_scan(self) -> None:
+        with self._lock:
+            self._scanning = False
+
+    def _new_job(self, port: str, kind: str, screen_model: str | None = None) -> dict | None:
+        """Create the single in-flight job (caller holds no lock). Returns the job
+        dict, or ``None`` if the serial slot is already taken (flash or scan)."""
+        with self._lock:
+            if self._slot_taken():
                 return None
             self._job = {
                 "id": next(_job_ids),
                 "kind": kind,
+                "screen_model": screen_model,
                 "state": "running",
                 "port": port,
                 "log": [],
@@ -55,25 +77,49 @@ class FlashJobManager:
             }
             return self._job
 
-    def cancel(self) -> bool:
-        """Request the running job stop at its next checkpoint (F7 catch loop only;
-        the esptool flash is not interruptible). Returns True if a job was running."""
+    def _fail_to_start(self, job: dict, exc: Exception) -> None:
+        """Mark a job errored when its worker thread could not be started, so the
+        slot frees instead of wedging in ``running`` forever."""
         with self._lock:
-            if self._job is not None and self._job["state"] == "running":
-                self._job["cancel"] = True
-                return True
-            return False
+            job["error"] = f"could not start flash thread: {exc}"
+            job["state"] = "error"
+            job["finished_at"] = time.time()
+            job["log"].append(f"ERROR: {job['error']}")
 
-    def start(self, port: str, config: dict, firmware_path: Path) -> int | None:
+    def cancel(self) -> bool:
+        """Request the running job stop at its next checkpoint. Only the Bigme F7
+        catch loop is interruptible; an esptool flash is not, so cancelling one is
+        refused (returns False) rather than falsely reporting success."""
+        with self._lock:
+            job = self._job
+            if job is None or job["state"] != "running":
+                return False
+            if job.get("kind") != "bigme_f7":
+                return False
+            job["cancel"] = True
+            return True
+
+    def start(
+        self,
+        port: str,
+        config: dict,
+        firmware_path: Path,
+        screen_model: str = "huessen_epf1301",
+    ) -> int | None:
         """Begin a flash in a background thread. Returns the job id, or ``None``
-        if a flash is already running."""
-        job = self._new_job(port, kind="esp32")
+        if a flash is already running.
+
+        ``screen_model`` selects which ESP32-S3 screen's flash layout (flash size,
+        NVS offsets, artifact name) drives the flash — the two ESP32 boards share a
+        USB VID:PID, so the operator's model choice, not the scan, disambiguates."""
+        job = self._new_job(port, kind="esp32", screen_model=screen_model)
         if job is None:
             return None
         job_id = job["id"]
         logger.info(
-            "Flash job #%d starting: port=%s firmware=%s screen_name=%r ssid=%r url=%s",
+            "Flash job #%d starting: model=%s port=%s firmware=%s screen_name=%r ssid=%r url=%s",
             job_id,
+            screen_model,
             port,
             Path(firmware_path).name,
             config.get("screen_name", ""),
@@ -82,11 +128,15 @@ class FlashJobManager:
         )
         self._thread = threading.Thread(
             target=self._run,
-            args=(job, port, config, firmware_path),
+            args=(job, port, config, firmware_path, screen_model),
             name=f"flash-{job_id}",
             daemon=True,
         )
-        self._thread.start()
+        try:
+            self._thread.start()
+        except RuntimeError as exc:  # e.g. OS thread exhaustion
+            logger.error("Flash job #%d thread failed to start: %s", job_id, exc)
+            self._fail_to_start(job, exc)
         return job_id
 
     def start_f7(self, port: str, image_path: Path, provision: dict | None = None) -> int | None:
@@ -96,7 +146,7 @@ class FlashJobManager:
         replug+press catch), writes slot 0, and — if ``provision`` is given — writes
         Wi-Fi/config over the console after a power-cycle. Returns the job id, or
         ``None`` if a flash is already running."""
-        job = self._new_job(port, kind="bigme_f7")
+        job = self._new_job(port, kind="bigme_f7", screen_model="bigme_f7")
         if job is None:
             return None
         job_id = job["id"]
@@ -113,7 +163,11 @@ class FlashJobManager:
             name=f"flash-f7-{job_id}",
             daemon=True,
         )
-        self._thread.start()
+        try:
+            self._thread.start()
+        except RuntimeError as exc:  # e.g. OS thread exhaustion
+            logger.error("Flash job #%d (Bigme F7) thread failed to start: %s", job_id, exc)
+            self._fail_to_start(job, exc)
         return job_id
 
     def _run_f7(self, job: dict, port: str, image_path: Path, provision: dict | None) -> None:
@@ -146,9 +200,14 @@ class FlashJobManager:
         with self._lock:
             job["log"].append(line)
 
-    def _run(self, job: dict, port: str, config: dict, firmware_path: Path) -> None:
+    def _run(
+        self, job: dict, port: str, config: dict, firmware_path: Path, screen_model: str
+    ) -> None:
         try:
-            result = huessen_epf1301.flash_device(
+            screen = esp32_screen(screen_model)
+            if screen is None:
+                raise ValueError(f"unknown ESP32 screen model {screen_model!r}")
+            result = screen.flash_device(
                 port, config, firmware_path, on_line=lambda ln: self._append(job, ln)
             )
             duration = time.time() - job["started_at"]
@@ -184,6 +243,7 @@ class FlashJobManager:
             return {
                 "id": job["id"],
                 "kind": job.get("kind", "esp32"),
+                "screen_model": job.get("screen_model"),
                 "state": job["state"],
                 "port": job["port"],
                 "log": list(job["log"]),

@@ -39,5 +39,8 @@ CONFIG_VERSION = 2
 BOOTLOADER_OFFSET = 0x0
 APP_OFFSET = 0x10000
 
+# esptool --flash-size for this board (16 MB flash).
+FLASH_SIZE = "16MB"
+
 # esptool baud rate used for all flash operations.
 ESPTOOL_BAUD = "921600"

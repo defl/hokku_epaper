@@ -13,7 +13,14 @@ serve_scheduler.json
 # Debian build artifacts (land in builds/, never the repo root)
 /builds/
 build/
-test_server/
+# test_server/: commit the portable config + README + an empty cache/ dir, and
+# ignore local runtime state (rendered cache, local overrides, logs).
+test_server/*
+!test_server/config.json
+!test_server/README.md
+!test_server/cache/
+test_server/cache/*
+!test_server/cache/.gitkeep
 *.deb
 *.buildinfo
 *.changes
@@ -22,6 +29,7 @@ python/.pybuild/
 python/build/
 python/dist/
 python/firmware/
+python/default_image/
 python/*.egg-info/
 python/debian/hokku-server/
 python/debian/.debhelper/
@@ -33,8 +41,15 @@ python/debian/*.substvars
 # Releases — shared dir holding every variant's built firmware
 # (hokku-<vendor>_<model>-<version>.{bin,img}); build artifacts, never committed.
 firmware/release/
-firmware/huessen_epf1301/build/
-firmware/huessen_epf1301/test/host/Testing/Temporary/CTestCostData.txt
+
+# Firmware build artifacts: compiled objects/depfiles anywhere (ESP-IDF in-tree
+# + host-test compilation of the shared C in firmware/common/), the ESP-IDF build
+# dirs (all ESP32 screens), and host-test (CMake/CTest) build + output dirs.
+firmware/**/*.o
+firmware/**/*.d
+firmware/*/build/
+firmware/*/test/host/build*/
+firmware/*/test/host/Testing/
 
 # XR872 firmware build artifacts
 firmware/bigme_f7/*.o

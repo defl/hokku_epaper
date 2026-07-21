@@ -17,6 +17,7 @@ Usage::
 from __future__ import annotations
 
 import io
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -123,7 +124,25 @@ def _rasterize_svg(path: Path) -> Image.Image:
     return Image.open(io.BytesIO(png_bytes)).convert("RGB")
 
 
+# Image DECODING is serialized across render threads. libheif (via pillow_heif,
+# for HEIF/HEIC) is not thread-safe: two workers decoding HEIF images at once
+# deadlock/stall — the reason the MultiThreadedImageManager appeared to hang on
+# image sets containing .heic/.heif. Serializing the decode is cheap; the parallel
+# win is the numba dither downstream (render_panel_bytes), which runs unlocked.
+_DECODE_LOCK = threading.Lock()
+
+
 def open_image_for_render(path: Path) -> Image.Image:
+    """PIL.open + EXIF transpose + RGB convert + size cap.  Caller closes.
+
+    Serialized via :data:`_DECODE_LOCK` (see above); the returned image is fully
+    decoded, so downstream rendering still parallelises.
+    """
+    with _DECODE_LOCK:
+        return _open_image_for_render(path)
+
+
+def _open_image_for_render(path: Path) -> Image.Image:
     """PIL.open + EXIF transpose + RGB convert + size cap.  Caller closes.
 
     SVG files are rasterised via resvg before entering the PIL pipeline.
@@ -427,6 +446,7 @@ class ImageRenderer(AbstractImageRenderer):
         *,
         release_input: bool = False,
         clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
+        crop_anchor_bboxes_norm: tuple[BoundingBox, ...] | None = None,
     ) -> np.ndarray:
         arr, padding_mask = self._prepare_canvas(
             img,
@@ -437,6 +457,7 @@ class ImageRenderer(AbstractImageRenderer):
             crop_to_fill_threshold,
             release_input=release_input,
             clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
+            crop_anchor_bboxes_norm=crop_anchor_bboxes_norm,
         )
 
         sat_space = cfg.adaptive_saturate_space

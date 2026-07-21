@@ -53,6 +53,17 @@ def set_wifi_country(country_code: str) -> None:
 def set_ssh(enabled: bool) -> None:
     action = "enable" if enabled else "disable"
     logger.info("%s SSH", action)
+    if enabled:
+        # pi-gen strips host keys from the golden image (so cloned devices
+        # don't share identical keys); stock Raspberry Pi OS regenerates
+        # them via a separate regenerate_ssh_host_keys.service that's only
+        # wired up when SSH is turned on through raspi-config. Our wizard
+        # enables ssh.service directly, bypassing that — confirmed live,
+        # sshd's own ExecStartPre fails outright ("no hostkeys available")
+        # with no keys present. -A generates any missing key types and is a
+        # no-op for ones that already exist, so this is safe to run every
+        # time the wizard (re-)enables SSH.
+        _run(["ssh-keygen", "-A"])
     _run(["systemctl", action, "--now", "ssh"])
 
 

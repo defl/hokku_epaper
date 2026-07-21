@@ -18,7 +18,7 @@
 
 #include "mocks/image/fdcm.h"
 
-#include "../../hokku_config.c"
+#include "../../../common/xr872/hokku_config.c"
 
 /* ── Minimal test framework ────────────────────────────────────────────── */
 static int g_pass = 0;

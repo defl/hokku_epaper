@@ -7,7 +7,11 @@ Main-menu driven installer that orchestrates:
   - Cache management (prefetch all release assets, wipe cache)
 
 Usage:
-    python hokku_setup.py
+    python hokku_setup.py [--model <screen_model>]
+
+    --model selects the ESP32-S3 screen to flash/configure (default
+    huessen_epf1301). The two ESP32 boards share a USB VID:PID, so the model is an
+    explicit choice, not auto-detected.
 """
 
 import shutil
@@ -18,6 +22,16 @@ from pathlib import Path
 import esp32_setup
 import pi_installer
 import release_cache
+
+
+def _parse_model_arg(argv):
+    """Return the value of --model / --model=<v> from argv, or None."""
+    for i, a in enumerate(argv):
+        if a == "--model" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--model="):
+            return a.split("=", 1)[1]
+    return None
 
 
 def _banner():
@@ -128,11 +142,9 @@ def _cache_entries():
 
 
 def _parse_firmware_tag(filename):
-    """Extract the tag from 'hokku-huessen_epf1301-<tag>.bin'. Returns tag or 'local'."""
-    stem = Path(filename).stem  # drops .bin
-    if stem.startswith("hokku-huessen_epf1301-"):
-        return stem[len("hokku-huessen_epf1301-") :]
-    return "local"
+    """Extract the tag from 'hokku-<model>-<tag>.bin'. Returns tag or 'local'."""
+    m = esp32_setup.SCREEN.SPEC.merged_re.match(Path(filename).name)
+    return m.group(1) if m else "local"
 
 
 def _fetch_firmware_from_github():
@@ -150,7 +162,7 @@ def _fetch_firmware_from_github():
     tag = rel.get("tag_name", "latest")
     asset = release_cache.find_asset(rel, esp32_setup._is_merged_firmware_asset)
     if asset is None:
-        print(f"  ERROR: release {tag} has no hokku-huessen_epf1301-*.bin asset.")
+        print(f"  ERROR: release {tag} has no hokku-{esp32_setup.MODEL_ID}-*.bin asset.")
         return None
 
     target_dir = esp32_setup.FIRMWARE_CACHE_DIR / tag
@@ -478,7 +490,15 @@ def _dispatch(choice):
 
 def main():
     _pause_on_exit = "--pause-on-exit" in sys.argv
+    model = _parse_model_arg(sys.argv) or "huessen_epf1301"
+    try:
+        esp32_setup.set_model(model)
+    except ValueError as e:
+        print(f"  ERROR: {e}")
+        sys.exit(2)
     _banner()
+    print(f"  Screen model: {esp32_setup.MODEL_ID}  (change with --model)")
+    print()
 
     last_rc = 0
     first = True

@@ -27,6 +27,10 @@ class ScreenImageConfig:
     #: Face bounding boxes or None.
     #: Passed to the renderer to scope CLAHE away from the face regions.
     clahe_keepout_bboxes: tuple[BoundingBox, ...] | None = None
+    #: Face bounding boxes to center the cover-crop window on, or None.
+    #: "Face-aware cropping" — biases which side of the image gets cropped
+    #: away so faces stay centered instead of the plain image center.
+    face_crop_bboxes: tuple[BoundingBox, ...] | None = None
     #: Target screen model. Part of the cache key so different-geometry models
     #: (e.g. Bigme F7 192 KB vs Huessen 960 KB) never share a panel .bin file.
     screen_model: str = "huessen_epf1301"
@@ -48,6 +52,11 @@ class ScreenImageConfig:
         # (no re-render storm) while other models get distinct slugs/files.
         if self.screen_model != "huessen_epf1301":
             payload["screen_model"] = self.screen_model
+        # Face-aware cropping is a new, off-by-default feature — only fold it
+        # into the slug when actually in use, so upgrading doesn't invalidate
+        # every existing cached render.
+        if self.face_crop_bboxes:
+            payload["face_crop_bboxes"] = [asdict(b) for b in self.face_crop_bboxes]
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:14]
 
 
@@ -64,10 +73,19 @@ def _screen_image_config_from_dict(d: dict) -> ScreenImageConfig:
             keepout = None
     else:
         keepout = None
+    raw_crop = d.get("face_crop_bboxes")
+    if raw_crop is not None:
+        try:
+            face_crop = tuple(BoundingBox(x=b["x"], y=b["y"], w=b["w"], h=b["h"]) for b in raw_crop)
+        except (ValueError, KeyError, TypeError):
+            face_crop = None
+    else:
+        face_crop = None
     return ScreenImageConfig(
         image_config=image_config,
         orientation=orientation,
         crop_to_fill_threshold=crop_to_fill_threshold,
         clahe_keepout_bboxes=keepout,
+        face_crop_bboxes=face_crop,
         screen_model=str(d.get("screen_model", "huessen_epf1301")),
     )
