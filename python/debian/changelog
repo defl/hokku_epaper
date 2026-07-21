@@ -1,3 +1,9 @@
+hokku-server (4.0.1~dev.6-1) unstable; urgency=medium
+
+  * ci: grant build-image.yml contents:write so it can attach the release asset
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 21 Jul 2026 01:29:29 -0500
+
 hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
 
   * chore: drop the now-unused frame_x_pi.png
