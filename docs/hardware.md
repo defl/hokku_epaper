@@ -8,9 +8,9 @@ photo library.
 
 | Frame | Size | Price | Board | Status |
 |---|---|---|---|---|
-| [**Hokku / Huessen 13.3"**](#hokku--huessen-133) | 13.3" | ~$299 | ESP32-S3 | ✅ Fully supported — the original, most thoroughly tested |
+| [**Hokku / Huessen 13.3"**](#hokku--huessen-133) | 13.3" | from ~$279 | ESP32-S3 | ✅ Fully supported — the original, most thoroughly tested |
 | [**Bigme F7**](#bigme-f7) | 7.3" | ~$99 | XR872AT | ✅ Supported — proven end-to-end on real hardware |
-| [**Seeed reTerminal E1004**](#seeed-reterminal-e1004) | 13.3" | see Seeed | ESP32-S3 | ⚠️ Experimental — builds and passes tests, **never run on real hardware** |
+| [**Seeed reTerminal E1004**](#seeed-reterminal-e1004) | 13.3" | ~$288 | ESP32-S3 | ⚠️ Experimental — builds and passes tests, **never run on real hardware** |
 
 All three use **E Ink Spectra 6** — the same six-ink family (black, white, yellow,
 red, blue, green), so the same photo library and conversion pipeline serves all of
@@ -33,9 +33,9 @@ verified.
 | Retailer | Listing | Price | Confirmed |
 |----------|---------|------:|:---------:|
 | Amazon | [Hokku Designs 13.3" WiFi E-Paper Art Photo Frame](https://amzn.to/3Rs4DXs) | $299 | |
-| Wayfair | [Hokku Designs 13.3" WiFi E-Paper Art Photo Frame](https://www.wayfair.com/decor-pillows/pdp/hokku-designs-133-inch-wifi-epaper-art-photo-frame-w115006181.html) | $280 | ✓ |
-| Macy's | [Huessen 13.3" WiFi E-Paper Art Digital Photo Frame](https://www.macys.com/shop/product/huessen-13.3-inch-wifi-epaper-art-digital-photo-frame?ID=23769763) | $320 | |
-| Best Buy | [Huessen 13.3" WiFi E-Paper Art Photo Frame](https://www.bestbuy.com/product/huessen-13-3-inch-wifi-epaper-art-photo-frame/J3KVWY3Q9L) | $350 | |
+| Wayfair | [Hokku Designs 13.3" WiFi E-Paper Art Photo Frame](https://www.wayfair.com/decor-pillows/pdp/hokku-designs-133-inch-wifi-epaper-art-photo-frame-w115006181.html) | $290 | ✓ |
+| Macy's | [Huessen 13.3" WiFi E-Paper Art Digital Photo Frame](https://www.macys.com/shop/product/huessen-13.3-inch-wifi-epaper-art-digital-photo-frame?ID=23769763) | $279 | |
+| Best Buy | [Huessen 13.3" E-Ink Digital Photo Frame](https://www.bestbuy.com/product/huessen-13-3-e-ink-digital-photo-frame-full-color-anti-glare-display-app-control-wall-mounted-aluminum-frame-white/J3KVWY3Q9L) | $340 | |
 | eco4life | [13.3" WiFi E-Ink Art Photo Frame](https://mall.eco4lifehome.com/products/13-3-inch-wifi-e-ink-art-photo-frame-smart-epaper-digital-display-with-app-control-cloud-sync-no-glare-no-light-pollution-ultra-low-power-ideal-for-home-office-decor) | $380 | |
 
 **What to check before buying**
@@ -93,9 +93,9 @@ the usual marketplaces.
 A 13.3" Spectra 6 panel on a Seeed XIAO ESP32-S3, on the reTerminal E-Series
 baseboard. Same panel family and resolution as the Hokku/Huessen frame.
 
-| Retailer | Listing |
-|----------|---------|
-| Seeed Studio | [reTerminal E1004](https://www.seeedstudio.com/reTerminal-E1004-p-6692.html) |
+| Retailer | Listing | Price |
+|----------|---------|------:|
+| Seeed Studio | [reTerminal E1004](https://www.seeedstudio.com/reTerminal-E1004-p-6692.html) | $288 |
 
 The panel bring-up work this port is based on was contributed by
 [@TaichungLester](https://github.com/TaichungLester) in
@@ -159,5 +159,5 @@ with what you bought and whether it worked. It'll get added either way.
 
 ---
 
-> Amazon prices checked 2026-07-21; other retailers 2026-05-12. Prices fluctuate
-> and vary by retailer and sale.
+> Prices checked 2026-07-21, except eco4life (2026-05-12). Prices fluctuate and
+> vary by retailer and sale.

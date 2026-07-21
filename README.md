@@ -8,9 +8,9 @@ Write the [appliance image](docs/appliance.md) to a Raspberry Pi, join the WiFi 
 
 | Frame | Size | Price | Status |
 |---|---|---|---|
-| **Hokku / Huessen 13.3"** | 13.3" | ~$299 | ✅ Fully supported — the original, most thoroughly tested |
+| **Hokku / Huessen 13.3"** | 13.3" | from ~$279 | ✅ Fully supported — the original, most thoroughly tested |
 | **Bigme F7** | 7.3" | ~$99 | ✅ Supported — proven end-to-end on real hardware |
-| **Seeed reTerminal E1004** | 13.3" | see Seeed | ⚠️ Experimental — builds and passes tests, never run on real hardware |
+| **Seeed reTerminal E1004** | 13.3" | ~$288 | ⚠️ Experimental — builds and passes tests, never run on real hardware |
 
 All three use **E Ink Spectra 6**, so one photo library feeds every frame — and you can mix sizes and orientations against it. See **[Hardware](docs/hardware.md)** for where to buy and what to check.
 
