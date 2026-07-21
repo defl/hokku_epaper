@@ -23,6 +23,25 @@ See [`hardware_facts.md`](hardware_facts.md) for the hardware reference.
 - [x] **Custom firmware: reporting, config, deep-sleep, battery, A/B OTA** — all
       verified on hardware (see `custom_firmware.md`, `ota.md`)
 
+### How the BROM protocol was decoded
+
+Worth recording, because the same approach transfers to any device with a
+vendor flashing tool and an undocumented wire protocol:
+
+1. Run the **vendor tool** (PhoenixMC) against the device normally — no
+   virtual COM ports, no interception, nothing that changes its behaviour.
+2. Capture the USB traffic underneath it with **USBPcap / Wireshark**,
+   filtered to the CH340 bridge (VID `1A86:7523`).
+3. Decode the captures offline: match request/response framing, then work out
+   the checksum over known-good frames until it reproduces byte-for-byte.
+
+That produced the command set and CRC scheme now implemented directly in
+[`tools/xr872_flasher.py`](../../../tools/xr872_flasher.py) — `GetFlashId`,
+`ReadSector`, `WriteSector`, `EraseFlash`, `ChangeBaud`, `SysReboot` — which
+is why flashing an F7 needs no vendor tooling on any platform. The one-off
+capture and decode scripts served their purpose and were removed once the
+protocol was implemented and verified.
+
 ## Firmware Extraction Plan
 
 ### Option A: Direct SPI Flash Read (Recommended First Attempt)
