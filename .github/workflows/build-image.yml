@@ -25,6 +25,13 @@ on:
 jobs:
   build-image:
     runs-on: ubuntu-latest
+    # `gh release upload` writes an asset to the release, which needs
+    # contents:write. Without this the default GITHUB_TOKEN is read-only and
+    # the upload fails with "HTTP 403: Resource not accessible by
+    # integration" — after a full 45-minute build has already succeeded, so
+    # the image is built and then thrown away. Confirmed on v4.0.0-alpha1.
+    permissions:
+      contents: write
     # Image builds are long; increase timeout beyond the default 6 hours if needed.
     timeout-minutes: 90
 

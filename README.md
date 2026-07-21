@@ -76,7 +76,7 @@ Three tabs: **Images** (your photo library — upload, preview, manage), **Scree
 
 ## Installation
 
-<img src="images/frame_x_pi.png" width="500">
+<img src="images/frame_frame_pi.png" width="500">
 
 **The easy way — the [appliance image](docs/appliance.md).** Write it to an SD card, put it in a Raspberry Pi Zero 2 W, power it on. The Pi raises a WiFi network called `Hokku Setup`; join it from your phone, fill in the form that opens, and it reboots onto your own network with the server running. No keyboard, no monitor, no terminal.
 
