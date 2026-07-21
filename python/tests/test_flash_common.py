@@ -692,3 +692,36 @@ def test_serve_binary_no_signal_when_not_pending(
     }
     r = client.get("/hokku/screen/", headers=headers)
     assert "X-Firmware-Update" not in r.headers
+
+
+def test_serve_binary_serves_pre_multiscreen_firmware_without_model_header(
+    app_config, make_test_image, tmp_path
+):
+    """A frame on firmware older than 1.2.9 sends no X-Screen-Model at all.
+
+    Back then huessen_epf1301 was the only model, so a missing header means
+    huessen. Rejecting it stranded every 3-series frame on a 400 with no route
+    back: that firmware has no OTA, so it could not be told to update and needed
+    a USB reflash just to start showing photos again. Regression test for that.
+    """
+    state = _state_with_image(app_config, make_test_image)
+    client = _client(state, tmp_path)
+
+    resp = client.get("/hokku/screen/", headers={"X-Screen-Name": "old-frame"})
+
+    assert resp.status_code == 200
+    assert len(resp.data) > 0
+    assert state.scheduler.get_screen_model("old-frame") == "huessen_epf1301"
+
+
+def test_serve_binary_still_rejects_an_unrecognised_model(app_config, make_test_image, tmp_path):
+    """Missing is backward compatibility; present-but-unknown is a real error."""
+    state = _state_with_image(app_config, make_test_image)
+    client = _client(state, tmp_path)
+
+    resp = client.get(
+        "/hokku/screen/",
+        headers={"X-Screen-Name": "weird", "X-Screen-Model": "not_a_real_screen"},
+    )
+
+    assert resp.status_code == 400

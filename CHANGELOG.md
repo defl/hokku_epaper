@@ -33,6 +33,30 @@ Raspberry Pi into a photo frame server without ever opening a terminal.**
 
 ---
 
+### Upgrading from 3.x
+
+**Your existing frames keep working.** Upgrade the server — the `.deb`, or by
+writing the appliance image to a fresh SD card — and frames already on 3-series
+firmware carry on fetching photos as before. No reflash is needed just to keep
+things running.
+
+They will, however, stay on their old firmware until you update them once over
+USB. Frames on 3-series firmware predate over-the-air updates entirely, so that
+first update has to be a cable: use *Flash a screen* in the web app, or
+`tools/hokku_setup.py`. Everything after that can be wireless.
+
+> A late fix in this release matters here. During alpha testing a 3-series frame
+> stopped receiving images the moment its server was upgraded: the new
+> image-serving path required an `X-Screen-Model` header that only exists from
+> firmware 1.2.9, and returned 400 without it. Because that rejection happened
+> before any update signalling — and 3-series firmware has no OTA to signal to —
+> an affected frame could not be rescued remotely at all; it needed a USB
+> reflash purely to start showing photos again. A frame that doesn't identify
+> its model is now correctly treated as a Hokku / Huessen frame, which is what
+> it must be: no other model existed before that header did.
+
+---
+
 ### The appliance image
 
 Previously, getting a server running meant imaging a Pi, SSHing in, and
