@@ -1,3 +1,9 @@
+hokku-server (4.0.1~dev.189-1) unstable; urgency=medium
+
+  * docs: rewrite the README as a multi-screen platform; frame prices
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 20 Jul 2026 23:52:06 -0500
+
 hokku-server (4.0.1~dev.188-1) unstable; urgency=medium
 
   * docs: one buying guide, one README per screen — same structure for all three

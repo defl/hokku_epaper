@@ -6,11 +6,11 @@ photo library.
 
 ## Supported frames
 
-| Frame | Size | Panel | Board | Status |
+| Frame | Size | Price | Board | Status |
 |---|---|---|---|---|
-| [**Hokku / Huessen 13.3"**](#hokku--huessen-133) | 13.3" | Spectra 6, 1200×1600 | ESP32-S3 | ✅ Fully supported — the original, most thoroughly tested |
-| [**Bigme F7**](#bigme-f7) | 7.3" | Spectra 6, 800×480 | XR872AT | ✅ Supported — proven end-to-end on real hardware |
-| [**Seeed reTerminal E1004**](#seeed-reterminal-e1004) | 13.3" | Spectra 6, 1200×1600 | ESP32-S3 | ⚠️ Experimental — builds and passes tests, **never run on real hardware** |
+| [**Hokku / Huessen 13.3"**](#hokku--huessen-133) | 13.3" | ~$299 | ESP32-S3 | ✅ Fully supported — the original, most thoroughly tested |
+| [**Bigme F7**](#bigme-f7) | 7.3" | ~$99 | XR872AT | ✅ Supported — proven end-to-end on real hardware |
+| [**Seeed reTerminal E1004**](#seeed-reterminal-e1004) | 13.3" | see Seeed | ESP32-S3 | ⚠️ Experimental — builds and passes tests, **never run on real hardware** |
 
 All three use **E Ink Spectra 6** — the same six-ink family (black, white, yellow,
 red, blue, green), so the same photo library and conversion pipeline serves all of
@@ -32,7 +32,7 @@ verified.
 
 | Retailer | Listing | Price | Confirmed |
 |----------|---------|------:|:---------:|
-| Amazon | [Hokku Designs 13.3" WiFi E-Paper Art Photo Frame](https://amzn.to/3Rs4DXs) | | |
+| Amazon | [Hokku Designs 13.3" WiFi E-Paper Art Photo Frame](https://amzn.to/3Rs4DXs) | $299 | |
 | Wayfair | [Hokku Designs 13.3" WiFi E-Paper Art Photo Frame](https://www.wayfair.com/decor-pillows/pdp/hokku-designs-133-inch-wifi-epaper-art-photo-frame-w115006181.html) | $280 | ✓ |
 | Macy's | [Huessen 13.3" WiFi E-Paper Art Digital Photo Frame](https://www.macys.com/shop/product/huessen-13.3-inch-wifi-epaper-art-digital-photo-frame?ID=23769763) | $320 | |
 | Best Buy | [Huessen 13.3" WiFi E-Paper Art Photo Frame](https://www.bestbuy.com/product/huessen-13-3-inch-wifi-epaper-art-photo-frame/J3KVWY3Q9L) | $350 | |
@@ -50,7 +50,8 @@ verified.
 
 ## Bigme F7
 
-The cheapest way into Hokku, and the only non-ESP32 frame supported: it runs an
+The cheapest way into Hokku at around **$99**, and the only non-ESP32 frame
+supported: it runs an
 **XRADIOTECH XR872AT**, which took a full reverse-engineering effort to support
 (see the [reverse-engineering overview](screens/bigme_f7/reverse_engineering_overview.md)).
 Custom firmware, A/B OTA updates, battery reporting and mDNS all work — proven
@@ -61,9 +62,9 @@ F7 Ultra, F7 SE and F7+ — per the manufacturer's own FCC equivalence letter
 (FCC ID `2A8EM-F7`) these **share identical PCB and hardware** and differ only by
 sales region. Buy whichever variant is cheapest or available where you are.
 
-| Retailer | Listing |
-|----------|---------|
-| Amazon | [Bigme F7 7.3" colour e-ink frame](https://amzn.to/4wL9dPm) |
+| Retailer | Listing | Price |
+|----------|---------|------:|
+| Amazon | [Bigme F7 7.3" colour e-ink frame](https://amzn.to/4wL9dPm) | $99 |
 
 Made by Bigme Cloud Literacy Technology Co., Ltd.; also sold directly and through
 the usual marketplaces.
@@ -158,5 +159,5 @@ with what you bought and whether it worked. It'll get added either way.
 
 ---
 
-> Prices last checked 2026-05-12. Amazon prices fluctuate; frame prices vary by
-> retailer and sale.
+> Amazon prices checked 2026-07-21; other retailers 2026-05-12. Prices fluctuate
+> and vary by retailer and sale.
