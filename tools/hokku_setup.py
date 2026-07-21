@@ -7,7 +7,11 @@ Main-menu driven installer that orchestrates:
   - Cache management (prefetch all release assets, wipe cache)
 
 Usage:
-    python hokku_setup.py
+    python hokku_setup.py [--model <screen_model>]
+
+    --model selects the ESP32-S3 screen to flash/configure (default
+    huessen_epf1301). The two ESP32 boards share a USB VID:PID, so the model is an
+    explicit choice, not auto-detected.
 """
 
 import shutil
@@ -18,6 +22,16 @@ from pathlib import Path
 import esp32_setup
 import pi_installer
 import release_cache
+
+
+def _parse_model_arg(argv):
+    """Return the value of --model / --model=<v> from argv, or None."""
+    for i, a in enumerate(argv):
+        if a == "--model" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--model="):
+            return a.split("=", 1)[1]
+    return None
 
 
 def _banner():
@@ -128,11 +142,9 @@ def _cache_entries():
 
 
 def _parse_firmware_tag(filename):
-    """Extract the tag from 'hokku-firmware_<tag>.bin'. Returns tag or 'local'."""
-    stem = Path(filename).stem  # drops .bin
-    if stem.startswith("hokku-firmware_"):
-        return stem[len("hokku-firmware_") :]
-    return "local"
+    """Extract the tag from 'hokku-<model>-<tag>.bin'. Returns tag or 'local'."""
+    m = esp32_setup.SCREEN.SPEC.merged_re.match(Path(filename).name)
+    return m.group(1) if m else "local"
 
 
 def _fetch_firmware_from_github():
@@ -150,7 +162,7 @@ def _fetch_firmware_from_github():
     tag = rel.get("tag_name", "latest")
     asset = release_cache.find_asset(rel, esp32_setup._is_merged_firmware_asset)
     if asset is None:
-        print(f"  ERROR: release {tag} has no hokku-firmware_*.bin asset.")
+        print(f"  ERROR: release {tag} has no hokku-{esp32_setup.MODEL_ID}-*.bin asset.")
         return None
 
     target_dir = esp32_setup.FIRMWARE_CACHE_DIR / tag
@@ -228,7 +240,7 @@ def action_download_everything():
         print("  .deb: FAILED")
 
     # 3. Firmware merged bin.
-    # If a local build exists (firmware/release/hokku-firmware_*.bin) ask the
+    # If a local build exists (firmware/release/hokku-huessen_epf1301-*.bin) ask the
     # user whether to import it or pull the latest release from GitHub —
     # they might be running this to capture a dev build in .cache/, or to
     # refresh an old cache from the official release. Don't guess.
@@ -285,27 +297,28 @@ def action_clear_cache():
 def _menu_default(status):
     """Pick a sensible default option based on device state."""
     if status is None or "device" not in status:
-        return "1"  # no device → full Pi install likely
+        return "1"  # no device → appliance image is the most common starting point
     dev = status["device"]
     if not dev.get("has_hokku_firmware"):
-        return "3"  # configure + flash
+        return "4"  # configure + flash ESP32
     if not dev.get("config_version_ok"):
-        return "4"  # has firmware, needs config
+        return "5"  # has firmware, needs config
     if dev.get("firmware_current") is False:
-        return "5"  # firmware update
+        return "6"  # firmware update
     return "1"
 
 
 def _print_menu(default):
     print("  What would you like to do?")
     options = [
-        ("1", "Full install — image SD card, then configure + flash ESP32"),
-        ("2", "Server only — image SD card with hokku-server, skip ESP32"),
-        ("3", "ESP32: configure + flash firmware"),
-        ("4", "ESP32: configure only (keep existing firmware)"),
-        ("5", "ESP32: flash firmware only (keep existing config)"),
-        ("6", "Advanced — install settings, cache management"),
-        ("7", "Exit"),
+        ("1", "Appliance image — flash Hokku appliance image (captive-portal setup on Pi)"),
+        ("2", "Full install — image SD card, configure on this PC, then flash ESP32"),
+        ("3", "Server only — image SD card with hokku-server (configure on this PC)"),
+        ("4", "ESP32: configure + flash firmware"),
+        ("5", "ESP32: configure only (keep existing firmware)"),
+        ("6", "ESP32: flash firmware only (keep existing config)"),
+        ("7", "Advanced — install settings, cache management"),
+        ("8", "Exit"),
     ]
     for num, label in options:
         marker = "  <-- default" if num == default else ""
@@ -416,6 +429,15 @@ def _dispatch(choice):
     """Run the chosen action. Returns ('continue', rc) to re-display the menu,
     or ('exit', rc) to quit."""
     if choice == "1":
+        # Appliance image: just flash the pre-built image, no PC-side config needed.
+        result = pi_installer.run_appliance()
+        if result is None:
+            return "continue", 1
+        print()
+        print("  Appliance image flashed. Follow the on-screen instructions above.")
+        print("  Once the Pi is on your network, flash the ESP32 screen here:")
+        return "continue", esp32_setup.run(pi_credentials=None, pi_install_ran=False)
+    if choice == "2":
         # Full install: Pi OS SD, then ESP32 config+flash with pre-fill.
         result = pi_installer.run()
         pi_install_ran = result is not None
@@ -435,7 +457,7 @@ def _dispatch(choice):
         return "continue", esp32_setup.run(
             pi_credentials=pi_credentials, pi_install_ran=pi_install_ran
         )
-    if choice == "2":
+    if choice == "3":
         # Server only: image the SD card, run through mDNS/HTTP wait, then stop.
         result = pi_installer.run()
         if result is None:
@@ -451,15 +473,15 @@ def _dispatch(choice):
         else:
             print("  Server install submitted but HTTP probe timed out — check the Pi directly.")
         return "continue", 0
-    if choice == "3":
-        return "continue", esp32_setup.run_configure_and_flash()
     if choice == "4":
-        return "continue", esp32_setup.run_configure_only()
+        return "continue", esp32_setup.run_configure_and_flash()
     if choice == "5":
-        return "continue", esp32_setup.run_flash_only()
+        return "continue", esp32_setup.run_configure_only()
     if choice == "6":
-        return "continue", action_advanced()
+        return "continue", esp32_setup.run_flash_only()
     if choice == "7":
+        return "continue", action_advanced()
+    if choice == "8":
         print("  Bye!")
         return "exit", 0
     print(f"  Unknown choice {choice!r}.")
@@ -468,7 +490,15 @@ def _dispatch(choice):
 
 def main():
     _pause_on_exit = "--pause-on-exit" in sys.argv
+    model = _parse_model_arg(sys.argv) or "huessen_epf1301"
+    try:
+        esp32_setup.set_model(model)
+    except ValueError as e:
+        print(f"  ERROR: {e}")
+        sys.exit(2)
     _banner()
+    print(f"  Screen model: {esp32_setup.MODEL_ID}  (change with --model)")
+    print()
 
     last_rc = 0
     first = True

@@ -50,7 +50,7 @@ The details view shows the original and the converted version side by side at fu
 
 The Screens tab shows every frame that has ever connected to this server. Each entry in the dashboard displays:
 
-- **Name** — the screen name you gave the frame during setup. If you have multiple frames this is how you tell them apart.
+- **Name** — the screen name given to the frame when it was set up. If you have multiple frames this is how you tell them apart.
 - **Battery level** — shown as a percentage with a colour indicator. Drops below 20% and it turns red. The frame reports its battery level on every refresh so this is always current as of the last check-in.
 - **WiFi signal** — the frame's signal strength at the time of its last refresh. Useful for diagnosing frames that are inconsistent updaters.
 - **Last seen** — when the frame last fetched an image. If this is hours ago and the frame is supposed to be on a regular schedule, something is probably wrong.
@@ -60,9 +60,28 @@ The Screens tab shows every frame that has ever connected to this server. Each e
 
 **How frames connect** — the frame calls the server on its refresh schedule, receives the next image and a sleep duration in the response headers, and goes back to deep sleep. It doesn't maintain a persistent connection. This means the Screens table only updates when a frame checks in — a frame that's been asleep for 12 hours will show its last-seen time as 12 hours ago. That's normal.
 
-**Multiple frames** — every frame that connects is tracked independently. You can run as many frames as you like from a single server. Give each one a distinct name during setup so you can tell them apart in the dashboard. Each frame follows the same global refresh schedule and image pool.
+**Multiple frames** — every frame that connects is tracked independently. You can run as many frames as you like from a single server, and they don't have to be the same model: a 13.3" frame and a 7.3" Bigme F7 can run side by side off the same library, each served images converted for its own panel. Give each one a distinct name so you can tell them apart in the dashboard. All frames share the same refresh schedule and image pool.
 
 **Per-screen orientation** — each frame carries its own orientation, set in the Screens tab. A frame mounted in portrait can show portrait-rendered images while another in landscape shows landscape ones, both served from the same library. A brand-new frame defaults to landscape until you change it.
+
+**Firmware version** — each frame reports the firmware it's running, shown in the
+dashboard. If the server is carrying a newer build for that model, the frame is
+flagged as outdated.
+
+**Firmware updates over the air** — open a frame's details and turn on *Update
+firmware on next refresh*. The next time that frame checks in, it downloads and
+installs the new firmware by itself: no USB, no cable, no terminal. The old
+firmware stays in a second slot and is restored automatically if the new one
+can't reach the server afterwards, so a bad update rolls itself back rather than
+bricking the frame.
+
+A frame has to be running Hokku firmware already for this to work — the very
+first install is always over USB. After that, every update can be wireless.
+
+**Flash a screen** — if the server runs on the machine you plug frames into (the
+[appliance](appliance.md), typically), the *Flash a screen* page installs firmware
+onto a USB-connected frame directly from the web app, including adopting a
+brand-new one. It handles each supported model's flashing method for you.
 
 ### 1.3 Config
 
@@ -106,6 +125,9 @@ After editing the config file, restart the server (`systemctl restart hokku-serv
 
 ### 2.1 Buttons and LEDs
 
+> Physical controls vary by frame. This section describes the **Hokku / Huessen
+> 13.3"** frame; see your screen's [hardware page](hardware.md) for the others.
+
 **The button** on the side of the frame (right side in landscape orientation, bottom in portrait) forces an immediate refresh regardless of schedule. The frame wakes up, connects to WiFi, fetches the next image, displays it, then goes back to sleep. This works whether the frame is running on battery or plugged into USB. Use it when you've just uploaded something and want to see it on the frame right now rather than waiting for the next scheduled time.
 
 After a button press the frame stays awake for 60 seconds — long enough to press the button again to skip to another image, or to plug in USB for reflashing if needed.
@@ -121,7 +143,7 @@ If something goes wrong the frame doesn't go blank or silently stop working — 
 
 Common error messages and what to do:
 
-- **Config missing or invalid** — the frame was flashed without being configured, or the configuration version doesn't match the firmware. Run `python tools/hokku_setup.py` and use option [3] or [4] to write a fresh config.
+- **Config missing or invalid** — the frame was flashed without being configured, or the configuration version doesn't match the firmware. Reconfigure it from **Flash a screen** in the web app, or run `python tools/hokku_setup.py` and use option [3] or [4].
 - **WiFi connection failed** — the SSID or password is wrong, or the network isn't available at the frame's location. If a secondary network is configured the frame tries both before giving up. Check your WiFi credentials and run configure again.
 - **Server unreachable** — the frame connected to WiFi but couldn't reach the server. Check that the server is running, that the IP address in the frame's config is correct, and that nothing on your network is blocking port 8080.
 - **No images available** — the server is running and reachable but the image pool is empty. Upload some photos via the web app.
@@ -130,9 +152,9 @@ After fixing the underlying issue, the frame will try again on its next schedule
 
 ### 2.3 Sleep and power
 
-The frame spends the vast majority of its time in deep sleep, drawing around 8 µA — a level so low that a full charge lasts several months. It wakes up only at the scheduled refresh times (or when you press the button), fetches an image, displays it, and goes back to sleep. Displaying a new image takes a few seconds; the rest of the time there is no power draw from the display either, since e-ink retains its image without any power.
+The frame spends the vast majority of its time in deep sleep, drawing single-digit microamps — a level so low that a full charge lasts several months. (The Hokku / Huessen frame measures around 8 µA; other models differ.) It wakes up only at the scheduled refresh times (or when you press the button), fetches an image, displays it, and goes back to sleep. Displaying a new image takes a few seconds; the rest of the time there is no power draw from the display either, since e-ink retains its image without any power.
 
-When plugged into USB (a computer, not a plain wall charger) the frame stays fully awake and skips deep sleep. This is intentional — it keeps the chip reachable for reflashing. The red LED blinks while this is the case. Plugging and unplugging USB does not trigger an image refresh; only the schedule and the button do.
+On the Hokku / Huessen frame and the Bigme F7, plugging into USB (a computer, not a plain wall charger) keeps the frame fully awake instead of deep sleeping. This is intentional — it keeps the chip reachable for reflashing. On the Hokku / Huessen frame the red LED blinks while this is the case. Not every model detects USB this way. Plugging and unplugging USB does not trigger an image refresh; only the schedule and the button do.
 
 The battery level is reported to the server on every refresh and shown in the Screens tab. The web app flags frames below 20% in red. If a frame's battery gets too low to complete a refresh it will display a low-battery message on screen before powering off.
 
@@ -142,8 +164,8 @@ The battery level is reported to the server on every refresh and shown in the Sc
 
 The following docs cover specific subsystems in detail:
 
-- **[hardware.md](hardware.md)** — where to buy the frame and the recommended Pi server kit.
-- **[install.md](install.md)** — full installation reference: the setup wizard step by step, manual installation on any platform, configuration file format and loading order.
+- **[hardware.md](hardware.md)** — every supported frame, where to buy, and the recommended Pi server kit.
+- **[appliance.md](appliance.md)** — the SD-card image: write it, join its WiFi, fill in a form.
+- **[install.md](install.md)** — full installation reference: manual installation on any platform, configuration file format and loading order.
 - **[dithering.md](dithering.md)** — how images are converted to the six-colour palette, why the defaults are what they are, what each setting does, and how to tune for specific types of photo.
-- **[firmware_design.md](firmware_design.md)** — the state-machine spec the firmware implements, for developers.
-- **[hardware_facts.md](hardware_facts.md)** — confirmed GPIO map, SPI config, and other hardware details.
+- **Per-screen documentation** — [Hokku / Huessen 13.3"](screens/huessen_epf1301/README.md) · [Bigme F7](screens/bigme_f7/README.md) · [Seeed reTerminal E1004](screens/seeedstudio_e1004/README.md), each covering that model's hardware, firmware and quirks.

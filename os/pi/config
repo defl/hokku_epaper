@@ -1,0 +1,30 @@
+IMG_NAME="hokku"
+RELEASE="bookworm"
+TARGET_HOSTNAME="hokku"
+
+# Build 64-bit image for Pi Zero 2 W, Pi 4, etc.
+ARCH="arm64"
+
+# SSH disabled at image level — installer enables it only if user requests.
+ENABLE_SSH=0
+
+LOCALE_DEFAULT="en_GB.UTF-8"
+KEYBOARD_LAYOUT="gb"
+KEYBOARD_MODEL="pc105"
+TIMEZONE_DEFAULT="UTC"
+
+# Default user: hokku / hokku — installer warns if SSH is enabled without changing this.
+FIRST_USER_NAME="hokku"
+FIRST_USER_PASS="$(openssl passwd -6 hokku)"
+
+# WiFi NOT baked in — installer collects SSID/password/country via captive portal.
+# WPA_COUNTRY must NOT be set (even to empty): pi-gen's 02-net-tweaks/01-run.sh
+# calls 'raspi-config nonint do_wifi_country ""' when the variable is set,
+# which fails on an empty value. Unset = pi-gen uses NetworkManager default.
+
+# Only build through stage-hokku; stages 0/1/2 produce no standalone images
+# (SKIP_IMAGES is added to stage2 by build-image.sh).
+STAGE_LIST="stage0 stage1 stage2 stage-hokku"
+
+DEPLOY_COMPRESSION="xz"
+COMPRESSION_LEVEL=6

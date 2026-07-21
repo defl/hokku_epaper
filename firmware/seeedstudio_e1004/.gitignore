@@ -1,0 +1,3 @@
+build/
+sdkconfig
+main/secrets.h

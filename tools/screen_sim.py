@@ -154,6 +154,7 @@ def fetch_screen(
     battery_mv: int | None = None,
     sim_state: SimState | None = None,
     timeout: int = 30,
+    screen_model: str = "huessen_epf1301",
 ) -> tuple[bytes, dict[str, str]]:
     """GET /hokku/screen/ and return (binary, response_headers).
 
@@ -161,10 +162,12 @@ def fetch_screen(
     request in its screen telemetry.
 
     Args:
-        server_url:  Base URL, e.g. ``http://localhost:8080``.
-        screen_name: Sent as ``X-Screen-Name``; shows up in the server UI.
-        battery_mv:  Optional battery voltage in mV (``X-Battery-mV``).
-        timeout:     Socket timeout in seconds.
+        server_url:   Base URL, e.g. ``http://localhost:8080``.
+        screen_name:  Sent as ``X-Screen-Name``; shows up in the server UI.
+        battery_mv:   Optional battery voltage in mV (``X-Battery-mV``).
+        timeout:      Socket timeout in seconds.
+        screen_model: Sent as ``X-Screen-Model`` — the hardware model the
+                      server routes on (default: huessen_epf1301).
 
     Returns:
         A (binary_data, headers_dict) tuple. headers_dict keys are lowercase.
@@ -177,6 +180,7 @@ def fetch_screen(
     hdrs: dict[str, str] = {
         "User-Agent": f"hokku-screen-sim/2.0 ({screen_name})",
         "X-Screen-Name": screen_name,
+        "X-Screen-Model": screen_model,
     }
     if battery_mv is not None:
         hdrs["X-Battery-mV"] = str(battery_mv)
@@ -381,6 +385,14 @@ def main():
         "(1200×1600, rotated 90° CCW from landscape)",
     )
     parser.add_argument(
+        "--model",
+        "-m",
+        default="huessen_epf1301",
+        metavar="MODEL",
+        help="Hardware model sent as X-Screen-Model — the model the server routes on "
+        "(e.g. huessen_epf1301, seeedstudio_e1004, bigme_f7). Default: huessen_epf1301",
+    )
+    parser.add_argument(
         "--quiet",
         "-q",
         action="store_true",
@@ -410,6 +422,7 @@ def main():
                 args.name,
                 battery_mv=args.battery,
                 sim_state=sim_state,
+                screen_model=args.model,
             )
             sleep_s = headers.get("x-sleep-seconds", "?")
             epoch = headers.get("x-server-time-epoch", "?")

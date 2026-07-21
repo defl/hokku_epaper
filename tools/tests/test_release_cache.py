@@ -54,29 +54,29 @@ class TestFindLatestReleaseWithAsset:
             {"tag_name": "v2.0", "assets": [{"name": "other.bin"}]},
             {
                 "tag_name": "v1.0",
-                "assets": [{"name": "hokku-firmware_v1.0.bin", "browser_download_url": "u"}],
+                "assets": [{"name": "hokku-huessen_epf1301-v1.0.bin", "browser_download_url": "u"}],
             },
         ]
         monkeypatch.setattr(release_cache, "get_all_releases", lambda: releases)
         rel, asset = release_cache.find_latest_release_with_asset(
-            lambda n: n.startswith("hokku-firmware_")
+            lambda n: n.startswith("hokku-huessen_epf1301-")
         )
         assert rel is not None and asset is not None
         assert rel["tag_name"] == "v1.0"
-        assert asset["name"] == "hokku-firmware_v1.0.bin"
+        assert asset["name"] == "hokku-huessen_epf1301-v1.0.bin"
 
     def test_returns_prerelease_when_it_has_asset(self, monkeypatch):
         releases = [
             {
                 "tag_name": "v3.0.0",
                 "prerelease": True,
-                "assets": [{"name": "hokku-firmware_v3.0.0.bin"}],
+                "assets": [{"name": "hokku-huessen_epf1301-v3.0.0.bin"}],
             },
             {"tag_name": "v2.9.0", "prerelease": False, "assets": []},
         ]
         monkeypatch.setattr(release_cache, "get_all_releases", lambda: releases)
         rel, _ = release_cache.find_latest_release_with_asset(
-            lambda n: n.startswith("hokku-firmware_")
+            lambda n: n.startswith("hokku-huessen_epf1301-")
         )
         assert rel is not None
         assert rel["tag_name"] == "v3.0.0"
@@ -186,10 +186,10 @@ class TestEnsureCachedAsset:
 
 class TestMergedFirmwareDetection:
     def test_picks_merged_file(self, tmp_path):
-        (tmp_path / "hokku-firmware_v1.0.0.bin").write_bytes(b"x")
+        (tmp_path / "hokku-huessen_epf1301-v1.0.0.bin").write_bytes(b"x")
         result = esp32_setup._merged_firmware_file(tmp_path)
         assert result is not None
-        assert result.name == "hokku-firmware_v1.0.0.bin"
+        assert result.name == "hokku-huessen_epf1301-v1.0.0.bin"
 
     def test_returns_none_when_no_merged(self, tmp_path):
         assert esp32_setup._merged_firmware_file(tmp_path) is None
@@ -199,11 +199,11 @@ class TestMergedFirmwareDetection:
         assert esp32_setup._merged_firmware_file(tmp_path) is None
 
     def test_picks_latest_sorted(self, tmp_path):
-        (tmp_path / "hokku-firmware_v1.bin").write_bytes(b"x")
-        (tmp_path / "hokku-firmware_v2.bin").write_bytes(b"x")
+        (tmp_path / "hokku-huessen_epf1301-v1.bin").write_bytes(b"x")
+        (tmp_path / "hokku-huessen_epf1301-v2.bin").write_bytes(b"x")
         latest = esp32_setup._merged_firmware_file(tmp_path)
         assert latest is not None
-        assert latest.name == "hokku-firmware_v2.bin"
+        assert latest.name == "hokku-huessen_epf1301-v2.bin"
 
     def test_nonexistent_dir(self, tmp_path):
         assert esp32_setup._merged_firmware_file(tmp_path / "nope") is None
@@ -211,7 +211,7 @@ class TestMergedFirmwareDetection:
 
 class TestIsMergedAsset:
     def test_matches_merged(self):
-        assert esp32_setup._is_merged_firmware_asset("hokku-firmware_v2.1.20.bin")
+        assert esp32_setup._is_merged_firmware_asset("hokku-huessen_epf1301-v2.1.20.bin")
 
     def test_rejects_parts(self):
         for n in ("bootloader.bin", "partition-table.bin", "hokku_epaper.bin"):
@@ -225,7 +225,7 @@ class TestResolveFirmwareDir:
     def test_uses_local_when_merged_file_present(self, tmp_path, monkeypatch):
         local = tmp_path / "release"
         local.mkdir()
-        (local / "hokku-firmware_v1.0.0.bin").write_bytes(b"x")
+        (local / "hokku-huessen_epf1301-v1.0.0.bin").write_bytes(b"x")
         monkeypatch.setattr(esp32_setup, "LOCAL_FIRMWARE_DIR", local)
         monkeypatch.setattr(esp32_setup, "FIRMWARE_DIR", None)
         assert esp32_setup.resolve_firmware_dir() == local
@@ -240,7 +240,7 @@ class TestResolveFirmwareDir:
         monkeypatch.setattr(esp32_setup, "FIRMWARE_DIR", None)
 
         fake_asset = {
-            "name": "hokku-firmware_v9.9.9.bin",
+            "name": "hokku-huessen_epf1301-v9.9.9.bin",
             "browser_download_url": "http://x/fw.bin",
             "size": 42,
         }
@@ -264,7 +264,7 @@ class TestResolveFirmwareDir:
 
         result = esp32_setup.resolve_firmware_dir()
         assert result == cache / "v9.9.9"
-        assert downloaded == ["hokku-firmware_v9.9.9.bin"]
+        assert downloaded == ["hokku-huessen_epf1301-v9.9.9.bin"]
 
     def test_downloads_from_prerelease_when_newest_with_asset(self, tmp_path, monkeypatch):
         """Firmware is fetched even if the newest release is a GitHub pre-release."""
@@ -277,7 +277,7 @@ class TestResolveFirmwareDir:
         monkeypatch.setattr(esp32_setup, "FIRMWARE_DIR", None)
 
         fake_asset = {
-            "name": "hokku-firmware_v3.0.0.bin",
+            "name": "hokku-huessen_epf1301-v3.0.0.bin",
             "browser_download_url": "http://x/fw.bin",
             "size": 10,
         }
@@ -324,7 +324,7 @@ class TestResolveFirmwareDir:
 class TestReleaseAppHeader:
     def test_reads_from_merged_at_app_offset(self, tmp_path):
         """Merged file must be read at offset 0x10000 (app region)."""
-        merged = tmp_path / "hokku-firmware_v1.bin"
+        merged = tmp_path / "hokku-huessen_epf1301-v1.bin"
         # Fill with zeros then write a recognizable pattern at APP_OFFSET
         blob = bytearray(esp32_setup.APP_OFFSET + 256)
         blob[esp32_setup.APP_OFFSET : esp32_setup.APP_OFFSET + 16] = b"APPHEADER_START\x00"

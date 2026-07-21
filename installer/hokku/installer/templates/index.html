@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hokku Setup</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@400;600&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #1a1a1a;
+      --ink-light: #4a4a4a;
+      --paper: #f5f0e8;
+      --paper-dark: #e8e0d0;
+      --accent: #8b2020;
+      --accent-light: #c44;
+      --border: #c8bda8;
+      --warn-bg: #fff8e6;
+      --warn-border: #d4a017;
+      --error-bg: #fff0f0;
+      --error-border: #cc4444;
+      --radius: 6px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', sans-serif;
+      font-size: 15px;
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 100vh;
+      padding: 24px 16px 48px;
+    }
+    .page {
+      max-width: 560px;
+      margin: 0 auto;
+    }
+    header {
+      text-align: center;
+      padding: 24px 0 32px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 32px;
+    }
+    header h1 {
+      font-family: 'Shippori Mincho', serif;
+      font-size: 2rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: var(--ink);
+    }
+    header p {
+      margin-top: 8px;
+      color: var(--ink-light);
+      font-size: 0.9rem;
+    }
+    .section {
+      margin-bottom: 28px;
+    }
+    .section-title {
+      font-family: 'Shippori Mincho', serif;
+      font-size: 0.85rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--ink-light);
+      margin-bottom: 14px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    .field {
+      margin-bottom: 16px;
+    }
+    label {
+      display: block;
+      font-weight: 500;
+      font-size: 0.88rem;
+      margin-bottom: 5px;
+      color: var(--ink);
+    }
+    label .hint {
+      font-weight: 400;
+      color: var(--ink-light);
+      font-size: 0.82rem;
+      margin-left: 4px;
+    }
+    input[type="text"],
+    input[type="password"],
+    select {
+      width: 100%;
+      padding: 9px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: #fff;
+      font-size: 0.95rem;
+      font-family: inherit;
+      color: var(--ink);
+      transition: border-color 0.15s;
+      appearance: none;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .input-suffix-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0;
+    }
+    .input-suffix-wrap input {
+      border-radius: var(--radius) 0 0 var(--radius);
+      border-right: none;
+      flex: 1;
+    }
+    .input-suffix {
+      padding: 9px 10px;
+      border: 1px solid var(--border);
+      border-left: none;
+      border-radius: 0 var(--radius) var(--radius) 0;
+      background: var(--paper-dark);
+      color: var(--ink-light);
+      font-size: 0.9rem;
+      white-space: nowrap;
+    }
+    .ssid-wrap {
+      display: flex;
+      gap: 8px;
+    }
+    .ssid-wrap input { flex: 1; }
+    .btn-scan {
+      padding: 9px 14px;
+      background: var(--paper-dark);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-family: inherit;
+      color: var(--ink);
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+    .btn-scan:hover { background: var(--border); }
+    .scan-list {
+      display: none;
+      margin-top: 6px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: #fff;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .scan-list.visible { display: block; }
+    .scan-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 9px 12px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--paper-dark);
+      font-size: 0.9rem;
+    }
+    .scan-item:last-child { border-bottom: none; }
+    .scan-item:hover { background: var(--paper); }
+    .scan-item .scan-ssid { font-weight: 500; }
+    .scan-item .scan-meta { font-size: 0.78rem; color: var(--ink-light); }
+    .scan-empty { padding: 12px; text-align: center; color: var(--ink-light); font-size: 0.88rem; }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--paper-dark);
+    }
+    .toggle-row:last-child { border-bottom: none; }
+    .toggle-label { font-weight: 500; font-size: 0.9rem; }
+    .toggle-desc { font-size: 0.8rem; color: var(--ink-light); margin-top: 2px; }
+    .toggle {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-track {
+      position: absolute;
+      inset: 0;
+      background: var(--border);
+      border-radius: 12px;
+      transition: background 0.2s;
+      cursor: pointer;
+    }
+    .toggle input:checked + .toggle-track { background: var(--accent); }
+    .toggle-thumb {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 18px;
+      height: 18px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.2s;
+      pointer-events: none;
+    }
+    .toggle input:checked ~ .toggle-thumb { transform: translateX(20px); }
+    .radio-group {
+      display: flex;
+      gap: 8px;
+    }
+    .radio-group label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 400;
+      background: var(--paper-dark);
+      transition: background 0.15s, border-color 0.15s;
+      margin: 0;
+    }
+    .radio-group input[type="radio"] { accent-color: var(--accent); }
+    .radio-group label:has(input:checked) {
+      background: #fff;
+      border-color: var(--accent);
+      font-weight: 500;
+    }
+    .static-fields { display: none; margin-top: 14px; }
+    .static-fields.visible { display: block; }
+    .warn {
+      padding: 10px 14px;
+      background: var(--warn-bg);
+      border: 1px solid var(--warn-border);
+      border-radius: var(--radius);
+      font-size: 0.85rem;
+      margin-top: 10px;
+      display: none;
+    }
+    .warn.visible { display: block; }
+    .error-msg {
+      font-size: 0.8rem;
+      color: var(--accent-light);
+      margin-top: 4px;
+    }
+    input.invalid, select.invalid { border-color: var(--accent-light); }
+    .form-errors {
+      padding: 12px 16px;
+      background: var(--error-bg);
+      border: 1px solid var(--error-border);
+      border-radius: var(--radius);
+      margin-bottom: 20px;
+      font-size: 0.88rem;
+    }
+    .form-errors strong { display: block; margin-bottom: 4px; }
+    .btn-submit {
+      display: block;
+      width: 100%;
+      padding: 14px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-family: 'Shippori Mincho', serif;
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      margin-top: 28px;
+      transition: background 0.15s;
+    }
+    .btn-submit:hover { background: var(--accent-light); }
+    .btn-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+    @media (max-width: 400px) {
+      header h1 { font-size: 1.6rem; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>北句 Hokku</h1>
+    <p>Connect your device to your network</p>
+  </header>
+
+  {% if errors %}
+  <div class="form-errors">
+    <strong>Please fix the following:</strong>
+    {% for field, msg in errors.items() %}
+    <div>{{ msg }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <form method="POST" action="/setup" id="setup-form" novalidate>
+
+    <!-- ── WiFi ─────────────────────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-title">WiFi Network</div>
+
+      <div class="field">
+        <label for="ssid">Network name (SSID)</label>
+        <div class="ssid-wrap">
+          <input type="text" id="ssid" name="ssid"
+                 value="{{ form.ssid if form else '' }}"
+                 placeholder="Select or type network name"
+                 autocomplete="off" autocorrect="off" spellcheck="false"
+                 class="{{ 'invalid' if errors and errors.ssid else '' }}">
+          <button type="button" class="btn-scan" id="btn-scan">Scan</button>
+        </div>
+        {% if errors and errors.ssid %}<div class="error-msg">{{ errors.ssid }}</div>{% endif %}
+        <div class="scan-list" id="scan-list"></div>
+      </div>
+
+      <div class="field">
+        <label for="wifi_password">WiFi password <span class="hint">(leave blank for open network)</span></label>
+        <input type="password" id="wifi_password" name="wifi_password"
+               autocomplete="new-password"
+               class="{{ 'invalid' if errors and errors.wifi_password else '' }}">
+        {% if errors and errors.wifi_password %}<div class="error-msg">{{ errors.wifi_password }}</div>{% endif %}
+      </div>
+
+      <div class="field">
+        <label for="country_code">WiFi country</label>
+        <select id="country_code" name="country_code"
+                class="{{ 'invalid' if errors and errors.country_code else '' }}">
+          {% for code, name in countries %}
+          <option value="{{ code }}"
+            {% if (form and form.country_code == code) or (not form and code == detected_country) %}selected{% endif %}>
+            {{ name }} ({{ code }})
+          </option>
+          {% endfor %}
+        </select>
+        {% if errors and errors.country_code %}<div class="error-msg">{{ errors.country_code }}</div>{% endif %}
+      </div>
+    </div>
+
+    <!-- ── Network ───────────────────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-title">Network Configuration</div>
+      <div class="field">
+        <label>IP address assignment</label>
+        <div class="radio-group">
+          <label>
+            <input type="radio" name="network_mode" value="dhcp"
+                   {% if not form or form.get('network_mode','dhcp') == 'dhcp' %}checked{% endif %}
+                   id="mode_dhcp"> Automatic (DHCP)
+          </label>
+          <label>
+            <input type="radio" name="network_mode" value="static"
+                   {% if form and form.get('network_mode') == 'static' %}checked{% endif %}
+                   id="mode_static"> Static IP
+          </label>
+        </div>
+      </div>
+
+      <div class="static-fields {{ 'visible' if form and form.get('network_mode') == 'static' else '' }}" id="static-fields">
+        <div class="field">
+          <label for="static_ip">IP address</label>
+          <input type="text" id="static_ip" name="static_ip"
+                 value="{{ form.static_ip if form else '' }}"
+                 placeholder="192.168.1.100"
+                 class="{{ 'invalid' if errors and errors.static_ip else '' }}">
+          {% if errors and errors.static_ip %}<div class="error-msg">{{ errors.static_ip }}</div>{% endif %}
+        </div>
+        <div class="field">
+          <label for="static_prefix">Subnet prefix length</label>
+          <input type="text" id="static_prefix" name="static_prefix"
+                 value="{{ form.static_prefix if form else '24' }}"
+                 placeholder="24"
+                 class="{{ 'invalid' if errors and errors.static_prefix else '' }}">
+          {% if errors and errors.static_prefix %}<div class="error-msg">{{ errors.static_prefix }}</div>{% endif %}
+        </div>
+        <div class="field">
+          <label for="static_gateway">Gateway</label>
+          <input type="text" id="static_gateway" name="static_gateway"
+                 value="{{ form.static_gateway if form else '' }}"
+                 placeholder="192.168.1.1"
+                 class="{{ 'invalid' if errors and errors.static_gateway else '' }}">
+          {% if errors and errors.static_gateway %}<div class="error-msg">{{ errors.static_gateway }}</div>{% endif %}
+        </div>
+        <div class="field">
+          <label for="static_dns">DNS servers <span class="hint">(comma-separated)</span></label>
+          <input type="text" id="static_dns" name="static_dns"
+                 value="{{ form.static_dns if form else '8.8.8.8, 8.8.4.4' }}"
+                 placeholder="8.8.8.8, 8.8.4.4"
+                 class="{{ 'invalid' if errors and errors.static_dns else '' }}">
+          {% if errors and errors.static_dns %}<div class="error-msg">{{ errors.static_dns }}</div>{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- ── System ────────────────────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-title">System</div>
+
+      <div class="field">
+        <label for="hostname">Device name</label>
+        <input type="text" id="hostname" name="hostname"
+               value="{{ form.hostname if form else 'hokku' }}"
+               autocorrect="off" spellcheck="false"
+               class="{{ 'invalid' if errors and errors.hostname else '' }}">
+        {% if errors and errors.hostname %}<div class="error-msg">{{ errors.hostname }}</div>{% endif %}
+      </div>
+
+      <div class="field">
+        <label for="timezone">Timezone</label>
+        <select id="timezone" name="timezone"
+                class="{{ 'invalid' if errors and errors.timezone else '' }}">
+          {% for tz in timezones %}
+          <option value="{{ tz }}"
+            {% if (form and form.timezone == tz) or (not form and tz == detected_timezone) %}selected{% endif %}>
+            {{ tz }}
+          </option>
+          {% endfor %}
+        </select>
+        {% if errors and errors.timezone %}<div class="error-msg">{{ errors.timezone }}</div>{% endif %}
+      </div>
+    </div>
+
+    <!-- ── Services ──────────────────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-title">Services</div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">mDNS / Bonjour</div>
+          <div class="toggle-desc">Discover at <em id="mdns-preview">hokku.local</em></div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" name="mdns_enabled" id="mdns_enabled"
+                 {% if not form or form.get('mdns_enabled') == 'on' %}checked{% endif %}>
+          <span class="toggle-track"></span>
+          <span class="toggle-thumb"></span>
+        </label>
+      </div>
+
+      <div class="field" id="mdns-name-field" style="{{ 'display:none' if form and form.get('mdns_enabled') != 'on' else '' }}">
+        <label for="mdns_name">mDNS name</label>
+        <div class="input-suffix-wrap">
+          <input type="text" id="mdns_name" name="mdns_name"
+                 value="{{ form.mdns_name if form else 'hokku' }}"
+                 autocorrect="off" spellcheck="false"
+                 class="{{ 'invalid' if errors and errors.mdns_name else '' }}">
+          <span class="input-suffix">.local</span>
+        </div>
+        {% if errors and errors.mdns_name %}<div class="error-msg">{{ errors.mdns_name }}</div>{% endif %}
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">SSH access</div>
+          <div class="toggle-desc">Remote terminal access</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" name="ssh_enabled" id="ssh_enabled"
+                 {% if form and form.get('ssh_enabled') == 'on' %}checked{% endif %}>
+          <span class="toggle-track"></span>
+          <span class="toggle-thumb"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Samba file sharing</div>
+          <div class="toggle-desc">Access image folder from Windows / macOS</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" name="samba_enabled" id="samba_enabled"
+                 {% if form and form.get('samba_enabled') == 'on' %}checked{% endif %}>
+          <span class="toggle-track"></span>
+          <span class="toggle-thumb"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- ── Security ──────────────────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-title">Security</div>
+
+      <div class="field">
+        <label for="admin_password">Admin password <span class="hint">(optional)</span></label>
+        <input type="password" id="admin_password" name="admin_password"
+               autocomplete="new-password"
+               class="{{ 'invalid' if errors and errors.admin_password else '' }}">
+        {% if errors and errors.admin_password %}<div class="error-msg">{{ errors.admin_password }}</div>{% endif %}
+      </div>
+      <div class="field">
+        <label for="admin_password_confirm">Confirm password</label>
+        <input type="password" id="admin_password_confirm" name="admin_password_confirm"
+               autocomplete="new-password"
+               class="{{ 'invalid' if errors and errors.admin_password_confirm else '' }}">
+        {% if errors and errors.admin_password_confirm %}<div class="error-msg">{{ errors.admin_password_confirm }}</div>{% endif %}
+      </div>
+
+      <div class="warn" id="ssh-warn">
+        ⚠️ <strong>SSH is enabled with the default password.</strong>
+        Anyone on your network can log in as <code>hokku</code> with password <code>hokku</code>.
+        Set a password above, or log in via SSH later and run <code>passwd</code>.
+      </div>
+    </div>
+
+    <button type="submit" class="btn-submit" id="btn-submit">
+      Connect &amp; Reboot
+    </button>
+
+  </form>
+</div>
+
+<script>
+(function () {
+  // Static IP fields visibility
+  document.querySelectorAll('input[name="network_mode"]').forEach(function(r) {
+    r.addEventListener('change', function() {
+      document.getElementById('static-fields').classList.toggle('visible', r.value === 'static');
+    });
+  });
+
+  // mDNS name field + preview
+  var mdnsToggle = document.getElementById('mdns_enabled');
+  var mdnsField = document.getElementById('mdns-name-field');
+  var mdnsNameInput = document.getElementById('mdns_name');
+  var mdnsPreview = document.getElementById('mdns-preview');
+
+  function updateMdns() {
+    var on = mdnsToggle.checked;
+    mdnsField.style.display = on ? '' : 'none';
+    mdnsPreview.textContent = (mdnsNameInput.value.trim() || 'hokku') + '.local';
+  }
+  mdnsToggle.addEventListener('change', updateMdns);
+  mdnsNameInput.addEventListener('input', updateMdns);
+  updateMdns();
+
+  // SSH warning
+  var sshToggle = document.getElementById('ssh_enabled');
+  var pwdInput = document.getElementById('admin_password');
+  var sshWarn = document.getElementById('ssh-warn');
+
+  function updateSshWarn() {
+    var show = sshToggle.checked && !pwdInput.value.trim();
+    sshWarn.classList.toggle('visible', show);
+  }
+  sshToggle.addEventListener('change', updateSshWarn);
+  pwdInput.addEventListener('input', updateSshWarn);
+  updateSshWarn();
+
+  // Hostname → mDNS name sync (only when mDNS name hasn't been manually changed)
+  var hostnameInput = document.getElementById('hostname');
+  var mdnsManuallyChanged = false;
+  mdnsNameInput.addEventListener('input', function() { mdnsManuallyChanged = true; });
+  hostnameInput.addEventListener('input', function() {
+    if (!mdnsManuallyChanged) {
+      mdnsNameInput.value = hostnameInput.value;
+      updateMdns();
+    }
+  });
+
+  // WiFi scan
+  var btnScan = document.getElementById('btn-scan');
+  var scanList = document.getElementById('scan-list');
+  var ssidInput = document.getElementById('ssid');
+
+  btnScan.addEventListener('click', function() {
+    btnScan.textContent = '…';
+    btnScan.disabled = true;
+    scanList.innerHTML = '<div class="scan-empty">Scanning…</div>';
+    scanList.classList.add('visible');
+
+    fetch('/api/scan')
+      .then(function(r) { return r.json(); })
+      .then(function(networks) {
+        if (!networks.length) {
+          scanList.innerHTML = '<div class="scan-empty">No networks found — type SSID manually</div>';
+        } else {
+          scanList.innerHTML = '';
+          networks.forEach(function(n) {
+            var item = document.createElement('div');
+            item.className = 'scan-item';
+            item.innerHTML =
+              '<span class="scan-ssid">' + escHtml(n.ssid) + '</span>' +
+              '<span class="scan-meta">' + n.signal + '% ' + (n.secured ? '🔒' : 'open') + '</span>';
+            item.addEventListener('click', function() {
+              ssidInput.value = n.ssid;
+              scanList.classList.remove('visible');
+            });
+            scanList.appendChild(item);
+          });
+        }
+      })
+      .catch(function() {
+        scanList.innerHTML = '<div class="scan-empty">Scan failed — type SSID manually</div>';
+      })
+      .finally(function() {
+        btnScan.textContent = 'Scan';
+        btnScan.disabled = false;
+      });
+  });
+
+  // Close scan list on outside click
+  document.addEventListener('click', function(e) {
+    if (!ssidInput.contains(e.target) && !btnScan.contains(e.target) && !scanList.contains(e.target)) {
+      scanList.classList.remove('visible');
+    }
+  });
+
+  // Disable submit button after click to prevent double-submit
+  document.getElementById('setup-form').addEventListener('submit', function() {
+    var btn = document.getElementById('btn-submit');
+    btn.disabled = true;
+    btn.textContent = 'Applying…';
+  });
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+})();
+</script>
+</body>
+</html>

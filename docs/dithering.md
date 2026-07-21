@@ -763,7 +763,7 @@ defaults inside the serialised form.
 
 Three metrics are tracked. Full definitions — what they measure, how they are
 computed, and how to interpret the numbers — are in
-[docs/image_quality.md](image_quality.md). Short summary:
+[image quality notes](screens/huessen_epf1301/image_quality.md). Short summary:
 
 > **Metrics caveat:** these numbers measure pixel-level colour fidelity. They
 > are reliable for comparing dither algorithms and LUT variants, but will
@@ -771,7 +771,7 @@ computed, and how to interpret the numbers — are in
 > legibility at the cost of per-pixel colour accuracy (CLAHE, pre-dither noise,
 > midtone lift). When those stages are active, a rising `hue_error` or falling
 > `sat_hit` does not necessarily indicate a quality regression. See
-> [image_quality.md §⚠](image_quality.md#-the-fundamental-limit-metrics-measure-colour-fidelity-not-perceptual-quality)
+> [image_quality.md §⚠](screens/huessen_epf1301/image_quality.md#-the-fundamental-limit-metrics-measure-colour-fidelity-not-perceptual-quality)
 > for a full discussion.
 
 | Metric        | Good direction | What it catches                                  |

@@ -11,6 +11,7 @@ license = {text = "GPL-3.0 (non-commercial)"}
 dependencies = [
     "pyserial>=3.5",
     "esptool>=4.0",
+    "esp-idf-nvs-partition-gen",
 ]
 
 [project.scripts]

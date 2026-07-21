@@ -6,20 +6,74 @@ on:
   pull_request:
 
 jobs:
-  test-firmware:
+  test-firmware-huessen_epf1301:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v5
 
       - name: Configure
-        run: cmake -B firmware/test/host/build firmware/test/host
+        run: cmake -B firmware/huessen_epf1301/test/host/build firmware/huessen_epf1301/test/host
 
       - name: Build
-        run: cmake --build firmware/test/host/build
+        run: cmake --build firmware/huessen_epf1301/test/host/build
 
       - name: Run tests
-        run: ctest --test-dir firmware/test/host/build --output-on-failure
+        run: ctest --test-dir firmware/huessen_epf1301/test/host/build --output-on-failure
+
+  test-firmware-bigme_f7:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -B firmware/bigme_f7/test/host/build firmware/bigme_f7/test/host
+
+      - name: Build
+        run: cmake --build firmware/bigme_f7/test/host/build
+
+      - name: Run tests
+        run: ctest --test-dir firmware/bigme_f7/test/host/build --output-on-failure
+
+  test-firmware-seeedstudio_e1004:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -B firmware/seeedstudio_e1004/test/host/build firmware/seeedstudio_e1004/test/host
+
+      - name: Build
+        run: cmake --build firmware/seeedstudio_e1004/test/host/build
+
+      - name: Run tests
+        run: ctest --test-dir firmware/seeedstudio_e1004/test/host/build --output-on-failure
+
+  # Unit tests for the shared firmware code, which is compiled into ALL three
+  # firmwares: common/all (pure, SoC-agnostic: firmware_url, frame_state,
+  # json_util, logbuf — no mocks) AND common/esp32 (the ESP-IDF-specific
+  # config/state/scheduler/log, tested against the shared mock kit).
+  test-firmware-common:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure common/all
+        run: cmake -B firmware/common/all/test/build firmware/common/all/test
+      - name: Build common/all
+        run: cmake --build firmware/common/all/test/build
+      - name: Test common/all
+        run: ctest --test-dir firmware/common/all/test/build --output-on-failure
+
+      - name: Configure common/esp32
+        run: cmake -B firmware/common/esp32/test/build firmware/common/esp32/test
+      - name: Build common/esp32
+        run: cmake --build firmware/common/esp32/test/build
+      - name: Test common/esp32
+        run: ctest --test-dir firmware/common/esp32/test/build --output-on-failure
 
   test-webserver:
     runs-on: ubuntu-latest
@@ -33,12 +87,89 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e "webserver/[test]"
+        run: pip install -e "python/[test]"
 
       - name: Run tests
         run: pytest -m "not time_intensive"
 
-  lint-firmware:
+  lint-webserver:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Mirror the local pre-commit gate: ruff + pyright out of a repo-root .venv
+      # (pyrightconfig.json points venvPath/venv at ./.venv for import resolution).
+      - name: Create venv + install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e "python/[test]"
+          .venv/bin/pip install ruff==0.15.14 pyright==1.1.409
+
+      - name: Ruff lint
+        run: .venv/bin/ruff check python/
+
+      - name: Ruff format check
+        run: .venv/bin/ruff format --check python/
+
+      - name: Pyright
+        run: .venv/bin/pyright python/hokku python/tests
+
+  test-tools:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # tools/ CLIs (esp32_setup, hokku_setup, hokku_config, ...) import the hokku
+      # package and pyserial/esptool — all pulled in by the hokku-server install.
+      - name: Install dependencies
+        run: pip install -e "python/[test]"
+
+      - name: Run tools tests
+        run: pytest tools/tests
+
+  lint-tools:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Create venv + install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e "python/[test]"
+          .venv/bin/pip install ruff==0.15.14 pyright==1.1.409
+
+      - name: Ruff lint
+        run: .venv/bin/ruff check tools/
+
+      - name: Ruff format check
+        run: .venv/bin/ruff format --check tools/
+
+      # pyrightconfig.json analyses tools/ as Windows (ctypes.windll) and excludes
+      # the tools needing packages that can't install on Linux (pywinauto, etc.).
+      - name: Pyright
+        run: .venv/bin/pyright tools
+
+  lint-firmware-huessen_epf1301:
     runs-on: ubuntu-latest
 
     steps:
@@ -55,12 +186,99 @@ jobs:
           --suppress=missingIncludeSystem
           --suppress=missingInclude
           --suppress=checkersReport
+          --suppress=unmatchedSuppression
           --inline-suppr
           --error-exitcode=1
-          firmware/main/
+          firmware/huessen_epf1301/main/
 
-  build-firmware:
-    needs: [test-firmware, lint-firmware]
+  lint-firmware-seeedstudio_e1004:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y --no-install-recommends cppcheck
+
+      - name: Run cppcheck
+        run: >
+          cppcheck
+          --enable=all
+          --std=c11
+          --suppress=missingIncludeSystem
+          --suppress=missingInclude
+          --suppress=checkersReport
+          --suppress=unmatchedSuppression
+          --inline-suppr
+          --error-exitcode=1
+          firmware/seeedstudio_e1004/main/
+
+  lint-firmware-bigme_f7:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y --no-install-recommends cppcheck
+
+      # unusedFunction is suppressed here (not on huessen_epf1301's lint job):
+      # this is only a handful of C files, no headers from the SDK that calls
+      # into them (command dispatch table, weak-symbol overrides), so cppcheck
+      # can't see those call sites and flags every SDK entry point as dead code.
+      # test/ is excluded (-i): scanning it together with main.c makes cppcheck
+      # cross-contaminate its analysis — it picks up the host-test mocks' fixed
+      # return values (e.g. OS_MutexLock always returning OS_OK) and wrongly
+      # applies that to reasoning about main.c's real, variable-behavior
+      # conditionals ("always false"), which is only true under the mock.
+      - name: Run cppcheck
+        run: >
+          cppcheck
+          --enable=all
+          --std=c11
+          --suppress=missingIncludeSystem
+          --suppress=missingInclude
+          --suppress=checkersReport
+          --suppress=unmatchedSuppression
+          --suppress=unusedFunction
+          --inline-suppr
+          --error-exitcode=1
+          -ifirmware/bigme_f7/test
+          firmware/bigme_f7/
+
+  # Lint the shared firmware code (both common/all and common/esp32). Like the
+  # bigme job, unusedFunction is suppressed — the shared functions are called
+  # from the per-screen firmwares, which cppcheck doesn't see in this scan, so
+  # every shared entry point would otherwise look dead. The common/all/test
+  # tree is excluded (host tests, not firmware sources).
+  lint-firmware-common:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y --no-install-recommends cppcheck
+
+      - name: Run cppcheck
+        run: >
+          cppcheck
+          --enable=all
+          --std=c11
+          --suppress=missingIncludeSystem
+          --suppress=missingInclude
+          --suppress=checkersReport
+          --suppress=unmatchedSuppression
+          --suppress=unusedFunction
+          --inline-suppr
+          --error-exitcode=1
+          -ifirmware/common/all/test
+          -ifirmware/common/esp32/test
+          firmware/common/
+
+  build-firmware-huessen_epf1301:
+    needs: [test-firmware-huessen_epf1301, lint-firmware-huessen_epf1301,
+            test-firmware-common, lint-firmware-common]
     runs-on: ubuntu-latest
 
     steps:
@@ -71,16 +289,200 @@ jobs:
         with:
           esp_idf_version: v5.5.3
           target: esp32s3
-          path: firmware
+          path: firmware/huessen_epf1301
           command: bash ci-build.sh
 
       - uses: actions/upload-artifact@v7
         with:
-          name: hokku-firmware
-          path: firmware/release/hokku-firmware_*.bin
+          name: hokku-huessen_epf1301-firmware
+          path: firmware/release/hokku-huessen_epf1301-*.bin
+
+  build-firmware-seeedstudio_e1004:
+    needs: [test-firmware-seeedstudio_e1004, lint-firmware-seeedstudio_e1004,
+            test-firmware-common, lint-firmware-common]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.3
+          target: esp32s3
+          path: firmware/seeedstudio_e1004
+          command: bash ci-build.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hokku-seeedstudio_e1004-firmware
+          path: firmware/release/hokku-seeedstudio_e1004-*.bin
+
+  build-firmware-bigme_f7:
+    needs: [test-firmware-bigme_f7, lint-firmware-bigme_f7,
+            test-firmware-common, lint-firmware-common]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Third-party XR872 SDK the F7 firmware builds against — not part of this
+      # repo. Pinned so the sdk_patches/*.patch below (which assumes this exact
+      # content) keeps applying cleanly regardless of upstream changes.
+      - name: Checkout XR872 SDK
+        uses: actions/checkout@v5
+        with:
+          repository: divadiow/xr872_sdk
+          ref: 73ca68a513316fd0dee6a5f5c68870b3c52049d1
+          path: xr872_sdk
+
+      - name: Apply SDK patches
+        working-directory: xr872_sdk
+        run: git apply "${{ github.workspace }}"/firmware/bigme_f7/sdk_patches/*.patch
+
+      - name: Build toolchain image
+        run: docker build -t hokku-bigme_f7-builder firmware/bigme_f7
+
+      - name: Build firmware
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/hokku_epaper" \
+            -v "${{ github.workspace }}/xr872_sdk:/xr872_sdk" \
+            hokku-bigme_f7-builder bash -lc '
+              cd /hokku_epaper/firmware/bigme_f7 &&
+              XR872_SDK=/xr872_sdk CC_DIR=/usr/bin bash ci-build.sh
+            '
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hokku-bigme_f7-firmware
+          path: firmware/release/hokku-bigme_f7-*.img
 
   build-webserver-deb:
-    needs: test-webserver
+    needs: [test-webserver, lint-webserver, build-firmware-huessen_epf1301, build-firmware-seeedstudio_e1004, build-firmware-bigme_f7]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential debhelper dh-python python3-setuptools pybuild-plugin-pyproject
+
+      # The "Flash a screen" feature ships both merged firmwares inside the
+      # .deb. debian/install picks up firmware/release/hokku-* wildcarded, so
+      # place both build jobs' artifacts there before building.
+      - name: Download ESP32 firmware artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: hokku-huessen_epf1301-firmware
+          path: python/firmware/release
+
+      - name: Download Seeed E1004 firmware artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: hokku-seeedstudio_e1004-firmware
+          path: python/firmware/release
+
+      - name: Download Bigme F7 firmware artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: hokku-bigme_f7-firmware
+          path: python/firmware/release
+
+      # Default placeholder image, same reasoning as the firmware staging
+      # above: debian/install can only reference paths inside python/, not
+      # the repo root, so stage it in before building.
+      - name: Stage default placeholder image
+        run: |
+          mkdir -p python/default_image
+          cp images/logo/logo_alt_white.png python/default_image/
+
+      - name: Build .deb
+        working-directory: python
+        run: dpkg-buildpackage -us -uc -b
+
+      # Guard the two ways this package has silently shipped broken:
+      #  1. dh_python3 guessing pyproject.toml's deps into Depends. esptool maps to
+      #     a Debian package absent from many apt sources, so the .deb refuses to
+      #     install ("Depends: esptool but it is not installable"). Prevented by
+      #     --no-guessing-deps in debian/rules; those deps are pip-installed by postinst.
+      #  2. "Fixing" (1) by dropping ${python3:Depends} from debian/control, which makes
+      #     dh_python3 skip the package entirely ("no package to act on"), so the hokku
+      #     module never ships and the service dies with "No module named 'hokku'".
+      # Both produced a green build and a package that failed only on the target.
+      - name: Verify .deb dependencies and contents
+        run: |
+          set -euo pipefail
+          deb=$(ls hokku-server_*.deb)
+          echo "Verifying $deb"
+          depends=$(dpkg-deb -f "$deb" Depends)
+          echo "Depends: $depends"
+
+          # These are pip-installed by postinst and must never appear as apt deps.
+          pip_only="esptool esp-idf-nvs-partition-gen numba opencv-python-headless"
+          pip_only="$pip_only pillow-heif pillow-avif-plugin pillow-jxl-plugin"
+          pip_only="$pip_only colour-science resvg-py zeroconf"
+
+          # Exact package-name match, so python3-numba wouldn't false-positive on numba.
+          fail=0
+          for dep in $(printf '%s\n' "$depends" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]].*//'); do
+            for bad in $pip_only; do
+              if [ "$dep" = "$bad" ]; then
+                echo "::error::pip-only dependency '$dep' leaked into Depends. dh_python3 guessed it from pyproject.toml — keep --no-guessing-deps in python/debian/rules." >&2
+                fail=1
+              fi
+            done
+          done
+
+          # The Python package must actually ship, i.e. dh_python3 processed the package.
+          # Capture the listing first and match with a here-string: piping into `grep -q`
+          # makes grep exit early, SIGPIPEs dpkg-deb, and under `pipefail` that reads as
+          # "not found" — which would fail the build on a perfectly good package.
+          contents=$(dpkg-deb -c "$deb")
+          if ! grep -q 'usr/lib/python3/dist-packages/hokku/__init__.py' <<<"$contents"; then
+            echo "::error::hokku module missing from the .deb — dh_python3 skipped the package. python/debian/control must keep \${python3:Depends} in Depends." >&2
+            grep dist-packages <<<"$contents" | head -20 >&2 || true
+            fail=1
+          fi
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "OK: no pip-only deps in Depends; hokku module present."
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p build
+          mv hokku-server_*.deb hokku-server_*.buildinfo hokku-server_*.changes build/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hokku-server-deb
+          path: build/hokku-server_*.deb
+
+  test-installer:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e "installer/"
+
+      - name: Import check
+        run: |
+          python -c "import hokku.installer"
+          python -c "from hokku.installer.validators import validate_ssid, validate_wifi_password, validate_mdns_hostname"
+          python -c "from hokku.installer.flask_app import create_app"
+
+  build-installer-deb:
+    needs: [test-installer]
     runs-on: ubuntu-latest
 
     steps:
@@ -93,15 +495,15 @@ jobs:
             build-essential debhelper dh-python python3-setuptools pybuild-plugin-pyproject
 
       - name: Build .deb
-        working-directory: webserver
+        working-directory: installer
         run: dpkg-buildpackage -us -uc -b
 
       - name: Collect artifacts
         run: |
           mkdir -p build
-          mv hokku-server_*.deb hokku-server_*.buildinfo hokku-server_*.changes build/
+          mv hokku-installer_*.deb hokku-installer_*.buildinfo hokku-installer_*.changes build/
 
       - uses: actions/upload-artifact@v7
         with:
-          name: hokku-server-deb
-          path: build/hokku-server_*.deb
+          name: hokku-installer-deb
+          path: build/hokku-installer_*.deb

@@ -1,0 +1,5 @@
+hokku/installer/templates/index.html /usr/share/hokku-installer/templates/
+hokku/installer/templates/success.html /usr/share/hokku-installer/templates/
+files/dnsmasq-ap.conf /etc/hokku-installer/
+files/wifi-watchdog.sh /usr/lib/hokku-installer/
+files/reset.sh /usr/lib/hokku-installer/

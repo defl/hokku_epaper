@@ -1,10 +1,21 @@
 # Installation
 
+> ### The easy way: the appliance image
+>
+> If you're running the server on a **Raspberry Pi Zero 2 W**, you almost
+> certainly want the [**appliance image**](appliance.md) instead of this guide.
+> Write one file to an SD card, power the Pi on, join the WiFi network it
+> creates, and fill in a form. No terminal, no Python, no cables.
+>
+> This guide is for everything else: running the server on a laptop, NAS, or
+> desktop; installing onto an existing Pi you don't want to reimage; or building
+> from source.
+
 ## What you need
 
-**A computer to run the server on.** This can be anything on your local network — a Raspberry Pi, a spare laptop, a NAS, a desktop that's always on. A Raspberry Pi Zero 2 W is the most popular choice because it's cheap, silent, uses almost no power, and is more than fast enough. The server needs to be reachable by the frame at all times, so something that stays on makes more sense than a laptop you close. See [hardware.md](hardware.md) for the recommended Pi kit and where to buy.
+**A computer to run the server on.** This can be anything on your local network — a Raspberry Pi, a spare laptop, a NAS, a desktop that's always on. A Raspberry Pi Zero 2 W is the most popular choice because it's cheap, silent, uses almost no power, and is more than fast enough. The server needs to be reachable by the frame at all times, so something that stays on makes more sense than a laptop you close. See [hardware.md](hardware.md#the-server) for the recommended Pi kit and where to buy.
 
-**The frame.** The Hokku / Huessen 13.3" six-colour e-ink display. The board inside is an ESP32-S3 — the pre-built firmware is matched to it, you don't need to worry about the hardware details. See [hardware.md](hardware.md) for where to buy.
+**A frame.** Any screen Hokku supports — see the [hardware guide](hardware.md) for the full list, what each costs, and where to buy. The 13.3" Hokku / Huessen frame is the original and the most thoroughly tested; the 7.3" Bigme F7 is the cheapest. Pre-built firmware ships for each, so you don't need to worry about the hardware details.
 
 **A data-capable USB-C cable** for the initial setup. Not all USB-C cables carry data — charge-only cables are common and won't work. If nothing shows up when you plug in, try a different cable.
 
@@ -12,7 +23,7 @@
 
 ---
 
-> **All commands in this guide assume you are in the project root directory** — the folder that contains `hokku_setup.bat`, `requirements.txt`, and the `tools/` and `webserver/` subdirectories. Open your terminal there before running anything.
+> **All commands in this guide assume you are in the project root directory** — the folder that contains `hokku_setup.bat`, `requirements.txt`, and the `tools/` and `python/` subdirectories. Open your terminal there before running anything.
 
 ## Contents
 
@@ -79,11 +90,11 @@ python -m venv .venv
 source .venv/bin/activate   # Linux / macOS
 .venv\Scripts\activate      # Windows
 pip install -r requirements.txt
-cd webserver
-python -m hokku_server
+cd python
+python -m hokku.webserver
 ```
 
-The `cd webserver` step is required — the server package lives there. On first start without a config file it writes a fresh default (including `upload_dir`, which defaults to `/var/lib/hokku/images` — change this in the config to a local path if you're not running on Linux). Web GUI at `http://<your-server>:8080/`.
+The `cd python` step is required — the server package lives there. On first start without a config file it writes a fresh default (including `upload_dir`, which defaults to `/var/lib/hokku/images` — change this in the config to a local path if you're not running on Linux). Web GUI at `http://<your-server>:8080/`.
 
 ---
 
@@ -137,10 +148,10 @@ Connect the frame to your computer via the USB-C charging port. Find the serial 
 
 **Step 2: Flash the firmware**
 
-Download `hokku-firmware_<tag>.bin` from the latest GitHub release, then:
+Download `hokku-huessen_epf1301-<tag>.bin` from the latest GitHub release, then:
 
 ```bash
-esptool.py --chip esp32s3 --port <PORT> write_flash 0x0 hokku-firmware_<tag>.bin
+esptool.py --chip esp32s3 --port <PORT> write_flash 0x0 hokku-huessen_epf1301-<tag>.bin
 ```
 
 The flash takes about 30 seconds.
@@ -307,7 +318,7 @@ It then presents a menu and pre-selects the most sensible option for the detecte
 
 2. **Configuration prompts** (options 3 and 4) — you're asked for WiFi SSID, WiFi password, server IP, server port (default `8080`), and an optional screen name. You can also configure an optional secondary WiFi network; if you do, a connection-order prompt follows (`primary first` or `last-used first`). The wizard checks the server is reachable before writing; if it isn't you'll see a warning and can continue anyway.
 
-3. **Firmware download and flash** (options 3 and 5) — the wizard fetches the latest `hokku-firmware_*.bin` from GitHub releases (or imports a local build if one exists) and flashes it over USB. Takes about 30 seconds. A boot check follows: the wizard reads serial output for 10 seconds and reports whether the firmware started cleanly.
+3. **Firmware download and flash** (options 3 and 5) — the wizard fetches the latest `hokku-huessen_epf1301-*.bin` from GitHub releases (or imports a local build if one exists) and flashes it over USB. Takes about 30 seconds. A boot check follows: the wizard reads serial output for 10 seconds and reports whether the firmware started cleanly.
 
 ![Setup tool configuring a frame](../images/configurator.png)
 

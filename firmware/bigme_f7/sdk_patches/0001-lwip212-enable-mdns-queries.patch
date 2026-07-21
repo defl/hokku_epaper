@@ -1,0 +1,13 @@
+diff --git a/include/net/lwip-2.1.2/lwipopts.h b/include/net/lwip-2.1.2/lwipopts.h
+index 77d4214..9a8be77 100644
+--- a/include/net/lwip-2.1.2/lwipopts.h
++++ b/include/net/lwip-2.1.2/lwipopts.h
+@@ -914,7 +914,7 @@
+ 
+ /** Set this to 1 to enable querying ".local" names via mDNS
+  *  using a One-Shot Multicast DNS Query */
+-#define LWIP_DNS_SUPPORT_MDNS_QUERIES  0 // ???
++#define LWIP_DNS_SUPPORT_MDNS_QUERIES  1 /* Hokku: resolve <host>.local for the F7 */
+ /**
+  * @}
+  */

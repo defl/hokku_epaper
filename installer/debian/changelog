@@ -1,0 +1,5 @@
+hokku-installer (4.0.1~dev.17-1) unstable; urgency=medium
+
+  * Initial release — first-boot setup wizard for Hokku appliance images
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 30 May 2026 22:00:00 +0000

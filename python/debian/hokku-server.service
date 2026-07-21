@@ -1,0 +1,42 @@
+[Unit]
+Description=Hokku Server
+# On appliance images, wait until the installer has finished (sentinel exists).
+# On standard apt installs the /var/lib/hokku-installer dir is absent, so the
+# second OR-condition fires and the server starts normally.
+# Syntax: multiple ConditionPathExists with | prefix = OR logic in systemd.
+ConditionPathExists=|/var/lib/hokku-installer/setup_complete
+ConditionPathExists=|!/var/lib/hokku-installer
+After=network.target
+# avahi-daemon conflicts with the Python zeroconf library — both compete for
+# the mDNS multicast group on port 5353, causing NonUniqueNameException on
+# service registration. avahi is only needed as the install beacon
+# (hokku-installing.local); stop it as soon as hokku-server takes over.
+Conflicts=avahi-daemon.service avahi-daemon.socket
+After=network.target avahi-daemon.service avahi-daemon.socket
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStartPre=-/bin/sh -c 'test -f /var/lib/hokku/config.json || cp /usr/share/hokku-server/config.json /var/lib/hokku/config.json'
+ExecStart=/usr/bin/hokku-server /var/lib/hokku/config.json
+Environment="PYTHONUNBUFFERED=1"
+Environment="NUMBA_CACHE_DIR=/var/lib/hokku/numba_cache"
+# Fixed system user (created by postinst) rather than DynamicUser, so the
+# service has a stable identity that can be granted serial-port access. The
+# "dialout" group is required to open /dev/ttyACM0 to flash a screen.
+User=hokku
+Group=hokku
+SupplementaryGroups=dialout
+StateDirectory=hokku hokku/numba_cache
+CacheDirectory=hokku
+Restart=on-failure
+RestartSec=30
+# hokku-server is the memory-heavy workload on this appliance (numba JIT,
+# image decode/dither) — make it the OOM killer's preferred target so a
+# memory crunch kills this, not sshd/NetworkManager/hokku-installer. 1000 is
+# the maximum score; always considered first.
+OOMScoreAdjust=1000
+
+[Install]
+WantedBy=multi-user.target

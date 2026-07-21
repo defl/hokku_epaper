@@ -18,6 +18,7 @@ zstd                 # panel cache compression
 # Firmware tools
 esptool
 pyserial
+esp-idf-nvs-partition-gen
 rich
 rich-click
 

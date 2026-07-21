@@ -1,0 +1,140 @@
+#!/bin/sh
+set -e
+
+# Stop any running instance before pip operations and service restart.
+# systemctl stop is synchronous — it blocks until the process exits and the
+# port is free. Without this, the old process may still hold port 8080 when
+# debhelper starts the new one at the end of postinst.
+systemctl stop hokku-server 2>/dev/null || true
+
+# Create a fixed system user for the service. Unlike DynamicUser, this gives the
+# service a stable identity that can be added to the "dialout" group so it can
+# open /dev/ttyACM0 to flash screens (see hokku-server.service SupplementaryGroups).
+if ! getent passwd hokku >/dev/null; then
+    adduser --system --group --no-create-home --home /var/lib/hokku hokku
+fi
+
+# Create data directories and hand the whole state tree to the hokku user.
+# systemd StateDirectory=hokku also chowns /var/lib/hokku to User= on start, but
+# doing it here ensures pre-existing files — including a config.json left
+# root-owned by an older DynamicUser/2.1.x install — are owned by hokku so the
+# web UI can save settings. The config.json itself is seeded by the service's
+# ExecStartPre on first start (now running as hokku, so ownership is correct).
+mkdir -p /var/lib/hokku/images /var/lib/hokku/cache
+chown -R hokku:hokku /var/lib/hokku
+
+# Seed a default placeholder image so a freshly installed/flashed appliance
+# has something to show before the user uploads their own photos. Done here
+# (package-install time), not in a service ExecStartPre that runs on every
+# start, so a user who deletes it stays deleted — it never comes back.
+# cp -n: don't clobber if somehow already present (e.g. package reinstall).
+cp -n /usr/share/hokku-server/logo_alt_white.png /var/lib/hokku/images/ 2>/dev/null || true
+chown hokku:hokku /var/lib/hokku/images/logo_alt_white.png 2>/dev/null || true
+
+# Install pillow-heif via pip if not available as system package
+if ! python3 -c "import pillow_heif" 2>/dev/null; then
+    echo "Installing pillow-heif via pip..."
+    pip3 install --break-system-packages pillow-heif 2>/dev/null || \
+    pip3 install pillow-heif 2>/dev/null || \
+    echo "Warning: Could not install pillow-heif. HEIC/HEIF support will be unavailable."
+fi
+
+# Install pillow-avif-plugin via pip for AVIF image support
+if ! python3 -c "import pillow_avif" 2>/dev/null; then
+    echo "Installing pillow-avif-plugin via pip..."
+    pip3 install --break-system-packages pillow-avif-plugin 2>/dev/null || \
+    pip3 install pillow-avif-plugin 2>/dev/null || \
+    echo "Warning: Could not install pillow-avif-plugin. AVIF support will be unavailable."
+fi
+
+# Install pillow-jxl-plugin via pip for JPEG-XL image support
+if ! python3 -c "import pillow_jxl" 2>/dev/null; then
+    echo "Installing pillow-jxl-plugin via pip..."
+    pip3 install --break-system-packages pillow-jxl-plugin 2>/dev/null || \
+    pip3 install pillow-jxl-plugin 2>/dev/null || \
+    echo "Warning: Could not install pillow-jxl-plugin. JPEG-XL support will be unavailable."
+fi
+
+# Install opencv-python-headless via pip — required for YuNet face detection.
+# The Debian package (python3-opencv) lacks the DNN module on many platforms.
+if ! python3 -c "import cv2" 2>/dev/null; then
+    echo "Installing opencv-python-headless via pip..."
+    pip3 install --break-system-packages "opencv-python-headless>=4.7" 2>/dev/null || \
+    pip3 install "opencv-python-headless>=4.7" 2>/dev/null || \
+    echo "Warning: Could not install opencv-python-headless. Face detection will be unavailable."
+fi
+
+# Ensure scipy is compatible with the installed NumPy. NumPy 2.x requires
+# scipy>=1.14; the system python3-scipy package was compiled against NumPy 1.x
+# and raises "AttributeError: _ARRAY_API not found" at import time. Numba
+# triggers this during its first JIT compilation via ensure_blas(). We check
+# by importing the C extension directly — a plain "import scipy" succeeds even
+# on a broken install, but the C extension fails immediately.
+if ! python3 -c "import scipy.linalg.cython_blas" 2>/dev/null; then
+    echo "Installing/upgrading scipy for NumPy 2.x compatibility (>=1.14 required)..."
+    pip3 install --break-system-packages "scipy>=1.14" 2>/dev/null || \
+    pip3 install "scipy>=1.14" 2>/dev/null || \
+    echo "Warning: Could not upgrade scipy. Numba JIT compilation may fail."
+fi
+
+# Install resvg-py via pip for SVG rasterisation support
+if ! python3 -c "import resvg_py" 2>/dev/null; then
+    echo "Installing resvg-py for SVG support..."
+    pip3 install --break-system-packages "resvg-py>=0.3" 2>/dev/null || \
+    pip3 install "resvg-py>=0.3" 2>/dev/null || \
+    echo "Warning: Could not install resvg-py. SVG support will be unavailable."
+fi
+
+# Install colour-science via pip — required for the CAM16-UCS palette LUT
+# variants. Not available as a Debian package.
+if ! python3 -c "import colour" 2>/dev/null; then
+    echo "Installing colour-science for CAM16-UCS palette LUT..."
+    pip3 install --break-system-packages "colour-science>=0.4" 2>/dev/null || \
+    pip3 install "colour-science>=0.4" 2>/dev/null || \
+    echo "Warning: Could not install colour-science. CAM16-UCS LUTs will be unavailable."
+fi
+
+# Install zeroconf via pip — required for mDNS / Bonjour advertisement so
+# the server is discoverable as "Hokku on <hostname>" on the local network
+# without needing to know the IP address.
+if ! python3 -c "import zeroconf" 2>/dev/null; then
+    echo "Installing zeroconf for mDNS/Bonjour advertisement..."
+    pip3 install --break-system-packages "zeroconf>=0.38" 2>/dev/null || \
+    pip3 install "zeroconf>=0.38" 2>/dev/null || \
+    echo "Warning: Could not install zeroconf. mDNS advertisement will be unavailable."
+fi
+
+# Install numba via pip — required for NumbaStreamingDither (JIT-compiled dither
+# inner loop). Not available as a Debian package; pip is the only distribution
+# path. numba>=0.59 is required for NumPy 2.x compatibility (numpy.core was
+# removed in NumPy 2.0; older numba versions break with an ImportError at JIT
+# time). We verify with a real njit call so an existing but broken install
+# (e.g. numba 0.56–0.58 against NumPy 2.x) is also caught and upgraded.
+if ! python3 -c "import numba; numba.njit(lambda x: x)(1)" 2>/dev/null; then
+    echo "Installing/upgrading numba (>=0.59 required for NumPy 2.x)..."
+    pip3 install --break-system-packages "numba>=0.59" 2>/dev/null || \
+    pip3 install "numba>=0.59" 2>/dev/null || \
+    echo "Warning: Could not install numba. The dither pipeline requires numba; rendering will fail."
+fi
+
+# Install esptool via pip — required to flash screens from the web UI. The
+# Debian python3-esptool package is often absent/outdated; pip is the reliable
+# path. python3-serial (pyserial) is a packaged Depends.
+if ! python3 -c "import esptool" 2>/dev/null; then
+    echo "Installing esptool for screen flashing..."
+    pip3 install --break-system-packages "esptool>=4.7" 2>/dev/null || \
+    pip3 install "esptool>=4.7" 2>/dev/null || \
+    echo "Warning: Could not install esptool. Flashing screens will be unavailable."
+fi
+
+# Install esp-idf-nvs-partition-gen via pip — generates the NVS config partition
+# written to a screen during flashing (replaces a full ESP-IDF install). Not a
+# Debian package.
+if ! python3 -c "import esp_idf_nvs_partition_gen" 2>/dev/null; then
+    echo "Installing esp-idf-nvs-partition-gen for screen provisioning..."
+    pip3 install --break-system-packages esp-idf-nvs-partition-gen 2>/dev/null || \
+    pip3 install esp-idf-nvs-partition-gen 2>/dev/null || \
+    echo "Warning: Could not install esp-idf-nvs-partition-gen. Writing screen config will be unavailable."
+fi
+
+#DEBHELPER#
