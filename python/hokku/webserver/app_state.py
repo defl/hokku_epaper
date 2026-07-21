@@ -19,6 +19,7 @@ from hokku.webserver.image_manager_abstract import AbstractImageManager
 from hokku.webserver.image_manager_multi import MultiThreadedImageManager
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
 from hokku.webserver.mdns import start_mdns, stop_mdns
+from hokku.webserver.self_update import SelfUpdateManager
 from hokku.webserver.serve_scheduler import ServeScheduler
 from hokku.webserver.worker_count import resolve_worker_count
 
@@ -75,6 +76,9 @@ class AppState:
         # Screen-flashing job manager. Independent of config, so it is created
         # once here and intentionally NOT rebuilt in reload().
         self.flash_jobs = FlashJobManager()
+        # Server self-update (GitHub release check + install) job manager.
+        # Same treatment as flash_jobs: independent of config, created once.
+        self.update_jobs = SelfUpdateManager()
 
     def reload(self, new_config: AppConfig) -> None:
         """Rebuild classifier + manager + scheduler from *new_config* and swap atomically.

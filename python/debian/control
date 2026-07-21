@@ -15,7 +15,8 @@ Depends: ${python3:Depends}, ${misc:Depends},
  python3-pip,
  python3-zstd,
  python3-serial,
- python3-defusedxml
+ python3-defusedxml,
+ sudo
 # Note: numba, pillow-heif, opencv-python-headless, esptool, and
 # esp-idf-nvs-partition-gen are not available as Debian packages (or lack
 # required modules). They are installed automatically via pip by the postinst

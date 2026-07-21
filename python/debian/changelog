@@ -1,3 +1,11 @@
+hokku-server (4.0.1~dev.183-1) unstable; urgency=medium
+
+  * feat(update): self-update button — checks GitHub for a newer hokku-server
+    release and installs it; sudoers-gated root script + independent systemd
+    unit so the install survives postinst stopping hokku-server mid-way
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 20 Jul 2026 23:00:00 +0000
+
 hokku-server (4.0.1~dev.70-1) unstable; urgency=medium
 
   * fix(ota): serve exact app image size; parse ESP image header to strip 0xFF padding and otadata

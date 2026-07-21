@@ -1276,6 +1276,19 @@
     <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
   </div>
 
+  <!-- Only shown on package (.deb) installs -->
+  <div id="update-row" class="config-row" style="display:none; margin-top:20px; padding-top:16px; border-top:1px solid var(--border);">
+    <label>Software update</label>
+    <div>
+      <button type="button" class="btn btn-secondary btn-small" id="update-check-btn" onclick="checkForUpdate()">Check for updates</button>
+      <span id="update-status" class="flash-status"></span>
+      <div id="update-details" hidden style="margin-top:8px;">
+        <pre id="update-notes" class="flash-log"></pre>
+        <button type="button" class="btn btn-primary" id="update-install-btn" onclick="installUpdate()" hidden>Install</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Only shown on appliance images where hokku-installer is installed -->
   <div id="installer-reset-row" class="config-row" style="display:none; margin-top:20px; padding-top:16px; border-top:1px solid var(--border);">
     <label style="color:var(--vermilion);">Setup wizard</label>
@@ -1365,6 +1378,7 @@
 <script>
 let currentConfig = {};
 let refreshTimes = [];
+let lastGitDescribe = null;
 
 // Toggle the Admin section open/closed.
 function toggleAdmin() {
@@ -3302,6 +3316,7 @@ async function loadConfig() {
       descEl.textContent = data.git_describe;
       descEl.href = data.commit_url || (data.repo_url || '#');
       descEl.hidden = false;
+      lastGitDescribe = data.git_describe;
     }
     if (data.repo_url) repoEl.href = data.repo_url;
 
@@ -3350,6 +3365,13 @@ async function loadConfig() {
     if (installerRow) {
       installerRow.style.display = data.installer_available ? '' : 'none';
     }
+
+    // Show "Software update" only on package (.deb) installs — a dev
+    // checkout has no privileged install path.
+    const updateRow = document.getElementById('update-row');
+    if (updateRow) {
+      updateRow.style.display = data.package_install ? '' : 'none';
+    }
   } catch (e) {
     console.error('Config load failed:', e);
     showToast('Failed to load configuration');
@@ -3375,6 +3397,123 @@ async function resetToInstaller() {
   } catch (e) {
     showToast('Request failed: ' + e);
   }
+}
+
+// ── Server self-update ────────────────────────────────────────────
+let pendingUpdateTag = null;
+let updateInstallPollTimer = null;
+
+async function checkForUpdate() {
+  const btn = document.getElementById('update-check-btn');
+  const statusEl = document.getElementById('update-status');
+  const details = document.getElementById('update-details');
+  const notesEl = document.getElementById('update-notes');
+  const installBtn = document.getElementById('update-install-btn');
+
+  btn.disabled = true;
+  installBtn.hidden = true;
+  details.hidden = true;
+  statusEl.className = 'flash-status';
+  statusEl.textContent = 'Checking…';
+
+  try {
+    const resp = await fetch('/hokku/api/update/check');
+    const data = await resp.json();
+    if (!resp.ok) {
+      statusEl.className = 'flash-status err';
+      statusEl.textContent = data.error || `Check failed (${resp.status})`;
+      return;
+    }
+    const result = data.result || {};
+    if (!result.update_available) {
+      statusEl.className = 'flash-status ok';
+      statusEl.textContent = `Up to date (v${result.current_version})`;
+      return;
+    }
+    statusEl.className = 'flash-status';
+    statusEl.textContent = `v${result.latest_version} available (current v${result.current_version})`;
+    pendingUpdateTag = result.tag;
+    notesEl.textContent = result.release_notes || '(no release notes)';
+    details.hidden = false;
+    installBtn.hidden = false;
+    installBtn.disabled = false;
+    installBtn.textContent = `Install v${result.latest_version}…`;
+  } catch (e) {
+    statusEl.className = 'flash-status err';
+    statusEl.textContent = 'Request failed: ' + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function installUpdate() {
+  if (!pendingUpdateTag) return;
+  const ok = await showConfirm({
+    title: 'Install update?',
+    message: 'This downloads and installs the update, then restarts the server. ' +
+             'The page will be unreachable for a minute or two while it restarts.',
+    okLabel: 'Install',
+  });
+  if (!ok) return;
+
+  const statusEl = document.getElementById('update-status');
+  const installBtn = document.getElementById('update-install-btn');
+  installBtn.disabled = true;
+  const preInstallVersion = lastGitDescribe;
+
+  try {
+    const resp = await fetch('/hokku/api/update/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag: pendingUpdateTag }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      statusEl.className = 'flash-status err';
+      statusEl.textContent = data.error || `Install failed (${resp.status})`;
+      installBtn.disabled = false;
+      return;
+    }
+    statusEl.className = 'flash-status';
+    statusEl.textContent = 'Installing… the server will restart shortly.';
+    pollUpdateInstall(preInstallVersion);
+  } catch (e) {
+    statusEl.className = 'flash-status err';
+    statusEl.textContent = 'Request failed: ' + e;
+    installBtn.disabled = false;
+  }
+}
+
+function pollUpdateInstall(preInstallVersion) {
+  const statusEl = document.getElementById('update-status');
+  const deadline = Date.now() + 5 * 60 * 1000;
+  if (updateInstallPollTimer) clearInterval(updateInstallPollTimer);
+  updateInstallPollTimer = setInterval(async () => {
+    if (Date.now() > deadline) {
+      clearInterval(updateInstallPollTimer);
+      updateInstallPollTimer = null;
+      statusEl.className = 'flash-status err';
+      statusEl.textContent = 'Still not back after 5 minutes — check the server manually ' +
+        '(SSH in, "systemctl status hokku-server").';
+      return;
+    }
+    // A failed fetch during the restart (connection refused) is expected —
+    // just keep polling silently rather than surfacing it as an error.
+    try {
+      const resp = await fetch('/hokku/api/config');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.git_describe && data.git_describe !== preInstallVersion) {
+        clearInterval(updateInstallPollTimer);
+        updateInstallPollTimer = null;
+        statusEl.className = 'flash-status ok';
+        statusEl.textContent = `Updated — now running ${data.git_describe}. Reloading…`;
+        setTimeout(() => window.location.reload(), 1500);
+      }
+    } catch (e) {
+      // still restarting — keep polling
+    }
+  }, 3000);
 }
 
 async function refreshStatus() {

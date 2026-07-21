@@ -1,0 +1,18 @@
+[Unit]
+Description=hokku-server self-update (triggered manually from the web UI)
+# Deliberately NOT After=/PartOf=/BindsTo=hokku-server.service: postinst
+# stops hokku-server.service as its very first step on any upgrade, and
+# systemd's default KillMode=control-group would kill this unit too if it
+# shared that cgroup. Keeping it a fully independent unit lets the install
+# survive hokku-server being stopped mid-way through it.
+
+[Service]
+Type=oneshot
+# Explicit interpreter so the script's own executable bit is irrelevant to
+# whether it runs (see python/AGENTS.md's Docker build pitfalls — permission
+# bits are unreliable across the NTFS dev checkout -> Docker build pipeline).
+ExecStart=/bin/sh /usr/lib/hokku-server/self-update.sh
+
+# No [Install] section: this unit is never enabled at boot, only ever
+# started transiently via `systemctl start` (see the sudoers rule in
+# hokku-server.sudoers). Runs as root (the default when User= is unset).

@@ -137,4 +137,9 @@ if ! python3 -c "import esp_idf_nvs_partition_gen" 2>/dev/null; then
     echo "Warning: Could not install esp-idf-nvs-partition-gen. Writing screen config will be unavailable."
 fi
 
+# Pick up the new/changed hokku-server-self-update.service unit (shipped via
+# debian/install rather than dh_installsystemd, since it must never be
+# enabled/restarted automatically — see debian/hokku-server-self-update.service).
+systemctl daemon-reload || true
+
 #DEBHELPER#

@@ -72,6 +72,7 @@ from hokku.webserver.screen_headers import (
     parse_frame_state,
     parse_screen_model,
 )
+from hokku.webserver.self_update import is_package_install
 from hokku.webserver.time_utils import calculate_sleep_seconds, format_duration_human
 
 logger = logging.getLogger(__name__)
@@ -860,6 +861,9 @@ def create_app(
                 # True only on appliance images where hokku-installer is installed.
                 # The UI uses this to show/hide the "Reset to installer" button.
                 "installer_available": Path("/var/lib/hokku-installer").is_dir(),
+                # True only on a package (.deb) install — self-update needs root
+                # privileges it only has on that install type. See self_update.py.
+                "package_install": is_package_install(),
             }
         )
 
@@ -1216,6 +1220,64 @@ def create_app(
         logger.info("Installer sentinel removed — rebooting into installer AP mode")
         threading.Timer(2.0, lambda: subprocess.run(["systemctl", "reboot"], check=False)).start()  # noqa: S607
         return jsonify({"status": "rebooting"})
+
+    @app.route("/hokku/api/update/check", methods=["GET"])
+    def api_update_check():
+        """Check GitHub for a newer hokku-server release.
+
+        Only available on a package (.deb) install — a dev checkout has no
+        privileged install path. Runs synchronously; the GitHub call is a
+        few seconds at most (unlike a screen flash), so no job polling is
+        needed for this step.
+        """
+        if not is_package_install():
+            return jsonify({"error": "self-update is only available on package installs"}), 404
+
+        job_id = state.update_jobs.check()
+        if job_id is None:
+            return jsonify({"error": "an update check or install is already in progress"}), 409
+        return jsonify(state.update_jobs.status())
+
+    @app.route("/hokku/api/update/install", methods=["POST"])
+    def api_update_install():
+        """Download and trigger installation of the release tag from the last check.
+
+        The server re-validates the requested tag is still the latest
+        available release rather than trusting the client — mirrors how
+        ``api_flash_start`` validates ``screen_model`` against the registry.
+        Returns immediately once the privileged install is triggered; it
+        does not wait for the install (or the service restart it causes)
+        to finish. Poll /hokku/api/update/status for progress.
+        """
+        if not is_package_install():
+            return jsonify({"error": "self-update is only available on package installs"}), 404
+
+        body = request.get_json(silent=True) or {}
+        tag = body.get("tag")
+        if not tag:
+            return jsonify({"error": "missing 'tag'"}), 400
+
+        job_id = state.update_jobs.start_install(tag)
+        if job_id is None:
+            return jsonify({"error": "an update check or install is already in progress"}), 409
+        return jsonify({"job_id": job_id})
+
+    @app.route("/hokku/api/update/status")
+    def api_update_status():
+        """Poll the current/last update job.
+
+        Merges in-memory job state (may be empty/stale — a fresh Flask
+        process after the install restarts the service has no memory of the
+        job that triggered it) with the on-disk status file written by the
+        root-side install script, which is the only state that survives
+        that restart.
+        """
+        return jsonify(
+            {
+                "job": state.update_jobs.status(),
+                "disk": state.update_jobs.read_disk_status(),
+            }
+        )
 
     @app.errorhandler(Exception)
     def _unhandled_exception(exc: Exception):

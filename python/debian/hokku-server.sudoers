@@ -1,0 +1,11 @@
+# Allows the unprivileged hokku-server service user to trigger the
+# self-update install without a password, and only that single fixed
+# command — no wildcards, no arguments the caller can influence. The actual
+# apt-get install runs inside hokku-server-self-update.service, driven by
+# /usr/lib/hokku-server/self-update.sh (root). See python/hokku/webserver/
+# self_update.py for the caller side and self-update.sh for the script.
+#
+# The command here MUST match subprocess.run(...) in self_update.py
+# byte-for-byte (absolute path, same flags) — sudo matches the command line
+# literally; any mismatch fails as "sudo: command not allowed".
+hokku ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block hokku-server-self-update.service

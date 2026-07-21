@@ -9,3 +9,5 @@ hokku/webserver/static/line_seg_4.png /usr/share/hokku-server/static/
 hokku/webserver/static/line_seg_5.png /usr/share/hokku-server/static/
 firmware/release/hokku-* /usr/share/hokku-server/firmware/
 default_image/logo_alt_white.png /usr/share/hokku-server/
+debian/self-update.sh /usr/lib/hokku-server/
+debian/hokku-server-self-update.service /lib/systemd/system/
