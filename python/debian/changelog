@@ -1,3 +1,9 @@
+hokku-server (4.0.1~dev.197-1) unstable; urgency=medium
+
+  * docs: README banner image now shows both frame sizes
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 21 Jul 2026 00:43:52 -0500
+
 hokku-server (4.0.1~dev.194-1) unstable; urgency=medium
 
   * docs: add an "Upgrading from 3.x" section to the 4.0.0 alpha 1 changelog
