@@ -215,13 +215,24 @@ def create_app(
         screen_name = request.headers.get("X-Screen-Name", "unnamed")
         screen_ip = request.remote_addr or "unknown"
 
-        # Every screen must self-identify its hardware model. No default, no
-        # fallback — an unknown or missing model is a misconfigured screen.
-        screen_model = parse_screen_model(request.headers.get("X-Screen-Model"))
-        if screen_model is None:
-            resp = make_response("Unknown or missing X-Screen-Model", 400)
-            resp.headers["X-Sleep-Seconds"] = str(_busy_retry_seconds(config))
-            return resp
+        # Screens self-identify their hardware model, but the header only exists
+        # from firmware 1.2.9 onwards. Anything older predates multi-screen
+        # support entirely, and back then huessen_epf1301 was the only model
+        # there was — so a *missing* header means huessen, not a broken screen.
+        # Rejecting it would strand every pre-1.2.9 frame on a 400 with no way
+        # back: that firmware has no OTA, so it could never be told to update
+        # and would need a USB reflash just to start showing photos again.
+        # A header that is present but unrecognised is still a real error.
+        # (Matches the firmware/config endpoints below, which already default.)
+        raw_screen_model = request.headers.get("X-Screen-Model")
+        if raw_screen_model is None:
+            screen_model = "huessen_epf1301"
+        else:
+            screen_model = parse_screen_model(raw_screen_model)
+            if screen_model is None:
+                resp = make_response("Unknown X-Screen-Model", 400)
+                resp.headers["X-Sleep-Seconds"] = str(_busy_retry_seconds(config))
+                return resp
 
         battery_mv = parse_battery_header(request.headers.get("X-Battery-mV"))
         frame_state = parse_frame_state(request.headers.get("X-Frame-State"))

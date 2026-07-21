@@ -1,3 +1,9 @@
+hokku-server (4.0.1~dev.192-1) unstable; urgency=medium
+
+  * fix(server): serve frames on pre-1.2.9 firmware that send no X-Screen-Model
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 21 Jul 2026 00:12:45 -0500
+
 hokku-server (4.0.1~dev.191-1) unstable; urgency=medium
 
   * docs: add the 4.0.0 alpha 1 changelog entry
