@@ -1,5 +1,181 @@
 # Changelog
 
+## 4.0.0 alpha 1
+
+The release where Hokku stops being firmware for one photo frame and becomes a
+small platform: **three supported screens, and an appliance image that turns a
+Raspberry Pi into a photo frame server without ever opening a terminal.**
+
+### Headlines
+
+- **The appliance image** — write one file to an SD card, boot a Pi Zero 2 W,
+  join the WiFi network it creates, and fill in a form. No keyboard, no monitor,
+  no command line, no Python.
+- **Three screens, one library** — the 13.3" Hokku / Huessen frame, the $99 7.3"
+  **Bigme F7**, and the **Seeed reTerminal E1004** (experimental). Mix models,
+  sizes and orientations against the same photos.
+- **A whole SoC reverse-engineered** — the Bigme F7 runs an XRADIOTECH XR872AT
+  with no public SDK support and no vendor documentation. Supporting it meant
+  recovering the panel init sequence from stock firmware and writing a BROM
+  flasher from scratch in Python.
+- **Over-the-air firmware updates, per screen** — flip a toggle and a frame
+  updates itself on its next refresh, rolling back automatically if the new
+  build can't reach the server.
+- **Flash a screen from the web app** — adopt a brand-new frame over USB from
+  the browser, including a factory-fresh F7.
+- **Face-aware cropping** — when a photo is cropped to fill the panel, faces are
+  detected locally and kept in frame instead of being sliced off.
+
+> **Alpha, and it means it.** Support maturity varies by screen: the
+> Hokku / Huessen frame and the Bigme F7 have been run end-to-end on real
+> hardware; the **Seeed reTerminal E1004 has never been flashed to a physical
+> device.** See [Hardware](docs/hardware.md) for per-screen status.
+
+---
+
+### The appliance image
+
+Previously, getting a server running meant imaging a Pi, SSHing in, and
+installing a `.deb` — or running the Windows setup wizard. Now there's a
+prebuilt image, attached to this release, that does all of it.
+
+On first boot it raises an open WiFi access point called **`Hokku Setup`** and
+serves a captive-portal setup form: WiFi network and password, country,
+hostname, timezone, static or DHCP addressing, mDNS name, and optional SSH and
+Samba. Submit it and the Pi reboots onto your own network with the server
+running at `http://<name>.local:8080`.
+
+It recovers from its own mistakes. If the WiFi details turn out to be wrong, a
+watchdog notices the Pi never connected and puts the setup access point back up
+rather than leaving a headless brick on a shelf. A `reset.sh` does the same on
+demand.
+
+The image is hardened for unattended appliance duty: logs to RAM instead of the
+SD card, security-only unattended upgrades, Bluetooth and swap disabled, and a
+USB gadget serial console so a single cable to a laptop gives a login prompt
+with no monitor or keyboard. Built with pi-gen from `os/pi/`, and built by CI —
+publishing a release attaches the image to it automatically.
+
+Documentation: [appliance guide](docs/appliance.md),
+[image build](os/pi/README.md), [installer internals](installer/README.md).
+
+### Multi-screen support
+
+The server used to assume one panel geometry and one palette. It now identifies
+each frame by an `X-Screen-Model` header and runs a **model-aware render
+pipeline**: images are converted per model, cached per model, and served to each
+frame in its own resolution and orientation. A `Display` registry holds the
+per-panel specification, so adding a screen means adding one entry rather than
+touching the pipeline.
+
+Per-screen settings moved out of global config into a per-frame Config modal:
+orientation, letterbox fill limit, OTA opt-in, and a server URL override for
+frames that need to be pointed somewhere else.
+
+### Bigme F7 (7.3", ~$99)
+
+The cheapest way into Hokku, and the first non-ESP32 screen. The XR872AT has no
+ESP-IDF equivalent and no public documentation, so this took a full
+reverse-engineering effort: dumping the stock flash, decoding the EK79655 panel
+init sequence byte-for-byte, and implementing the chip's mask-BROM protocol in
+Python so a fresh unit can be adopted with no vendor tooling on any platform.
+
+What works: custom firmware, WiFi with persistence across reflashes, image fetch
+and display, A/B OTA with automatic rollback, real battery reporting, deep sleep
+with USB awareness, and mDNS `.local` resolution (which needed lwIP 2.1.2 rather
+than the SDK default).
+
+Flashing only ever writes the inactive A/B slot and its config sector — never
+the bootloader, never the OEM slot — so a bad image rolls back instead of
+bricking the unit.
+
+Documentation: [screen overview](docs/screens/bigme_f7/README.md),
+[bootstrap](docs/screens/bigme_f7/bootstrap.md),
+[restore to stock](docs/screens/bigme_f7/restore_to_stock.md).
+
+### Seeed reTerminal E1004 (experimental)
+
+A 13.3" Spectra 6 panel on a Seeed XIAO ESP32-S3. The firmware is a thin board
+layer over the shared `firmware/common/` modules, so it inherits feature parity
+with the huessen frame for free.
+
+**It has never been flashed to real hardware.** It builds against the real
+ESP-IDF toolchain in CI and passes the host test suite; the panel registers and
+pinout come from Seeed's own driver and a community Arduino port, but the
+ESP-IDF SPI/DMA plumbing and the battery divider ratio are unconfirmed on
+silicon. If you own one, reports are very welcome.
+
+The panel bring-up work it is based on was contributed by
+[@TaichungLester](https://github.com/TaichungLester) in
+[PR #16](https://github.com/defl/hokku_epaper/pull/16).
+
+### Over-the-air firmware updates
+
+Open a frame's details, turn on *Update firmware on next refresh*, and the frame
+downloads and installs new firmware itself on its next check-in. The previous
+build stays in the second slot and is restored automatically if the new one
+can't reach the server afterwards.
+
+The server serves the right firmware per model, retries transient failures with
+a bounded backoff so they self-heal, and flags frames whose firmware is behind
+the bundled build — compared per model, not against a single global version.
+The first install on any frame is still over USB; everything after can be
+wireless.
+
+### Flash a screen from the web app
+
+If the server runs on the machine you plug frames into — the appliance case —
+the *Flash a screen* page installs firmware over USB straight from the browser,
+picking the right method per model. For the Bigme F7 that includes adopting a
+factory-fresh unit: catching the mask BROM, writing slot 0, and provisioning
+WiFi and server URL, all from the page. A unit already running Hokku firmware
+enters the BROM on its own, with no button press needed.
+
+### Image conversion
+
+**Face-aware cropping** — the existing fill-crop (which trims photos close to
+the panel's aspect ratio rather than letterboxing them) now detects faces
+locally and biases the crop to keep them in frame.
+
+### Firmware
+
+- **huessen_epf1301 1.2.18** — moved onto the shared `firmware/common/`
+  modules, exponential backoff when the server is unreachable, retry before
+  rollback on a pending-verify boot, and version/build headers sent to the
+  server.
+- **bigme_f7 1.2.5** — new: full custom firmware for the XR872AT.
+- **seeedstudio_e1004 1.2.1** — new, and unflashed on real hardware.
+
+Firmware is now built from a shared foundation: `firmware/common/all` (pure C,
+every screen), `firmware/common/esp32` (ESP-IDF) and `firmware/common/xr872`.
+Release artifacts are named `hokku-<brand_model>-<version>`.
+
+### Documentation
+
+Substantially rewritten for a project with more than one screen: a
+[hardware guide](docs/hardware.md) covering every frame with prices and honest
+per-screen status, per-screen overview pages, an
+[appliance guide](docs/appliance.md), and build/internals READMEs for `os/pi`
+and `installer`. Every internal link in the repository was checked and repaired.
+
+### Known issues and caveats
+
+- The **Seeed reTerminal E1004 is unproven on hardware** — treat it as untested.
+- The **web app has no authentication.** Anyone who can reach port 8080 can
+  manage your library and frames. Fine on a trusted home network; do not expose
+  it to the internet.
+- The **appliance image ships with a default `hokku`/`hokku` login** so the
+  serial console and first SSH session work. Change it, particularly if you
+  enable SSH.
+- Converting a stock Bigme F7 **replaces the vendor firmware** and is closer to
+  a one-way trip than flashing the ESP32 frames. Restoring to stock is
+  documented and tested, but read it before buying.
+- The Bigme F7's firmware version is hardcoded in `main.c` rather than read from
+  a `VERSION` file like the other two screens.
+
+---
+
+
 ## 3.1.0 alpha 1
 
 ### Frame log upload

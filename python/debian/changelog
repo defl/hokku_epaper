@@ -1,3 +1,9 @@
+hokku-server (4.0.1~dev.191-1) unstable; urgency=medium
+
+  * docs: add the 4.0.0 alpha 1 changelog entry
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 20 Jul 2026 23:59:57 -0500
+
 hokku-server (4.0.1~dev.190-1) unstable; urgency=medium
 
   * docs: update DISCLAIMER for three screens and the appliance; frame prices
