@@ -1,3 +1,9 @@
+hokku-server (4.0.1~dev.186-1) unstable; urgency=medium
+
+  * docs: appliance image guide, os/pi + installer READMEs, hardware index
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 20 Jul 2026 23:28:26 -0500
+
 hokku-server (4.0.1~dev.184-1) unstable; urgency=medium
 
   * docs: repair all broken internal links after the docs/screens/ reorg

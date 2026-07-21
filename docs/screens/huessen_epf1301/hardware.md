@@ -1,8 +1,11 @@
-# Hardware
+# Hokku / Huessen 13.3" — hardware
+
+> Part of the [hardware overview](../../hardware.md), which covers every
+> supported frame and the server kit.
 
 ## The Frame
 
-<img src="../images/screen.png" width="400">
+<img src="../../../images/screen.png" width="400">
 
 This project is built for the **Hokku Designs / Huessen 13.3" WiFi E-Paper Art Photo Frame** — a six-colour Spectra 6 e-ink display with an ESP32-S3 inside. It is sold under two brand names depending on the retailer: **Hokku Designs** and **Huessen**. The hardware is identical.
 
@@ -27,31 +30,11 @@ If you buy one of the unconfirmed listings above — or find the frame somewhere
 
 ## The Server
 
-<img src="../images/pi.png" width="200">
-
-The image server will run on almost anything — a cheap ARM board, a spare laptop, a NAS, a desktop, or a server-grade machine. The only hard requirement is **512 MB of RAM**. If you have a spare computer sitting around, that's your server.
-
-If you want to buy something new, the cheapest route is AliExpress — ARM boards and accessories go for a fraction of the prices below. The trade-off is weeks of shipping and variable quality. If you're in the US and want something in your hands tomorrow from reputable brands, the following list is the recommended build:
-
-| Item | Link | Price |
-|------|------|------:|
-| Raspberry Pi Zero 2 W (board + essentials kit) | [Amazon](https://amzn.to/4wz5jtY) | $42 |
-| Aluminium case with passive cooling and 4-port USB hub | [Amazon](https://amzn.to/4eLkzxk) | $9 |
-| Official Pi power supply (5.1 V / 2.5 A) | [Amazon](https://amzn.to/4uhEbhy) | $22 |
-| USB-C cable (data-capable, for flashing the frame) | [Amazon](https://amzn.to/4wAjkrh) | $10 |
-| SanDisk 64 GB microSD card | [Amazon](https://amzn.to/4dpocGI) | $24 |
-| USB SD card reader | [Amazon](https://amzn.to/49K7pwY) | $4 |
-| **Total** | | **$111** |
-
-A few notes:
-
-- The kit (row 1) includes the Pi Zero 2 W board, header, heatsink, USB cable, and HDMI adapter.
-- The case (row 2) does **not** include the board — it pairs with the kit above.
-- The USB-C cable must be data-capable (not charge-only). The linked cable supports 10 Gbps / 3 A and works reliably for flashing.
-
-> The Amazon links above are affiliate links. Clicking them costs you absolutely nothing extra — the price is identical either way. I get a few percent from Amazon, and if enough people do this, maybe one day there'll be enough in the jar to add the next screen to the lineup.
-
+The server hardware is the same whichever frame you use — see
+[**The Server**](../../hardware.md#the-server) in the hardware overview for the
+recommended Raspberry Pi kit, or [the appliance image](../../appliance.md) for the
+no-terminal setup route.
 
 ---
 
-> Prices last checked 2026-05-12. Amazon prices fluctuate; the frame price varies by retailer and sale.
+> Prices last checked 2026-05-12. The frame price varies by retailer and sale.

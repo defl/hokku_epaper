@@ -1,10 +1,21 @@
 # Installation
 
+> ### The easy way: the appliance image
+>
+> If you're running the server on a **Raspberry Pi Zero 2 W**, you almost
+> certainly want the [**appliance image**](appliance.md) instead of this guide.
+> Write one file to an SD card, power the Pi on, join the WiFi network it
+> creates, and fill in a form. No terminal, no Python, no cables.
+>
+> This guide is for everything else: running the server on a laptop, NAS, or
+> desktop; installing onto an existing Pi you don't want to reimage; or building
+> from source.
+
 ## What you need
 
 **A computer to run the server on.** This can be anything on your local network — a Raspberry Pi, a spare laptop, a NAS, a desktop that's always on. A Raspberry Pi Zero 2 W is the most popular choice because it's cheap, silent, uses almost no power, and is more than fast enough. The server needs to be reachable by the frame at all times, so something that stays on makes more sense than a laptop you close. See [hardware.md](screens/huessen_epf1301/hardware.md) for the recommended Pi kit and where to buy.
 
-**The frame.** The Hokku / Huessen 13.3" six-colour e-ink display. The board inside is an ESP32-S3 — the pre-built firmware is matched to it, you don't need to worry about the hardware details. See [hardware.md](screens/huessen_epf1301/hardware.md) for where to buy.
+**A frame.** Any screen Hokku supports — see the [hardware guide](hardware.md) for the full list, what each costs, and where to buy. The 13.3" Hokku / Huessen frame is the original and the most thoroughly tested; the 7.3" Bigme F7 is the cheapest. Pre-built firmware ships for each, so you don't need to worry about the hardware details.
 
 **A data-capable USB-C cable** for the initial setup. Not all USB-C cables carry data — charge-only cables are common and won't work. If nothing shows up when you plug in, try a different cable.
 
