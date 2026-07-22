@@ -1,3 +1,9 @@
+hokku-server (4.0.1~dev.16-1) unstable; urgency=medium
+
+  * fix(os): last-resort SD swap + swappiness + trim unused services
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 21 Jul 2026 23:03:34 -0500
+
 hokku-server (4.0.1~dev.15-1) unstable; urgency=medium
 
   * fix(os): add zram swap so memory pressure no longer wedges the appliance

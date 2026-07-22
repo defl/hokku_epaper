@@ -76,31 +76,30 @@ touch "${ROOTFS_DIR}/etc/cloud/cloud-init.disabled"
 on_chroot << 'EOF'
 set -e
 
-# Swap policy: no on-SD swap (constant writes wear the card), but DO give the
-# box compressed RAM-backed swap via zram. This appliance runs on a 512 MB Pi
-# Zero 2 W (~460 MB usable, ~140 MB free at idle) and decodes + dithers photos,
-# so it runs close to the memory ceiling. With no swap at all, a memory spike
-# (a large photo, several frames converting, or the first-boot placeholder
-# conversion) has nowhere to go, and the kernel thrashes the page cache —
-# evicting executable pages and re-reading them from the slow SD — until the
-# whole box crawls to unresponsive while still answering ping. That was
-# observed on real hardware: a first post-setup boot where both sshd and
-# hokku-server were unreachable for minutes yet the Pi pinged, cleared only by
-# a power-cycle. zram gives the kernel somewhere to put anonymous pages
-# (compressed ~3:1 with zstd, entirely in RAM — zero SD writes), which both
-# fixes that failure mode and makes multi-frame conversion far more robust.
-if systemctl is-enabled dphys-swapfile >/dev/null 2>&1; then
-    systemctl disable dphys-swapfile
-fi
-if [ -f /etc/dphys-swapfile ]; then
-    sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=0/' /etc/dphys-swapfile
-fi
+# ── Memory / swap policy ──────────────────────────────────────────────
+# This appliance runs on a 512 MB Pi Zero 2 W (~460 MB usable, ~140 MB free
+# at idle) and decodes + dithers photos, so it lives near the memory ceiling.
+# Three layers keep it from tipping over, in order of use:
+#
+#   1. zram — compressed RAM-backed swap, the PRIMARY overflow. Anonymous
+#      pages compress ~3:1 and stay in RAM (zero SD writes), so it soaks up
+#      normal spikes (the first-boot placeholder dither, several frames
+#      converting at once) without ever touching the card. Highest swap
+#      priority (100), so the kernel fills it first.
+#   2. A small on-SD swapfile — the LAST-RESORT safety net, only reached when
+#      zram is completely full. Kept at dphys-swapfile's default (negative)
+#      swap priority, far below zram's 100, so under normal and even heavy
+#      load it is never written — no SD wear — but it prevents an outright
+#      OOM kill under extreme pressure.
+#   3. vm.swappiness=100 — bias the kernel toward moving cold anonymous pages
+#      into (cheap) zram rather than evicting executable pages and re-reading
+#      them from the slow SD. That page-cache thrash is what wedged a first
+#      boot on real hardware: with NO swap at all, a spike had nowhere to go,
+#      and sshd + hokku-server were both unreachable for minutes while the Pi
+#      still answered ping, cleared only by a power-cycle.
 
-# zram-tools (installed via 00-packages) reads /etc/default/zramswap. A zram
-# device sized at 100% of RAM holds up to ~460 MB of swapped pages; because
-# they're compressed in RAM the real cost is a fraction of that, so this is
-# net memory relief, not consumption. zstd trades a little CPU (fine on the
-# quad-core A53) for a better ratio, which is what a memory-bound box wants.
+# zram (zram-tools, installed via 00-packages): device sized at 100% of RAM,
+# zstd for a better ratio (fine on the quad-core A53), swap priority 100.
 cat > /etc/default/zramswap <<'ZRAM'
 # Managed by the Hokku appliance image (os/pi/stage-hokku/01-pi-tweaks).
 ALGO=zstd
@@ -109,6 +108,21 @@ PRIORITY=100
 ZRAM
 systemctl enable zramswap.service 2>/dev/null || \
     echo "WARNING: zramswap.service missing (zram-tools not installed?)"
+
+# Last-resort on-SD swapfile via dphys-swapfile: 512 MB, created on first boot
+# (not baked into the image, so the .img stays small). Its default swap
+# priority is negative — well below zram's 100 — so it is only ever used once
+# zram is exhausted, keeping SD writes to genuine emergencies.
+if [ -f /etc/dphys-swapfile ]; then
+    sed -i 's/^#\?CONF_SWAPSIZE=.*/CONF_SWAPSIZE=512/' /etc/dphys-swapfile
+fi
+systemctl enable dphys-swapfile 2>/dev/null || true
+
+# Prefer swapping cold anon pages to zram over dropping/re-reading page cache.
+cat > /etc/sysctl.d/99-hokku-vm.conf <<'SYSCTL'
+# Managed by the Hokku appliance image (os/pi/stage-hokku/01-pi-tweaks).
+vm.swappiness=100
+SYSCTL
 
 if systemctl is-enabled avahi-daemon >/dev/null 2>&1; then
     systemctl disable avahi-daemon
@@ -135,6 +149,16 @@ done
 # by default on Bookworm, but disable defensively in case the base image
 # lineage changes.
 systemctl disable --now rsyslog 2>/dev/null || true
+
+# Background daemons with no purpose on this headless, single-function
+# appliance — each is idle RAM plus periodic wakeups for zero benefit here.
+# Disabling them also frees a little of the tight 512 MB budget.
+#   ModemManager — cellular / USB-modem manager; there is no modem
+#   udisks2      — removable-disk + automount daemon; nothing hot-plugs
+#   triggerhappy — global hotkey daemon; there are no input devices
+for unit in ModemManager udisks2 triggerhappy; do
+    systemctl disable --now "$unit" 2>/dev/null || true
+done
 
 # fstrim.timer is intentionally left enabled — TRIM helps SD-card wear, it's
 # not a source of it.
