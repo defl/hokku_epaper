@@ -1,3 +1,10 @@
+hokku-installer (4.0.1~dev.18-1) unstable; urgency=medium
+
+  * setup AP: scan and pick the emptiest 2.4 GHz channel so iOS reliably
+    sees "Hokku Setup" instead of it being buried co-channel with a router
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 22 Jul 2026 13:09:17 +0000
+
 hokku-installer (4.0.1~dev.17-1) unstable; urgency=medium
 
   * Initial release — first-boot setup wizard for Hokku appliance images
