@@ -76,12 +76,39 @@ touch "${ROOTFS_DIR}/etc/cloud/cloud-init.disabled"
 on_chroot << 'EOF'
 set -e
 
+# Swap policy: no on-SD swap (constant writes wear the card), but DO give the
+# box compressed RAM-backed swap via zram. This appliance runs on a 512 MB Pi
+# Zero 2 W (~460 MB usable, ~140 MB free at idle) and decodes + dithers photos,
+# so it runs close to the memory ceiling. With no swap at all, a memory spike
+# (a large photo, several frames converting, or the first-boot placeholder
+# conversion) has nowhere to go, and the kernel thrashes the page cache —
+# evicting executable pages and re-reading them from the slow SD — until the
+# whole box crawls to unresponsive while still answering ping. That was
+# observed on real hardware: a first post-setup boot where both sshd and
+# hokku-server were unreachable for minutes yet the Pi pinged, cleared only by
+# a power-cycle. zram gives the kernel somewhere to put anonymous pages
+# (compressed ~3:1 with zstd, entirely in RAM — zero SD writes), which both
+# fixes that failure mode and makes multi-frame conversion far more robust.
 if systemctl is-enabled dphys-swapfile >/dev/null 2>&1; then
     systemctl disable dphys-swapfile
 fi
 if [ -f /etc/dphys-swapfile ]; then
     sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=0/' /etc/dphys-swapfile
 fi
+
+# zram-tools (installed via 00-packages) reads /etc/default/zramswap. A zram
+# device sized at 100% of RAM holds up to ~460 MB of swapped pages; because
+# they're compressed in RAM the real cost is a fraction of that, so this is
+# net memory relief, not consumption. zstd trades a little CPU (fine on the
+# quad-core A53) for a better ratio, which is what a memory-bound box wants.
+cat > /etc/default/zramswap <<'ZRAM'
+# Managed by the Hokku appliance image (os/pi/stage-hokku/01-pi-tweaks).
+ALGO=zstd
+PERCENT=100
+PRIORITY=100
+ZRAM
+systemctl enable zramswap.service 2>/dev/null || \
+    echo "WARNING: zramswap.service missing (zram-tools not installed?)"
 
 if systemctl is-enabled avahi-daemon >/dev/null 2>&1; then
     systemctl disable avahi-daemon

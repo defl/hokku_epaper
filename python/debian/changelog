@@ -1,3 +1,9 @@
+hokku-server (4.0.1~dev.15-1) unstable; urgency=medium
+
+  * fix(os): add zram swap so memory pressure no longer wedges the appliance
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 21 Jul 2026 22:22:24 -0500
+
 hokku-server (4.0.1~dev.14-1) unstable; urgency=medium
 
   * fix(installer): validate the setup form client-side before submitting
