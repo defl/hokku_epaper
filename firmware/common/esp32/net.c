@@ -84,6 +84,14 @@ bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
         .user_data = &ctx,
         .timeout_ms = HTTP_TIMEOUT_MS,
         .buffer_size = 4096,
+        /* TX (request) buffer. The default is DEFAULT_HTTP_BUF_SIZE = 512,
+         * which our request headers exceed: X-Frame-State alone is up to the
+         * caller's ~384-byte JSON, on top of X-Screen-Name/Model and the two
+         * firmware headers. esp_http_client tolerates that by writing headers
+         * across several passes, but it logs an ESP_LOGE each time and — if any
+         * SINGLE header ever exceeds this buffer — silently drops that header
+         * and every one after it. Size it well past our largest single header. */
+        .buffer_size_tx = 1024,
     };
     esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
     if (!client) {

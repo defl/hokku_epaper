@@ -71,6 +71,11 @@ static bool ota_fetch_config(const char *base_url, const char *screen_name,
     esp_http_client_config_t cfg = {
         .url = url, .event_handler = ota_buf_event_handler, .user_data = &ctx,
         .timeout_ms = HTTP_TIMEOUT_MS, .buffer_size = 4096,
+        /* X-Config-State is up to 1280 bytes (cfgstate[]) — a SINGLE header far
+         * over the 512-byte default TX buffer. If one header exceeds the TX
+         * buffer, esp_http_client can't make progress and silently drops it and
+         * every header after it. Must exceed the whole X-Config-State header. */
+        .buffer_size_tx = 2048,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) { free(buf); return false; }
@@ -137,6 +142,9 @@ static bool ota_write_app(const char *base_url, const char *screen_name,
     esp_http_client_config_t cfg = {
         .url = url, .event_handler = ota_app_event_handler, .user_data = &ctx,
         .timeout_ms = HTTP_TIMEOUT_MS, .buffer_size = 4096,
+        /* Raise TX buffer past the 512-byte default for our request headers —
+         * see the note on the config-fetch client above. */
+        .buffer_size_tx = 1024,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) { esp_ota_abort(handle); return false; }

@@ -31,6 +31,7 @@ typedef struct {
     void                 *user_data;
     int                   timeout_ms;
     int                   buffer_size;
+    int                   buffer_size_tx;
 } esp_http_client_config_t;
 
 typedef enum {
