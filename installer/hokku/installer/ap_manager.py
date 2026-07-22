@@ -22,6 +22,28 @@ _AP_SSID = "Hokku Setup"
 _AP_INTERFACE = "wlan0"
 _AP_IP = "192.168.11.1/24"
 
+# Pin the radio to 2.4 GHz (band "bg") and a fixed channel. Both matter for the
+# AP being *visible* on Apple devices, which is otherwise the setup wizard's
+# single point of failure — if the phone can't see "Hokku Setup", the whole
+# appliance is unreachable.
+#
+#   band=bg: with the band left unset, NetworkManager/wpa_supplicant picks a
+#   mode and rates that iPhones scan and list poorly. Every working "NM AP +
+#   iOS" recipe pins band=bg (forces hw_mode=g and the legacy-compatible
+#   beacon). The Pi Zero 2 W has no 5 GHz radio anyway, so bg is the only band.
+#
+#   channel=6: without an explicit channel NM lands on channel 1, and a Pi
+#   Zero's weak radio sitting co-channel with a strong router/mesh node on the
+#   same channel gets buried — Windows still decodes the beacon and lists it,
+#   but iOS drops a weak co-channel AP from its scan list entirely (observed
+#   directly: "Hokku Setup" on ch 1 alongside a mesh AP was invisible on an
+#   iPhone while a laptop saw it at 100%). Channel 6 is the middle of the three
+#   non-overlapping 2.4 GHz channels (1/6/11); no static channel is ideal in
+#   every environment, but a fixed one off the NM default is far better than
+#   auto-selection that reliably collides with channel 1.
+_AP_BAND = "bg"
+_AP_CHANNEL = "6"
+
 
 def _nmcli(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -49,6 +71,12 @@ def start_ap() -> None:
         _AP_SSID,
         "mode",
         "ap",
+        # 2.4 GHz + fixed channel so Apple devices can actually see the AP
+        # (see the _AP_BAND / _AP_CHANNEL note above).
+        "802-11-wireless.band",
+        _AP_BAND,
+        "802-11-wireless.channel",
+        _AP_CHANNEL,
         # Use manual (not shared) so NM does NOT start its own dnsmasq instance.
         # Our dnsmasq process handles DHCP and captive DNS.
         "ipv4.method",

@@ -1,3 +1,9 @@
+hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
+
+  * fix(installer): pin setup AP to 2.4GHz bg + channel 6 so iPhones can see it
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 21 Jul 2026 20:59:59 -0500
+
 hokku-server (4.0.1~dev.8-1) unstable; urgency=medium
 
   * docs(bigme_f7): record how the BROM protocol was decoded
