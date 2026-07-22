@@ -601,11 +601,136 @@
     }
   });
 
-  // Disable submit button after click to prevent double-submit
-  document.getElementById('setup-form').addEventListener('submit', function() {
-    var btn = document.getElementById('btn-submit');
+  // ── Client-side validation (mirrors validators.py) ────────────────────
+  // The form is `novalidate` and the server returns errors at the TOP of a
+  // long page — trivial to miss on a phone, where a bounced submit just
+  // looks like "nothing happened" (a mistyped confirm-password did exactly
+  // that during testing). Validate here first so problems surface inline,
+  // next to the offending field, with the first one scrolled into view,
+  // before any POST. The server still re-validates — this is UX, not trust.
+  function firstBadChar(s, extra) {
+    extra = extra || '';
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charAt(i), code = s.charCodeAt(i);
+      if (code < 0x20 || code > 0x7E || c === '"' || c === '\\' || extra.indexOf(c) !== -1) return c;
+    }
+    return null;
+  }
+  function utf8len(s) { return unescape(encodeURIComponent(s)).length; }
+  function isIPv4(s) {
+    var o = s.split('.');
+    return o.length === 4 && o.every(function (p) { return /^\d{1,3}$/.test(p) && +p <= 255; });
+  }
+  function hostnameError(s) {
+    if (!s) return 'Name is required';
+    if (s.length > 63) return 'Name is too long (max 63 characters)';
+    if (!/[a-z0-9]/i.test(s.charAt(0))) return 'Must start with a letter or digit';
+    if (s.charAt(s.length - 1) === '-') return 'Must not end with a hyphen';
+    if (!/^[a-z0-9-]+$/i.test(s)) return 'Only letters, digits and hyphens are allowed';
+    return null;
+  }
+
+  function collectErrors() {
+    var e = [];
+    function add(id, msg) { e.push({ id: id, msg: msg }); }
+    function val(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+
+    var ssid = val('ssid');
+    if (!ssid) add('ssid', 'Network name is required');
+    else if (utf8len(ssid) > 32) add('ssid', 'Network name is too long (max 32 bytes)');
+    else { var bs = firstBadChar(ssid); if (bs) add('ssid', 'Contains a character that is not allowed: ' + JSON.stringify(bs)); }
+
+    var wpw = val('wifi_password');
+    if (wpw !== '') {
+      if (wpw.length < 8) add('wifi_password', 'WiFi password must be at least 8 characters (WPA2 requirement)');
+      else if (wpw.length > 63) add('wifi_password', 'WiFi password is too long (max 63 characters)');
+      else { var bw = firstBadChar(wpw); if (bw) add('wifi_password', 'Contains a character that is not allowed: ' + JSON.stringify(bw)); }
+    }
+
+    var he = hostnameError(val('hostname').trim());
+    if (he) add('hostname', he);
+
+    if (document.getElementById('mdns_enabled').checked) {
+      var me = hostnameError(val('mdns_name').trim());
+      if (me) add('mdns_name', me);
+    }
+
+    if (document.getElementById('mode_static').checked) {
+      if (!isIPv4(val('static_ip').trim())) add('static_ip', 'Enter a valid IPv4 address');
+      var pfx = val('static_prefix').trim();
+      if (!/^\d+$/.test(pfx) || +pfx < 1 || +pfx > 32) add('static_prefix', 'Prefix length must be a number from 1 to 32');
+      if (!isIPv4(val('static_gateway').trim())) add('static_gateway', 'Enter a valid IPv4 gateway');
+      var dns = val('static_dns').trim();
+      if (dns) {
+        var parts = dns.replace(/;/g, ',').split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+        for (var i = 0; i < parts.length; i++) {
+          if (!isIPv4(parts[i])) { add('static_dns', 'Invalid DNS address: ' + parts[i]); break; }
+        }
+      }
+    }
+
+    var pw = val('admin_password'), cf = val('admin_password_confirm');
+    if (pw !== '') {
+      var bp = firstBadChar(pw, ':');
+      if (bp) add('admin_password', 'Contains a character that is not allowed: ' + JSON.stringify(bp));
+      else if (pw !== cf) add('admin_password_confirm', 'Passwords do not match');
+    }
+    return e;
+  }
+
+  function clearJsErrors() {
+    document.querySelectorAll('.js-error').forEach(function (el) { el.remove(); });
+    document.querySelectorAll('.js-invalid').forEach(function (el) { el.classList.remove('invalid', 'js-invalid'); });
+  }
+
+  function showErrors(errs) {
+    clearJsErrors();
+    var form = document.getElementById('setup-form');
+    var sum = document.createElement('div');
+    sum.className = 'form-errors js-error';
+    sum.innerHTML = '<strong>Please fix the following before continuing:</strong>' +
+      errs.map(function (x) { return '<div>• ' + escHtml(x.msg) + '</div>'; }).join('');
+    form.insertBefore(sum, form.firstChild);
+    errs.forEach(function (x) {
+      var field = document.getElementById(x.id);
+      if (!field) return;
+      field.classList.add('invalid', 'js-invalid');
+      var container = field.closest('.field') || field.parentNode;
+      var msg = document.createElement('div');
+      msg.className = 'error-msg js-error';
+      msg.textContent = x.msg;
+      container.appendChild(msg);
+    });
+    var first = document.getElementById(errs[0].id);
+    if (first) {
+      first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      try { first.focus({ preventScroll: true }); } catch (_) { first.focus(); }
+    }
+  }
+
+  document.getElementById('setup-form').addEventListener('submit', function (ev) {
+    var errs = collectErrors();
+    if (errs.length) {
+      ev.preventDefault();
+      showErrors(errs);
+      return;
+    }
+    clearJsErrors();
+    var btn = document.getElementById('btn-submit');  // valid: lock against double-submit
     btn.disabled = true;
     btn.textContent = 'Applying…';
+  });
+
+  // Clear a field's error as soon as the user starts fixing it.
+  ['ssid', 'wifi_password', 'hostname', 'mdns_name', 'static_ip', 'static_prefix',
+   'static_gateway', 'static_dns', 'admin_password', 'admin_password_confirm'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', function () {
+      el.classList.remove('invalid', 'js-invalid');
+      var c = el.closest('.field');
+      if (c) c.querySelectorAll('.js-error').forEach(function (m) { m.remove(); });
+    });
   });
 
   function escHtml(s) {

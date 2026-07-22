@@ -1,3 +1,9 @@
+hokku-server (4.0.1~dev.14-1) unstable; urgency=medium
+
+  * fix(installer): validate the setup form client-side before submitting
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 21 Jul 2026 22:14:04 -0500
+
 hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
 
   * fix(installer): pin setup AP to 2.4GHz bg + channel 6 so iPhones can see it
