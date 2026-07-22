@@ -33,6 +33,17 @@ sibling-board-derived values that are not E1004-confirmed belong in
 
 - **Palette (native nibble encoding)**: Black=0x0, White=0x1, Yellow=0x2, Red=0x3, Blue=0x5, Green=0x6 — identical to the hokku wire format, so no colour remap is needed when driving the panel directly (see `firmware/seeedstudio_e1004/README.md`). Cross-validated against the reverse-engineered `huessen_epf1301` palette.
 
+## Serial console / USB-C wiring (CONFIRMED — issue #14 on real hardware)
+- The board's **USB-C port is an external CH340K USB-to-UART bridge on UART0**
+  (TX=GPIO43, RX=GPIO44), **not** a path to the SoC's native USB Serial/JTAG
+  peripheral. Plugged in, it enumerates as `VID_1A86:PID_7522` (CH340K); the
+  native-USJ id `VID_303A:PID_1001` never appears for this board.
+- Consequence: the console must be `CONFIG_ESP_CONSOLE_UART_DEFAULT=y`, **not**
+  `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` (which the huessen frame uses — that
+  board really does expose native USJ). Full boot log is visible at 115200 8N1.
+- This is a genuine board difference from huessen; do not assume ESP32-S3 boards
+  share console wiring. Confirmed via issue #14 / PR #23.
+
 ## Expansion header J2 (CONFIRMED — E1004 wiki)
 - I2C1: SDA=GPIO39, SCL=GPIO40
 - UART1: RX=GPIO42, TX=GPIO41

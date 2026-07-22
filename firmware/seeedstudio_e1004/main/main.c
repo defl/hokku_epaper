@@ -31,11 +31,12 @@
  * the early recovery via button-wake satisfy the root AGENTS.md flashing STOP
  * rules.
  *
- * KNOWN ISSUE: app logs do not reach the native USB console despite
- * CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y — the ROM banner appears, then silence
- * for the rest of boot. Possibly routed to the physical UART0 pins instead
- * (the Arduino reference example mentions Serial0). Use the panel and the
- * server-side X-Frame-State / log ring for bring-up diagnostics.
+ * SERIAL CONSOLE: on UART0 (CONFIG_ESP_CONSOLE_UART_DEFAULT), NOT native USB
+ * Serial/JTAG. This baseboard's USB-C port is wired through an external CH340K
+ * bridge to UART0, so the port enumerates as VID_1A86:PID_7522 and the full
+ * boot log is visible over it at 115200. (Early builds copied huessen's
+ * CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y, which pointed the console at a
+ * peripheral with no path to the host — see issue #14 / PR #23.)
  */
 
 #include <string.h>

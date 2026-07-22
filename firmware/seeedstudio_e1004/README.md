@@ -37,15 +37,16 @@ foundation, but its panel bring-up work is what this driver is based on.
 - **Still unproven:** deep sleep across days, an OTA on this board, and battery
   behaviour over a full discharge. One unit, one session — not a track record.
 
-**Known issue — no app logs on the native USB console.** With
-`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` (the same setting huessen uses, where it
-works) the native USB port emits the ROM bootloader banner and then goes silent
-for the whole boot, under both `idf.py monitor` and a raw reset-pulse capture.
-The device is *not* hung — the panel renders normally. The Arduino reference
-example notes diagnostic output going out `Serial0`/UART0 on this board, so the
-console may be landing on the physical UART0 pins; unconfirmed. During bring-up,
-watch the panel and the server-side `X-Frame-State` / log ring rather than the
-USB port.
+**Serial console is on UART0, not native USB Serial/JTAG.** This baseboard's
+USB-C port is an external **CH340K** bridge wired to UART0 (GPIO43/44), so the
+console is `CONFIG_ESP_CONSOLE_UART_DEFAULT=y` — unlike huessen, which uses the
+SoC's native USB Serial/JTAG. Plugged in, the port enumerates as a CH340K
+(`VID_1A86:PID_7522`), and `idf.py monitor` at 115200 shows the full boot log.
+Early builds copied huessen's `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, which
+pointed the console at a peripheral with no path to the host (ROM banner, then
+silence — looked like a hang, wasn't); diagnosed and fixed on real hardware in
+[issue #14](https://github.com/defl/hokku_epaper/issues/14) /
+[PR #23](https://github.com/defl/hokku_epaper/pull/23).
 
 **Flashing safety (root `AGENTS.md` STOP rules):** this firmware now has **A/B
 OTA with bootloader rollback** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`, ota_0/

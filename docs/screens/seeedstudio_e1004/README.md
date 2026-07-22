@@ -17,8 +17,9 @@ as the Hokku/Huessen frame, on open, documented hardware.
 > the huessen frame and the Bigme F7. Deep sleep over days, OTA and battery
 > behaviour over a full discharge are still unproven.
 >
-> **Known issue:** app logs do not reach the native USB serial console. See
-> [serial console](#serial-console-known-issue) below.
+> **Serial console:** logs come out over UART0 via the baseboard's CH340K USB
+> bridge, not the SoC's native USB Serial/JTAG. See
+> [serial console](#serial-console) below.
 
 ## Documentation
 
@@ -59,23 +60,20 @@ Arduino client.
 The panel's native nibble encoding matches Hokku's wire format exactly, so no
 colour remapping is needed when driving it.
 
-## Serial console (known issue)
+## Serial console
 
-The firmware is built with `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` (the same
-setting the huessen frame uses, where it works). On the E1004, the native USB
-port shows the ROM bootloader banner and then goes **completely silent** for the
-rest of boot — no second-stage bootloader line, no app logs. Reproduced with
-both `idf.py monitor` and a raw reset-pulse capture.
+The console is on **UART0** (`CONFIG_ESP_CONSOLE_UART_DEFAULT=y`). On this
+baseboard the USB-C port is wired through an external **CH340K** USB-to-UART
+bridge to UART0 (GPIO43/44) — it is **not** connected to the SoC's native USB
+Serial/JTAG peripheral. Plug in and the port enumerates as a CH340K
+(`VID_1A86:PID_7522` on Windows), not as native USJ (`VID_303A:PID_1001`);
+`idf.py monitor` and any serial terminal at 115200 8N1 see the full boot log.
 
-The device is not hung: the panel renders normally throughout, which is how the
-first hardware run was verified at all. Only the log stream is missing. The
-Arduino reference example for this board notes that diagnostic output goes out
-`Serial0` / UART0, so the likely explanation is that the console ends up on the
-physical UART0 pins rather than the USB Serial/JTAG peripheral — but that has
-not been confirmed with a probe on the header.
-
-**If you are bringing this board up, do not read silence on the USB port as a
-crash.** Watch the panel, or use the frame's own diagnostics instead: the
-firmware keeps a log ring and reports state to the server via `X-Frame-State`,
-both visible in the web app. Reported in
-[issue #14](https://github.com/defl/hokku_epaper/issues/14).
+This differs from the huessen frame, which does use native USB Serial/JTAG.
+Early builds carried `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` copied from huessen
+without re-checking this board's wiring, which routed the app console to a
+peripheral with no physical path to the host: the ROM banner still appeared
+(ROM prints to UART0 unconditionally) and then everything went silent, which
+looked like a hang but was just a misrouted console. Fixed in
+[PR #23](https://github.com/defl/hokku_epaper/pull/23) — diagnosed and verified
+on real hardware via [issue #14](https://github.com/defl/hokku_epaper/issues/14).

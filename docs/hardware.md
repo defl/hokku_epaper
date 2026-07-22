@@ -89,10 +89,8 @@ the usual marketplaces.
 > server fetch, correct panel render and battery reporting all worked, so the
 > ESP-IDF SPI/DMA plumbing and the ×2.0 battery divider check out. That is one
 > unit in one session — deep sleep over days, OTA and full-discharge battery
-> behaviour are still unproven, and app logs do not reach the native USB serial
-> console (see the
-> [screen page](screens/seeedstudio_e1004/README.md#serial-console-known-issue)).
-> More reports [very welcome](https://github.com/defl/hokku_epaper/issues).
+> behaviour are still unproven. More reports
+> [very welcome](https://github.com/defl/hokku_epaper/issues).
 
 A 13.3" Spectra 6 panel on a Seeed XIAO ESP32-S3, on the reTerminal E-Series
 baseboard. Same panel family and resolution as the Hokku/Huessen frame.
