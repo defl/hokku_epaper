@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import threading
 import time
 from dataclasses import asdict, dataclass, replace
@@ -480,10 +481,12 @@ class ServeScheduler:
             if not eligible:
                 self._next_for[orientation] = None
             else:
-                self._next_for[orientation] = min(
-                    (r.name for r in eligible),
-                    key=lambda n: (self._stats[n].show_index, n),
-                )
+                # Pick the least-shown index, then break ties randomly rather
+                # than alphabetically — otherwise every daily rotation reset
+                # (see _reconcile) replays the same name-sorted prefix first.
+                min_idx = min(self._stats[r.name].show_index for r in eligible)
+                tied = [r.name for r in eligible if self._stats[r.name].show_index == min_idx]
+                self._next_for[orientation] = random.choice(tied)
 
     def _reconcile(self, ready_names: set[str]) -> None:
         # Drop orphans.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import replace
 from pathlib import Path
 
@@ -57,6 +58,32 @@ def test_fair_rotation(app_config: AppConfig, make_test_image):
         sched.mark_served(n)
         counts[n] += 1
     assert counts == {"a.png": 3, "b.png": 3, "c.png": 3}
+
+
+def test_tie_break_draws_from_full_tied_set(
+    app_config: AppConfig, make_test_image, monkeypatch
+):
+    """When multiple images share the minimum show_index, the pick must be
+    drawn from that whole tied set via random.choice, not deterministically
+    the alphabetically-first name — otherwise every rotation reset triggered
+    by a new upload (_reconcile flattening show_index back to 1) replays the
+    same name-sorted prefix before later names ever get a turn."""
+    calls = []
+    original_choice = random.choice
+
+    def spy_choice(seq):
+        calls.append(sorted(seq))
+        return original_choice(seq)
+
+    # Patch before construction: ServeScheduler.__init__ already runs one
+    # _precompute_all_locked pass itself, so patching after _setup() would
+    # miss it and the cached pick from that pass would satisfy pick_next()
+    # without ever re-invoking random.choice.
+    monkeypatch.setattr("hokku.webserver.serve_scheduler.random.choice", spy_choice)
+    _, sched = _setup(app_config, make_test_image, ["z.png", "a.png", "m.png"])
+    sched.pick_next(Orientation.NEUTRAL)
+    assert calls, "random.choice should be used to break show_index ties"
+    assert calls[0] == ["a.png", "m.png", "z.png"]
 
 
 def test_stats_after_serves(app_config: AppConfig, make_test_image):
