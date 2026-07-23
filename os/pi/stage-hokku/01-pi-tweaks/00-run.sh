@@ -1,17 +1,28 @@
 #!/bin/bash -e
 # Pi Zero 2 W optimisations.
 
-# GPU memory: minimum (16 MB) — server is headless. dwc2/dr_mode=peripheral
-# enables the USB gadget serial console (see below); disable-bt turns off the
-# unused Bluetooth radio (smaller attack surface, one less background daemon
-# — see docs/os_pi_usb_console.md for the console, and the hardening notes
-# in this stage for the rest).
+# GPU memory: minimum (16 MB) — server is headless. disable-bt turns off the
+# unused Bluetooth radio (smaller attack surface, one less background daemon).
+#
+# dwc2/dr_mode=otg makes the Zero 2 W's single USB data port DUAL-ROLE, which
+# it must be to serve two jobs on one port:
+#   • peripheral role — when plugged into a PC with a normal cable, it is the
+#     USB gadget serial console (/dev/ttyGS0, see below and the cmdline stanza).
+#   • host role — when a screen is attached through a micro-USB→USB-A OTG
+#     adapter, the port becomes a host so "Flash a screen" can drive it
+#     (the screen enumerates as /dev/ttyUSB0). Power the Pi from the PWR port
+#     so the data port is free to host.
+# The role is chosen by the cable/adapter (OTG ID pin), so there is nothing to
+# switch in software. dr_mode=peripheral would have locked it to console-only,
+# leaving no way to flash a screen from the appliance itself.
+# See docs/os_pi_usb_console.md for the console; the hardening notes in this
+# stage cover the rest.
 for cfg in \
     "${ROOTFS_DIR}/boot/firmware/config.txt" \
     "${ROOTFS_DIR}/boot/config.txt"; do
     if [ -f "$cfg" ]; then
         echo "gpu_mem=16" >> "$cfg"
-        echo "dtoverlay=dwc2,dr_mode=peripheral" >> "$cfg"
+        echo "dtoverlay=dwc2,dr_mode=otg" >> "$cfg"
         echo "dtoverlay=disable-bt" >> "$cfg"
         break
     fi
