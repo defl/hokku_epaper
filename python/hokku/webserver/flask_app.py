@@ -1028,8 +1028,14 @@ def create_app(
         # Bigme F7 (XR872), which is USB-flashed by a different (vendor-tool)
         # procedure, not esptool — so the UI shows F7 guidance instead of the
         # generic "not an ESP32-S3" warning.
+        #
+        # is_usb distinguishes a plausible screen (any USB serial device, which
+        # has a VID) from the host's own on-board UARTs (e.g. the Pi's
+        # /dev/ttyS0, /dev/ttyAMA0 — no VID). A screen is always USB-attached, so
+        # the UI groups the non-USB host ports away as "not a screen".
         for d in devices:
             d["is_bigme_f7"] = (d.get("vid"), d.get("pid")) == (0x1A86, 0x7523)
+            d["is_usb"] = d.get("vid") is not None
         return jsonify({"devices": devices, "busy": False})
 
     @app.route("/hokku/api/flash/server_url")

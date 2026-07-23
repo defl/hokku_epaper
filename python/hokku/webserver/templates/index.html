@@ -995,14 +995,21 @@
 
       <ol class="flash-f7-steps">
         <li>Press <em>Bootstrap F7</em> and watch the log.</li>
-        <li><strong>Already on Hokku firmware:</strong> nothing to do — it enters the
-            BROM via <code>upgrade</code> and writes automatically.</li>
-        <li><strong>Stock unit</strong> (only if the log asks): <strong>unplug</strong>
-            the USB, <strong>replug</strong> it, then <strong>press power</strong> —
-            repeat until the log shows <em>BROM caught</em>.</li>
         <li>When the log says so, <strong>power-cycle</strong> the unit — it boots and
             the Wi-Fi/config is written automatically.</li>
       </ol>
+      <div class="config-advanced-toggle" id="flash-f7-manual-toggle" onclick="toggleF7ManualSteps()">
+        <span class="toggle-arrow">▶</span>
+        <span class="toggle-label">Flashing a stock unit (never ran Hokku)? Show the catch steps</span>
+      </div>
+      <div class="config-advanced-body" id="flash-f7-manual-body">
+        <div class="flash-note" style="font-size:0.82em;">
+          A unit already on Hokku firmware enters update mode on its own — you can
+          skip this. A <strong>stock</strong> unit needs a manual catch: when the
+          log asks, <strong>unplug</strong> the USB, <strong>replug</strong> it, then
+          <strong>press power</strong> — repeat until the log shows <em>BROM caught</em>.
+        </div>
+      </div>
       <div class="config-row">
         <button type="button" class="btn btn-primary" id="flash-f7-go-btn" onclick="startF7Flash()">Bootstrap F7</button>
         <button type="button" class="btn btn-secondary" id="flash-f7-cancel-btn" onclick="cancelF7Flash()" hidden>Cancel</button>
@@ -2049,10 +2056,14 @@ let flashPollTimer = null;
 
 function flashDeviceLabel(d) {
   if (d.is_bigme_f7) return `${d.port} — Bigme F7 (XR872)`;
-  if (!d.is_esp32) return `${d.port} — ${d.description} (not an ESP32-S3)`;
-  let s = `${d.port} — ESP32-S3`;
-  if (d.config && d.config.screen_name) s += ` · "${d.config.screen_name}"`;
-  return s;
+  if (d.is_esp32) {
+    let s = `${d.port} — ESP32-S3 screen (Huessen EPF1301 or Seeed E1004)`;
+    if (d.config && d.config.screen_name) s += ` · "${d.config.screen_name}"`;
+    return s;
+  }
+  // A USB serial device we don't recognise vs. the host's own on-board UART.
+  if (d.is_usb) return `${d.port} — ${d.description || 'USB serial device'}`;
+  return `${d.port} — this device's own serial port (not a screen)`;
 }
 
 async function scanFlashDevices() {
@@ -2077,15 +2088,43 @@ async function scanFlashDevices() {
     const data = await r.json();
     flashDevices = data.devices || [];
     sel.innerHTML = '';
-    const esp = flashDevices.filter(d => d.is_esp32);
+    // A screen is always USB-attached. Split the scan into things you can flash
+    // (recognised ESP32/F7), other USB serial gadgets, and the host's own
+    // on-board UARTs (no VID) — which can never be a screen.
+    const flashable = flashDevices.filter(d => d.is_esp32 || d.is_bigme_f7);
+    const usbOther  = flashDevices.filter(d => d.is_usb && !d.is_esp32 && !d.is_bigme_f7);
+    const hostPorts = flashDevices.filter(d => !d.is_usb);
+
     if (!flashDevices.length) {
-      sel.innerHTML = '<option value="">— no serial devices found —</option>';
-      note.textContent = 'No serial devices found. Is the screen plugged in via USB?';
+      sel.innerHTML = '<option value="">— nothing found —</option>';
+      note.textContent = 'No serial devices found. Plug a screen into this device’s USB port, then press Scan.';
     } else {
       sel.appendChild(new Option('— select a device —', ''));
-      flashDevices.forEach(d => sel.appendChild(new Option(flashDeviceLabel(d), d.port)));
-      if (esp.length === 1) sel.value = esp[0].port;
-      note.textContent = esp.length ? '' : 'No ESP32-S3 detected among the serial ports.';
+      // Real / plausible screens first.
+      [...flashable, ...usbOther].forEach(d =>
+        sel.appendChild(new Option(flashDeviceLabel(d), d.port)));
+      // The host's own ports, shown (so it's clear they were seen) but grouped
+      // and disabled — never selectable as a flash target.
+      if (hostPorts.length) {
+        const grp = document.createElement('optgroup');
+        grp.label = 'Other ports (not screens)';
+        hostPorts.forEach(d => {
+          const o = new Option(flashDeviceLabel(d), d.port);
+          o.disabled = true;
+          grp.appendChild(o);
+        });
+        sel.appendChild(grp);
+      }
+      // Auto-select when exactly one screen is present.
+      if (flashable.length === 1) sel.value = flashable[0].port;
+
+      if (flashable.length) {
+        note.textContent = '';
+      } else if (usbOther.length) {
+        note.textContent = 'A USB serial device was found but it isn’t a recognised Hokku screen.';
+      } else {
+        note.textContent = 'No screen detected — only this device’s own serial ports. Plug a Hokku screen into USB and press Scan.';
+      }
     }
     onFlashDeviceChange();
   } catch (e) {
@@ -2167,6 +2206,13 @@ function onFlashModelChange() {
 function toggleFlashSecondWifi() {
   const toggle = document.getElementById('flash-second-toggle');
   const body = document.getElementById('flash-second-body');
+  const open = body.classList.toggle('open');
+  toggle.classList.toggle('open', open);
+}
+
+function toggleF7ManualSteps() {
+  const toggle = document.getElementById('flash-f7-manual-toggle');
+  const body = document.getElementById('flash-f7-manual-body');
   const open = body.classList.toggle('open');
   toggle.classList.toggle('open', open);
 }
