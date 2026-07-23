@@ -9,6 +9,7 @@ from unittest.mock import patch
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.time_utils import (
     DEBUG_FAST_REFRESH_SECONDS,
+    MIN_SLOT_GAP_SECONDS,
     calculate_sleep_seconds,
     format_duration_human,
 )
@@ -93,6 +94,32 @@ def test_multiple_slots_picks_nearest_future():
         mock_dt.now.return_value = now
         result = calculate_sleep_seconds(cfg)
     assert 7_000 <= result <= 7_300, f"Expected ~7200 s, got {result}"
+
+
+def test_imminent_slot_skipped_to_avoid_double_refresh():
+    """A device whose deep-sleep timer drifted can wake a few minutes before
+    its nominal slot. That wake already serves the slot, so the next slot
+    within MIN_SLOT_GAP_SECONDS must be skipped rather than returning a very
+    short sleep that would wake the device again almost immediately."""
+    # now=18:52, slots at 07:00/19:00 → 19:00 is only 8 min away (imminent),
+    # so it should be skipped in favour of tomorrow's 07:00 (~12h08m).
+    now = _fake_now(18, 52)
+    cfg = _cfg(debug_fast_refresh=False, refresh_image_at_time=["0700", "1900"])
+    with patch("hokku.webserver.time_utils.datetime") as mock_dt:
+        mock_dt.now.return_value = now
+        result = calculate_sleep_seconds(cfg)
+    assert result > MIN_SLOT_GAP_SECONDS
+    assert 43_500 <= result <= 43_700, f"Expected ~12h08m, got {result}"
+
+
+def test_slot_just_outside_min_gap_still_chosen():
+    """A slot just beyond MIN_SLOT_GAP_SECONDS away is still picked normally."""
+    now = _fake_now(18, 44)  # 19:00 is 16 min away, past the 15 min guard
+    cfg = _cfg(debug_fast_refresh=False, refresh_image_at_time=["0700", "1900"])
+    with patch("hokku.webserver.time_utils.datetime") as mock_dt:
+        mock_dt.now.return_value = now
+        result = calculate_sleep_seconds(cfg)
+    assert 900 <= result <= 1_000, f"Expected ~16 min, got {result}"
 
 
 # ── format_duration_human ─────────────────────────────────────────────────────

@@ -11,6 +11,15 @@ from hokku.webserver.app_config import AppConfig
 
 DEBUG_FAST_REFRESH_SECONDS = 180
 
+# A device's deep-sleep timer (ESP32 internal RC oscillator) can drift by
+# several minutes over a long sleep, waking it a bit early. If we naively
+# scheduled the next wake at the nearest future slot, an early wake this
+# close to that slot would get told to sleep only a few minutes, wake again
+# right at the nominal slot, and serve a second refresh almost immediately.
+# Slots within this window of "now" are treated as already served by the
+# current request, so we skip ahead to the following slot instead.
+MIN_SLOT_GAP_SECONDS = 900  # 15 minutes
+
 
 def calculate_sleep_seconds(config: AppConfig) -> int:
     """Seconds until the next configured refresh time (system local TZ).
@@ -34,10 +43,10 @@ def calculate_sleep_seconds(config: AppConfig) -> int:
 
     for h, m in wake_times:
         candidate = now.replace(hour=h, minute=m, second=0, microsecond=0)
-        if candidate > now:
+        if (candidate - now).total_seconds() > MIN_SLOT_GAP_SECONDS:
             return max(60, int((candidate - now).total_seconds()))
 
-    # All today's slots are past — use tomorrow's first slot.
+    # Remaining today's slots are past or imminent — use tomorrow's first slot.
     h, m = wake_times[0]
     tomorrow = now + timedelta(days=1)
     candidate = tomorrow.replace(hour=h, minute=m, second=0, microsecond=0)
