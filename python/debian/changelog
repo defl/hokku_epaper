@@ -1,3 +1,10 @@
+hokku-server (4.0.1~dev.17-1) unstable; urgency=medium
+
+  * fix(server/ui): clean up the Flash-a-screen device picker for the F7
+    (hide the host's own UARTs, positive labels, slimmer F7 form)
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 23 Jul 2026 02:29:05 +0000
+
 hokku-server (4.0.1~dev.16-1) unstable; urgency=medium
 
   * fix(os): last-resort SD swap + swappiness + trim unused services
