@@ -16,9 +16,9 @@ import tempfile
 
 import serial.tools.list_ports
 
-from hokku.screens.esp32.firmware import release_app_header
-from hokku.screens.esp32.nvs import read_nvs
-from hokku.screens.esp32.spec import Esp32Spec
+from hokku.common.esp32.firmware import release_app_header
+from hokku.common.esp32.nvs import read_nvs
+from hokku.common.esp32.spec import Esp32Spec
 
 logger = logging.getLogger(__name__)
 

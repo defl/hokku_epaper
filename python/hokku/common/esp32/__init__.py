@@ -13,6 +13,6 @@ The XR872 ``bigme_f7`` screen does NOT use this layer (different SoC / BROM path
 
 from __future__ import annotations
 
-from hokku.screens.esp32.spec import Esp32Spec
+from hokku.common.esp32.spec import Esp32Spec
 
 __all__ = ["Esp32Spec"]

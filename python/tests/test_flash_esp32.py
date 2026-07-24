@@ -2,7 +2,7 @@
 
 Every test here takes the ``esp32_mod`` fixture (defined in conftest) and runs
 once per board. The two boards bind the same shared code in
-:mod:`hokku.screens.esp32` to their own :class:`Esp32Spec`, so a single suite
+:mod:`hokku.common.esp32` to their own :class:`Esp32Spec`, so a single suite
 proves the pure flash ops (NVS build/parse, device-state parsing, firmware-file
 discovery, app-image slicing, config migration) and the model-aware
 ``/hokku/firmware-config`` endpoint for both. This mirrors the firmware's
@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from hokku.common.esp32 import nvs as esp32_nvs
 from hokku.screens import huessen_epf1301, seeedstudio_e1004
-from hokku.screens.esp32 import nvs as esp32_nvs
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
 from hokku.webserver.flask_app import create_app

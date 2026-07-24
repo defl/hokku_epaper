@@ -1,7 +1,7 @@
 """EPF1301 (EL133UF1) Hokku frame: detection, NVS config, and USB flashing.
 
 A thin binding of the shared ESP32-S3 flash/OTA/NVS layer
-(:mod:`hokku.screens.esp32`) to this board's :class:`Esp32Spec`. The public
+(:mod:`hokku.common.esp32`) to this board's :class:`Esp32Spec`. The public
 surface below (consumed by ``hokku.webserver`` and the ``tools/`` CLI by name) is
 unchanged; each callable is the shared implementation with ``SPEC`` pre-bound.
 """
@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from functools import partial
 
-from hokku.screens.esp32 import device as _device
-from hokku.screens.esp32 import firmware as _firmware
-from hokku.screens.esp32 import flasher as _flasher
-from hokku.screens.esp32 import nvs as _nvs
-from hokku.screens.esp32.spec import Esp32Spec
+from hokku.common.esp32 import device as _device
+from hokku.common.esp32 import firmware as _firmware
+from hokku.common.esp32 import flasher as _flasher
+from hokku.common.esp32 import nvs as _nvs
+from hokku.common.esp32.spec import Esp32Spec
 
 from . import constants
 from .constants import (

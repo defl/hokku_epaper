@@ -114,7 +114,7 @@ Source: direct testing on the device, 2026-06-13.
 ### BROM command wire protocol
 
 Source: disassembly of the phoenixMC Linux ELF (`CFlashHost::*`, symbols intact) cross-checked
-against live transactions, 2026-06-19. Implemented in `tools/xr872_flasher.py`.
+against live transactions, 2026-06-19. Implemented in `python/hokku/common/xr872/flasher.py`.
 
 - Sync: host sends `0x55` until BROM replies `OK`. Commands are 12-byte-header frames:
   `"BROM"(4) + type(1)=0x04 + pad(1) + CRC16_LE(2) + count_BE(4) + cmd(1) + payload_BE`.

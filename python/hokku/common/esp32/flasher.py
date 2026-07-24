@@ -16,9 +16,9 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from hokku.screens.esp32.device import parse_device_state, read_device_flash
-from hokku.screens.esp32.nvs import build_nvs_binary
-from hokku.screens.esp32.spec import Esp32Spec
+from hokku.common.esp32.device import parse_device_state, read_device_flash
+from hokku.common.esp32.nvs import build_nvs_binary
+from hokku.common.esp32.spec import Esp32Spec
 
 OnLine = Callable[[str], None]
 

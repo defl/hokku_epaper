@@ -29,10 +29,17 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import pathlib
 import sys
 import time
 
-from xr872_flasher import ERASE_TYPE_4K, XR872Flasher, send_upgrade_command
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "python"))
+
+from hokku.common.xr872.flasher import (
+    ERASE_TYPE_4K,
+    XR872Flasher,
+    send_upgrade_command,
+)
 
 BL_SIZE = 0x8000  # bootloader region [0, 0x8000) — never touched
 FLASH_SIZE = 0x400000  # 4 MB

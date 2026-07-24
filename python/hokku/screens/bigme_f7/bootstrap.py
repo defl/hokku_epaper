@@ -1,19 +1,20 @@
 """Drive a fresh/stock Bigme F7 into Hokku firmware from the web "Flash a screen" UI.
 
 Wraps the proven pure-Python mask-BROM catch + safe slot-0 write (the flashers in
-``tools/``) in a callback-streamed, cancellable routine the web flash job can run.
-The catch waits for the operator to power-cycle the unit with a **USB replug + power
-press** (the replug brings the CH340 port up first, so we hammer ``0x55`` straight
-through the BROM sync window — a plain long-press drops the port and misses it).
+:mod:`hokku.common.xr872`) in a callback-streamed, cancellable routine the web flash
+job can run. The catch waits for the operator to power-cycle the unit with a **USB
+replug + power press** (the replug brings the CH340 port up first, so we hammer
+``0x55`` straight through the BROM sync window — a plain long-press drops the port
+and misses it).
 
 Safety is inherited unchanged from ``flash_slot0``: only slot 0 + its A/B cfg sector
 are written, the bootloader and OEM slot 1 are never touched, the cfg flip is the
 last write, and any header/verify failure aborts via ``die()`` (which we surface as
 an error) leaving slot 1 bootable. Nothing here relaxes those checks.
 
-The flash primitives live in the dev-tree ``tools/`` directory (not packaged), so
-this feature is only available where that directory is present; callers must gate on
-:func:`tooling_available`.
+The flash primitives live in the packaged :mod:`hokku.common.xr872`, so this feature
+ships with the server (including the appliance .deb); :func:`tooling_available` now
+only guards against a missing ``pyserial``.
 """
 
 from __future__ import annotations
@@ -27,16 +28,23 @@ from typing import Callable
 
 from hokku.screens.bigme_f7.config import write_config_via_brom
 
-# python/hokku/screens/bigme_f7/bootstrap.py -> repo root is parents[4]
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-_TOOLS = _REPO_ROOT / "tools"
-
 CATCH_TIMEOUT_S = 300.0
 
 
 def tooling_available() -> bool:
-    """True if the dev-tree flash primitives this module needs are present."""
-    return (_TOOLS / "flash_candidate_slot0.py").exists() and (_TOOLS / "xr872_flasher.py").exists()
+    """True if the XR872 flash primitives (and pyserial) can be imported.
+
+    They now live in the packaged :mod:`hokku.common.xr872`, so this is true on
+    any normal install (including the appliance .deb) — the only way it comes
+    back false is a missing ``pyserial``.
+    """
+    try:
+        import serial  # noqa: F401, PLC0415
+
+        from hokku.common.xr872 import catch, flasher, slot0  # noqa: F401, PLC0415
+    except ImportError:
+        return False
+    return True
 
 
 class _LineWriter(io.TextIOBase):
@@ -97,23 +105,13 @@ class _LineWriter(io.TextIOBase):
 
 
 def _import_tools():
-    if str(_TOOLS) not in sys.path:
-        sys.path.insert(0, str(_TOOLS))
+    # Imported lazily (inside the flash routine) so pyserial and the flasher
+    # aren't pulled in just by importing this module.
     import serial  # noqa: PLC0415
 
-    # These live in the dev-tree tools/ dir (added to sys.path just above), so the
-    # static checkers can't resolve them — that's expected, gate on tooling_available.
-    from flash_candidate_slot0 import (  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
-        flash_slot0,
-    )
-    from flash_candidate_slot0_catch import (  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
-        hammer_sync,
-        open_stable,
-    )
-    from xr872_flasher import (  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
-        XR872Flasher,
-        send_upgrade_command,
-    )
+    from hokku.common.xr872.catch import hammer_sync, open_stable  # noqa: PLC0415
+    from hokku.common.xr872.flasher import XR872Flasher, send_upgrade_command  # noqa: PLC0415
+    from hokku.common.xr872.slot0 import flash_slot0  # noqa: PLC0415
 
     return flash_slot0, hammer_sync, open_stable, XR872Flasher, send_upgrade_command, serial
 

@@ -36,7 +36,7 @@ vendor flashing tool and an undocumented wire protocol:
    the checksum over known-good frames until it reproduces byte-for-byte.
 
 That produced the command set and CRC scheme now implemented directly in
-[`tools/xr872_flasher.py`](../../../tools/xr872_flasher.py) — `GetFlashId`,
+[`python/hokku/common/xr872/flasher.py`](../../../python/hokku/common/xr872/flasher.py) — `GetFlashId`,
 `ReadSector`, `WriteSector`, `EraseFlash`, `ChangeBaud`, `SysReboot` — which
 is why flashing an F7 needs no vendor tooling on any platform. The one-off
 capture and decode scripts served their purpose and were removed once the

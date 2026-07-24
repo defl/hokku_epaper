@@ -41,11 +41,11 @@ import time
 import serial
 
 _HERE = pathlib.Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE))
+sys.path.insert(0, str(_HERE.parent / "python"))
 
-from flash_candidate_slot0 import BL_SIZE, OTA_ADDR, build_fdcm_seq0, flash_slot0  # noqa: E402
-from flash_candidate_slot0_catch import hammer_sync, open_stable  # noqa: E402
-from xr872_flasher import XR872Flasher  # noqa: E402
+from hokku.common.xr872.catch import hammer_sync, open_stable  # noqa: E402
+from hokku.common.xr872.flasher import XR872Flasher  # noqa: E402
+from hokku.common.xr872.slot0 import BL_SIZE, OTA_ADDR, build_fdcm_seq0, flash_slot0  # noqa: E402
 
 FLASH_SIZE = 0x400000
 SLOT0_APP = BL_SIZE  # 0x8000

@@ -3,18 +3,18 @@
 The display (image serving) is a pure model-id override of huessen (identical
 wire format). Firmware/OTA serving and USB flashing bind this board's
 :class:`Esp32Spec` (32 MB flash, artifact name) to the shared ESP32-S3 layer in
-:mod:`hokku.screens.esp32`. The public surface mirrors huessen_epf1301.
+:mod:`hokku.common.esp32`. The public surface mirrors huessen_epf1301.
 """
 
 from __future__ import annotations
 
 from functools import partial
 
-from hokku.screens.esp32 import device as _device
-from hokku.screens.esp32 import firmware as _firmware
-from hokku.screens.esp32 import flasher as _flasher
-from hokku.screens.esp32 import nvs as _nvs
-from hokku.screens.esp32.spec import Esp32Spec
+from hokku.common.esp32 import device as _device
+from hokku.common.esp32 import firmware as _firmware
+from hokku.common.esp32 import flasher as _flasher
+from hokku.common.esp32 import nvs as _nvs
+from hokku.common.esp32.spec import Esp32Spec
 
 from . import constants
 from .constants import (

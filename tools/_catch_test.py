@@ -17,13 +17,16 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import pathlib
 import sys
 import time
 
 import serial
 
-from flash_candidate_slot0_catch import hammer_sync, open_stable
-from xr872_flasher import XR872Flasher
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "python"))
+
+from hokku.common.xr872.catch import hammer_sync, open_stable
+from hokku.common.xr872.flasher import XR872Flasher
 
 
 def ts() -> str:

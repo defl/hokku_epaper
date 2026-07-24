@@ -15,9 +15,9 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
-from hokku.screens.esp32.spec import Esp32Spec
+from hokku.common.esp32.spec import Esp32Spec
 
-# python/hokku/screens/esp32/firmware.py -> repo root is parents[4]
+# python/hokku/common/esp32/firmware.py -> repo root is parents[4]
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _DEV_FIRMWARE_DIR = _REPO_ROOT / "firmware" / "release"
 _INSTALLED_FIRMWARE_DIR = Path("/usr/share/hokku-server/firmware")

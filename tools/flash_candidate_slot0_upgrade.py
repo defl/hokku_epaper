@@ -18,10 +18,13 @@ Usage:
 """
 
 import argparse
+import pathlib
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "python"))
+
 from _dump_bigme_f7 import enter_brom
-from flash_candidate_slot0 import flash_slot0
+from hokku.common.xr872.slot0 import flash_slot0
 
 
 def main() -> int:

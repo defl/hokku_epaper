@@ -21,9 +21,9 @@ import serial
 from serial.tools import list_ports
 
 ROOT = pathlib.Path(__file__).parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "python"))
 from _private import private_root
-from xr872_flasher import XR872Flasher
+from hokku.common.xr872.flasher import XR872Flasher
 
 CH340_VID = 0x1A86
 CH340_PID = 0x7523
@@ -64,7 +64,7 @@ def _close(s):
 
 def _try_brom_sync(port: str, attempts: int = 4) -> "XR872Flasher | None":
     """Try BROM sync on `port`, return flasher on success or None."""
-    from xr872_flasher import XR872Flasher
+    from hokku.common.xr872.flasher import XR872Flasher
 
     for _ in range(attempts):
         time.sleep(0.3)
@@ -92,7 +92,7 @@ def enter_brom(overall_timeout: float = 300.0) -> "tuple[XR872Flasher, str] | No
     Repeat until it syncs. If the device is asleep, a button press wakes it and
     a later iteration catches it. No boot-log window timing required.
     """
-    from xr872_flasher import XR872Flasher
+    from hokku.common.xr872.flasher import XR872Flasher
 
     deadline = time.monotonic() + overall_timeout
 
@@ -151,7 +151,7 @@ def _read_chunk(f: "XR872Flasher", addr: int, nbytes: int) -> tuple[bytes, str |
     len>>9) — the BROM's true wire semantics. A single frame returns exactly
     nbytes; the connection stays in BROM, ready for the next frame.
     """
-    from xr872_flasher import frame_readsector
+    from hokku.common.xr872.flasher import frame_readsector
 
     frame = frame_readsector(addr, nbytes)
     f.ser.reset_input_buffer()

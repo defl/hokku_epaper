@@ -20,11 +20,13 @@ Usage:
 """
 
 import argparse
+import contextlib
 import struct
 import sys
 import time
+from typing import NoReturn
 
-from xr872_flasher import ERASE_TYPE_4K, XR872Flasher, send_upgrade_command
+from hokku.common.xr872.flasher import ERASE_TYPE_4K, XR872Flasher, send_upgrade_command
 
 BL_SIZE = 0x8000
 OTA_ADDR = 0x180000
@@ -68,7 +70,7 @@ def parse_cfg(sector: bytes):
     return seq, verified
 
 
-def die(msg):
+def die(msg) -> NoReturn:
     print(f"ABORT: {msg}")
     sys.exit(1)
 
@@ -188,20 +190,16 @@ def main():
     # awake window (the OEM e-reader re-sleeps quickly). Give up after ~40 attempts.
     f = None
     for attempt in range(40):
-        try:
+        with contextlib.suppress(Exception):
             send_upgrade_command(args.port)
-        except Exception:
-            pass
         time.sleep(0.4)
-        try:
+        with contextlib.suppress(Exception):
             ftry = XR872Flasher(args.port)
             if ftry.sync(attempts=4, timeout_per=0.25):
                 f = ftry
                 print(f"BROM sync OK (attempt {attempt + 1})")
                 break
             ftry.close()
-        except Exception:
-            pass
     if f is None:
         die("could not enter BROM after retries (keep the device awake and retry)")
 

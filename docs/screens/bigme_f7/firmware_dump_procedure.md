@@ -79,7 +79,7 @@ This depends on the **sector-addressed** ReadSector/WriteSector semantics (addr 
 length = sector count) — see "BROM command wire protocol" in [`hardware_facts.md`](hardware_facts.md).
 An earlier version passed raw byte offsets and produced **corrupt** dumps (every chunk past
 `0x40000` read 512× too far → erased/garbage blocks); the byte-vs-sector fix in
-`tools/xr872_flasher.py` resolved it. The `tools/xr872_flasher.py` `write`/`erase` paths use the
+`python/hokku/common/xr872/flasher.py` resolved it. The `python/hokku/common/xr872/flasher.py` `write`/`erase` paths use the
 same corrected addressing (WriteSector sector-indexed, 16 KB/frame; EraseFlash byte-addressed,
 64 KB blocks) and were validated by a write→readback→erase round-trip on erased flash regions.
 

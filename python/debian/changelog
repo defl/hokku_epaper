@@ -1,3 +1,11 @@
+hokku-server (4.0.1~dev.18-1) unstable; urgency=medium
+
+  * refactor: move ESP32 + XR872 flash primitives into hokku.common so the
+    Bigme F7 BROM flasher ships in the .deb (Flash-a-screen F7 now works on
+    the appliance, not just the dev tree)
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 24 Jul 2026 01:19:47 +0000
+
 hokku-server (4.0.1~dev.17-1) unstable; urgency=medium
 
   * fix(server/ui): clean up the Flash-a-screen device picker for the F7

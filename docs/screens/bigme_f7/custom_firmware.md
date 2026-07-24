@@ -73,6 +73,6 @@ OTA. The version is reported in `X-Firmware-Version` and the frame-state `fw`.
 ## Build & flash
 
 Build: `firmware_build.md`. First-time flash of a unit (bootstrap) is USB-only via
-the safe slot-0 flashers (`tools/flash_candidate_slot0*.py`) — the pre-OTA image
+the safe slot-0 flashers (`python/hokku/common/xr872/{slot0,catch}.py`) — the pre-OTA image
 must be flashed over USB because it has no OTA client yet. After that, updates go
 over the air. See [`ota.md`](ota.md) and [`restore_to_stock.md`](restore_to_stock.md).

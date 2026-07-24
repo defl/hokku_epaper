@@ -19,13 +19,14 @@ Usage:
 """
 
 import argparse
+import contextlib
 import sys
 import time
 
 import serial
 
-from flash_candidate_slot0 import flash_slot0
-from xr872_flasher import SYNC_BYTE, SYNC_OK, XR872Flasher
+from hokku.common.xr872.flasher import SYNC_BYTE, SYNC_OK, XR872Flasher
+from hokku.common.xr872.slot0 import flash_slot0
 
 
 def ts() -> str:
@@ -104,10 +105,8 @@ def main() -> int:
                     print(f"\n[{ts()}] DONE. Power-cycle / watch UART to see it boot.")
                     return 0
             finally:
-                try:
+                with contextlib.suppress(Exception):
                     ser.close()
-                except Exception:
-                    pass
 
         except serial.SerialException:
             time.sleep(0.02)  # power-cycle bounce — reconnect fast

@@ -1,7 +1,7 @@
 """Map a screen ``model_id`` to its USB-flashable ESP32-S3 screen module.
 
 An ESP32 screen module exposes the full flash + NVS-config surface bound to its
-own :class:`~hokku.screens.esp32.spec.Esp32Spec` (flash size, offsets, artifact
+own :class:`~hokku.common.esp32.spec.Esp32Spec` (flash size, offsets, artifact
 name): ``flash_device``, ``merged_firmware_file``, ``scan_devices``,
 ``migrate_config``, ``build_nvs_binary``, ``CONFIG_VERSION``, ``NvsToolUnavailable``.
 

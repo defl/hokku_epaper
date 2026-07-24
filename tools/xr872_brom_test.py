@@ -165,7 +165,7 @@ def main() -> None:
     synced = wait_for_brom_sync(args.port, args.baud, args.sync_timeout)
 
     if synced:
-        print("\nBROM sync OK — proceed with: python tools/xr872_flasher.py identify")
+        print("\nBROM sync OK — proceed with: python -m hokku.common.xr872.flasher identify")
         sys.exit(0)
     else:
         print("\nBROM sync FAILED")

@@ -4,7 +4,7 @@
 using the standalone ``esp-idf-nvs-partition-gen`` PyPI package (invoked as a
 subprocess) — no full ESP-IDF install required. ``read_nvs`` parses an NVS
 partition image back into a dict (pure stdlib). Both are parameterised by an
-:class:`~hokku.screens.esp32.spec.Esp32Spec` (namespace, size, schema version).
+:class:`~hokku.common.esp32.spec.Esp32Spec` (namespace, size, schema version).
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 
-from hokku.screens.esp32.spec import Esp32Spec
+from hokku.common.esp32.spec import Esp32Spec
 
 # Module name of the standalone generator (`pip install esp-idf-nvs-partition-gen`).
 _NVS_GEN_MODULE = "esp_idf_nvs_partition_gen"
