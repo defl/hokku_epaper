@@ -79,6 +79,30 @@ If the `.local` name doesn't resolve (some Windows and Android setups don't do
 mDNS reliably), find the Pi's IP address in your router's DHCP client list and
 use `http://<ip>:8080` instead.
 
+## Flashing a frame from the appliance
+
+The appliance can flash a frame over USB itself — open **Flash a screen** in
+the web app, no separate setup machine needed. But the Pi Zero 2 W has only a
+**single USB data port**, and the appliance runs it in dual-role (OTG) mode: a
+normal cable to a PC is the serial console (peripheral), while a frame on a
+micro-USB→USB-A OTG adapter turns the port into a host that can flash it.
+
+Because it's one shared port, the order matters:
+
+1. **Boot the appliance with nothing plugged into the data port.** A frame
+   attached *at boot* puts the port into host mode while the system is still
+   starting, and the appliance never finishes coming up (no web app, no SSH).
+   This is the most common mistake — always boot bare.
+2. Power the Pi from its **PWR** port, so the data port is free to host.
+3. Once the appliance is up, **hot-plug the frame** into the data port through
+   the OTG adapter. The port flips to host mode, the frame enumerates, and it
+   appears in **Flash a screen**.
+4. Flash it, then unplug the frame. (While a frame is attached the USB serial
+   console is unavailable — the port can't be host and console at once.)
+
+If a frame you plug in doesn't show up, check the OTG adapter — host mode needs
+the adapter's ID pin grounded; a plain charging cable won't switch the port.
+
 ## If something goes wrong
 
 ### The Pi never appears on your network
@@ -88,6 +112,11 @@ Pi can't connect within about three and a half minutes of booting — wrong
 password, network out of range, typo in the SSID — it **automatically reverts to
 setup mode and raises the `Hokku Setup` network again**. Rejoin it and correct
 the details.
+
+If it pings but the web app and SSH never come up, check you don't have a
+**frame plugged into the USB data port** — a frame attached at boot wedges
+startup. Unplug it and power-cycle; see [Flashing a frame from the
+appliance](#flashing-a-frame-from-the-appliance).
 
 ### `Hokku Setup` never appears
 
