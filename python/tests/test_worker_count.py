@@ -38,9 +38,19 @@ def test_auto_normal_host():
 
 
 def test_auto_ram_capped():
-    """4 cores, only 190 MB free → (190-100)//30 = 3 → min(3, 3) = 3."""
-    with patch("os.cpu_count", return_value=4), _mock_psutil(190 * 1024 * 1024):
-        assert resolve_worker_count(0) == 3
+    """4 cores but only ~540 MB free → (540-100)//220 = 2 → min(3, 2) = 2.
+
+    RAM, not cores, is the limit (220 MB budgeted per concurrent active render)."""
+    with patch("os.cpu_count", return_value=4), _mock_psutil(540 * 1024 * 1024):
+        assert resolve_worker_count(0) == 2
+
+
+def test_auto_pi_zero_2w_is_serial():
+    """The 464 MB Pi Zero 2 W (4 cores, ~360 MB free) resolves to 1 worker:
+    (360-100)//220 = 1. One render at a time is all it can safely do — three
+    concurrent large-image renders is what OOM-killed the server."""
+    with patch("os.cpu_count", return_value=4), _mock_psutil(360 * 1024 * 1024):
+        assert resolve_worker_count(0) == 1
 
 
 def test_auto_ram_very_low_clamps_to_1():

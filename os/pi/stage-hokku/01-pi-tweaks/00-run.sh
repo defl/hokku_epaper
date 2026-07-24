@@ -84,6 +84,51 @@ APTEOF
 mkdir -p "${ROOTFS_DIR}/etc/cloud"
 touch "${ROOTFS_DIR}/etc/cloud/cloud-init.disabled"
 
+# First-boot root-filesystem expansion. pi-gen images carry no auto-resize, so
+# without this the rootfs stays at its built ~3 GB on any card and fills up
+# (which, once full, makes uploads and conversions fail). A oneshot service
+# grows the partition + ext4 online on first boot, then stamps itself done.
+# growpart (cloud-guest-utils) exits 1 with "NOCHANGE" when already full, so
+# every step tolerates failure and the stamp still lands.
+mkdir -p "${ROOTFS_DIR}/usr/local/sbin"
+cat > "${ROOTFS_DIR}/usr/local/sbin/hokku-resize-rootfs" <<'RESIZEEOF'
+#!/bin/sh
+set -e
+STAMP=/var/lib/hokku/.rootfs-resized
+[ -e "$STAMP" ] && exit 0
+
+root_src=$(findmnt -no SOURCE /)
+case "$root_src" in
+    /dev/mmcblk*p[0-9]*) disk=${root_src%p[0-9]*}; part=${root_src##*p} ;;
+    /dev/sd*[0-9])       disk=$(echo "$root_src" | sed -E 's/[0-9]+$//'); part=$(echo "$root_src" | sed -E 's/.*[^0-9]//') ;;
+    *) echo "hokku-resize: unrecognised root device '$root_src', skipping" >&2; exit 0 ;;
+esac
+
+growpart "$disk" "$part" || true   # exits 1 (NOCHANGE) when already at full size
+partx -u "$disk" || true           # make the kernel re-read the grown last partition
+resize2fs "$root_src" || true      # online-grow the mounted ext4
+
+mkdir -p /var/lib/hokku
+touch "$STAMP"
+RESIZEEOF
+
+cat > "${ROOTFS_DIR}/etc/systemd/system/hokku-resize-rootfs.service" <<'RESIZESVC'
+[Unit]
+Description=Grow the Hokku appliance rootfs to fill the SD card (first boot)
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=sysinit.target hokku-server.service hokku-installer.service
+ConditionPathExists=!/var/lib/hokku/.rootfs-resized
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/hokku-resize-rootfs
+
+[Install]
+WantedBy=sysinit.target
+RESIZESVC
+
 on_chroot << 'EOF'
 set -e
 
@@ -138,6 +183,11 @@ SYSCTL
 if systemctl is-enabled avahi-daemon >/dev/null 2>&1; then
     systemctl disable avahi-daemon
 fi
+
+# First-boot rootfs expansion (see the unit written above this on_chroot).
+chmod +x /usr/local/sbin/hokku-resize-rootfs
+systemctl enable hokku-resize-rootfs.service 2>/dev/null || \
+    echo "WARNING: could not enable hokku-resize-rootfs.service"
 
 # USB gadget serial console login. Use the generic getty@.service template —
 # NOT serial-getty@ttyGS0, which BindsTo=dev-ttyGS0.device and gets torn

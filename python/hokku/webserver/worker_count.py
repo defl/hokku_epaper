@@ -1,14 +1,19 @@
 """Resolve the configured image-worker count to an actual integer.
 
 Auto mode (configured == 0):
-    workers = min(cpu_count - 1, (available_ram - 100 MB) // 30 MB)
+    workers = min(cpu_count - 1, (available_ram - 100 MB) // 220 MB)
     clamped to at least 1.
 
-    Constants tuned for the thread-pool model: threads share the Python
-    interpreter, so the incremental RSS per extra worker is ~14 MB on a
-    Pi Zero 2 W under load (measured: 166 MB idle → 209 MB with 3 workers).
-    The old 50 MB / 250 MB figures were for the process-pool model where
-    each worker forked the full interpreter.
+    The sizing constant is the *active-render peak*, not the idle-thread
+    overhead. Threads share the interpreter, so an extra idle worker only adds
+    ~14 MB — but that's the wrong number to budget against. When N workers all
+    render at once, each independently decodes + preprocesses (face detect,
+    orientation crop) a full-resolution source before the streaming dither, and
+    that transient peak is ~150-220 MB per concurrent render for a large photo.
+    Budgeting on the old ~30 MB idle figure let a 464 MB Pi Zero 2 W pick 3
+    workers, and three large images landing together OOM-killed the server. At
+    220 MB/worker a 464 MB board resolves to 1 (serial); roomier machines still
+    parallelise up to cpu_count - 1.
 
 Serial mode (configured == 1):
     always returns 1 (legacy behaviour, default).
@@ -46,7 +51,7 @@ def resolve_worker_count(configured: int) -> int:
 
     avail = psutil.virtual_memory().available
     _OS_RESERVE = 100 * 1024 * 1024  # 100 MB headroom for OS + Flask
-    _PER_WORKER = 30 * 1024 * 1024  # ~30 MB incremental RSS per thread
+    _PER_WORKER = 220 * 1024 * 1024  # active-render peak (decode+preprocess) per concurrent render
     ram_workers = max(1, (avail - _OS_RESERVE) // _PER_WORKER)
 
     return max(1, min(cpu_workers, int(ram_workers)))
