@@ -70,32 +70,48 @@ IMAGE_EXTENSIONS = {
     ".svg",
 }
 
-# Hard cap on decoded pixel count. Anything above raises
-# PIL.Image.DecompressionBombError from .load()/.convert(). Sized to comfortably
-# fit 8K (33 MP) photos while keeping a decoded RGB buffer under ~120 MB —
-# safe for a Raspberry Pi.
+# Hard cap on *declared* pixel count — the decompression-bomb guard. A file
+# whose header claims more than this is refused at open(), before a single pixel
+# is decoded (a few-hundred-byte PNG can declare 20000x20000). Kept high so it
+# only catches genuine bombs; the real per-decode RAM ceiling is
+# DECODE_BUDGET_PIXELS below.
 MAX_IMAGE_PIXELS = 40_000_000
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
-# Upload-time caps. Pixel cap matches the decode cap; byte cap is a coarse
-# first line of defense before we even decode the header.
+# The RAM ceiling that actually matters on the 464 MB Pi Zero 2 W: how many
+# pixels we are willing to *materialise*. A full-resolution decode of N pixels
+# costs ~N*3 bytes for RGB, and 2–3x that transiently for HEIF (libheif working
+# memory) — a 24 MP HEIF peaked ~170 MB on Debian, which does not fit alongside
+# the ~324 MB resident baseline. 16 MP keeps even a worst-case HEIF decode under
+# ~120 MB while still covering every 12 MP phone photo.
+#
+# Crucially this is checked AFTER draft() (see _open_image_for_render): a huge
+# JPEG shrink-on-loads to well under the budget and is accepted, while an
+# un-draftable format (PNG / HEIF / etc.) that would decode above the budget is
+# refused with a clear message instead of OOM-killing the whole server. Tunable:
+# raise it if the appliance gets more RAM, lower it if decodes still tip over.
+DECODE_BUDGET_PIXELS = 16_000_000
+
+# Upload-time caps. Pixel cap matches the bomb guard (the decode budget is
+# enforced per-format at render time, post-draft); byte cap is a coarse first
+# line of defense before we even decode the header.
 MAX_UPLOAD_PIXELS = MAX_IMAGE_PIXELS
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 GRAYSCALE_CHROMA_THRESHOLD = 8.0
 
 
-_MAX_SOURCE_LONG_SIDE = max(3200, 1800)  # FULL_W, PANEL_H values
-
 # Screen geometry (the panel is 1200x1600; viewed landscape that's 1600x1200).
-# A source image carrying more than 2x screen pixels in BOTH directions has
-# more detail than dithering can possibly use — and on a Pi those extra
-# pixels are just RAM pressure waiting to OOM. Pre-shrink to this bbox so
-# decoded buffers stay bounded regardless of source size.
+# Source images are pre-shrunk to this bbox: enough oversampling for crop-to-fill
+# quality, but no more — extra source pixels are just RAM pressure and resize
+# temp waiting to OOM on the Pi. 1.5x screen (down from an earlier 2x) roughly
+# halves the LANCZOS resize temp with no visible change at panel resolution.
 _SCREEN_LONG = max(_SCREEN_W, _SCREEN_H)
 _SCREEN_SHORT = min(_SCREEN_W, _SCREEN_H)
-MAX_SOURCE_LONG = 2 * _SCREEN_LONG  # 3200
-MAX_SOURCE_SHORT = 2 * _SCREEN_SHORT  # 2400
+_SOURCE_SCREEN_MULT = 1.5
+MAX_SOURCE_LONG = int(_SOURCE_SCREEN_MULT * _SCREEN_LONG)  # 2400
+MAX_SOURCE_SHORT = int(_SOURCE_SCREEN_MULT * _SCREEN_SHORT)  # 1800
+_MAX_SOURCE_LONG_SIDE = MAX_SOURCE_LONG  # single-axis (panorama/portrait) clamp
 
 # Conservative upper bound used for the upload pixel-budget guard. The actual
 # rasterisation uses a square canvas so both orientations get full resolution.
@@ -143,71 +159,156 @@ def open_image_for_render(path: Path) -> Image.Image:
 
 
 def _open_image_for_render(path: Path) -> Image.Image:
-    """PIL.open + EXIF transpose + RGB convert + size cap.  Caller closes.
+    """Decode a source into a memory-bounded, EXIF-corrected, white-flattened RGB
+    image sized to the source bbox.  Caller closes.  SVG is rasterised via resvg.
 
-    SVG files are rasterised via resvg before entering the PIL pipeline.
+    Memory discipline for the 464 MB Pi, in order:
+      * reject a decompression bomb above ``MAX_IMAGE_PIXELS`` at header read;
+      * ``draft`` shrink-on-load for JPEG, then reject anything still above
+        ``DECODE_BUDGET_PIXELS`` (un-draftable formats) so one oversized image
+        can't OOM the server — it is marked "failed" and the rest keep serving;
+      * shrink to the source bbox BEFORE EXIF-transpose / RGB-convert / white
+        composite, so those run on the small image, not a full-frame buffer.
 
-    Raises ``ValueError`` if the source exceeds ``MAX_IMAGE_PIXELS`` — protects
-    the Pi from decompression-bomb PNGs (small file, huge declared dimensions)
-    that would otherwise blow up RAM on ``convert("RGB")``.
-
-    Also shrinks sources that exceed 2x screen resolution in *both* directions
-    down to a 2x-screen bbox.  Skipped for sources that are only oversized in
-    one direction (e.g. a tall thin portrait) so we don't throw away detail
-    along the short axis.
+    Raises ``ValueError`` for both rejection cases.
     """
     if path.suffix.lower() == ".svg":
-        img = _rasterize_svg(path)
-    else:
-        img = Image.open(path)
-        w0, h0 = img.size
-        if w0 * h0 > MAX_IMAGE_PIXELS:
-            img.close()
-            raise ValueError(
-                f"image {path.name} is too large: {w0}x{h0} "
-                f"({w0 * h0:,} px) exceeds cap of {MAX_IMAGE_PIXELS:,} px"
-            )
-        img_long = max(w0, h0)
-        # Cheap JPEG-only header-time downscale (no-op for PNG/HEIC/etc.) — keeps
-        # the decoded buffer small for huge JPEGs before we ever load pixels.
-        if img_long > _MAX_SOURCE_LONG_SIDE:
-            k = 1
-            while img_long / (k * 2) >= _MAX_SOURCE_LONG_SIDE / 2 and k < 8:
-                k *= 2
-            if k > 1:
-                try:
-                    img.draft("RGB", (w0 // k, h0 // k))
-                except (AttributeError, OSError):
-                    pass
-        img = ImageOps.exif_transpose(img)
-        try:
-            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
-                # Flatten transparency onto WHITE so a transparent background
-                # becomes white (the panel/letterbox background) rather than the
-                # black that a plain convert("RGB") leaves under transparent pixels.
-                rgba = img.convert("RGBA")
-                bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
-                img = Image.alpha_composite(bg, rgba).convert("RGB")
-            else:
-                img = img.convert("RGB")
-        except Image.DecompressionBombError as exc:
-            raise ValueError(f"image {path.name} is too large to decode") from exc
+        # Already RGB and bounded at screen res by _rasterize_svg; the common
+        # shrink below is a cheap guard.
+        return _shrink_to_source_bbox(_rasterize_svg(path))
 
-    # Common size-cap: pre-shrink if oversized in both dimensions (saves RAM on Pi).
-    # SVG path: already bounded at screen res by _rasterize_svg; still guarded here.
+    img = Image.open(path)
+    w0, h0 = img.size
+    if w0 * h0 > MAX_IMAGE_PIXELS:
+        img.close()
+        raise ValueError(
+            f"image {path.name} is too large: {w0}x{h0} "
+            f"({w0 * h0:,} px) exceeds cap of {MAX_IMAGE_PIXELS:,} px"
+        )
+    _jpeg_draft_downscale(img, w0, h0)
+
+    # Post-draft decode budget (see DECODE_BUDGET_PIXELS). A big JPEG has
+    # shrink-on-loaded to well under the budget and passes here; an un-draftable
+    # format (PNG/HEIF/...) that would materialise above the budget is refused
+    # NOW — before the decode — so one oversized image can't OOM-kill the whole
+    # server. Raised as ValueError so the manager marks that image "failed" and
+    # keeps serving everything else.
+    dw, dh = img.size
+    if dw * dh > DECODE_BUDGET_PIXELS:
+        img.close()
+        raise ValueError(
+            f"image {path.name} would decode to {dw}x{dh} ({dw * dh:,} px), over "
+            f"this device's {DECODE_BUDGET_PIXELS:,}-px decode budget — downscale "
+            f"it, or re-save as JPEG (which decodes at reduced scale)"
+        )
+
+    has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
+    try:
+        if has_alpha:
+            # Transparency path. Flatten onto WHITE so a transparent background
+            # becomes white (the panel/letterbox colour) not the black a plain
+            # convert("RGB") leaves (see fb1fdd4) — but SHRINK FIRST so the
+            # white composite (which needs several full-frame RGBA buffers) runs
+            # on the small image, not the full-res one. Normalise to RGBA up front
+            # so reduce()/thumbnail behave; the one full-res RGBA buffer is freed
+            # by the shrink before the composite. Any faint edge-bleed from
+            # downscaling semi-transparent pixels is imperceptible at panel res.
+            if img.mode != "RGBA":
+                img = img.convert("RGBA")
+            img = _shrink_to_source_bbox(img)  # forces decode, then shrinks
+            img = ImageOps.exif_transpose(img)  # now on the small image
+            bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+            img = Image.alpha_composite(bg, img).convert("RGB")
+            return img
+
+        # Common path (JPEG / HEIF / opaque PNG) — the memory-critical one on the
+        # 464 MB Pi. Shrink FIRST, so exif_transpose and the RGB convert operate
+        # on the already-small image. Previously all three ran at source
+        # resolution, holding three-plus full-frame buffers alive at once (decode
+        # + transpose copy + convert copy) — enough to tip the box into the OOM
+        # killer on a big JPEG or a HEIF panorama. Shrinking first caps the peak
+        # to a single transient full-res decode buffer.
+        #
+        # reduce()/thumbnail resample pixel values, which is meaningless on a
+        # palette ("P") image — convert those to RGB before shrinking. P-mode
+        # sources are palette graphics (small), so the full-res convert is cheap
+        # and rare. RGB/L resample cleanly and skip it.
+        if img.mode == "P":
+            img = img.convert("RGB")
+        img = _shrink_to_source_bbox(img)  # forces the one full-res decode, then shrinks
+        img = ImageOps.exif_transpose(img)  # now cheap — operates on the small image
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        return img
+    except Image.DecompressionBombError as exc:
+        raise ValueError(f"image {path.name} is too large to decode") from exc
+
+
+def _jpeg_draft_downscale(img: Image.Image, w0: int, h0: int) -> None:
+    """Cheap JPEG-only header-time downscale (no-op for PNG/HEIC/etc.).
+
+    ``draft`` sets the libjpeg scale so the *next* ``load()`` decodes a reduced
+    buffer directly — the full-resolution array is never materialised for a huge
+    JPEG. Steps in powers of two (libjpeg supports 1/2, 1/4, 1/8), stopping at
+    the smallest reduction that still leaves the long side at/above the source
+    cap so we never under-sample below what rendering needs.
+    """
+    img_long = max(w0, h0)
+    if img_long <= _MAX_SOURCE_LONG_SIDE:
+        return
+    k = 1
+    while img_long / (k * 2) >= _MAX_SOURCE_LONG_SIDE / 2 and k < 8:
+        k *= 2
+    if k > 1:
+        try:
+            img.draft("RGB", (w0 // k, h0 // k))
+        except (AttributeError, OSError):
+            pass
+
+
+def _shrink_to_source_bbox(img: Image.Image) -> Image.Image:
+    """Shrink an oversized decoded image down to the RAM-bounded source bbox.
+
+    Two rules (see the MAX_SOURCE_* constants):
+      * oversized in BOTH directions → shrink into the (long, short) screen-1.5x
+        bbox (more detail than dithering can use is just RAM pressure);
+      * oversized on only the long side (tall/wide panoramas) → clamp only the
+        long side to ``_MAX_SOURCE_LONG_SIDE`` and keep the short-axis detail.
+
+    Two-stage downscale so the LANCZOS resize temp never balloons off the full
+    decode buffer (on Linux a 15 MP source thumbnailed straight to the box peaked
+    ~100 MB — too close to the Pi's ceiling): an integer ``reduce()`` (a cheap box
+    filter, small intermediate) knocks the long side down to just above the cap,
+    then LANCZOS does the final fractional step off the already-small image. Cuts
+    the peak roughly in half. ``reduce`` and ``thumbnail`` both preserve
+    ``img.info`` (so a later ``exif_transpose`` still sees the orientation tag).
+    Returns the shrunk image.
+    """
     img_long = max(img.size)
     img_short = min(img.size)
-    oversize_both = img_long > MAX_SOURCE_LONG and img_short > MAX_SOURCE_SHORT
-    if oversize_both:
-        # Match orientation: thumbnail uses (w_cap, h_cap) so route long/short.
+    if img_long > MAX_SOURCE_LONG and img_short > MAX_SOURCE_SHORT:
+        # Match orientation: thumbnail takes (w_cap, h_cap), so route long/short.
+        cap_long = MAX_SOURCE_LONG
         w_cap, h_cap = (
             (MAX_SOURCE_LONG, MAX_SOURCE_SHORT)
             if img.size[0] >= img.size[1]
             else (MAX_SOURCE_SHORT, MAX_SOURCE_LONG)
         )
-        img.thumbnail((w_cap, h_cap), Image.Resampling.LANCZOS)
     elif img_long > _MAX_SOURCE_LONG_SIDE:
-        img.thumbnail((_MAX_SOURCE_LONG_SIDE, _MAX_SOURCE_LONG_SIDE), Image.Resampling.LANCZOS)
+        cap_long = _MAX_SOURCE_LONG_SIDE
+        w_cap = h_cap = _MAX_SOURCE_LONG_SIDE
+    else:
+        return img  # already within the bbox
+
+    # Stage 1: integer box-reduce to just above the target long side. reduce(k)
+    # allocates only the (source / k) output, so the big source buffer is freed
+    # before the LANCZOS pass — the peak is one decode buffer, not decode + a
+    # full-frame resize temp.
+    factor = img_long // cap_long
+    if factor >= 2:
+        img = img.reduce(factor)
+    # Stage 2: LANCZOS for the final sub-integer step to the exact bbox.
+    img.thumbnail((w_cap, h_cap), Image.Resampling.LANCZOS)
     return img
 
 

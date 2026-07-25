@@ -25,6 +25,7 @@ from hokku.webserver.app_state import AppState, build_manager
 from hokku.webserver.flask_app import create_app
 from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.image_renderer import (
+    _MAX_SOURCE_LONG_SIDE,
     MAX_IMAGE_PIXELS,
     MAX_SOURCE_LONG,
     MAX_SOURCE_SHORT,
@@ -183,10 +184,12 @@ def test_open_image_does_not_shrink_tall_thin_portrait(tmp_path: Path):
     img = open_image_for_render(src)
     try:
         # The general long-side cap still applies — long edge clamped to
-        # _MAX_SOURCE_LONG_SIDE = 3200. We just verify the BOTH rule didn't
-        # also force the short edge below 2x screen short.
-        assert img.size[0] >= 900, (
-            "short axis was over-shrunk; the 2x-both rule should not "
+        # _MAX_SOURCE_LONG_SIDE. We just verify the BOTH rule didn't also force
+        # the short edge below screen-short: the short side should scale by the
+        # same factor as the long side (1500 * cap/5000), not be clamped harder.
+        expected_short = round(1500 * _MAX_SOURCE_LONG_SIDE / 5000)
+        assert img.size[0] >= expected_short - 5, (
+            "short axis was over-shrunk; the both-axes rule should not "
             "have triggered for an image that is only oversized on one axis"
         )
     finally:

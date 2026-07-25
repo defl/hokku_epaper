@@ -12,6 +12,7 @@ panel render must fit within 50 MB of the child's baseline RSS.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +29,17 @@ from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 from tests._memory_helpers import (
     peak_python_heap,
     peak_rss_subprocess,
+)
+
+# The RSS-budget assertions are calibrated against the deployment target's
+# ru_maxrss (Linux / the Pi). Windows peak_wset and macOS metrics read higher
+# and would fail a Linux-tuned byte budget spuriously, so those specific
+# assertions are gated to Linux; everything else (rejection, tracemalloc heap)
+# runs everywhere.
+_rss_budget_linux_only = pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="RSS byte-budget is calibrated for the Linux target (Pi); "
+    "peak_wset/macOS metrics differ",
 )
 
 
@@ -68,6 +80,7 @@ def huge_jpeg(tmp_path_factory: pytest.TempPathFactory) -> Path:
 # ──────────────────────────────────────────────────────────────────────
 
 
+@_rss_budget_linux_only
 @pytest.mark.time_intensive
 @pytest.mark.parametrize("image_name", REAL_IMAGES)
 def test_full_render_peak_under_50mb(image_name: str) -> None:
@@ -85,6 +98,7 @@ def test_full_render_peak_under_50mb(image_name: str) -> None:
     )
 
 
+@_rss_budget_linux_only
 @pytest.mark.time_intensive
 def test_full_render_huge_jpeg_under_50mb(huge_jpeg: Path) -> None:
     """A 6000×4000 source JPEG must also fit in 50 MB."""

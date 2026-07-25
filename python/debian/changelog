@@ -1,3 +1,19 @@
+hokku-server (4.0.1~dev.22-1) unstable; urgency=medium
+
+  * fix(server): stop large images OOM-killing the Pi appliance. Decode now
+    shrinks BEFORE EXIF-transpose / RGB-convert / white-composite (previously
+    all ran at full source resolution, holding 3+ full-frame buffers at once),
+    and a two-stage reduce()+LANCZOS downscale keeps the resize temp small.
+    A post-draft DECODE_BUDGET_PIXELS (16 MP) refuses un-draftable sources that
+    would still blow the RAM budget (e.g. a 38.9 MP HEIF panorama) with a clear
+    "downscale it" message instead of crash-looping — big JPEGs pass via draft
+    shrink-on-load. Source bbox lowered 2x→1.5x screen. Adds decode-path unit
+    tests (orientation, transparency, budget accept/reject, peak guards) and a
+    CI-runnable shrink-first invariant, since the peak-memory guards were all
+    time_intensive and never ran in CI.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 25 Jul 2026 19:31:57 +0000
+
 hokku-server (4.0.1~dev.21-1) unstable; urgency=medium
 
   * fix(server): pin the numeric stack's threads (OPENBLAS/OMP/MKL=1, numba=2).
