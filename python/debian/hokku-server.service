@@ -22,6 +22,17 @@ ExecStartPre=-/bin/sh -c 'test -f /var/lib/hokku/config.json || cp /usr/share/ho
 ExecStart=/usr/bin/hokku-server /var/lib/hokku/config.json
 Environment="PYTHONUNBUFFERED=1"
 Environment="NUMBA_CACHE_DIR=/var/lib/hokku/numba_cache"
+# Pin the numeric stack's thread pools. numpy/scipy/OpenBLAS + OpenMP each
+# default to one thread per core (4 on a Pi Zero 2 W), so a single render spins
+# up ~12 numeric threads — which blows past the RAM-derived RLIMIT_NPROC (~765)
+# with "pthread_create failed", and thrashes the 464 MB RAM with parallel BLAS.
+# On a memory-bound board single-threaded BLAS is also usually *faster* (no
+# thrash / context-switch churn). numba keeps a little parallelism for the
+# dither hot loop. This is what let a cold-cache re-JIT boot actually complete.
+Environment="OPENBLAS_NUM_THREADS=1"
+Environment="OMP_NUM_THREADS=1"
+Environment="MKL_NUM_THREADS=1"
+Environment="NUMBA_NUM_THREADS=2"
 # Fixed system user (created by postinst) rather than DynamicUser, so the
 # service has a stable identity that can be granted serial-port access. The
 # "dialout" group is required to open /dev/ttyACM0 to flash a screen.

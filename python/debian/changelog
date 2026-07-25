@@ -1,9 +1,8 @@
-hokku-server (4.0.1~dev.20-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.21-1) unstable; urgency=medium
 
-  * fix(server): Restart=always so a clean-exit (seen once on a stressed first
-    boot) can't leave the appliance dead — systemd always brings it back
-  * fix(os): keep a small capped-persistent journal so boot issues are
-    diagnosable across a reboot (was RAM-only)
+  * fix(server): pin the numeric stack's threads (OPENBLAS/OMP/MKL=1, numba=2).
+    Un-pinned, numpy/scipy/OpenBLAS grabbed 4 threads/core and blew past the
+    Pi's RLIMIT_NPROC + thrashed RAM — a cold-cache re-JIT boot never settled.
 
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 25 Jul 2026 05:18:09 +0000
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 25 Jul 2026 05:38:20 +0000
 
