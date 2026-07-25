@@ -31,6 +31,7 @@ from hokku.webserver.image_renderer import (
     DECODE_BUDGET_PIXELS,
     MAX_SOURCE_LONG,
     MAX_SOURCE_SHORT,
+    decoded_pixels_exceed_budget,
     open_image_for_render,
 )
 from tests._memory_helpers import peak_rss_decode_subprocess
@@ -194,6 +195,27 @@ def test_budget_rejects_large_png(tmp_path: Path) -> None:
     src = _make_solid_png(tmp_path / "over.png", (w, h))
     with pytest.raises(ValueError, match="decode budget"):
         open_image_for_render(src)
+
+
+@pytest.mark.parametrize(
+    ("w", "h", "is_jpeg", "expected"),
+    [
+        (10334, 3769, False, True),  # Albi 38.9 MP HEIF — the OOM culprit
+        (6000, 4000, False, True),  # 24 MP PNG
+        (4562, 7027, True, False),  # Actress 32 MP JPEG — drafts under budget
+        (4160, 6240, True, False),  # string_ensemble 26 MP JPEG — drafts under
+        (3024, 4032, False, False),  # tree.heic 12 MP HEIF — under budget
+        (40, 30, False, False),  # tiny
+    ],
+)
+def test_decoded_pixels_exceed_budget(w: int, h: int, is_jpeg: bool, expected: bool) -> None:
+    """The dims-only gate mirrors open_image_for_render's accept/reject.
+
+    This is what lets the pipeline refuse an image BEFORE any phase (thumbnail /
+    classify / render) decodes it — a JPEG passes on its post-draft size, every
+    other format on its full size.
+    """
+    assert decoded_pixels_exceed_budget(w, h, is_jpeg=is_jpeg) is expected
 
 
 _TEST_IMAGES_DIR = Path(__file__).resolve().parent.parent.parent / "images" / "test"

@@ -244,26 +244,59 @@ def _open_image_for_render(path: Path) -> Image.Image:
         raise ValueError(f"image {path.name} is too large to decode") from exc
 
 
+def _jpeg_draft_factor(long_side: int) -> int:
+    """The power-of-two downscale libjpeg ``draft`` applies for *long_side*.
+
+    Steps in powers of two (libjpeg supports 1/2, 1/4, 1/8), stopping at the
+    smallest reduction that still leaves the long side at/above the source cap so
+    we never under-sample below what rendering needs. 1 = no reduction.
+    """
+    if long_side <= _MAX_SOURCE_LONG_SIDE:
+        return 1
+    k = 1
+    while long_side / (k * 2) >= _MAX_SOURCE_LONG_SIDE / 2 and k < 8:
+        k *= 2
+    return k
+
+
 def _jpeg_draft_downscale(img: Image.Image, w0: int, h0: int) -> None:
     """Cheap JPEG-only header-time downscale (no-op for PNG/HEIC/etc.).
 
     ``draft`` sets the libjpeg scale so the *next* ``load()`` decodes a reduced
     buffer directly — the full-resolution array is never materialised for a huge
-    JPEG. Steps in powers of two (libjpeg supports 1/2, 1/4, 1/8), stopping at
-    the smallest reduction that still leaves the long side at/above the source
-    cap so we never under-sample below what rendering needs.
+    JPEG.
     """
-    img_long = max(w0, h0)
-    if img_long <= _MAX_SOURCE_LONG_SIDE:
-        return
-    k = 1
-    while img_long / (k * 2) >= _MAX_SOURCE_LONG_SIDE / 2 and k < 8:
-        k *= 2
+    k = _jpeg_draft_factor(max(w0, h0))
     if k > 1:
         try:
             img.draft("RGB", (w0 // k, h0 // k))
         except (AttributeError, OSError):
             pass
+
+
+# JPEG-family suffixes libjpeg can shrink-on-load (draft). A large one of these
+# still decodes small; every other format decodes at full source resolution and
+# is bounded by DECODE_BUDGET_PIXELS.
+JPEG_SUFFIXES = frozenset({".jpg", ".jpeg", ".jpe", ".jfif", ".mpo"})
+
+
+def decoded_pixels_exceed_budget(width: int, height: int, *, is_jpeg: bool) -> bool:
+    """Would decoding a *width* x *height* source blow the RAM budget?
+
+    Dimensions only — no pixel decode — so it can gate an image out of the whole
+    pipeline (thumbnail / classify / render) before any subsystem tries to load
+    it. Mirrors ``_open_image_for_render``'s accept/reject exactly: a JPEG
+    shrink-on-loads via draft, so its *post-draft* pixel count is what matters;
+    every other format decodes at full resolution.
+    """
+    if width <= 0 or height <= 0:
+        return False
+    if width * height > MAX_IMAGE_PIXELS:
+        return True  # decompression bomb — refused before decode regardless of format
+    if is_jpeg:
+        k = _jpeg_draft_factor(max(width, height))
+        width, height = width // k, height // k
+    return width * height > DECODE_BUDGET_PIXELS
 
 
 def _shrink_to_source_bbox(img: Image.Image) -> Image.Image:

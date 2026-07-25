@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import io
 import logging
-import struct
-import zlib
 from pathlib import Path
 
 import pytest
@@ -33,27 +31,7 @@ from hokku.webserver.image_renderer import (
     open_image_for_render,
 )
 from hokku.webserver.serve_scheduler import ServeScheduler
-
-
-def _crc(chunk_type: bytes, data: bytes) -> bytes:
-    return struct.pack(">I", zlib.crc32(chunk_type + data) & 0xFFFFFFFF)
-
-
-def _make_bomb_png(width: int, height: int) -> bytes:
-    """Forge a PNG whose IHDR declares (width, height) but whose IDAT is empty.
-
-    The file is a few hundred bytes on disk but PIL's header parse reports
-    the full declared dimensions — exactly the shape of a real decompression
-    bomb. The IDAT is malformed (won't decode), which is fine: our guards run
-    on header dims and must reject the file before any decode is attempted.
-    """
-    sig = b"\x89PNG\r\n\x1a\n"
-    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    ihdr = struct.pack(">I", len(ihdr_data)) + b"IHDR" + ihdr_data + _crc(b"IHDR", ihdr_data)
-    idat_data = zlib.compress(b"")
-    idat = struct.pack(">I", len(idat_data)) + b"IDAT" + idat_data + _crc(b"IDAT", idat_data)
-    iend = struct.pack(">I", 0) + b"IEND" + _crc(b"IEND", b"")
-    return sig + ihdr + idat + iend
+from tests._helpers import make_declared_size_png as _make_bomb_png
 
 
 def test_pil_max_image_pixels_is_capped():

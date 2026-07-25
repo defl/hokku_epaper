@@ -36,7 +36,13 @@ from hokku.webserver.image_record import (
     ConvertStatus,
     ImageRecord,
 )
-from hokku.webserver.image_renderer import IMAGE_EXTENSIONS, SVG_PROBE_DIMS, open_image_for_render
+from hokku.webserver.image_renderer import (
+    IMAGE_EXTENSIONS,
+    JPEG_SUFFIXES,
+    SVG_PROBE_DIMS,
+    decoded_pixels_exceed_budget,
+    open_image_for_render,
+)
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.screen_image_config import ScreenImageConfig
 
@@ -629,9 +635,27 @@ class AbstractImageManager(ABC):
         try:
             with Image.open(path) as img:
                 w, h = img.size
-            return w, h, None
         except Exception as e:
             return None, None, f"{type(e).__name__}: {e}"
+        # Ingest budget gate: an un-draftable source above the decode budget
+        # (e.g. a 38.9 MP HEIF panorama) would OOM-kill the Pi if any phase
+        # decoded it — thumbnail (Phase 1) and classify (Phase 2) both decode at
+        # full resolution and would crash *before* the render-time check ever
+        # runs. Reject it here, at the single dimension-reading choke point every
+        # registration path uses, so it is marked "failed" and no phase touches
+        # it. Reported like an unreadable image (dims None) so the existing
+        # pending/failed logic and the needs-thumbnail filter both skip it.
+        is_jpeg = path.suffix.lower() in JPEG_SUFFIXES
+        if decoded_pixels_exceed_budget(w, h, is_jpeg=is_jpeg):
+            return (
+                None,
+                None,
+                (
+                    f"image is too large to decode on this device ({w}x{h}, "
+                    f"{w * h:,} px) — downscale it, or re-save as JPEG"
+                ),
+            )
+        return w, h, None
 
     def _atomic_write_json(self, payload: dict) -> None:
         atomic_write_json(self._db_path, payload)

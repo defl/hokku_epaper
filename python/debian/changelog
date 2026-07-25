@@ -1,3 +1,18 @@
+hokku-server (4.0.1~dev.23-1) unstable; urgency=medium
+
+  * fix(server): gate over-budget images at INGEST, not just at render. dev.22
+    only guarded the render decode; the thumbnail (Phase 1) and classify (Phase 2)
+    phases decode at full resolution too, so a 38.9 MP HEIF still OOM-killed the
+    Pi before render ran. The dimension-reading choke point (_try_read_image_dims)
+    now refuses an un-draftable source over DECODE_BUDGET_PIXELS the same way it
+    refuses an unreadable one — the record is marked "failed" and drops out of the
+    thumbnail/classify/render phases entirely. Shared, dims-only
+    decoded_pixels_exceed_budget() mirrors the render-path accept/reject (JPEG
+    passes on its post-draft size). Verified live on hardware: the full reference
+    set (incl. 32 MP + 26 MP JPEGs and a 12 MP HEIF) converts with no OOM.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 25 Jul 2026 21:14:32 +0000
+
 hokku-server (4.0.1~dev.22-1) unstable; urgency=medium
 
   * fix(server): stop large images OOM-killing the Pi appliance. Decode now

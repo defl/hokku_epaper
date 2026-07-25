@@ -21,6 +21,7 @@ from hokku.webserver.app_config import AppConfig
 from hokku.webserver.image_manager_abstract import AbstractImageManager
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.screen_image_config import ScreenImageConfig
+from tests._helpers import make_declared_size_png
 
 _HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
 TOTAL_BYTES = _HUESSEN.total_bytes
@@ -56,6 +57,39 @@ def test_register_and_convert(app_config: AppConfig, image_manager_factory, make
     assert all(
         r.slug_for("huessen_epf1301", Orientation.LANDSCAPE) == expected_slug for r in records
     )
+
+
+def test_over_budget_image_is_failed_without_decoding(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """An over-budget source is marked 'failed' at ingest and NO phase decodes it.
+
+    This is the OOM guard: a 38.9 MP HEIF panorama (here a forged 24 MP PNG that
+    declares its size in the header but never decodes) would crash the Pi if
+    Phase 1 (thumbnail) or Phase 2 (classify) tried to load it at full res. The
+    dimension-reading choke point refuses it up front — reported with no width,
+    so it drops out of the thumbnail/classify/render phases entirely — while a
+    normal image alongside it still converts. If the gate regressed, sync() would
+    try to thumbnail the forged PNG and raise on its malformed IDAT.
+    """
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "good.png")
+    # 6000x4000 = 24 MP > the 16 MP decode budget, but < the 40 MP bomb cap.
+    (upload / "toobig.png").write_bytes(make_declared_size_png(6000, 4000))
+
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+
+    good = mgr.status("good.png")
+    toobig = mgr.status("toobig.png")
+    assert good is not None and good.convert_status == "ok"
+    assert toobig is not None
+    assert toobig.convert_status == "failed", "over-budget image should be failed, not decoded"
+    assert toobig.image_width is None, "over-budget image must be gated out of every decode phase"
+    assert toobig.convert_error and "too large" in toobig.convert_error.lower()
+    # No thumbnail was materialised for it (no decode was attempted).
+    assert mgr.thumbnail_jpg("toobig.png") is None
 
 
 def test_panel_bytes_after_sync(app_config: AppConfig, image_manager_factory, make_test_image):
