@@ -43,15 +43,18 @@ for cmdline in \
     fi
 done
 
-# journald: RAM-only, capped. Appliances run 24/7 on a consumer SD card —
-# a persistent disk-backed journal is continuous write wear for no real
-# benefit here (journalctl still works fine against the live instance;
-# this just means log history doesn't survive a reboot).
+# journald: persistent but tightly capped. A purely RAM-only journal is easiest
+# on the SD card, but it makes boot problems undiagnosable — a reboot erases the
+# evidence, exactly the trap we hit debugging a first-boot that misbehaved before
+# SSH was up. Keep a small persistent journal so `journalctl -b -1` can show the
+# previous boot; the 100 MB cap + compression bound the write wear.
 mkdir -p "${ROOTFS_DIR}/etc/systemd/journald.conf.d"
 cat > "${ROOTFS_DIR}/etc/systemd/journald.conf.d/hokku.conf" <<'JOURNALEOF'
 [Journal]
-Storage=volatile
-RuntimeMaxUse=32M
+Storage=persistent
+Compress=yes
+SystemMaxUse=100M
+SystemMaxFileSize=20M
 JOURNALEOF
 
 # unattended-upgrades: keep it (this appliance has no other patching

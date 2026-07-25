@@ -30,7 +30,12 @@ Group=hokku
 SupplementaryGroups=dialout
 StateDirectory=hokku hokku/numba_cache
 CacheDirectory=hokku
-Restart=on-failure
+# Restart on ANY exit, not just failures. On a stressed first boot hokku-server
+# was seen to exit cleanly (status 0) — with on-failure that left it dead, so the
+# web UI + zeroconf (hokku-test.local) were gone until a manual restart. An
+# appliance server should never stay down; StartLimitBurst above still caps a
+# genuine crash-loop.
+Restart=always
 RestartSec=30
 # hokku-server is the memory-heavy workload on this appliance (numba JIT,
 # image decode/dither) — make it the OOM killer's preferred target so a

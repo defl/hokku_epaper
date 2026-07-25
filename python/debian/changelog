@@ -1,9 +1,9 @@
-hokku-server (4.0.1~dev.19-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.20-1) unstable; urgency=medium
 
-  * fix(server): stop the appliance OOM-killing itself on image batches —
-    memory-realistic auto worker count (serial on the Pi Zero 2 W) + wire the
-    RLIMIT_AS render memory guard so an oversized image fails gracefully
-  * fix(os): expand the rootfs to fill the SD card on first boot
+  * fix(server): Restart=always so a clean-exit (seen once on a stressed first
+    boot) can't leave the appliance dead — systemd always brings it back
+  * fix(os): keep a small capped-persistent journal so boot issues are
+    diagnosable across a reboot (was RAM-only)
 
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 24 Jul 2026 02:17:25 +0000
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 25 Jul 2026 05:18:09 +0000
 
