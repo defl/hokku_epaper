@@ -107,6 +107,12 @@ class AppConfig:
     upload_dir: str = "/var/lib/hokku/images"
     cache_dir: str = "/var/lib/hokku/cache"
     port: int = 8080
+    #: Size of the WSGI server's fixed request-thread pool (waitress). BOUNDED on
+    #: purpose: the old Werkzeug dev server spawned one thread per request and hit
+    #: the Pi's process limit ("can't start new thread") when several screens
+    #: polled it at once. A small pool is plenty for this appliance — request
+    #: handlers just return cached bytes; rendering runs in its own worker.
+    server_threads: int = 4
     poll_interval_seconds: int = 10
     debug_fast_refresh: bool = False
     auto_clear_cache: bool = False

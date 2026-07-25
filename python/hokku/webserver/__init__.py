@@ -128,10 +128,25 @@ def main() -> None:
     finally:
         _probe.close()
 
-    logger.info("Starting server on port %s", config.port)
+    logger.info(
+        "Starting server on port %s (waitress, %s threads)", config.port, config.server_threads
+    )
     _zc = start_mdns(config.port, config.mdns_hostname) if config.mdns_hostname else None
     state._zc = _zc  # hand ownership to AppState so config reloads can restart mDNS
-    app.run(host="0.0.0.0", port=config.port)  # noqa: S104 — intentional: server binds all interfaces
+    # waitress: a real WSGI server with a FIXED request-thread pool, unlike
+    # Werkzeug's dev server (one thread per request → "can't start new thread"
+    # under multi-screen polling on the Pi's process limit). See
+    # AppConfig.server_threads.
+    import waitress  # noqa: PLC0415 — deferred so tests importing main() don't need it eagerly
+
+    waitress.serve(
+        app,
+        host="0.0.0.0",  # noqa: S104 — intentional: server binds all interfaces
+        port=config.port,
+        threads=config.server_threads,
+        # Identify ourselves rather than leaking the waitress version banner.
+        ident="hokku",
+    )
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@
   "upload_dir": "/var/lib/hokku/images",
   "cache_dir": "/var/lib/hokku/cache",
   "port": 8080,
+  "server_threads": 4,
   "poll_interval_seconds": 10,
   "debug_fast_refresh": false,
   "auto_clear_cache": false,

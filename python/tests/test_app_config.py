@@ -168,6 +168,33 @@ def test_v1_file_loads_with_default_worker_count(tmp_path: Path):
     assert loaded.image_worker_thread_count == 1
 
 
+def test_server_threads_default_is_bounded():
+    """The WSGI request-thread pool must be small and fixed — the whole point is
+    to NOT spawn a thread per request (which OOM'd the Pi on process limits)."""
+    n = AppConfig().server_threads
+    assert isinstance(n, int)
+    assert 1 <= n <= 16, f"server_threads default {n} is not a small bounded pool"
+
+
+def test_server_threads_roundtrips(tmp_path: Path):
+    cfg = AppConfig(server_threads=2)
+    p = tmp_path / "config.json"
+    cfg.save(p)
+    assert AppConfig.load(p).server_threads == 2
+
+
+def test_old_config_gets_default_server_threads(tmp_path: Path):
+    """A config written before server_threads existed loads with the default."""
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"version": _CURRENT_VERSION, "port": 8080}))
+    assert AppConfig.load(p).server_threads == AppConfig().server_threads
+
+
+def test_cache_slug_invariant_to_server_threads():
+    """Serving concurrency doesn't affect rendered output — must not change the slug."""
+    assert AppConfig(server_threads=2).cache_slug() == AppConfig(server_threads=8).cache_slug()
+
+
 def test_mdns_hostname_default():
     assert AppConfig().mdns_hostname == "hokku"
 

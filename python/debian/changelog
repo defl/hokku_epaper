@@ -1,3 +1,18 @@
+hokku-server (4.0.1~dev.24-1) unstable; urgency=medium
+
+  * fix(server): serve on waitress with a bounded request-thread pool instead of
+    the Werkzeug dev server. The dev server spawned one thread per HTTP request
+    and hit the Pi's process limit ("RuntimeError: can't start new thread") when
+    several screens polled static assets/thumbnails at once. waitress uses a
+    fixed pool (AppConfig.server_threads, default 4) — plenty for this appliance,
+    where request handlers just return cached bytes and rendering runs in its own
+    worker. Also drops the "development server" warning. New python3-waitress
+    dependency. (The JXL "Generic Error" seen during the earlier OOM was libjxl
+    failing to allocate under memory pressure; it decodes fine now that the
+    ingest gate keeps memory in budget — no code change needed there.)
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 25 Jul 2026 22:16:55 +0000
+
 hokku-server (4.0.1~dev.23-1) unstable; urgency=medium
 
   * fix(server): gate over-budget images at INGEST, not just at render. dev.22
