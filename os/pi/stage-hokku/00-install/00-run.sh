@@ -50,18 +50,24 @@ apt-get install -f -y
 # the build (first boot just falls back to JIT-on-demand).
 mkdir -p /etc/systemd/system/hokku-server.service.d
 cat > /etc/systemd/system/hokku-server.service.d/10-numba-cpu.conf <<'DROPIN'
-# Pin numba's codegen to this appliance's CPU so the build-time pre-warmed
-# cache (os/pi/stage-hokku/00-install) is valid at runtime instead of being
-# re-compiled on first boot. The appliance is always a Pi Zero 2 W (Cortex-A53).
+# Pin numba's codegen target so the build-time pre-warmed cache
+# (os/pi/stage-hokku/00-install) is valid at runtime instead of re-compiling on
+# first boot. The cache is keyed by (cpu_name, cpu_features) — and numba only
+# takes cpu_features from NUMBA_CPU_FEATURES if it is SET (even to empty);
+# otherwise it host-detects, which differs between the qemu build chroot and the
+# real Pi and voids the cache. So pin BOTH to a fixed pair. Empty features →
+# cortex-a53's LLVM defaults (incl. NEON); the appliance is always a Pi Zero 2 W.
 [Service]
 Environment=NUMBA_CPU_NAME=cortex-a53
+Environment=NUMBA_CPU_FEATURES=
 DROPIN
 
 echo "[hokku-stage] Pre-warming the numba dither cache (cortex-a53)..."
 mkdir -p /var/lib/hokku/numba_cache
 # timeout: the JIT runs under qemu emulation here, so it's slow — but bounded,
 # so a stuck compile can't stall the whole image build.
-NUMBA_CACHE_DIR=/var/lib/hokku/numba_cache NUMBA_CPU_NAME=cortex-a53 timeout 600 python3 - <<'WARM' \
+NUMBA_CACHE_DIR=/var/lib/hokku/numba_cache NUMBA_CPU_NAME=cortex-a53 NUMBA_CPU_FEATURES= \
+    timeout 600 python3 - <<'WARM' \
     || echo "[hokku-stage] warmup failed/timed out (non-fatal — first boot will JIT on demand)"
 import numpy as np
 from hokku.screens.registry import DISPLAY_REGISTRY
