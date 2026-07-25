@@ -38,6 +38,46 @@ echo "[hokku-stage] Installing hokku-server..."
 dpkg -i --force-depends --force-overwrite "${STAGE}"/hokku-server_*.deb
 
 apt-get install -f -y
+
+# ── Pre-warm the numba dither cache ───────────────────────────────────────
+# First use of the dither JIT-compiles its kernel — minutes of pure compile on
+# one weak A53 core, during which sshd/hokku-server/mDNS are all starved (this
+# is what made every cold first boot look wedged). Compile it HERE instead, in
+# the build chroot, into the very cache dir the service reads. numba's on-disk
+# cache is keyed by the target CPU, so we pin cortex-a53 (the Pi Zero 2 W) for
+# BOTH this warmup and the runtime service (drop-in below) — otherwise the Pi
+# cache-misses and re-JITs anyway. Best-effort: a warmup failure must not fail
+# the build (first boot just falls back to JIT-on-demand).
+mkdir -p /etc/systemd/system/hokku-server.service.d
+cat > /etc/systemd/system/hokku-server.service.d/10-numba-cpu.conf <<'DROPIN'
+# Pin numba's codegen to this appliance's CPU so the build-time pre-warmed
+# cache (os/pi/stage-hokku/00-install) is valid at runtime instead of being
+# re-compiled on first boot. The appliance is always a Pi Zero 2 W (Cortex-A53).
+[Service]
+Environment=NUMBA_CPU_NAME=cortex-a53
+DROPIN
+
+echo "[hokku-stage] Pre-warming the numba dither cache (cortex-a53)..."
+mkdir -p /var/lib/hokku/numba_cache
+# timeout: the JIT runs under qemu emulation here, so it's slow — but bounded,
+# so a stuck compile can't stall the whole image build.
+NUMBA_CACHE_DIR=/var/lib/hokku/numba_cache NUMBA_CPU_NAME=cortex-a53 timeout 600 python3 - <<'WARM' \
+    || echo "[hokku-stage] warmup failed/timed out (non-fatal — first boot will JIT on demand)"
+import numpy as np
+from hokku.screens.registry import DISPLAY_REGISTRY
+from hokku.webserver.dither_config import DitherConfig
+from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
+
+disp = DISPLAY_REGISTRY["huessen_epf1301"]
+NumbaStreamingDither(disp).dither(
+    np.zeros((16, 16, 3), dtype=np.float32),
+    DitherConfig(algorithm="floyd_steinberg", lut_name="euclidean",
+                 serpentine=True, hue_cutoff_deg=8.0, neutral_chroma=8.0),
+)
+print("[hokku-stage] dither kernel compiled + cached")
+WARM
+# The service runs as user 'hokku'; hand it the pre-warmed cache.
+chown -R hokku:hokku /var/lib/hokku/numba_cache 2>/dev/null || true
 EOF
 
 rm -rf "${ROOTFS_DIR}/tmp/hokku-stage"

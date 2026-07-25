@@ -4,17 +4,15 @@
 # GPU memory: minimum (16 MB) — server is headless. disable-bt turns off the
 # unused Bluetooth radio (smaller attack surface, one less background daemon).
 #
-# dwc2/dr_mode=otg makes the Zero 2 W's single USB data port DUAL-ROLE, which
-# it must be to serve two jobs on one port:
-#   • peripheral role — when plugged into a PC with a normal cable, it is the
-#     USB gadget serial console (/dev/ttyGS0, see below and the cmdline stanza).
-#   • host role — when a screen is attached through a micro-USB→USB-A OTG
-#     adapter, the port becomes a host so "Flash a screen" can drive it
-#     (the screen enumerates as /dev/ttyUSB0). Power the Pi from the PWR port
-#     so the data port is free to host.
-# The role is chosen by the cable/adapter (OTG ID pin), so there is nothing to
-# switch in software. dr_mode=peripheral would have locked it to console-only,
-# leaving no way to flash a screen from the appliance itself.
+# dwc2/dr_mode=peripheral: the single USB data port is a rock-solid USB gadget
+# serial console (/dev/ttyGS0 — see below and the cmdline stanza). We tried
+# dr_mode=otg to make the same port ALSO able to host a screen for "Flash a
+# screen", but it was a bad trade: OTG's peripheral role only appears after host
+# negotiation, so the console enumerated unreliably on Windows ("Device
+# Descriptor Request Failed"), AND merely inserting the (even empty) OTG adapter
+# grounds the ID pin → the port comes up as a host at boot → USB host-init wedges
+# the whole boot. A reliable console beats host-flashing from the appliance
+# (flash screens from a laptop instead). So: hard-wired peripheral.
 # See docs/os_pi_usb_console.md for the console; the hardening notes in this
 # stage cover the rest.
 for cfg in \
@@ -22,7 +20,7 @@ for cfg in \
     "${ROOTFS_DIR}/boot/config.txt"; do
     if [ -f "$cfg" ]; then
         echo "gpu_mem=16" >> "$cfg"
-        echo "dtoverlay=dwc2,dr_mode=otg" >> "$cfg"
+        echo "dtoverlay=dwc2,dr_mode=peripheral" >> "$cfg"
         echo "dtoverlay=disable-bt" >> "$cfg"
         break
     fi
