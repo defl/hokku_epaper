@@ -68,7 +68,6 @@ def render_one(
 
     import pillow_avif  # noqa: F401, PLC0415 — PIL plugin registration
     import pillow_jxl  # noqa: F401, PLC0415 — PIL plugin registration
-    import psutil  # noqa: PLC0415
     from pillow_heif import register_heif_opener  # noqa: PLC0415
 
     register_heif_opener()
@@ -79,7 +78,6 @@ def render_one(
     from hokku.webserver.image_abc import preview_png_from_panel_bytes  # noqa: PLC0415
     from hokku.webserver.image_config import _image_config_from_dict  # noqa: PLC0415
     from hokku.webserver.image_renderer import ImageRenderer, open_image_for_render  # noqa: PLC0415
-    from hokku.webserver.memory_guard import memory_limit  # noqa: PLC0415
 
     display = DISPLAY_REGISTRY[model]
     cfg = _image_config_from_dict(image_config_dict)
@@ -104,28 +102,22 @@ def render_one(
         except (KeyError, TypeError, ValueError):
             crop_anchor_norm = None
 
-    # Cap this render's address-space growth so a pathological source (a huge
-    # decode or float working set) raises a catchable MemoryError instead of
-    # driving the whole box into the OOM killer — which, with the service's
-    # oom_score_adj=1000, would kill the server mid-batch (observed on a 464 MB
-    # Pi Zero 2 W). Budget from currently-available RAM: let the render grow into
-    # ~65% of it, leaving headroom so the kernel never has to intervene. On roomy
-    # machines the budget is large and never trips; on the Pi it fails just the
-    # offending image (caught upstream → that image marked "failed"). No-op where
-    # RLIMIT_AS is unavailable (Windows). The server is single-threaded, so this
-    # process-wide limit has no concurrent render to race with.
-    avail = psutil.virtual_memory().available
-    cap = psutil.Process().memory_info().vms + max(96 * 1024 * 1024, int(avail * 0.65))
-
-    with memory_limit(cap):
-        with open_image_for_render(Path(image_path)) as img:
-            panel_bytes = renderer.render_panel_bytes(
-                img,
-                cfg,
-                orientation,  # type: ignore[arg-type]
-                crop_to_fill_threshold,
-                clahe_keepout_bboxes_norm=bboxes_norm,
-                crop_anchor_bboxes_norm=crop_anchor_norm,
-            )
-        preview_bytes = preview_png_from_panel_bytes(panel_bytes, orientation, display)  # type: ignore[arg-type]
+    # NOTE: no RLIMIT_AS cap here (there used to be one). It was virtual-address-
+    # space, so it never actually prevented the *physical* OOM it was meant to —
+    # that is now handled properly upstream by DECODE_BUDGET_PIXELS, which refuses
+    # an oversized source at ingest before any phase decodes it, so nothing that
+    # reaches this point can blow the RAM budget. Worse, an RLIMIT_AS cap breaks
+    # native decoders that legitimately *reserve* (not commit) large virtual
+    # arenas / thread stacks — libjxl fails with an opaque "Generic Error" under
+    # it (reproduced on the Pi). So the cap was both redundant and harmful.
+    with open_image_for_render(Path(image_path)) as img:
+        panel_bytes = renderer.render_panel_bytes(
+            img,
+            cfg,
+            orientation,  # type: ignore[arg-type]
+            crop_to_fill_threshold,
+            clahe_keepout_bboxes_norm=bboxes_norm,
+            crop_anchor_bboxes_norm=crop_anchor_norm,
+        )
+    preview_bytes = preview_png_from_panel_bytes(panel_bytes, orientation, display)  # type: ignore[arg-type]
     return panel_bytes, preview_bytes

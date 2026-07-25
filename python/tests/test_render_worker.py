@@ -84,6 +84,37 @@ def test_render_one_colour_image():
     assert preview_bytes[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+# ── native-decoder (JPEG XL) renders — regression for the RLIMIT_AS removal ────
+
+
+def test_render_one_renders_jxl():
+    """A JPEG XL image renders through the worker.
+
+    libjxl reserves large *virtual* arenas/thread-stacks while decoding. The
+    worker used to wrap the render in an RLIMIT_AS cap, under which libjxl failed
+    with an opaque "Generic Error" on the memory-constrained Pi — while the same
+    image decoded fine without the cap. The cap was removed (redundant with the
+    ingest decode budget; RLIMIT_AS never bounded physical RAM anyway). This keeps
+    a native decoder in the render smoke-test set so that regression can't return
+    silently. Skipped only where pillow-jxl/libjxl isn't functional.
+    """
+    jxl = _TEST_IMAGES / "Albrecht_Duerer_Hare_1502_Google_Art_Project.jxl"
+    if not jxl.is_file():
+        pytest.skip("JXL fixture missing")
+    try:
+        import pillow_jxl  # noqa: F401, PLC0415
+        from PIL import Image  # noqa: PLC0415
+
+        with Image.open(jxl) as _probe:
+            _probe.load()
+    except Exception as e:
+        pytest.skip(f"pillow-jxl/libjxl not functional here: {e}")
+
+    panel_bytes, preview_bytes = render_one(str(jxl), _cfg_dict(), "huessen_epf1301", "landscape")
+    assert len(panel_bytes) == _HUESSEN.total_bytes
+    assert preview_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 # ── bad path raises a meaningful exception ────────────────────────────────────
 
 
