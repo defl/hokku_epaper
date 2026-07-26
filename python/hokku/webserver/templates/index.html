@@ -1021,6 +1021,35 @@
   </div>
 </section>
 
+<!-- Firmware library -->
+<section id="sec-firmware" class="config-section">
+  <h2>Firmware library</h2>
+  <div class="section-card">
+    <p class="config-section-label">Choose which firmware each screen model is offered</p>
+    <div class="flash-note">
+      The server ships bundled firmware and works fully offline. You can also download
+      newer versions from GitHub and <strong>pin</strong> a specific one per model — the
+      pinned version is what a screen receives over-the-air or when flashed. Betas are
+      never chosen automatically; pin one deliberately to use it.
+    </div>
+
+    <div id="firmware-models"><div class="screens-empty">Loading…</div></div>
+
+    <div id="firmware-online" hidden>
+      <div class="config-row" style="flex-wrap:wrap;gap:10px;">
+        <button type="button" class="btn btn-secondary btn-small" id="fw-check-btn"
+                onclick="checkGithubFirmware()">Check GitHub for firmware</button>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+          <input type="checkbox" id="fw-include-pre" onchange="onFwIncludePreChange()">
+          <span>Include pre-releases (beta)</span>
+        </label>
+        <span id="fw-remote-status" class="flash-status"></span>
+      </div>
+      <div id="firmware-remote"></div>
+    </div>
+  </div>
+</section>
+
 <!-- Image rendering -->
 <section id="sec-image-rendering" class="config-section">
   <h2>Image rendering</h2>
@@ -1379,6 +1408,173 @@ function toggleAdmin() {
   const body   = document.getElementById('admin-body');
   const open   = body.classList.toggle('open');
   toggle.classList.toggle('open', open);
+  // Load the firmware library the first time Admin is expanded (it's hidden
+  // during normal use, so there's no reason to fetch it on every page load).
+  if (open && !firmwareLibraryLoaded) loadFirmwareLibrary();
+}
+
+// ── Firmware library ────────────────────────────────────────────
+const FW_MODEL_LABELS = {
+  huessen_epf1301: 'Huessen EPF1301',
+  seeedstudio_e1004: 'Seeed reTerminal E1004',
+  bigme_f7: 'Bigme F7',
+};
+let firmwareLibraryLoaded = false;
+
+function fwEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fwLabel(model) { return FW_MODEL_LABELS[model] || model; }
+function fwChannelBadge(channel) {
+  if (channel === 'beta')
+    return ' <span title="Pre-release / beta" style="color:#a60;font-weight:700;font-size:0.82em">BETA</span>';
+  return '';
+}
+
+async function loadFirmwareLibrary() {
+  const container = document.getElementById('firmware-models');
+  try {
+    const r = await fetch('/hokku/api/firmware/library');
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    firmwareLibraryLoaded = true;
+    renderFirmwareModels(data);
+    document.getElementById('firmware-online').hidden = !data.online_fetch;
+  } catch (e) {
+    container.innerHTML = '<div class="screens-empty">Could not load the firmware library: '
+      + fwEsc(e.message) + '</div>';
+  }
+}
+
+function renderFirmwareModels(data) {
+  const container = document.getElementById('firmware-models');
+  const models = data.models || {};
+  let html = '';
+  for (const model of Object.keys(models)) {
+    const m = models[model];
+    const eff = m.effective;
+    const pinned = m.pinned;
+    html += '<div class="config-row" style="flex-wrap:wrap;align-items:baseline;gap:8px;'
+      + 'border-top:1px solid var(--hairline,#0001);padding-top:8px;">';
+    html += '<label style="min-width:180px;font-weight:600">' + fwEsc(fwLabel(model)) + '</label>';
+    if (!eff) {
+      html += '<span style="color:var(--stone,#888)">No firmware available.</span></div>';
+      continue;
+    }
+    html += '<span>Serving: <strong>' + fwEsc(eff) + '</strong>'
+      + fwChannelBadge(m.effective_channel)
+      + (pinned ? ' <span style="color:var(--accent,#2a6);font-size:0.82em">(pinned)</span>'
+                : ' <span style="color:var(--stone,#888);font-size:0.82em">(auto — highest stable)</span>')
+      + '</span>';
+    // Version picker (pin control).
+    const avail = m.available || [];
+    let opts = '<option value="">Auto (highest stable)</option>';
+    for (const v of avail) {
+      const sel = (pinned && v.version === pinned) ? ' selected' : '';
+      const lbl = v.version + (v.channel === 'beta' ? ' (beta)' : '')
+        + (v.source === 'downloaded' ? ' — downloaded' : '');
+      opts += '<option value="' + fwEsc(v.version) + '"' + sel + '>' + fwEsc(lbl) + '</option>';
+    }
+    html += '<select id="fw-pin-' + fwEsc(model) + '" onchange="pinFirmware(\'' + fwEsc(model) + '\')">'
+      + opts + '</select>';
+    html += '<span id="fw-pin-status-' + fwEsc(model) + '" class="flash-status"></span>';
+    html += '</div>';
+  }
+  container.innerHTML = html || '<div class="screens-empty">No firmware-capable models.</div>';
+}
+
+async function pinFirmware(model) {
+  const sel = document.getElementById('fw-pin-' + model);
+  const status = document.getElementById('fw-pin-status-' + model);
+  const version = sel.value || null;  // '' -> clear pin (auto)
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/hokku/api/firmware/select', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model, version}),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    status.textContent = '';
+    showToast(version ? (fwLabel(model) + ' pinned to ' + version)
+                      : (fwLabel(model) + ' set to auto'));
+    loadFirmwareLibrary();  // refresh the "Serving:" line
+  } catch (e) {
+    status.textContent = '';
+    showToast('Could not pin firmware: ' + e.message);
+    loadFirmwareLibrary();
+  }
+}
+
+function onFwIncludePreChange() { checkGithubFirmware(); }
+
+async function checkGithubFirmware() {
+  const btn = document.getElementById('fw-check-btn');
+  const status = document.getElementById('fw-remote-status');
+  const includePre = document.getElementById('fw-include-pre').checked;
+  const prev = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Checking…';
+  status.textContent = 'Contacting GitHub…';
+  try {
+    const r = await fetch('/hokku/api/firmware/remote?prereleases=' + (includePre ? '1' : '0'));
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    status.textContent = '';
+    renderRemoteFirmware(data.releases || []);
+  } catch (e) {
+    status.textContent = '';
+    document.getElementById('firmware-remote').innerHTML =
+      '<div class="screens-empty">Could not reach GitHub: ' + fwEsc(e.message) + '</div>';
+  } finally {
+    btn.disabled = false; btn.textContent = prev;
+  }
+}
+
+function renderRemoteFirmware(releases) {
+  const el = document.getElementById('firmware-remote');
+  if (!releases.length) {
+    el.innerHTML = '<div class="screens-empty">No downloadable firmware found in GitHub releases.</div>';
+    return;
+  }
+  let html = '<p class="config-section-label" style="margin-top:10px">Available on GitHub</p>';
+  for (const rel of releases) {
+    const sizeMb = rel.size ? (rel.size / 1048576).toFixed(1) + ' MB' : '';
+    html += '<div class="config-row" style="flex-wrap:wrap;gap:8px;align-items:baseline;">';
+    html += '<span style="min-width:180px">' + fwEsc(fwLabel(rel.model)) + '</span>';
+    html += '<span><strong>' + fwEsc(rel.version) + '</strong>' + fwChannelBadge(rel.channel)
+      + ' <span style="color:var(--stone,#888);font-size:0.82em">' + fwEsc(rel.tag)
+      + (sizeMb ? ' · ' + sizeMb : '') + '</span></span>';
+    if (rel.downloaded) {
+      html += '<span style="color:var(--accent,#2a6);font-size:0.85em">✓ in library</span>';
+    } else {
+      html += '<button type="button" class="btn btn-secondary btn-small" '
+        + 'onclick="downloadFirmware(\'' + fwEsc(rel.model) + '\',\'' + fwEsc(rel.tag) + '\',this)">'
+        + 'Download</button>';
+    }
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+async function downloadFirmware(model, tag, btn) {
+  const prev = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Downloading…';
+  try {
+    const r = await fetch('/hokku/api/firmware/fetch', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model, tag}),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    showToast('Downloaded ' + fwLabel(model) + ' ' + j.version
+      + (j.channel === 'beta' ? ' (beta) — pin it to use it' : ''));
+    await loadFirmwareLibrary();     // it now appears in the picker
+    await checkGithubFirmware();     // mark it "in library"
+  } catch (e) {
+    btn.disabled = false; btn.textContent = prev;
+    showToast('Download failed: ' + e.message);
+  }
 }
 
 // Dither config UI state. `ditherState` is the form's working copy; it's

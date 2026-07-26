@@ -1,3 +1,12 @@
+hokku-server (4.0.1~dev.4-1) unstable; urgency=medium
+
+  * Firmware library: optionally download firmware from GitHub Releases and pin a
+    specific version (including betas, never auto-selected) per screen model.
+    Offline-first preserved — the server only reaches the internet on an explicit
+    button press.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 26 Jul 2026 18:09:10 +0000
+
 hokku-server (4.0.0~beta1-1) unstable; urgency=medium
 
   * First public beta of the 4.0 Pi Zero 2 W appliance line. Highlights since

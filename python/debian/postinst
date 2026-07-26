@@ -20,7 +20,10 @@ fi
 # root-owned by an older DynamicUser/2.1.x install — are owned by hokku so the
 # web UI can save settings. The config.json itself is seeded by the service's
 # ExecStartPre on first start (now running as hokku, so ownership is correct).
-mkdir -p /var/lib/hokku/images /var/lib/hokku/cache
+# firmware/ holds firmware the user optionally downloads from GitHub (plus the
+# per-model pin selection.json). Bundled firmware still ships read-only under
+# /usr/share/hokku-server/firmware — this dir is the writable overlay.
+mkdir -p /var/lib/hokku/images /var/lib/hokku/cache /var/lib/hokku/firmware
 chown -R hokku:hokku /var/lib/hokku
 
 # Seed a default placeholder image so a freshly installed/flashed appliance

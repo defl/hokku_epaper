@@ -49,6 +49,8 @@ release_app_header = partial(_firmware.release_app_header, SPEC)
 bundled_firmware_version = partial(_firmware.bundled_firmware_version, SPEC)
 release_app_image = partial(_firmware.release_app_image, SPEC)
 resolve_firmware_dir = partial(_firmware.resolve_firmware_dir, SPEC)
+list_firmware_files = partial(_firmware.list_firmware_files, SPEC)
+app_image_from_file = partial(_firmware.app_image_from_file, SPEC)
 
 # NVS (spec-bound; nvs_tool_available takes no spec).
 build_nvs_binary = partial(_nvs.build_nvs_binary, SPEC)
@@ -76,11 +78,13 @@ __all__ = [
     "SPEC",
     "EsptoolError",
     "NvsToolUnavailable",
+    "app_image_from_file",
     "build_nvs_binary",
     "bundled_firmware_version",
     "constants",
     "flash_device",
     "flash_firmware",
+    "list_firmware_files",
     "list_serial_ports",
     "merged_firmware_file",
     "migrate_config",

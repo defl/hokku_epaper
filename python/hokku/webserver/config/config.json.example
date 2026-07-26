@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "refresh_image_at_time": [
     "0600",
     "1200",
@@ -50,6 +50,9 @@
   "flash_wifi_pass": "",
   "flash_wifi_ssid2": "",
   "flash_wifi_pass2": "",
+  "firmware_dir": "/var/lib/hokku/firmware",
+  "firmware_online_fetch": true,
+  "firmware_github_repo": "defl/hokku_epaper",
   "image_config_bw": {
     "dither": {
       "algorithm": "floyd_steinberg",

@@ -24,7 +24,7 @@ from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 
 logger = logging.getLogger(__name__)
 
-_CURRENT_VERSION = 8
+_CURRENT_VERSION = 9
 
 
 def _migrate_v1_to_v2(d: dict) -> dict:
@@ -76,6 +76,18 @@ def _migrate_v7_to_v8(d: dict) -> dict:
     return d
 
 
+def _migrate_v8_to_v9(d: dict) -> dict:
+    """Add the firmware-library fields (downloadable firmware from GitHub).
+
+    Defaults preserve offline-first behaviour: the download dir is empty until the
+    user acts, and online fetch is a purely on-demand button — nothing polls.
+    """
+    d.setdefault("firmware_dir", "/var/lib/hokku/firmware")
+    d.setdefault("firmware_online_fetch", True)
+    d.setdefault("firmware_github_repo", "defl/hokku_epaper")
+    return d
+
+
 # v(N) → v(N+1) upgrade functions. Populated as the schema evolves.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     1: _migrate_v1_to_v2,
@@ -85,6 +97,7 @@ _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     5: _migrate_v5_to_v6,
     6: _migrate_v6_to_v7,
     7: _migrate_v7_to_v8,
+    8: _migrate_v8_to_v9,
 }
 
 
@@ -154,6 +167,17 @@ class AppConfig:
     flash_wifi_pass: str = ""
     flash_wifi_ssid2: str = ""
     flash_wifi_pass2: str = ""
+
+    #: Writable directory holding firmware downloaded from GitHub (plus the pin
+    #: ``selection.json`` and per-file ``.meta.json`` sidecars). Layered on top of
+    #: the read-only bundled firmware that ships in the package.
+    firmware_dir: str = "/var/lib/hokku/firmware"
+    #: Whether the "Check GitHub for firmware" / download actions are offered.
+    #: When False the server never reaches the internet for firmware (fully
+    #: offline). Purely gates the manual buttons — nothing polls even when True.
+    firmware_online_fetch: bool = True
+    #: ``owner/repo`` whose GitHub Releases firmware is downloaded from.
+    firmware_github_repo: str = "defl/hokku_epaper"
 
     def cache_slug(self) -> str:
         """Path-safe fingerprint of fields that affect cached panel output."""
