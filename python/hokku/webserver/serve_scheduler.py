@@ -482,11 +482,12 @@ class ServeScheduler:
                 self._next_for[orientation] = None
             else:
                 # Pick the least-shown index, then break ties randomly rather
-                # than alphabetically — otherwise every daily rotation reset
-                # (see _reconcile) replays the same name-sorted prefix first.
+                # than alphabetically — new uploads keep re-tying the least-shown
+                # images (see _reconcile), so a name-sorted tie-break would
+                # replay the same prefix first every time.
                 min_idx = min(self._stats[r.name].show_index for r in eligible)
                 tied = [r.name for r in eligible if self._stats[r.name].show_index == min_idx]
-                self._next_for[orientation] = random.choice(tied)
+                self._next_for[orientation] = random.choice(tied)  # noqa: S311 — rotation fairness, not crypto
 
     def _reconcile(self, ready_names: set[str]) -> None:
         # Drop orphans.
@@ -494,14 +495,25 @@ class ServeScheduler:
             if name not in ready_names and name not in {r.name for r in self._manager.list()}:
                 del self._stats[name]
 
-        # Add fresh entries. If we see any genuinely new name, reset all
-        # nonzero indices to 1 so the new image isn't perpetually behind.
+        # Add fresh entries. A genuinely new image joins the rotation tied with
+        # whatever is currently least-shown — not at an index below everyone
+        # (which would let it monopolise the rotation until it caught up), and
+        # not by flattening every index back to 1. Flattening erased how far the
+        # current cycle had progressed, so images already served this cycle were
+        # dropped back level with the laggards and could jump the queue again on
+        # the next upload — the same reset that made the old alphabetical
+        # tie-break unfair. Instead, normalise existing indices down to their
+        # minimum (keeping the pointer bounded and each image's position within
+        # the cycle) and drop the new image in at that minimum.
         currently_known = set(self._stats.keys())
         truly_new = ready_names - currently_known
-        if truly_new:
-            for n in list(self._stats.keys()):
-                if self._stats[n].show_index > 0:
-                    self._stats[n] = replace(self._stats[n], show_index=1)
+        if truly_new and self._stats:
+            base = min(s.show_index for s in self._stats.values())
+            if base > 0:
+                for n in list(self._stats.keys()):
+                    self._stats[n] = replace(
+                        self._stats[n], show_index=self._stats[n].show_index - base
+                    )
         for name in truly_new:
             self._stats[name] = ServeStats(0, None, 0, 0.0)
 
