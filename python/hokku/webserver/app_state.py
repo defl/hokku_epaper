@@ -44,6 +44,7 @@ def build_manager(
     """
     budget = compute_budget(config.memory_budget_mb)
     image_renderer.set_decode_budget_pixels(budget.decode_budget_pixels)
+    image_renderer.set_decode_concurrency(budget.decode_slots)
     logger.info("%s", budget.log_line())
     if budget.under_provisioned:
         logger.warning(

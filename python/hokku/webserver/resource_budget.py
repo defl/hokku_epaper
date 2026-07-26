@@ -88,6 +88,7 @@ class ResourceBudget:
     cpu_count: int  #: cgroup-aware usable CPU count
     decode_budget_pixels: int  #: max un-draftable source we will decode
     worker_count: int  #: concurrent renders allowed
+    decode_slots: int  #: concurrent source decodes allowed (memory-bounded)
     under_provisioned: bool  #: memory below the healthy floor
 
     def log_line(self) -> str:
@@ -95,7 +96,7 @@ class ResourceBudget:
         return (
             f"Resource budget: memory={self.memory_bytes / _MB:.0f} MB ({src}), "
             f"cpu={self.cpu_count}, decode_budget={self.decode_budget_pixels:,} px, "
-            f"workers={self.worker_count}"
+            f"workers={self.worker_count}, decode_slots={self.decode_slots}"
             + (" [UNDER-PROVISIONED]" if self.under_provisioned else "")
         )
 
@@ -126,18 +127,59 @@ def effective_memory_bytes(memory_budget_mb: int) -> tuple[int, bool]:
 def resolve_worker_count(*, memory_bytes: int, cpu_count: int, decode_budget_pixels: int) -> int:
     """Concurrent-render count — always derived, never manually set.
 
-    Decode is serialized (one at a time via ``_DECODE_LOCK``), so the memory
-    worst case is: baseline + one full-size decode in flight + the remaining
-    workers doing lighter post-decode renders. We reserve baseline plus one
-    worst-case decode, then fit as many additional ``PER_RENDER_BYTES`` renders
-    as remain — capped by the usable CPU count, always at least 1. This couples
-    the worker count to the decode budget so a big decode budget doesn't let
-    parallelism OOM the box.
+    The memory floor reserves one full-size decode in flight plus the remaining
+    workers doing lighter post-decode renders: baseline + one worst-case decode,
+    then as many additional ``PER_RENDER_BYTES`` renders as fit — capped by the
+    usable CPU count, always at least 1. This couples the worker count to the
+    decode budget so a big decode budget doesn't let parallelism OOM the box.
+
+    How many decodes may actually run *concurrently* (rather than the single one
+    reserved here) is a separate, memory-bounded number — see
+    :func:`resolve_decode_concurrency`, which spends any leftover headroom.
     """
     decode_reserve = decode_budget_pixels * DECODE_BYTES_PER_PIXEL
     usable = memory_bytes - BASELINE_RSS_BYTES - decode_reserve
     additional = max(0, int(usable // PER_RENDER_BYTES))
     return max(1, min(cpu_count, 1 + additional))
+
+
+def resolve_decode_concurrency(
+    *, memory_bytes: int, worker_count: int, decode_budget_pixels: int
+) -> int:
+    """How many source decodes may run concurrently, bounded by RAM.
+
+    Serializing every decode behind one lock (the old behaviour) makes a stream
+    of ordinary JPEG/PNG uploads queue behind a single decode. This lets them
+    decode in parallel *up to what memory allows*, so the render pool isn't
+    starved — while never exceeding the budget.
+
+    A decoding worker costs a full ``decode_peak`` (``decode_budget_pixels`` ×
+    ``DECODE_BYTES_PER_PIXEL``); a rendering worker costs ``PER_RENDER_BYTES``.
+    The worst case with K concurrent decodes across ``worker_count`` workers is
+    ``K*decode_peak + (worker_count-K)*PER_RENDER_BYTES``. We return the largest
+    K in ``[1, worker_count]`` that still fits ``memory_bytes``:
+
+      * if a decode is no costlier than a render (small decode budgets — e.g. the
+        Pi at 16 MP: 128 MB < 220 MB), every worker may decode → K = worker_count;
+      * otherwise K starts at the one decode :func:`resolve_worker_count` already
+        reserved and grows by one per ``(decode_peak - PER_RENDER_BYTES)`` of
+        leftover headroom.
+
+    A single-worker box (the appliance) is always K = 1 — fully serialized, no
+    behaviour change. Conservative on purpose: every decode slot is charged the
+    worst-case (HEIF, 8 B/px) cost even though JPEG/PNG decode cheaper, so the
+    bound holds for any format. Per-format decode costs could raise K further
+    later; this keeps the reconciliation provably safe today.
+    """
+    decode_peak = decode_budget_pixels * DECODE_BYTES_PER_PIXEL
+    if decode_peak <= PER_RENDER_BYTES:
+        return max(1, worker_count)
+    usable = memory_bytes - BASELINE_RSS_BYTES
+    # resolve_worker_count guarantees one decode + (worker_count-1) renders fits;
+    # spend any remaining headroom upgrading render slots to decode slots.
+    slack = usable - (decode_peak + (worker_count - 1) * PER_RENDER_BYTES)
+    extra = max(0, int(slack // (decode_peak - PER_RENDER_BYTES)))
+    return max(1, min(worker_count, 1 + extra))
 
 
 def resolve_decode_budget_pixels(memory_bytes: int) -> int:
@@ -163,6 +205,11 @@ def compute_budget(memory_budget_mb: int) -> ResourceBudget:
         cpu_count=cpu_count,
         decode_budget_pixels=decode,
     )
+    decode_slots = resolve_decode_concurrency(
+        memory_bytes=memory_bytes,
+        worker_count=workers,
+        decode_budget_pixels=decode,
+    )
     under = decode < MIN_HEALTHY_DECODE_PIXELS
     return ResourceBudget(
         memory_bytes=memory_bytes,
@@ -170,5 +217,6 @@ def compute_budget(memory_budget_mb: int) -> ResourceBudget:
         cpu_count=cpu_count,
         decode_budget_pixels=decode,
         worker_count=workers,
+        decode_slots=decode_slots,
         under_provisioned=under,
     )

@@ -1,3 +1,14 @@
+hokku-server (4.0.1~dev.14-1) unstable; urgency=medium
+
+  * perf(render): decode each source once per image (decode-once, dither-many)
+    instead of once per rendered (model, orientation) variant, and add a
+    memory-bounded decode admission semaphore so ordinary JPEG/PNG uploads decode
+    concurrently up to what the budget allows while native codecs (HEIF/AVIF/JXL)
+    stay serialized for thread-safety. Single-worker boxes (the appliance) are
+    unchanged; the budget's one-decode-at-a-time invariant is preserved.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 26 Jul 2026 21:36:48 +0000
+
 hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
 
   * Firmware library: optionally download firmware from GitHub Releases and pin a

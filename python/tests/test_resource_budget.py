@@ -9,12 +9,15 @@ import pytest
 from hokku.webserver import resource_budget as rb
 from hokku.webserver.resource_budget import (
     BASELINE_RSS_BYTES,
+    DECODE_BYTES_PER_PIXEL,
     MAX_DECODE_BUDGET_PIXELS,
     MIN_MEMORY_BUDGET_MB,
+    PER_RENDER_BYTES,
     compute_budget,
     effective_memory_bytes,
     memory_budget_too_low,
     resolve_decode_budget_pixels,
+    resolve_decode_concurrency,
     resolve_worker_count,
 )
 
@@ -65,6 +68,68 @@ def test_workers_below_baseline_clamps_to_1():
 
 def test_workers_always_at_least_1():
     assert resolve_worker_count(memory_bytes=1, cpu_count=1, decode_budget_pixels=0) == 1
+
+
+# ── decode concurrency (admission slots) ──────────────────────────────────────
+
+
+def test_decode_concurrency_single_worker_is_serial():
+    # The appliance: one worker → one decode at a time, unchanged behaviour.
+    assert (
+        resolve_decode_concurrency(
+            memory_bytes=464 * _MB, worker_count=1, decode_budget_pixels=16_000_000
+        )
+        == 1
+    )
+
+
+def test_decode_concurrency_cheap_decode_allows_all_workers():
+    # When a decode is no costlier than a render (decode_peak <= PER_RENDER),
+    # every worker may decode concurrently.
+    decode_peak_eq_render = PER_RENDER_BYTES // DECODE_BYTES_PER_PIXEL
+    assert (
+        resolve_decode_concurrency(
+            memory_bytes=64 * 1024**3,
+            worker_count=5,
+            decode_budget_pixels=decode_peak_eq_render,
+        )
+        == 5
+    )
+
+
+def test_decode_concurrency_medium_box_allows_two():
+    # 1 GB / worker_count 2 / 40 MP: the one reserved decode plus leftover
+    # headroom fits a second concurrent decode.
+    assert (
+        resolve_decode_concurrency(
+            memory_bytes=1024 * _MB, worker_count=2, decode_budget_pixels=40_000_000
+        )
+        == 2
+    )
+
+
+def test_decode_concurrency_never_exceeds_workers():
+    k = resolve_decode_concurrency(
+        memory_bytes=64 * 1024**3, worker_count=3, decode_budget_pixels=40_000_000
+    )
+    assert 1 <= k <= 3
+
+
+@pytest.mark.parametrize("mb", [512, 768, 1024, 2048, 4096, 8192])
+def test_compute_budget_decode_slots_are_memory_safe(mb):
+    # Provable invariant: the worst case of decode_slots concurrent decodes plus
+    # the remaining workers rendering must fit the usable budget. If this ever
+    # fails, concurrent decodes could OOM the box.
+    with (
+        patch.object(rb, "detect_memory_limit_bytes", return_value=mb * _MB),
+        patch.object(rb, "detect_cpu_limit", return_value=24),
+    ):
+        b = compute_budget(0)
+    assert 1 <= b.decode_slots <= b.worker_count
+    decode_peak = b.decode_budget_pixels * DECODE_BYTES_PER_PIXEL
+    usable = b.memory_bytes - BASELINE_RSS_BYTES
+    worst = b.decode_slots * decode_peak + (b.worker_count - b.decode_slots) * PER_RENDER_BYTES
+    assert worst <= usable
 
 
 # ── decode budget ─────────────────────────────────────────────────────────────

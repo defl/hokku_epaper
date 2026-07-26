@@ -173,31 +173,56 @@ def _rasterize_svg(path: Path) -> Image.Image:
     return Image.open(io.BytesIO(png_bytes)).convert("RGB")
 
 
-# Image DECODING is serialized across render threads by this GLOBAL lock — every
-# format takes it, at most one decode is ever in flight. Two reasons:
-#   1. libheif (via pillow_heif, HEIF/HEIC) is not thread-safe: two workers
-#      decoding HEIF at once deadlock/stall.
-#   2. The memory budget (resource_budget.resolve_worker_count) sizes the worker
-#      count as "baseline + ONE worst-case decode + N lighter post-decode renders".
-#      That reservation of a SINGLE decode peak is only safe while this lock keeps
-#      decodes serialized; letting common formats (JPEG/PNG) decode concurrently
-#      would allow N simultaneous decodes and blow the budget on multi-worker
-#      boxes. Scoping the lock to just the native codecs is therefore deferred
-#      until the budget layer can reserve for concurrent decodes (a decode
-#      admission semaphore) rather than assuming one at a time.
-# Serializing the decode is cheap; the parallel win is the numba dither downstream
-# (render_panel_bytes), which runs unlocked — and with decode-once each source is
-# now decoded a single time per image, not once per rendered variant.
-_DECODE_LOCK = threading.Lock()
+# Image DECODING is bounded across render threads two independent ways:
+#
+#   1. MEMORY — every decode (any format) takes a permit from _DECODE_SEMAPHORE,
+#      whose size is derived from the memory budget (see
+#      resource_budget.resolve_decode_concurrency) and installed via
+#      set_decode_concurrency(). At most K decodes are ever in flight, and the
+#      budget picks K so K*decode_peak stays within RAM. K=1 (a 1-worker box like
+#      the Pi) fully serializes decode — identical to the old global lock; K>1
+#      lets ordinary JPEG/PNG uploads decode in parallel instead of queuing behind
+#      one decode, without risking OOM on multi-worker boxes.
+#
+#   2. THREAD-SAFETY — the native container codecs in _NATIVE_DECODE_SUFFIXES are
+#      not safe to run concurrently with themselves: libheif (pillow_heif,
+#      HEIF/HEIC) deadlocks/stalls two-at-a-time (the reason multi-render hung on
+#      .heic/.heif sets); libavif (AVIF) and libjxl (JXL) are kept here
+#      conservatively. Those formats additionally take _NATIVE_DECODE_LOCK, so at
+#      most one native decode runs at a time regardless of K.
+#
+# Acquisition order is always semaphore → native lock, so the two never deadlock.
+# The parallel win downstream (the numba dither in render_panel_bytes) runs
+# unlocked; with decode-once each source is decoded a single time per image.
+_NATIVE_DECODE_SUFFIXES = frozenset({".heic", ".heif", ".hif", ".avif", ".jxl"})
+_NATIVE_DECODE_LOCK = threading.Lock()
+_DECODE_SEMAPHORE = threading.BoundedSemaphore(1)
+
+
+def set_decode_concurrency(max_concurrent_decodes: int) -> None:
+    """Install how many source decodes may run at once (see
+    resource_budget.resolve_decode_concurrency).
+
+    Called once at startup and on every config reload. ``open_image_for_render``
+    reads this module global at ``with`` time, so a reload takes effect for the
+    next decode. Always at least 1.
+    """
+    global _DECODE_SEMAPHORE
+    _DECODE_SEMAPHORE = threading.BoundedSemaphore(max(1, int(max_concurrent_decodes)))
 
 
 def open_image_for_render(path: Path) -> Image.Image:
     """PIL.open + EXIF transpose + RGB convert + size cap.  Caller closes.
 
-    Serialized via :data:`_DECODE_LOCK` (see above); the returned image is fully
-    decoded, so downstream rendering still parallelises.
+    Bounded by :data:`_DECODE_SEMAPHORE` (concurrent-decode memory) and, for the
+    native codecs in :data:`_NATIVE_DECODE_SUFFIXES`, :data:`_NATIVE_DECODE_LOCK`
+    (their decoders are not thread-safe). The returned image is fully decoded, so
+    downstream rendering still parallelises regardless.
     """
-    with _DECODE_LOCK:
+    with _DECODE_SEMAPHORE:
+        if path.suffix.lower() in _NATIVE_DECODE_SUFFIXES:
+            with _NATIVE_DECODE_LOCK:
+                return _open_image_for_render(path)
         return _open_image_for_render(path)
 
 
