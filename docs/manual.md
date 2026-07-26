@@ -116,8 +116,7 @@ The Config tab controls how the server behaves and how images are converted. All
 - **`mdns_hostname`** — the mDNS/Bonjour hostname the server advertises on your network. When set (default: `"hokku"`), the server is reachable as `hokku.local` in addition to its IP address, which means you can bookmark `http://hokku.local:8080/` and never worry about the IP changing. Set to an empty string to disable mDNS.
 - **`port`** — the port the server listens on (default: `8080`). Change this if something else on your server is already using 8080.
 - **`upload_dir`** / **`cache_dir`** — where originals and converted images are stored. The defaults are sensible for a deb install; override these if you want to put your photo library on a different drive or mount point.
-- **`firmware_online_fetch`** — whether the **Firmware library** (Admin tab) offers the "Check GitHub for firmware" button. Default `true`, but nothing is ever downloaded automatically — the server only reaches the internet when you press the button. Set to `false` for a fully offline appliance; the bundled firmware still works.
-- **`firmware_github_repo`** — the `owner/repo` the firmware library downloads GitHub releases from. Default `"defl/hokku_epaper"`. Change it only if you publish firmware from a fork.
+- **`firmware_github_repo`** — the `owner/repo` the **Firmware library** (Admin tab) downloads GitHub releases from. Default `"defl/hokku_epaper"`. Change it only if you publish firmware from a fork. The server only contacts GitHub when you press the *Check GitHub for firmware* button — nothing is ever fetched automatically.
 - **`firmware_dir`** — where downloaded firmware and the per-model pin (`selection.json`) are stored. Default `/var/lib/hokku/firmware`.
 
 After editing the config file, restart the server (`systemctl restart hokku-server`) for changes to take effect.

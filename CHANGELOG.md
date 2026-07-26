@@ -11,11 +11,10 @@
   betas), *Download* one into a writable overlay (`/var/lib/hokku/firmware`), and
   *pin* which version each screen model is offered over-the-air or at flash time.
   Nothing is downloaded or selected automatically — the server only reaches the
-  internet on an explicit button press, betas are never chosen unless you pin one
-  deliberately, and the whole panel can be hidden with `firmware_online_fetch:
-  false` in the config for a strictly offline appliance. Downloads are validated
-  as real images for their model before being admitted. New config keys:
-  `firmware_online_fetch`, `firmware_github_repo`, `firmware_dir`.
+  internet on an explicit button press (that click is the consent), and betas are
+  never chosen unless you pin one deliberately. Downloads are validated as real
+  images for their model before being admitted. New config keys:
+  `firmware_github_repo`, `firmware_dir`.
 
 ### Fixed
 

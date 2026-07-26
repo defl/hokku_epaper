@@ -79,11 +79,11 @@ def _migrate_v7_to_v8(d: dict) -> dict:
 def _migrate_v8_to_v9(d: dict) -> dict:
     """Add the firmware-library fields (downloadable firmware from GitHub).
 
-    Defaults preserve offline-first behaviour: the download dir is empty until the
-    user acts, and online fetch is a purely on-demand button — nothing polls.
+    Offline-first is preserved by behaviour, not a flag: the download dir is empty
+    until the user acts, nothing polls, and the server reaches GitHub only when the
+    user clicks the button.
     """
     d.setdefault("firmware_dir", "/var/lib/hokku/firmware")
-    d.setdefault("firmware_online_fetch", True)
     d.setdefault("firmware_github_repo", "defl/hokku_epaper")
     return d
 
@@ -172,11 +172,9 @@ class AppConfig:
     #: ``selection.json`` and per-file ``.meta.json`` sidecars). Layered on top of
     #: the read-only bundled firmware that ships in the package.
     firmware_dir: str = "/var/lib/hokku/firmware"
-    #: Whether the "Check GitHub for firmware" / download actions are offered.
-    #: When False the server never reaches the internet for firmware (fully
-    #: offline). Purely gates the manual buttons — nothing polls even when True.
-    firmware_online_fetch: bool = True
-    #: ``owner/repo`` whose GitHub Releases firmware is downloaded from.
+    #: ``owner/repo`` whose GitHub Releases firmware is downloaded from. The server
+    #: only contacts GitHub when the user clicks "Check GitHub" / "Download" — that
+    #: click is the consent; there is no separate enable flag.
     firmware_github_repo: str = "defl/hokku_epaper"
 
     def cache_slug(self) -> str:

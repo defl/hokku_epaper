@@ -1035,7 +1035,7 @@
 
     <div id="firmware-models"><div class="screens-empty">Loading…</div></div>
 
-    <div id="firmware-online" hidden>
+    <div id="firmware-online">
       <div class="config-row" style="flex-wrap:wrap;gap:10px;">
         <button type="button" class="btn btn-secondary btn-small" id="fw-check-btn"
                 onclick="checkGithubFirmware()">Check GitHub for firmware</button>
@@ -1440,7 +1440,6 @@ async function loadFirmwareLibrary() {
     if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
     firmwareLibraryLoaded = true;
     renderFirmwareModels(data);
-    document.getElementById('firmware-online').hidden = !data.online_fetch;
   } catch (e) {
     container.innerHTML = '<div class="screens-empty">Could not load the firmware library: '
       + fwEsc(e.message) + '</div>';

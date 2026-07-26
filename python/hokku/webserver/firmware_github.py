@@ -2,8 +2,8 @@
 
 This is the **only** part of the server that reaches the internet for firmware,
 and it runs solely on an explicit user action (the "Check GitHub" / "Download"
-buttons), gated by ``config.firmware_online_fetch``. The offline-first appliance
-never calls in here on its own.
+buttons) — that click is the consent. The offline-first appliance never calls in
+here on its own.
 
 It reads the public Releases API for ``config.firmware_github_repo`` and matches
 release assets against the ``hokku-<model>-<version>.<ext>`` convention that

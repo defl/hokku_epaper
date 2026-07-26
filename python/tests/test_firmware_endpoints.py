@@ -37,7 +37,7 @@ def _client(config: AppConfig, tmp_path: Path):
 @pytest.fixture
 def cfg(app_config, tmp_path):
     fw = tmp_path / "fwdir"
-    return replace(app_config, firmware_dir=str(fw), firmware_online_fetch=True)
+    return replace(app_config, firmware_dir=str(fw))
 
 
 @pytest.fixture(autouse=True)
@@ -78,7 +78,6 @@ def _remote_list():
 
 def test_library_reports_bundled_effective(cfg, tmp_path):
     body = _client(cfg, tmp_path).get("/hokku/api/firmware/library").get_json()
-    assert body["online_fetch"] is True
     assert body["repo"] == cfg.firmware_github_repo
     m = body["models"][MODEL]
     assert m["effective"] == "1.2.2"
@@ -117,11 +116,6 @@ def test_select_version_not_present_404(cfg, tmp_path):
 
 
 # ── /remote ───────────────────────────────────────────────────────────────────
-
-
-def test_remote_disabled_returns_403(cfg, tmp_path):
-    client = _client(replace(cfg, firmware_online_fetch=False), tmp_path)
-    assert client.get("/hokku/api/firmware/remote").status_code == 403
 
 
 def test_remote_lists_stable_only_by_default(cfg, tmp_path, monkeypatch):
@@ -163,12 +157,6 @@ def test_remote_propagates_fetch_error(cfg, tmp_path, monkeypatch):
 
 
 # ── /fetch ────────────────────────────────────────────────────────────────────
-
-
-def test_fetch_disabled_returns_403(cfg, tmp_path):
-    client = _client(replace(cfg, firmware_online_fetch=False), tmp_path)
-    r = client.post("/hokku/api/firmware/fetch", json={"model": MODEL, "tag": "v4.0.0"})
-    assert r.status_code == 403
 
 
 def test_fetch_unknown_model_400(cfg, tmp_path):

@@ -720,7 +720,6 @@ def create_app(
             }
         return jsonify(
             {
-                "online_fetch": bool(state.config.firmware_online_fetch),
                 "repo": state.config.firmware_github_repo,
                 "models": models,
             }
@@ -728,13 +727,11 @@ def create_app(
 
     @app.route("/hokku/api/firmware/remote")
     def api_firmware_remote():
-        """List firmware downloadable from GitHub Releases. Opt-in, on demand.
+        """List firmware downloadable from GitHub Releases. On demand only.
 
         Prereleases (betas) are excluded unless ``?prereleases=1``. This is the
-        only route that reaches the internet, and only when online fetch is on."""
+        only route that reaches the internet, and only because the user asked."""
         cfg = state.config
-        if not cfg.firmware_online_fetch:
-            return jsonify({"error": "online firmware fetch is disabled"}), 403
         include_pre = request.args.get("prereleases") == "1"
         try:
             remote = firmware_github.available_firmware(
@@ -767,8 +764,6 @@ def create_app(
         (a bad asset is rejected, not stored). Does NOT change what is served —
         the user must pin it separately."""
         cfg = state.config
-        if not cfg.firmware_online_fetch:
-            return jsonify({"error": "online firmware fetch is disabled"}), 403
         body = request.get_json(silent=True) or {}
         model = body.get("model")
         tag = body.get("tag")

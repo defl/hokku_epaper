@@ -51,7 +51,6 @@
   "flash_wifi_ssid2": "",
   "flash_wifi_pass2": "",
   "firmware_dir": "/var/lib/hokku/firmware",
-  "firmware_online_fetch": true,
   "firmware_github_repo": "defl/hokku_epaper",
   "image_config_bw": {
     "dither": {
