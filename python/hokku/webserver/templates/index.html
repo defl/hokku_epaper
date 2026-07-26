@@ -515,6 +515,11 @@
   .state-modal td:first-child { color: var(--stone); width: 35%; }
   .state-modal .stale { color: var(--persimmon); font-size: 0.85em; }
   .state-modal .state-missing { color: var(--bamboo); font-style: italic; }
+  #sec-firmware .fw-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  #sec-firmware .fw-table th { text-align: left; font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--stone); font-weight: 700; padding: 4px 14px 6px 0; border-bottom: 1px solid var(--bamboo-soft); white-space: nowrap; }
+  #sec-firmware .fw-table td { padding: 9px 14px 9px 0; border-bottom: 1px solid var(--bamboo-soft); vertical-align: top; }
+  #sec-firmware .fw-table th:last-child, #sec-firmware .fw-table td:last-child { padding-right: 0; }
+  #sec-firmware .fw-table select { max-width: 100%; }
 
   /* ── Toast ────────────────────────────────────────────────── */
   .toast {
@@ -1454,24 +1459,28 @@ async function loadFirmwareLibrary() {
 function renderFirmwareModels(data) {
   const container = document.getElementById('firmware-models');
   const models = data.models || {};
-  let html = '';
-  for (const model of Object.keys(models)) {
+  const rows = Object.keys(models);
+  if (!rows.length) {
+    container.innerHTML = '<div class="screens-empty">No firmware-capable models.</div>';
+    return;
+  }
+  let html = '<table class="fw-table"><thead><tr>'
+    + '<th>Screen model</th><th>Currently serving</th><th>What to install</th>'
+    + '</tr></thead><tbody>';
+  for (const model of rows) {
     const m = models[model];
     const eff = m.effective;
     const pinned = m.pinned;
-    html += '<div class="config-row" style="flex-wrap:wrap;align-items:baseline;gap:8px;'
-      + 'border-top:1px solid var(--hairline,#0001);padding-top:8px;">';
-    html += '<label style="min-width:180px;font-weight:600">' + fwEsc(fwLabel(model)) + '</label>';
+    html += '<tr><td><strong>' + fwEsc(fwLabel(model)) + '</strong></td>';
     if (!eff) {
-      html += '<span style="color:var(--stone,#888)">No firmware available.</span></div>';
+      html += '<td colspan="2" style="color:var(--stone,#888)">No firmware available.</td></tr>';
       continue;
     }
-    html += '<span>Serving: <strong>' + fwEsc(eff) + '</strong>'
-      + fwChannelBadge(m.effective_channel)
-      + (pinned ? ' <span style="color:var(--accent,#2a6);font-size:0.82em">(pinned)</span>'
-                : ' <span style="color:var(--stone,#888);font-size:0.82em">(auto — highest stable)</span>')
-      + '</span>';
-    // Version picker (pin control).
+    // Currently serving.
+    html += '<td><strong>' + fwEsc(eff) + '</strong>' + fwChannelBadge(m.effective_channel)
+      + '<div style="font-size:0.8em;color:var(--stone,#888)">'
+      + (pinned ? 'pinned' : 'auto — highest stable') + '</div></td>';
+    // What to install (pin control).
     const avail = m.available || [];
     let opts = '<option value="">Auto (highest stable)</option>';
     for (const v of avail) {
@@ -1480,12 +1489,12 @@ function renderFirmwareModels(data) {
         + (v.source === 'downloaded' ? ' — downloaded' : '');
       opts += '<option value="' + fwEsc(v.version) + '"' + sel + '>' + fwEsc(lbl) + '</option>';
     }
-    html += '<select id="fw-pin-' + fwEsc(model) + '" onchange="pinFirmware(\'' + fwEsc(model) + '\')">'
-      + opts + '</select>';
-    html += '<span id="fw-pin-status-' + fwEsc(model) + '" class="flash-status"></span>';
-    html += '</div>';
+    html += '<td><select id="fw-pin-' + fwEsc(model) + '" onchange="pinFirmware(\'' + fwEsc(model) + '\')">'
+      + opts + '</select> <span id="fw-pin-status-' + fwEsc(model) + '" class="flash-status"></span></td>';
+    html += '</tr>';
   }
-  container.innerHTML = html || '<div class="screens-empty">No firmware-capable models.</div>';
+  html += '</tbody></table>';
+  container.innerHTML = html;
 }
 
 async function pinFirmware(model) {

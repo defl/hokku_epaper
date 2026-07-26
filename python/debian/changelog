@@ -1,11 +1,11 @@
-hokku-server (4.0.1~dev.4-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.8-1) unstable; urgency=medium
 
   * Firmware library: optionally download firmware from GitHub Releases and pin a
     specific version (including betas, never auto-selected) per screen model.
     Offline-first preserved — the server only reaches the internet on an explicit
-    button press.
+    button press. Presented as a table with a "What to install" column.
 
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 26 Jul 2026 18:09:10 +0000
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 26 Jul 2026 19:56:50 +0000
 
 hokku-server (4.0.0~beta1-1) unstable; urgency=medium
 
