@@ -18,7 +18,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _HOKKU_USER = "hokku"
-_DEFAULT_HOKKU_SERVER_CONFIG = Path("/usr/share/hokku-server/config.json")
+_DEFAULT_HOKKU_SERVER_CONFIG = Path("/usr/share/hokku-server/config.json.example")
 _HOKKU_SERVER_CONFIG = Path("/var/lib/hokku/config.json")
 
 

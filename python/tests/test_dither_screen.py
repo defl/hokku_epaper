@@ -2,7 +2,7 @@
 
 For every image in images/test/, runs the same B&W-detection → face-detection
 → default dispatch the live server uses, with configs loaded from
-config/config.json, then renders at full panel resolution.
+config/config.json.example, then renders at full panel resolution.
 
 Run with:  pytest -m time_intensive -s -k test_render_as_screen
 Output (per image):
@@ -34,7 +34,7 @@ from hokku.webserver.orientation import Orientation
 from tests._helpers import is_oversize_fixture
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_CONFIG_PATH = _REPO_ROOT / "python" / "hokku" / "webserver" / "config" / "config.json"
+_CONFIG_PATH = _REPO_ROOT / "python" / "hokku" / "webserver" / "config" / "config.json.example"
 _TEST_IMAGES_DIR = _REPO_ROOT / "images" / "test"
 _BUILD_SCREEN_DIR = _REPO_ROOT / "build" / "test_dither_screen"
 
@@ -130,7 +130,7 @@ def _classify(
 def test_render_as_screen() -> None:
     """Full screen-faithful render for every image in images/test/.
 
-    Uses config/config.json for all settings — B&W detection, face detection,
+    Uses config/config.json.example for all settings — B&W detection, face detection,
     and the three image configs (default/bw/face) — exactly as the server would.
     Writes per-image PNG and sidecar metrics.txt to build/test_dither_screen/.
     """

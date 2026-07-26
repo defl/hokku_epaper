@@ -51,6 +51,7 @@ include = ["hokku*"]
     "models/face_detection_yunet_2023mar.onnx",
     "templates/*",
     "static/**/*",
+    "config/config.json.example",
 ]
 
 [tool.pytest.ini_options]

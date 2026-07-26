@@ -108,6 +108,24 @@ jobs:
       - name: Show downloaded .debs
         run: ls -lh build/*.deb
 
+      # ── attach the pip wheel to the release ────────────────────────────────
+      # Done up front, before the 20-60 min image build, so the wheel lands on
+      # the release quickly and isn't lost if the image build later fails. Built
+      # by ci.yml's build-webserver-wheel job from the same commit's CI run.
+      - name: Download hokku-server-wheel
+        uses: actions/download-artifact@v7
+        with:
+          name: hokku-server-wheel
+          run-id: ${{ steps.find-run.outputs.server_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: build/wheel/
+
+      - name: Attach wheel to GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.event.release.tag_name }}" build/wheel/hokku_server-*.whl --clobber
+
       # ── build the image ────────────────────────────────────────────────────
 
       - name: Install host dependencies

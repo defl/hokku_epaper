@@ -448,8 +448,26 @@ jobs:
             fail=1
           fi
 
+          # The dashboard's runtime data files must ship to /usr/share/hokku-server.
+          # These are installed by debian/install; a missing template/asset builds
+          # green and only 500s the dashboard at runtime (TemplateNotFound), and
+          # the fonts/ subdir in particular was silently dropped for a while when
+          # static files were hand-listed instead of copied as a directory.
+          # dpkg-deb -c lists paths as "./usr/share/...", so match the trailing
+          # fragment rather than an absolute path.
+          for f in \
+            hokku-server/config.json.example \
+            hokku-server/templates/index.html \
+            hokku-server/static/logo.png \
+            hokku-server/static/fonts/; do
+            if ! grep -q "$f" <<<"$contents"; then
+              echo "::error::.deb is missing '/usr/share/$f' — check python/debian/install." >&2
+              fail=1
+            fi
+          done
+
           [ "$fail" -eq 0 ] || exit 1
-          echo "OK: no pip-only deps in Depends; hokku module present."
+          echo "OK: no pip-only deps in Depends; hokku module + runtime data files present."
 
       - name: Collect artifacts
         run: |
@@ -460,6 +478,65 @@ jobs:
         with:
           name: hokku-server-deb
           path: build/hokku-server_*.deb
+
+  # Build the pip-installable wheel and prove it actually carries the runtime
+  # data files. Running from a source checkout hides their absence (Flask's
+  # relative template/static lookup hits the live tree), so a wheel missing
+  # them builds green and only fails on `pip install` — the dashboard 500s with
+  # jinja2 TemplateNotFound. This job is the guard the deb's content-check is
+  # for the .deb. The wheel is attached to GitHub releases by build-image.yml.
+  build-webserver-wheel:
+    needs: [test-webserver, lint-webserver]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Build wheel
+        working-directory: python
+        run: |
+          pip install --upgrade build
+          python -m build --wheel --outdir dist
+
+      - name: Verify wheel contents and scrub for leaks
+        working-directory: python
+        run: |
+          set -euo pipefail
+          whl=$(ls dist/hokku_server-*.whl)
+          echo "Inspecting $whl"
+          contents=$(python -m zipfile -l "$whl")
+          echo "$contents"
+
+          # Every runtime data file must be present, or a pip install is broken.
+          require() {
+            if ! grep -q "$1" <<<"$contents"; then
+              echo "::error::wheel is missing '$1' — check [tool.setuptools.package-data] in python/pyproject.toml" >&2
+              exit 1
+            fi
+          }
+          require 'hokku/webserver/templates/index.html'
+          require 'hokku/webserver/static/logo.png'
+          require 'hokku/webserver/static/fonts/'
+          require 'hokku/webserver/config/config.json.example'
+          require 'hokku/webserver/models/face_detection_yunet_2023mar.onnx'
+
+          # Leak guard: the shipped example config must never carry real WiFi
+          # credentials (or any other populated secret field).
+          python -m zipfile -e "$whl" _wheel_check/
+          example=$(find _wheel_check -name config.json.example)
+          python -c "import json,sys; c=json.load(open(sys.argv[1])); bad=[k for k in ('flash_wifi_ssid','flash_wifi_pass','flash_wifi_ssid2','flash_wifi_pass2') if c.get(k)]; sys.exit('::error::example config in wheel carries populated secret fields: '+repr(bad)) if bad else print('OK: no credentials embedded in example config')" "$example"
+          rm -rf _wheel_check
+          echo "OK: wheel carries all runtime data files."
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hokku-server-wheel
+          path: python/dist/hokku_server-*.whl
 
   test-installer:
     runs-on: ubuntu-latest

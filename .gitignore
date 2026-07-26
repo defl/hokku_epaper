@@ -70,6 +70,9 @@ firmware/bigme_f7/image/xr872/xr_system.img.version
 # Local toolchain / config
 FlashTools_repo/
 settings_win.ini
+# Developer's local run config (machine-specific paths). Copy
+# python/hokku/webserver/config/config.json.example to create one.
+python/config.json
 
 # Editor / IDE
 .vscode/

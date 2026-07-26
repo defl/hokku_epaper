@@ -1,6 +1,31 @@
 # Changelog
 
-## 4.0.0 alpha 1
+## 4.0.0 beta 2 (dev)
+
+### Fixed
+
+- **The server package shipped incomplete data files.** The pip wheel declared
+  only the face-detection model as package data, so the Flask `templates/` and
+  `static/` trees were silently dropped — a plain `pip install` of the server
+  started fine but 500'd the dashboard with `jinja2 TemplateNotFound:
+  index.html` (fix contributed by @TaichungLester, #26). The `.deb` had the
+  matching gap for `static/fonts/` (hand-listed files, fonts never included).
+  Both packages now ship the full `templates/` and `static/` trees — the `.deb`
+  install list copies the directories recursively instead of enumerating files,
+  so new assets can't be forgotten again.
+
+### Packaging
+
+- The default server config is now shipped as **`config.json.example`** in both
+  the wheel and the `.deb`, so `pip`/`apt` users get a working template to copy.
+  The machine-specific developer config (`python/config.json`) is no longer
+  tracked. On the appliance the systemd unit and installer seed the live config
+  from this example, unchanged in behaviour.
+- The **pip wheel** (`hokku_server-*.whl`) is now built and content-verified in
+  CI (a guard that its data files are actually present, mirroring the existing
+  `.deb` content check) and attached to published GitHub releases.
+
+## 4.0.0 beta 1
 
 The release where Hokku stops being firmware for one photo frame and becomes a
 small platform: **three supported screens, and an appliance image that turns a
@@ -26,7 +51,7 @@ Raspberry Pi into a photo frame server without ever opening a terminal.**
 - **Face-aware cropping** — when a photo is cropped to fill the panel, faces are
   detected locally and kept in frame instead of being sliced off.
 
-> **Alpha, and it means it.** Support maturity varies by screen: the
+> **Beta, and it means it.** Support maturity varies by screen: the
 > Hokku / Huessen frame and the Bigme F7 have been run end-to-end on real
 > hardware for a long time; the **Seeed reTerminal E1004 has been confirmed
 > working on real hardware exactly once.** See [Hardware](docs/hardware.md) for
