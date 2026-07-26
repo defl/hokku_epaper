@@ -12,6 +12,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from hokku.webserver import image_renderer
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.flashing import FlashJobManager
 from hokku.webserver.image_classifier import ImageClassifier
@@ -19,8 +20,8 @@ from hokku.webserver.image_manager_abstract import AbstractImageManager
 from hokku.webserver.image_manager_multi import MultiThreadedImageManager
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
 from hokku.webserver.mdns import start_mdns, stop_mdns
+from hokku.webserver.resource_budget import compute_budget
 from hokku.webserver.serve_scheduler import ServeScheduler
-from hokku.webserver.worker_count import resolve_worker_count
 
 if TYPE_CHECKING:
     from hokku.webserver.watcher import Watcher
@@ -32,16 +33,27 @@ def build_manager(
     config: AppConfig,
     classifier: ImageClassifier,
 ) -> AbstractImageManager:
-    """Pick the right concrete ImageManager based on ``image_worker_thread_count``.
+    """Resolve the memory budget, install the decode budget, and pick the manager.
 
-    ``1`` (default) → SingleThreadedImageManager (renders inline; cheapest).
-    ``0`` (auto)    → MultiThreadedImageManager with auto-resolved worker count.
-    ``>= 2``        → MultiThreadedImageManager with that many workers.
+    Both the decode budget (max un-draftable source pixels) and the worker count
+    are derived from ``memory_budget_mb`` (cgroup-aware auto-detect or explicit
+    cap) and the cgroup-aware CPU count — see :func:`compute_budget`. The decode
+    budget is a process global installed here, so it is re-derived on every
+    config reload. The manager is single-threaded when only one render fits,
+    else a thread pool sized to the budget.
     """
-    if config.image_worker_thread_count == 1:
+    budget = compute_budget(config.memory_budget_mb)
+    image_renderer.set_decode_budget_pixels(budget.decode_budget_pixels)
+    logger.info("%s", budget.log_line())
+    if budget.under_provisioned:
+        logger.warning(
+            "Memory budget %d MB is below the healthy floor: large images will be "
+            "refused and rendering may fail. Give the server ~512 MB or more.",
+            budget.memory_bytes // (1024 * 1024),
+        )
+    if budget.worker_count <= 1:
         return SingleThreadedImageManager(config, classifier)
-    worker_count = resolve_worker_count(config.image_worker_thread_count)
-    return MultiThreadedImageManager(config, classifier, worker_count=worker_count)
+    return MultiThreadedImageManager(config, classifier, worker_count=budget.worker_count)
 
 
 class AppState:
@@ -126,10 +138,6 @@ class AppState:
                 logger.info("mDNS disabled (mdns_hostname is empty)")
 
         logger.info("Config reloaded in-process — pipeline slug: %s", new_config.cache_slug())
-        logger.info(
-            "Image worker count: configured=%s -> resolved=%s",
-            new_config.image_worker_thread_count,
-            new_manager.resolved_worker_count,
-        )
+        # build_manager() already logged the re-derived "Resource budget: ..." line.
         if self.watcher is not None:
             self.watcher.wake()  # skip remaining sleep, pick up new config immediately

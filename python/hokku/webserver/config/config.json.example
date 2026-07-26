@@ -13,7 +13,7 @@
   "debug_fast_refresh": false,
   "auto_clear_cache": false,
   "crop_to_fill_threshold": 0.10,
-  "image_worker_thread_count": 0,
+  "memory_budget_mb": 0,
   "image_config_default": {
     "dither": {
       "algorithm": "floyd_steinberg",

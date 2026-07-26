@@ -56,11 +56,18 @@ from hokku.webserver.image_renderer import (
     MAX_UPLOAD_PIXELS,
     SVG_PROBE_DIMS,
     ImageRenderer,
+    format_megapixels,
     open_image_for_render,
 )
 from hokku.webserver.mdns import _get_local_ip
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS, PRESET_META
+from hokku.webserver.resource_budget import (
+    MIN_MEMORY_BUDGET_MB,
+    compute_budget,
+    memory_budget_too_low,
+)
+from hokku.webserver.resource_limits import detect_memory_limit_bytes
 from hokku.webserver.screen_headers import (
     parse_battery_header,
     parse_config_state,
@@ -537,7 +544,7 @@ def create_app(
                     skipped.append(
                         {
                             "name": name,
-                            "reason": f"image too large; cap {MAX_UPLOAD_PIXELS:,} px",
+                            "reason": f"image too large; limit {format_megapixels(MAX_UPLOAD_PIXELS)}",
                         }
                     )
                     continue
@@ -549,7 +556,8 @@ def create_app(
                 skipped.append(
                     {
                         "name": name,
-                        "reason": f"image too large ({w}x{h}); cap {MAX_UPLOAD_PIXELS:,} px",
+                        "reason": f"image too large: {format_megapixels(w * h)} ({w}x{h}); "
+                        f"limit {format_megapixels(MAX_UPLOAD_PIXELS)}",
                     }
                 )
                 continue
@@ -841,6 +849,9 @@ def create_app(
         manager = state.manager
         scheduler = state.scheduler
 
+        # Re-derive the resource budget for display (cheap; reads cgroup/psutil).
+        _budget = compute_budget(state.config.memory_budget_mb)
+
         records = manager.list()
         progress = manager.conversion_progress()
         last = scheduler.last_served()
@@ -969,6 +980,16 @@ def create_app(
                 "image_worker_count_resolved": state.manager.resolved_worker_count,
                 "cpu_cores": os.cpu_count(),
                 "memory_available_gb": round(psutil.virtual_memory().available / 1e9, 1),
+                # Cgroup-aware resource picture (honours docker --memory / --cpus /
+                # systemd MemoryMax, unlike cpu_cores / memory_available_gb which
+                # report the host). memory_limit_mb is what's physically detected;
+                # memory_budget_effective_mb is after the memory_budget_mb cap.
+                "cpu_limit": _budget.cpu_count,
+                "memory_limit_mb": round(detect_memory_limit_bytes() / (1024 * 1024)),
+                "memory_budget_effective_mb": round(_budget.memory_bytes / (1024 * 1024)),
+                "memory_budget_auto": _budget.memory_auto,
+                "decode_budget_pixels": _budget.decode_budget_pixels,
+                "under_provisioned": _budget.under_provisioned,
                 "bundled_firmware_version": bundled_firmware_version,
                 # Per-model EFFECTIVE firmware versions (pin, else highest stable
                 # across bundled + downloaded), keyed by model id. Kept under the
@@ -1035,6 +1056,14 @@ def create_app(
         except (TypeError, ValueError) as e:
             logger.info("Config save: invalid config: %s", e)
             return jsonify({"error": f"invalid config: {e}"}), 400
+        if memory_budget_too_low(new_cfg.memory_budget_mb):
+            msg = (
+                f"Memory budget too low: {new_cfg.memory_budget_mb} MB. "
+                f"Minimum is {MIN_MEMORY_BUDGET_MB} MB — below this the server can't "
+                f"decode images. Leave the field empty for automatic detection."
+            )
+            logger.info("Config save rejected: %s", msg)
+            return jsonify({"error": msg}), 400
         try:
             new_cfg.save(config_path)
         except OSError as e:

@@ -78,19 +78,52 @@ IMAGE_EXTENSIONS = {
 MAX_IMAGE_PIXELS = 40_000_000
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
-# The RAM ceiling that actually matters on the 464 MB Pi Zero 2 W: how many
-# pixels we are willing to *materialise*. A full-resolution decode of N pixels
-# costs ~N*3 bytes for RGB, and 2–3x that transiently for HEIF (libheif working
-# memory) — a 24 MP HEIF peaked ~170 MB on Debian, which does not fit alongside
-# the ~324 MB resident baseline. 16 MP keeps even a worst-case HEIF decode under
-# ~120 MB while still covering every 12 MP phone photo.
+# The RAM ceiling that actually matters: how many pixels we are willing to
+# *materialise*. A full-resolution decode of N pixels costs ~N*3 bytes for RGB,
+# and 2–3x that transiently for HEIF (libheif working memory) — a 24 MP HEIF
+# peaked ~170 MB on Debian.
+#
+# This is DERIVED FROM THE MEMORY BUDGET at startup (see resource_budget.py) and
+# installed via set_decode_budget_pixels(): a 464 MB Pi resolves to ~16 MP, a
+# 1 GB+ box to the full bomb cap (so a 38.9 MP panorama renders). The value here
+# is only the default used until the server configures it (and by unit tests).
 #
 # Crucially this is checked AFTER draft() (see _open_image_for_render): a huge
 # JPEG shrink-on-loads to well under the budget and is accepted, while an
 # un-draftable format (PNG / HEIF / etc.) that would decode above the budget is
-# refused with a clear message instead of OOM-killing the whole server. Tunable:
-# raise it if the appliance gets more RAM, lower it if decodes still tip over.
+# refused with a clear message instead of OOM-killing the whole server.
 DECODE_BUDGET_PIXELS = 16_000_000
+
+
+def set_decode_budget_pixels(pixels: int) -> None:
+    """Install the runtime decode budget (see resource_budget.compute_budget).
+
+    Called once at startup and on every config reload. The gate functions
+    (:func:`decoded_pixels_exceed_budget`, :func:`_open_image_for_render`) read
+    this module global at call time, so a reload takes effect immediately.
+    """
+    global DECODE_BUDGET_PIXELS
+    DECODE_BUDGET_PIXELS = int(pixels)
+
+
+def format_megapixels(pixels: int) -> str:
+    """Format a pixel count as megapixels, e.g. ``38.9 MP`` — the unit users see
+    in the config (memory budget) and tooltips, so error messages match."""
+    return f"{pixels / 1_000_000:.1f} MP"
+
+
+def decode_budget_error(width: int, height: int) -> str:
+    """User-facing reason an image exceeds the runtime decode budget.
+
+    Reported in megapixels (matching the config / GUI) with the raw WxH kept for
+    reference, plus the current budget so users know the target to downscale to.
+    """
+    return (
+        f"too large to render on this device: {format_megapixels(width * height)} "
+        f"({width}x{height}), over the {format_megapixels(DECODE_BUDGET_PIXELS)} decode "
+        f"budget — downscale it, or re-save as JPEG (which decodes at reduced scale)"
+    )
+
 
 # Upload-time caps. Pixel cap matches the bomb guard (the decode budget is
 # enforced per-format at render time, post-draft); byte cap is a coarse first
@@ -182,8 +215,8 @@ def _open_image_for_render(path: Path) -> Image.Image:
     if w0 * h0 > MAX_IMAGE_PIXELS:
         img.close()
         raise ValueError(
-            f"image {path.name} is too large: {w0}x{h0} "
-            f"({w0 * h0:,} px) exceeds cap of {MAX_IMAGE_PIXELS:,} px"
+            f"image {path.name} is too large: {format_megapixels(w0 * h0)} "
+            f"({w0}x{h0}), exceeds the {format_megapixels(MAX_IMAGE_PIXELS)} limit"
         )
     _jpeg_draft_downscale(img, w0, h0)
 
@@ -196,11 +229,7 @@ def _open_image_for_render(path: Path) -> Image.Image:
     dw, dh = img.size
     if dw * dh > DECODE_BUDGET_PIXELS:
         img.close()
-        raise ValueError(
-            f"image {path.name} would decode to {dw}x{dh} ({dw * dh:,} px), over "
-            f"this device's {DECODE_BUDGET_PIXELS:,}-px decode budget — downscale "
-            f"it, or re-save as JPEG (which decodes at reduced scale)"
-        )
+        raise ValueError(f"image {path.name} {decode_budget_error(dw, dh)}")
 
     has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
     try:

@@ -1234,20 +1234,15 @@
     </div>
 
     <div class="config-row">
-      <label>Image workers:</label>
-      <span class="ctrl-tip" data-tip="Auto: uses all CPU cores minus 1, capped by free memory (~50 MB per worker).&#10;Single threaded: serial processing — safest, lowest memory.&#10;Custom: enter an exact worker count (1–1000).&#10;More workers = faster batch conversion but more RAM and CPU.">
-        <select id="image-worker-mode" onchange="onWorkerModeChange()">
-          <option value="auto">Auto</option>
-          <option value="serial" selected>Single threaded</option>
-          <option value="custom">Custom</option>
-        </select>
+      <label>Memory budget:</label>
+      <span class="ctrl-tip" data-tip="Maximum memory the server may use, in MB. Leave empty for automatic detection — honours a container / cgroup memory limit if there is one, otherwise physical RAM.&#10;The image decode budget (largest image it will render) and the number of parallel render workers are both derived from this.&#10;Lower it to cap RAM use on a shared box. Setting it above the detected physical RAM has no effect. Too low (below ~370 MB) is rejected — the server can't decode images with less.">
+        <input type="number" id="memory-budget-mb" min="370" step="1" placeholder="auto" style="width:100px;">
+        <span class="info">MB (empty = auto)</span>
       </span>
-      <input type="number" id="image-worker-count" min="1" max="1000" step="1" style="width:80px; display:none;" value="2">
     </div>
     <div class="config-row" style="margin-top:-6px; margin-bottom:8px;">
       <label></label>
-      <span class="info" id="image-worker-system-info" style="font-style:italic;"></span>
-      <span class="info" id="image-worker-count-resolved" style="font-style:italic;"></span>
+      <span class="info" id="memory-budget-info" style="font-style:italic;"></span>
     </div>
 
     <div class="config-row">
@@ -2685,11 +2680,6 @@ function removeTime(idx) {
   renderRefreshTimes();
 }
 
-function onWorkerModeChange() {
-  const mode = document.getElementById('image-worker-mode').value;
-  document.getElementById('image-worker-count').style.display = mode === 'custom' ? '' : 'none';
-}
-
 async function saveConfig() {
   if (document.getElementById('mdns-enabled').checked &&
       !document.getElementById('mdns-hostname').value.trim()) {
@@ -2705,12 +2695,9 @@ async function saveConfig() {
       ? (document.getElementById('mdns-hostname').value.trim() || '')
       : '',
     crop_to_fill_threshold: (parseInt(document.getElementById('crop-to-fill-threshold').value) || 0) / 100,
-    image_worker_thread_count: (() => {
-      const mode = document.getElementById('image-worker-mode').value;
-      if (mode === 'auto') return 0;
-      if (mode === 'serial') return 1;
-      const v = parseInt(document.getElementById('image-worker-count').value, 10);
-      return Number.isNaN(v) || v < 1 ? 2 : Math.min(v, 1000);
+    memory_budget_mb: (() => {
+      const v = parseInt(document.getElementById('memory-budget-mb').value, 10);
+      return Number.isNaN(v) || v < 1 ? 0 : v;  // empty / invalid → 0 = auto
     })(),
     image_config_default: ditherState,
     classifier_bw_detect_enabled: document.getElementById('bw-detect-enabled').checked,
@@ -2743,7 +2730,9 @@ async function saveConfig() {
       // user just submitted.
       refreshStatus();
     } else {
-      showToast('Failed to save configuration');
+      let msg = 'Failed to save configuration';
+      try { const j = await resp.json(); if (j && j.error) msg = j.error; } catch (_) { /* keep default */ }
+      showToast(msg);
     }
   } catch (e) {
     showToast('Error: ' + e.message);
@@ -3586,13 +3575,8 @@ async function loadConfig() {
     document.getElementById('crop-to-fill-threshold').value = fillPct;
     document.getElementById('fill-threshold-val').textContent = fillPct + '%';
     (function() {
-      const count = cfg.image_worker_thread_count ?? 1;
-      const modeEl = document.getElementById('image-worker-mode');
-      const customEl = document.getElementById('image-worker-count');
-      if (count === 0) { modeEl.value = 'auto'; }
-      else if (count === 1) { modeEl.value = 'serial'; }
-      else { modeEl.value = 'custom'; customEl.value = count; }
-      onWorkerModeChange();
+      const mb = cfg.memory_budget_mb ?? 0;  // 0 = auto → empty field
+      document.getElementById('memory-budget-mb').value = mb > 0 ? mb : '';
     })();
 
     document.getElementById('server-time').textContent = data.server_time || '';
@@ -3718,18 +3702,25 @@ async function refreshStatus() {
     lastBundledFirmwareVersions = data.bundled_firmware_versions || {};
     renderScreens(data.screens, lastBundledFirmwareVersions);
 
-    // Image worker system info (cores + RAM) + resolved count
-    const sysInfoEl = document.getElementById('image-worker-system-info');
-    const resolvedEl = document.getElementById('image-worker-count-resolved');
-    if (sysInfoEl) {
+    // Memory budget: detected system memory + the derived decode budget / workers.
+    const memInfoEl = document.getElementById('memory-budget-info');
+    if (memInfoEl) {
       const parts = [];
-      if (data.cpu_cores != null) parts.push(`${data.cpu_cores} cores`);
-      if (data.memory_available_gb != null) parts.push(`${data.memory_available_gb} GB free RAM`);
-      sysInfoEl.textContent = parts.join(', ');
-    }
-    if (resolvedEl && data.image_worker_count_resolved != null) {
-      const r = data.image_worker_count_resolved;
-      resolvedEl.textContent = r === 1 ? '→ 1 worker (serial)' : `→ ${r} workers active`;
+      if (data.memory_limit_mb != null) parts.push(`system: ${data.memory_limit_mb} MB detected`);
+      if (data.cpu_limit != null) parts.push(`${data.cpu_limit} CPU${data.cpu_limit === 1 ? '' : 's'}`);
+      if (data.memory_budget_effective_mb != null && data.memory_budget_auto === false) {
+        parts.push(`budget: ${data.memory_budget_effective_mb} MB (cap)`);
+      }
+      if (data.decode_budget_pixels != null) {
+        parts.push(data.decode_budget_pixels > 0
+          ? `→ decode budget ${(data.decode_budget_pixels / 1e6).toFixed(0)} MP`
+          : '→ decode budget 0 (under-provisioned)');
+      }
+      if (data.image_worker_count_resolved != null) {
+        const r = data.image_worker_count_resolved;
+        parts.push(`${r} worker${r === 1 ? '' : 's'}`);
+      }
+      memInfoEl.textContent = parts.join(' · ');
     }
 
     // Disk usage next to auto-clear toggle

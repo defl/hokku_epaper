@@ -77,12 +77,18 @@ def _migrate_v7_to_v8(d: dict) -> dict:
 
 
 def _migrate_v8_to_v9(d: dict) -> dict:
-    """Add the firmware-library fields (downloadable firmware from GitHub).
+    """Add memory_budget_mb + the firmware-library fields, and drop the old
+    image_worker_thread_count knob.
 
-    Offline-first is preserved by behaviour, not a flag: the download dir is empty
-    until the user acts, nothing polls, and the server reaches GitHub only when the
-    user clicks the button.
+    - memory_budget_mb (default 0 = auto-detect, cgroup-aware): the render worker
+      count is now derived from the memory budget + cgroup-aware CPU count, so the
+      manual image_worker_thread_count knob is gone.
+    - firmware_dir / firmware_github_repo: the downloadable firmware library.
+      Offline-first is preserved by behaviour, not a flag — the download dir is
+      empty until the user acts and the server reaches GitHub only on a button click.
     """
+    d.setdefault("memory_budget_mb", 0)
+    d.pop("image_worker_thread_count", None)
     d.setdefault("firmware_dir", "/var/lib/hokku/firmware")
     d.setdefault("firmware_github_repo", "defl/hokku_epaper")
     return d
@@ -132,11 +138,16 @@ class AppConfig:
     #: Zoom up to this fraction (e.g. 0.02 = 2 %) to eliminate letterbox bands.
     #: 0.0 = always letterbox (default, safe).
     crop_to_fill_threshold: float = 0.10
-    #: Number of worker processes for parallel image rendering.
-    #: 0 = auto (cpu_count − 1, capped by available RAM at ~50 MB/worker).
-    #: 1 = serial (legacy default).
-    #: N > 1 = exactly N workers; the user is responsible for having enough RAM.
-    image_worker_thread_count: int = 0
+    #: Memory the server may use, in MB. This is the master resource knob:
+    #: both the image decode budget and the render worker count are derived
+    #: from it (see resource_budget.py).
+    #: 0 = auto-detect (cgroup-aware: honours a docker --memory / systemd
+    #:     MemoryMax / k8s limit, falling back to physical RAM).
+    #: N > 0 = explicit cap in MB, clamped to physically-detected RAM so a
+    #:     too-high value can't invite the OOM killer.
+    #: The render worker count is derived from this budget and the cgroup-aware
+    #: CPU count (see resource_budget.py) — there is no separate worker knob.
+    memory_budget_mb: int = 0
 
     # Image pipeline: default, B&W, and face presets.
     image_config_default: ImageConfig = field(
