@@ -1,3 +1,28 @@
+hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
+
+  * feat(server): drive the image decode budget AND render worker count from a
+    single cgroup-aware memory budget, replacing the hardcoded 16 MP decode cap
+    and the raw-CPU-count worker heuristic. New resource_limits.py reads the real
+    cgroup memory/CPU limits (docker --memory / systemd MemoryMax / k8s), which
+    psutil and os.cpu_count() miss — that blind spot let the server size itself to
+    the host and OOM inside a constrained container. resource_budget.py derives
+    both numbers from the budget, calibrated to reproduce the proven 464 MB Pi
+    operating point (~16 MP, 1 worker) so the appliance does not regress, while a
+    1 GB+ box now renders a 38.9 MP panorama the old cap wrongly rejected.
+  * feat(config): new memory_budget_mb setting (0 = auto/cgroup-aware, N = cap
+    clamped to physical RAM) with a GUI control showing detected memory and the
+    derived decode budget / workers. Removes the image_worker_thread_count knob
+    (config + GUI) — the worker count is now always derived. Config schema v9.
+  * fix(server): reject a memory_budget_mb below the usable floor (~366 MB) with a
+    clear error instead of silently producing a zero decode budget (which made
+    Clear-caches churn and OOM the Pi); a stale too-low value is coerced to auto.
+  * ux: report image-size limits in megapixels (matching the config/UI) in the
+    failed-conversion and upload-rejection messages, not raw pixels.
+  * test: add a deb-in-docker end-to-end smoke harness (build .deb -> install ->
+    boot -> upload every test image -> validate dither) under test_server/e2e/.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 26 Jul 2026 14:55:29 -0500
+
 hokku-server (4.0.0~beta1-1) unstable; urgency=medium
 
   * First public beta of the 4.0 Pi Zero 2 W appliance line. Highlights since

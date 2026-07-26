@@ -152,11 +152,11 @@ def test_reload_is_idempotent(app_config: AppConfig, tmp_path: Path):
 
 
 def test_reload_always_builds_new_manager(app_config: AppConfig, tmp_path: Path):
-    """Even with the same worker count, reload builds a fresh manager."""
+    """Even with the same memory budget, reload builds a fresh manager."""
     state = _make_state(app_config)
     old_manager = state.manager
     new_cfg = _alt_config(app_config, tmp_path)
-    assert new_cfg.image_worker_thread_count == app_config.image_worker_thread_count
+    assert new_cfg.memory_budget_mb == app_config.memory_budget_mb
 
     state.reload(new_cfg)
 

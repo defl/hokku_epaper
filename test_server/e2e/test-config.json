@@ -1,0 +1,8 @@
+{
+  "version": 7,
+  "upload_dir": "/var/lib/hokku-e2e/images",
+  "cache_dir": "/var/lib/hokku-e2e/cache",
+  "port": 8080,
+  "poll_interval_seconds": 2,
+  "debug_fast_refresh": true
+}

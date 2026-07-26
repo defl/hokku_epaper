@@ -1,0 +1,13 @@
+{
+  "_comment": "Expected per-image outcome for a MEMORY-CONSTRAINED server, roughly a Pi-class ~512 MB budget (docker run --memory=512m, or memory_budget_mb ~= 512). The decode budget lands near ~23 MP, so the 38.9 MP Albi panorama is gated at ingest and FAILS gracefully (must NOT OOM the server) while normal photos still dither. The 100 MP synth bomb is refused at upload. Use with tools/e2e_deb_smoke.py --expectations.",
+  "images": {
+    "synth_black_10000x10000.png": {
+      "expect": "reject",
+      "reason": "100 MP > 40 MP upload cap (decompression-bomb guard) — refused at upload"
+    },
+    "Albi_Panorama_Sunset_Panini_General.heif": {
+      "expect": "fail",
+      "reason": "38.9 MP un-draftable HEIF over the constrained decode budget — gated at ingest, marked FAILED, must not OOM"
+    }
+  }
+}

@@ -123,13 +123,15 @@ def test_image_field_with_partial_blob_falls_back_to_default(tmp_path: Path):
     assert cfg.image_config_default == PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
 
 
-def test_v1_migrates_to_v2():
-    """A v1 dict (no image_worker_thread_count) is migrated forward and gains the v2 field with default 1."""
+def test_v1_migrates_to_current():
+    """A v1 dict migrates all the way forward; the old image_worker_thread_count
+    (added at v2) is dropped again at v9, and memory_budget_mb is present."""
     v1_blob = {"version": 1}  # minimal valid v1
 
     migrated = _migrate(v1_blob)
     assert migrated["version"] == _CURRENT_VERSION
-    assert migrated["image_worker_thread_count"] == 1
+    assert "image_worker_thread_count" not in migrated  # removed at v8→v9
+    assert migrated["memory_budget_mb"] == 0  # added at v8→v9
 
 
 def test_v2_migrates_forward():
@@ -140,32 +142,32 @@ def test_v2_migrates_forward():
     assert migrated["version"] == _CURRENT_VERSION
     # face_detector was added in v2→v3 then removed in v4→v5; must not survive.
     assert "face_detector" not in migrated
+    # image_worker_thread_count was added at v1→v2 then removed at v8→v9.
+    assert "image_worker_thread_count" not in migrated
 
 
-def test_image_worker_thread_count_roundtrips(tmp_path: Path):
-    """image_worker_thread_count is written to and read from JSON."""
-    cfg = AppConfig(image_worker_thread_count=3)
+def test_memory_budget_mb_roundtrips(tmp_path: Path):
+    """memory_budget_mb is written to and read from JSON."""
+    cfg = AppConfig(memory_budget_mb=512)
     p = tmp_path / "config.json"
     cfg.save(p)
     loaded = AppConfig.load(p)
-    assert loaded.image_worker_thread_count == 3
+    assert loaded.memory_budget_mb == 512
 
 
-def test_cache_slug_invariant_to_worker_count():
-    """Worker count doesn't affect rendered output, so it must not influence the slug."""
-    base = AppConfig(image_worker_thread_count=1)
-    other = AppConfig(image_worker_thread_count=4)
+def test_cache_slug_invariant_to_memory_budget():
+    """The memory budget doesn't affect rendered output, so it must not influence the slug."""
+    base = AppConfig(memory_budget_mb=0)
+    other = AppConfig(memory_budget_mb=512)
     assert base.cache_slug() == other.cache_slug()
 
 
-def test_v1_file_loads_with_default_worker_count(tmp_path: Path):
-    """Load a file written as v1 (no image_worker_thread_count); should default to 1."""
+def test_v1_file_loads_and_gains_memory_budget(tmp_path: Path):
+    """Load a file written as v1; it migrates forward and gains memory_budget_mb."""
     p = tmp_path / "config.json"
-    # Simulate a v1 save: only include v1 fields, no image_worker_thread_count.
-    v1_data = {"version": 1}
-    p.write_text(json.dumps(v1_data))
+    p.write_text(json.dumps({"version": 1}))
     loaded = AppConfig.load(p)
-    assert loaded.image_worker_thread_count == 1
+    assert loaded.memory_budget_mb == 0
 
 
 def test_server_threads_default_is_bounded():
