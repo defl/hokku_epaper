@@ -1520,10 +1520,14 @@ async function pinFirmware(model) {
   }
 }
 
-// Re-toggling the beta filter only re-queries once the user has already agreed
-// to go online this session — it must not itself trigger the first online call.
+// The full GitHub list (stable + beta) from the last online check, so toggling
+// the beta filter re-renders instantly without another request.
+let firmwareRemoteAll = null;
+
+// Re-toggling the beta filter only re-renders what we already fetched — it does
+// not go back online.
 function onFwIncludePreChange() {
-  if (firmwareOnlineConfirmed) _fetchRemoteFirmware();
+  if (firmwareRemoteAll !== null) renderRemoteFirmware();
 }
 
 // Button entry point: confirm the online action once, then fetch the list.
@@ -1549,16 +1553,18 @@ async function checkGithubFirmware() {
 async function _fetchRemoteFirmware() {
   const btn = document.getElementById('fw-check-btn');
   const status = document.getElementById('fw-remote-status');
-  const includePre = document.getElementById('fw-include-pre').checked;
   const prev = btn.textContent;
   btn.disabled = true; btn.textContent = 'Checking…';
   status.textContent = 'Contacting GitHub…';
   try {
-    const r = await fetch('/hokku/api/firmware/remote?prereleases=' + (includePre ? '1' : '0'));
+    // Always fetch everything (stable + pre-releases) in one go; the checkbox
+    // then filters the display so the empty state can point at hidden betas.
+    const r = await fetch('/hokku/api/firmware/remote?prereleases=1');
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
     status.textContent = '';
-    renderRemoteFirmware(data.releases || []);
+    firmwareRemoteAll = data.releases || [];
+    renderRemoteFirmware();
   } catch (e) {
     status.textContent = '';
     document.getElementById('firmware-remote').innerHTML =
@@ -1568,10 +1574,24 @@ async function _fetchRemoteFirmware() {
   }
 }
 
-function renderRemoteFirmware(releases) {
+function renderRemoteFirmware() {
   const el = document.getElementById('firmware-remote');
+  const all = firmwareRemoteAll || [];
+  const includePre = document.getElementById('fw-include-pre').checked;
+  const releases = all.filter(r => includePre || !r.prerelease);
   if (!releases.length) {
-    el.innerHTML = '<div class="screens-empty">No downloadable firmware found in GitHub releases.</div>';
+    const betas = all.filter(r => r.prerelease).length;
+    let msg;
+    if (!all.length) {
+      msg = 'No downloadable firmware found in GitHub releases.';
+    } else if (betas && !includePre) {
+      msg = 'No stable firmware published. ' + betas + ' pre-release (beta) build'
+        + (betas === 1 ? '' : 's') + ' available — tick “Include pre-releases (beta)” above to show '
+        + (betas === 1 ? 'it' : 'them') + '.';
+    } else {
+      msg = 'No downloadable firmware found.';
+    }
+    el.innerHTML = '<div class="screens-empty">' + fwEsc(msg) + '</div>';
     return;
   }
   let html = '<p class="config-section-label" style="margin-top:10px">Available on GitHub</p>';
@@ -1607,7 +1627,7 @@ async function downloadFirmware(model, tag, btn) {
     showToast('Downloaded ' + fwLabel(model) + ' ' + j.version
       + (j.channel === 'beta' ? ' (beta) — pin it to use it' : ''));
     await loadFirmwareLibrary();     // it now appears in the picker
-    await checkGithubFirmware();     // mark it "in library"
+    await _fetchRemoteFirmware();    // refresh so it shows "in library"
   } catch (e) {
     btn.disabled = false; btn.textContent = prev;
     showToast('Download failed: ' + e.message);
