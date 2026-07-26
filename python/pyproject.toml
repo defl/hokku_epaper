@@ -46,7 +46,12 @@ where = ["."]
 include = ["hokku*"]
 
 [tool.setuptools.package-data]
-"hokku.webserver" = ["models/ATTRIBUTION.md", "models/face_detection_yunet_2023mar.onnx"]
+"hokku.webserver" = [
+    "models/ATTRIBUTION.md",
+    "models/face_detection_yunet_2023mar.onnx",
+    "templates/*",
+    "static/**/*",
+]
 
 [tool.pytest.ini_options]
 addopts = ["-m", "not time_intensive and not serial", "-n", "8", "--dist=loadfile"]
