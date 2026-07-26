@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import replace
 from pathlib import Path
 
@@ -57,6 +58,59 @@ def test_fair_rotation(app_config: AppConfig, make_test_image):
         sched.mark_served(n)
         counts[n] += 1
     assert counts == {"a.png": 3, "b.png": 3, "c.png": 3}
+
+
+def test_tie_break_draws_from_full_tied_set(app_config: AppConfig, make_test_image, monkeypatch):
+    """When multiple images share the minimum show_index, the pick must be
+    drawn from that whole tied set via random.choice, not deterministically
+    the alphabetically-first name — otherwise every rotation reset triggered
+    by a new upload (_reconcile levelling the least-shown images) replays the
+    same name-sorted prefix before later names ever get a turn."""
+    calls = []
+    original_choice = random.choice
+
+    def spy_choice(seq):
+        calls.append(sorted(seq))
+        return original_choice(seq)
+
+    # Patch before construction: ServeScheduler.__init__ already runs one
+    # _precompute_all_locked pass itself, so patching after _setup() would
+    # miss it and the cached pick from that pass would satisfy pick_next()
+    # without ever re-invoking random.choice.
+    monkeypatch.setattr("hokku.webserver.serve_scheduler.random.choice", spy_choice)
+    _, sched = _setup(app_config, make_test_image, ["z.png", "a.png", "m.png"])
+    sched.pick_next(Orientation.NEUTRAL)
+    assert calls, "random.choice should be used to break show_index ties"
+    assert calls[0] == ["a.png", "m.png", "z.png"]
+
+
+def test_new_upload_preserves_cycle_progress(app_config: AppConfig, make_test_image):
+    """A new upload must not let images already served this cycle cut back ahead
+    of the laggard. Reconcile drops the newcomer in tied with the current
+    least-shown image and normalises the rest down to that minimum, so the
+    image still owed a turn keeps its priority. The old behaviour flattened
+    every show_index to 1 on any new image, erasing how far the cycle had run
+    and letting just-served names jump the queue again on the next upload."""
+    mgr, sched = _setup(app_config, make_test_image, ["a.png", "b.png", "c.png"])
+    # Round 1 serves everyone once; round 2 serves a and b again, so c lags.
+    for n in ["a.png", "b.png", "c.png", "a.png", "b.png"]:
+        sched.mark_served(n)
+
+    # A genuinely new image arrives mid-cycle and triggers reconcile.
+    make_test_image(Path(app_config.upload_dir) / "d.png")
+    mgr.sync()
+    sched.pick_next(Orientation.NEUTRAL)
+
+    idx = {}
+    for n in ("a.png", "b.png", "c.png", "d.png"):
+        s = sched.stats_for(n)
+        assert s is not None
+        idx[n] = s.show_index
+    # Laggard (c) and newcomer (d) share the minimum; already-served a and b
+    # stay strictly ahead and cannot cut back in.
+    assert idx["c.png"] == idx["d.png"] == min(idx.values())
+    assert idx["a.png"] > idx["c.png"]
+    assert idx["b.png"] > idx["c.png"]
 
 
 def test_stats_after_serves(app_config: AppConfig, make_test_image):
