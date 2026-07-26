@@ -1,6 +1,6 @@
 # Changelog
 
-## 4.0.0 beta 2 (dev)
+## Unreleased
 
 ### Fixed
 
@@ -23,7 +23,11 @@
   from this example, unchanged in behaviour.
 - The **pip wheel** (`hokku_server-*.whl`) is now built and content-verified in
   CI (a guard that its data files are actually present, mirroring the existing
-  `.deb` content check) and attached to published GitHub releases.
+  `.deb` content check) and attached to published GitHub releases. `pip install`
+  resolves all runtime dependencies automatically. Note the wheel is
+  **server-only and does not bundle screen firmware images** (those are release
+  build artifacts), so the flash-a-screen and OTA firmware-update features need
+  the `.deb`/appliance; everything else works from the wheel.
 
 ## 4.0.0 beta 1
 

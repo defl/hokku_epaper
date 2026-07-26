@@ -533,6 +533,22 @@ jobs:
           rm -rf _wheel_check
           echo "OK: wheel carries all runtime data files."
 
+      # Prove the wheel is actually installable and usable, not just well-formed:
+      # a clean-venv `pip install` resolves every runtime dependency (the .deb
+      # pip-installs several of these in postinst because apt can't provide them —
+      # for the wheel, pip must do it unaided), and the INSTALLED package resolves
+      # its templates/static from site-packages. That last check is the #26 bug
+      # class — data files present in the tree but not in the installed package.
+      - name: Smoke-test the installed wheel
+        working-directory: python
+        run: |
+          set -euo pipefail
+          python -m venv _venv
+          _venv/bin/pip install --upgrade pip >/dev/null
+          _venv/bin/pip install dist/hokku_server-*.whl
+          _venv/bin/python -c "from hokku.webserver import flask_app as f; from pathlib import Path; tf=Path(f._resolve_template_folder(None)); sf=f._resolve_static_folder(); assert (tf/'index.html').is_file(), tf; assert (sf/'logo.png').is_file(), sf; print('OK: installed wheel imports and resolves templates+static from the package')"
+          rm -rf _venv
+
       - uses: actions/upload-artifact@v7
         with:
           name: hokku-server-wheel
