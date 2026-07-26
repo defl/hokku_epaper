@@ -11,8 +11,7 @@ from __future__ import annotations
 import concurrent.futures
 
 from hokku.webserver.image_manager_abstract import AbstractImageManager
-from hokku.webserver.orientation import Orientation
-from hokku.webserver.render_worker import render_one
+from hokku.webserver.render_worker import render_image_variants
 
 
 class SingleThreadedImageManager(AbstractImageManager):
@@ -22,22 +21,13 @@ class SingleThreadedImageManager(AbstractImageManager):
     def resolved_worker_count(self) -> int:
         return 1
 
-    def _dispatch_render(
-        self,
-        name: str,
-        expected_slug: str,
-        model: str,
-        orientation: Orientation,
-        render_args: tuple,
-        t0: float,
-        *,
-        update_status: bool = True,
-    ) -> None:
+    def _run_batch(self, image_path: str, worker_variants: list[dict]) -> concurrent.futures.Future:
+        # Run the whole decode-once batch inline on the calling thread and return
+        # an already-resolved Future; the shared _submit_image_batch callback then
+        # fires synchronously, so sync() stays fully serial with no worker thread.
         future: concurrent.futures.Future = concurrent.futures.Future()
         try:
-            future.set_result(render_one(*render_args))
-        except BaseException as e:
+            future.set_result(render_image_variants(image_path, worker_variants))
+        except BaseException as e:  # mirror onto the Future for uniform routing
             future.set_exception(e)
-        self._on_render_done(
-            name, expected_slug, model, orientation, future, t0, update_status=update_status
-        )
+        return future

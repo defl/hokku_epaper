@@ -1,8 +1,9 @@
 """MultiThreadedImageManager: renders on a private ThreadPoolExecutor.
 
-Single process; GIL-bound while the dither hot path is pure Python.
-Switching to a GIL-releasing implementation later requires no callsite
-changes — threading already gives parallelism for free at that point.
+Single process, so all render threads share one address space (and one RAM
+budget). The numba dither releases the GIL, so concurrent renders make real
+CPU progress; a batch decodes its source once and dithers every variant off
+that one buffer.
 """
 
 from __future__ import annotations
@@ -11,8 +12,7 @@ import concurrent.futures
 
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.image_manager_abstract import AbstractImageManager
-from hokku.webserver.orientation import Orientation
-from hokku.webserver.render_worker import render_one
+from hokku.webserver.render_worker import render_image_variants
 
 
 class MultiThreadedImageManager(AbstractImageManager):
@@ -37,23 +37,11 @@ class MultiThreadedImageManager(AbstractImageManager):
     def resolved_worker_count(self) -> int:
         return self._worker_count
 
-    def _dispatch_render(
-        self,
-        name: str,
-        expected_slug: str,
-        model: str,
-        orientation: Orientation,
-        render_args: tuple,
-        t0: float,
-        *,
-        update_status: bool = True,
-    ) -> None:
-        future = self._executor.submit(render_one, *render_args)
-        future.add_done_callback(
-            lambda f, _n=name, _s=expected_slug, _m=model, _o=orientation, _t=t0, _us=update_status: (
-                self._on_render_done(_n, _s, _m, _o, f, _t, update_status=_us)
-            )
-        )
+    def _run_batch(self, image_path: str, worker_variants: list[dict]) -> concurrent.futures.Future:
+        # One executor job per image: decode once, dither every variant. Different
+        # images run concurrently across the pool; result routing happens in the
+        # shared _submit_image_batch done-callback.
+        return self._executor.submit(render_image_variants, image_path, worker_variants)
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False)

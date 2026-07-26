@@ -400,8 +400,17 @@ class AbstractImageRenderer(ABC):
         crop_to_fill_threshold: float = 0.0,
         clahe_keepout_bboxes_norm: tuple[BoundingBox, ...] | None = None,
         crop_anchor_bboxes_norm: tuple[BoundingBox, ...] | None = None,
+        *,
+        release_input: bool = True,
     ) -> bytes:
-        """Full-resolution panel → wire bytes."""
+        """Full-resolution panel → wire bytes.
+
+        ``release_input=True`` (default) closes ``img`` once it has been scaled,
+        freeing the source buffer before the dither — the right choice for a
+        one-shot render. Pass ``release_input=False`` to keep ``img`` alive so the
+        same decoded source can drive several renders (decode-once, dither-many);
+        the caller then owns closing it.
+        """
         idx = self.render_indices(
             img,
             cfg,
@@ -409,7 +418,7 @@ class AbstractImageRenderer(ABC):
             self._display.panel_w,
             self._display.panel_h,
             crop_to_fill_threshold,
-            release_input=True,
+            release_input=release_input,
             clahe_keepout_bboxes_norm=clahe_keepout_bboxes_norm,
             crop_anchor_bboxes_norm=crop_anchor_bboxes_norm,
         )

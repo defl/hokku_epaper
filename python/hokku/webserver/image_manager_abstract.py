@@ -6,8 +6,8 @@ The single source of truth for what's known to ImageManager is
 ``<cache_dir>/image_manager.json``.
 
 Concrete subclasses (SingleThreadedImageManager, MultiThreadedImageManager)
-implement ``_dispatch_render`` and ``resolved_worker_count`` — everything
-else is shared logic and lives here.
+implement ``_run_batch`` and ``resolved_worker_count`` — everything else,
+including per-variant result routing, is shared logic and lives here.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import shutil
 import threading
 import time
 from abc import ABC, abstractmethod
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import defusedxml.ElementTree as ET
@@ -64,6 +64,23 @@ _THUMB_MAX_PX = 300
 _THUMB_QUALITY = 85
 
 _KNOWN_SUFFIXES = (_PANEL_SUFFIX, _PREVIEW_SUFFIX, _THUMB_SUFFIX)
+
+
+@dataclass
+class _RenderVariant:
+    """One (model, orientation) render pending in an image's decode-once batch.
+
+    ``worker_payload`` is the plain-dict form handed to
+    ``render_worker.render_image_variants``; the other fields are what the
+    manager needs to route the result back through ``_on_render_done`` — exactly
+    as if this variant had been dispatched on its own.
+    """
+
+    slug: str
+    model: str
+    orientation: Orientation
+    update_status: bool
+    worker_payload: dict
 
 
 def _decision_to_screen_image_config(
@@ -127,24 +144,16 @@ class AbstractImageManager(ABC):
         """How many parallel renders this manager can run. 1 = serial."""
 
     @abstractmethod
-    def _dispatch_render(
-        self,
-        name: str,
-        expected_slug: str,
-        model: str,
-        orientation: Orientation,
-        render_args: tuple,
-        t0: float,
-        *,
-        update_status: bool = True,
-    ) -> None:
-        """Run ``render_one(*render_args)`` and arrange for ``_on_render_done``
-        to be called with the future when it completes.
+    def _run_batch(self, image_path: str, worker_variants: list[dict]) -> concurrent.futures.Future:
+        """Decode ``image_path`` once and render every variant in
+        ``worker_variants`` (see ``render_worker.render_image_variants``).
 
-        ``update_status=True`` (default): the primary lifecycle render — sets
-        convert_status to "ok"/"failed" and updates _progress.
-        ``update_status=False``: a secondary orientation render — only writes
-        the panel/preview files and updates the matching slug in the record.
+        Returns a Future that resolves to the per-variant results list, or raises
+        if the source could not be decoded. Multi-threaded managers submit to
+        their pool; the single-threaded manager runs inline and returns an
+        already-resolved Future. Result routing (per-variant ``_on_render_done``,
+        primary vs secondary lifecycle) is shared in ``_submit_image_batch`` — a
+        concrete manager only has to say *where* the batch runs.
         """
 
     # ── lifecycle ────────────────────────────────────────────────
@@ -944,63 +953,145 @@ class AbstractImageManager(ABC):
             # primary — it drives pending → ok and the progress counter. All
             # others are secondary (update_status=False). No model is
             # hardcoded; only the ordering is deterministic.
+            #
+            # Every uncached variant of THIS image goes into one decode-once
+            # batch: the source is decoded a single time and every (model,
+            # orientation) is dithered off that one buffer (see
+            # render_worker.render_image_variants). Cached variants are resolved
+            # inline here and never reach the batch.
             with self._db_lock:
                 sorted_models = sorted(self._known_models)
             primary_model = sorted_models[0]
+            variants: list[_RenderVariant] = []
             for mdl in sorted_models:
                 landscape_cfg = _decision_to_screen_image_config(
                     decision, Orientation.LANDSCAPE, mdl
                 )
                 portrait_cfg = _decision_to_screen_image_config(decision, Orientation.PORTRAIT, mdl)
-                self._dispatch_cfg(name, landscape_cfg, update_status=(mdl == primary_model))
-                self._dispatch_cfg(name, portrait_cfg, update_status=False)
+                v_land = self._prepare_variant(
+                    name, landscape_cfg, update_status=(mdl == primary_model)
+                )
+                v_port = self._prepare_variant(name, portrait_cfg, update_status=False)
+                variants.extend(v for v in (v_land, v_port) if v is not None)
+            if variants:
+                self._submit_image_batch(name, variants, time.monotonic())
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             logger.exception("Failed to submit %r: %s", name, err)
             self._mark_as_failed(name, err)
 
-    def _dispatch_cfg(self, name: str, cfg: ScreenImageConfig, *, update_status: bool) -> None:
-        """File-check then dispatch one (image, orientation) render job.
+    def _prepare_variant(
+        self, name: str, cfg: ScreenImageConfig, *, update_status: bool
+    ) -> _RenderVariant | None:
+        """Resolve one (image, model, orientation) into a pending render variant.
 
-        If the panel file for this cfg's slug already exists the orientation
-        slug is recorded in the DB and no render is dispatched.
-        ``update_status=True`` drives the primary lifecycle (pending → ok,
-        progress counter); ``update_status=False`` only writes files and
-        updates the orientation slug.
+        If the panel for this cfg's slug is already cached, records the orientation
+        slug (and, when ``update_status``, completes the primary lifecycle — the
+        cached primary never dispatches a render, so the counter would otherwise
+        wedge) and returns ``None``: nothing to render. Otherwise returns the
+        :class:`_RenderVariant` to include in the image's decode-once batch.
         """
         with self._db_lock:
             rec = self._records.get(name)
         if rec is None:
-            return
+            return None
         slug = cfg.cache_slug()
         if self._panel_path(rec.name_hash, slug).exists():
             self._set_orientation_slug(name, cfg.screen_model, cfg.orientation, slug)
             if update_status:
-                # The primary render is already cached (no render dispatched), so
-                # _on_render_done won't run for it — complete the lifecycle here or
-                # the image stays 'pending'/in-flight and the progress counter wedges.
                 self._complete_cached_primary(name)
-            return
-        render_args = (
-            str(self._upload_dir / name),
-            asdict(cfg.image_config),
-            cfg.screen_model,
-            cfg.orientation,
-            cfg.crop_to_fill_threshold,
-            tuple(asdict(b) for b in cfg.clahe_keepout_bboxes)
+            return None
+        payload = {
+            "model": cfg.screen_model,
+            "orientation": cfg.orientation.value,
+            "image_config": asdict(cfg.image_config),
+            "crop_to_fill_threshold": cfg.crop_to_fill_threshold,
+            "clahe_keepout_bboxes": tuple(asdict(b) for b in cfg.clahe_keepout_bboxes)
             if cfg.clahe_keepout_bboxes
             else None,
-            tuple(asdict(b) for b in cfg.face_crop_bboxes) if cfg.face_crop_bboxes else None,
-        )
-        logger.debug("Submitted %r for dithering (%s, %s)", name, cfg.screen_model, cfg.orientation)
-        self._dispatch_render(
-            name,
-            slug,
-            cfg.screen_model,
-            cfg.orientation,
-            render_args,
-            time.monotonic(),
+            "face_crop_bboxes": tuple(asdict(b) for b in cfg.face_crop_bboxes)
+            if cfg.face_crop_bboxes
+            else None,
+        }
+        return _RenderVariant(
+            slug=slug,
+            model=cfg.screen_model,
+            orientation=cfg.orientation,
             update_status=update_status,
+            worker_payload=payload,
+        )
+
+    def _submit_image_batch(self, name: str, variants: list[_RenderVariant], t0: float) -> None:
+        """Dispatch one decode-once batch for ``name`` and, on completion, route
+        each variant through :meth:`_on_render_done`.
+
+        The whole per-variant lifecycle (primary vs secondary, cache-file writes,
+        failure handling) is byte-for-byte the same as when every variant was
+        dispatched separately — each variant still gets its own resolved Future
+        and its own ``_on_render_done`` call. The only change is that the source
+        is decoded once for the batch instead of once per variant.
+        """
+        image_path = str(self._upload_dir / name)
+        worker_variants = [v.worker_payload for v in variants]
+        logger.debug("Submitted %r for dithering (%d variant(s))", name, len(variants))
+        batch_future = self._run_batch(image_path, worker_variants)
+        batch_future.add_done_callback(
+            lambda bf, _n=name, _v=variants, _t=t0: self._fan_out_batch(_n, _v, bf, _t)
+        )
+
+    def _fan_out_batch(
+        self,
+        name: str,
+        variants: list[_RenderVariant],
+        batch_future: concurrent.futures.Future,
+        t0: float,
+    ) -> None:
+        """Deliver each variant's result to ``_on_render_done``.
+
+        A whole-batch failure means the source could not be decoded — that dooms
+        every variant, so each is failed with the decode exception. Otherwise each
+        variant is delivered with its own success/failure from the results list.
+        """
+        try:
+            results = batch_future.result()
+        except Exception as decode_exc:  # a decode failure dooms every variant
+            for variant in variants:
+                self._deliver_variant(name, variant, None, decode_exc, t0)
+            return
+        for variant, res in zip(variants, results):
+            if res.get("ok"):
+                self._deliver_variant(
+                    name, variant, (res["panel_bytes"], res["preview_bytes"]), None, t0
+                )
+            else:
+                self._deliver_variant(
+                    name, variant, None, RuntimeError(res.get("error") or "render failed"), t0
+                )
+
+    def _deliver_variant(
+        self,
+        name: str,
+        variant: _RenderVariant,
+        result: tuple[bytes, bytes] | None,
+        exc: BaseException | None,
+        t0: float,
+    ) -> None:
+        """Wrap one variant's outcome in a resolved Future and hand it to
+        ``_on_render_done`` — exactly the shape that method saw when each variant
+        was its own executor job."""
+        future: concurrent.futures.Future = concurrent.futures.Future()
+        if exc is not None:
+            future.set_exception(exc)
+        else:
+            future.set_result(result)
+        self._on_render_done(
+            name,
+            variant.slug,
+            variant.model,
+            variant.orientation,
+            future,
+            t0,
+            update_status=variant.update_status,
         )
 
     def _set_orientation_slug(
@@ -1048,9 +1139,10 @@ class AbstractImageManager(ABC):
     ) -> None:
         """Called when a render finishes.
 
-        For multi-threaded managers this runs on a worker thread (via
-        ``Future.add_done_callback``). For single-threaded managers this is
-        invoked synchronously from ``_dispatch_render`` on the calling thread.
+        For multi-threaded managers this runs on a worker thread (via the batch
+        ``Future.add_done_callback`` → ``_fan_out_batch``). For single-threaded
+        managers the batch Future is already resolved, so this runs synchronously
+        on the calling thread.
         """
         try:
             panel_bytes, preview_bytes = future.result()

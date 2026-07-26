@@ -173,11 +173,21 @@ def _rasterize_svg(path: Path) -> Image.Image:
     return Image.open(io.BytesIO(png_bytes)).convert("RGB")
 
 
-# Image DECODING is serialized across render threads. libheif (via pillow_heif,
-# for HEIF/HEIC) is not thread-safe: two workers decoding HEIF images at once
-# deadlock/stall — the reason the MultiThreadedImageManager appeared to hang on
-# image sets containing .heic/.heif. Serializing the decode is cheap; the parallel
-# win is the numba dither downstream (render_panel_bytes), which runs unlocked.
+# Image DECODING is serialized across render threads by this GLOBAL lock — every
+# format takes it, at most one decode is ever in flight. Two reasons:
+#   1. libheif (via pillow_heif, HEIF/HEIC) is not thread-safe: two workers
+#      decoding HEIF at once deadlock/stall.
+#   2. The memory budget (resource_budget.resolve_worker_count) sizes the worker
+#      count as "baseline + ONE worst-case decode + N lighter post-decode renders".
+#      That reservation of a SINGLE decode peak is only safe while this lock keeps
+#      decodes serialized; letting common formats (JPEG/PNG) decode concurrently
+#      would allow N simultaneous decodes and blow the budget on multi-worker
+#      boxes. Scoping the lock to just the native codecs is therefore deferred
+#      until the budget layer can reserve for concurrent decodes (a decode
+#      admission semaphore) rather than assuming one at a time.
+# Serializing the decode is cheap; the parallel win is the numba dither downstream
+# (render_panel_bytes), which runs unlocked — and with decode-once each source is
+# now decoded a single time per image, not once per rendered variant.
 _DECODE_LOCK = threading.Lock()
 
 

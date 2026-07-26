@@ -12,9 +12,10 @@ from pathlib import Path
 
 import pytest
 
+import hokku.webserver.image_renderer as image_renderer
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
-from hokku.webserver.render_worker import render_one
+from hokku.webserver.render_worker import render_image_variants, render_one
 
 _HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
 
@@ -121,3 +122,67 @@ def test_render_one_renders_jxl():
 def test_render_one_bad_path_raises():
     with pytest.raises(FileNotFoundError):
         render_one("/nonexistent/path/image.png", _cfg_dict(), "huessen_epf1301", "landscape")
+
+
+# ── decode-once: many variants, one decode ────────────────────────────────────
+
+
+def test_render_image_variants_decodes_source_once(monkeypatch):
+    """render_image_variants decodes the source exactly once for N variants.
+
+    The whole point of the batch: the source is decoded a single time and every
+    (model, orientation) variant is dithered off that one buffer. Regression
+    guard — previously each variant re-decoded (and re-took the decode lock).
+    """
+    decode_calls = {"n": 0}
+    real_open = image_renderer.open_image_for_render
+
+    def counting_open(path):
+        decode_calls["n"] += 1
+        return real_open(path)
+
+    # The worker imports open_image_for_render from image_renderer at call time,
+    # so patching the module attribute is picked up inside render_image_variants.
+    monkeypatch.setattr(image_renderer, "open_image_for_render", counting_open)
+
+    variants = [
+        {"model": "huessen_epf1301", "orientation": "landscape", "image_config": _cfg_dict()},
+        {"model": "huessen_epf1301", "orientation": "portrait", "image_config": _cfg_dict()},
+    ]
+    results = render_image_variants(str(_FIXTURE_PNG), variants)
+
+    assert decode_calls["n"] == 1, f"source must decode once, decoded {decode_calls['n']}x"
+    assert len(results) == 2
+    assert all(r["ok"] for r in results)
+    assert all(len(r["panel_bytes"]) == _HUESSEN.total_bytes for r in results)
+    # Distinct orientations → distinct panels. Also proves the shared decoded
+    # buffer survived the first render (release_input=False): if the first variant
+    # had closed it, the second would have failed or produced garbage.
+    assert results[0]["panel_bytes"] != results[1]["panel_bytes"]
+
+
+def test_render_image_variants_isolates_one_variant_failure():
+    """A single bad variant fails alone; siblings still render.
+
+    Decode succeeds, so the batch does not raise; the bad variant (unknown model)
+    comes back ``ok=False`` while the good one renders normally.
+    """
+    variants = [
+        {"model": "huessen_epf1301", "orientation": "landscape", "image_config": _cfg_dict()},
+        {"model": "no_such_model", "orientation": "landscape", "image_config": _cfg_dict()},
+    ]
+    results = render_image_variants(str(_FIXTURE_PNG), variants)
+
+    assert results[0]["ok"] is True
+    assert len(results[0]["panel_bytes"]) == _HUESSEN.total_bytes
+    assert results[1]["ok"] is False
+    assert "error" in results[1]
+
+
+def test_render_image_variants_decode_failure_raises():
+    """A source that cannot be decoded dooms every variant → the call raises."""
+    variants = [
+        {"model": "huessen_epf1301", "orientation": "landscape", "image_config": _cfg_dict()},
+    ]
+    with pytest.raises(FileNotFoundError):
+        render_image_variants("/nonexistent/path/image.png", variants)

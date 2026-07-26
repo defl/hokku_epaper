@@ -246,25 +246,22 @@ def test_inflight_prevents_double_submission(
 
     mgr = image_manager_factory(app_config)
     submitted: list[str] = []
-    original = mgr._dispatch_render
+    original = mgr._submit_image_batch
 
-    def counting(name, expected_slug, model, orientation, render_args, t0, *, update_status=True):
+    def counting(name, variants, t0):
         submitted.append(name)
-        return original(
-            name, expected_slug, model, orientation, render_args, t0, update_status=update_status
-        )
+        return original(name, variants, t0)
 
-    monkeypatch.setattr(mgr, "_dispatch_render", counting)
+    monkeypatch.setattr(mgr, "_submit_image_batch", counting)
 
     mgr.sync()  # submits and completes a.png
     mgr.wait_for_idle()
     mgr.sync()  # a.png is now 'ok'; should NOT resubmit
     mgr.wait_for_idle()
 
-    # Both orientations are dispatched per image; the second sync() must not re-submit.
-    assert submitted == ["a.png", "a.png"], (
-        f"a.png should be submitted exactly twice (both orientations), got {submitted}"
-    )
+    # One decode-once batch per image (both orientations render inside it); the
+    # second sync() must not re-submit an already-converted image.
+    assert submitted == ["a.png"], f"a.png should be batched exactly once, got {submitted}"
 
 
 def test_two_images_both_succeed(app_config: AppConfig, image_manager_factory, make_test_image):

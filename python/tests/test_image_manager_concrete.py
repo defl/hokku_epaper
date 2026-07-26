@@ -19,7 +19,6 @@ from hokku.webserver import image_manager_single
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.image_manager_multi import MultiThreadedImageManager
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
-from hokku.webserver.orientation import Orientation
 
 _HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
 TOTAL_BYTES = _HUESSEN.total_bytes
@@ -41,14 +40,16 @@ def test_single_threaded_renders_inline_on_calling_thread(
     make_test_image(upload / "a.png")
     make_test_image(upload / "b.png")
 
-    real_render_one = image_manager_single.render_one
+    real_render_image_variants = image_manager_single.render_image_variants
     render_threads: list[int] = []
 
-    def recording_render_one(*args, **kwargs):
+    def recording_render_image_variants(*args, **kwargs):
         render_threads.append(threading.get_ident())
-        return real_render_one(*args, **kwargs)
+        return real_render_image_variants(*args, **kwargs)
 
-    monkeypatch.setattr(image_manager_single, "render_one", recording_render_one)
+    monkeypatch.setattr(
+        image_manager_single, "render_image_variants", recording_render_image_variants
+    )
 
     mgr = SingleThreadedImageManager(app_config)
     caller_ident = threading.get_ident()
@@ -61,9 +62,8 @@ def test_single_threaded_renders_inline_on_calling_thread(
     assert rec_a is not None and rec_b is not None
     assert rec_a.convert_status == "ok"
     assert rec_b.convert_status == "ok"
-    # Renders actually happened (>= 2: at least one per image; the manager renders
-    # per orientation, so the exact count is an implementation detail), and every
-    # one ran on the calling thread — no worker thread was used.
+    # Renders actually happened (one decode-once batch per image, so >= 2 for two
+    # images), and every one ran on the calling thread — no worker thread was used.
     assert len(render_threads) >= 2, f"expected renders to run, got {render_threads}"
     assert all(t == caller_ident for t in render_threads), (
         f"render ran off the calling thread: caller={caller_ident} renders={render_threads}"
@@ -77,20 +77,30 @@ def test_multi_threaded_runs_in_parallel(app_config: AppConfig, monkeypatch):
     """
     barrier = threading.Barrier(parties=3, timeout=10.0)
 
-    def fake_render_one(*_args, **_kwargs):
+    def fake_render_image_variants(_image_path, variants):
         # If both workers reach this barrier the test thread will too.
         # If only one reaches it, the timeout trips a BrokenBarrierError.
         barrier.wait()
-        return (b"\x00" * TOTAL_BYTES, b"\x89PNG\r\n\x1a\n")
+        return [
+            {
+                "ok": True,
+                "panel_bytes": b"\x00" * TOTAL_BYTES,
+                "preview_bytes": b"\x89PNG\r\n\x1a\n",
+            }
+            for _ in variants
+        ]
 
-    monkeypatch.setattr("hokku.webserver.image_manager_multi.render_one", fake_render_one)
+    monkeypatch.setattr(
+        "hokku.webserver.image_manager_multi.render_image_variants", fake_render_image_variants
+    )
 
     mgr = MultiThreadedImageManager(app_config, worker_count=2)
     try:
-        mgr._dispatch_render("a.png", "slug", "huessen_epf1301", Orientation.LANDSCAPE, (), 0.0)
-        mgr._dispatch_render("b.png", "slug", "huessen_epf1301", Orientation.LANDSCAPE, (), 0.0)
-        # Joining the barrier proves both workers entered fake_render_one
-        # concurrently. Raises BrokenBarrierError if only one did.
+        # Two images → two decode-once batches → two executor jobs. Joining the
+        # barrier proves both jobs entered the worker concurrently; a serial pool
+        # would leave one waiting and trip BrokenBarrierError on timeout.
+        mgr._run_batch("a.png", [{"model": "huessen_epf1301", "orientation": "landscape"}])
+        mgr._run_batch("b.png", [{"model": "huessen_epf1301", "orientation": "landscape"}])
         barrier.wait(timeout=5.0)
     finally:
         mgr.shutdown()
