@@ -9,8 +9,6 @@ import socket
 import sys
 from pathlib import Path
 
-import psutil as _psutil
-
 from hokku.screens import huessen_epf1301
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
@@ -73,15 +71,10 @@ def main() -> None:
         sys.exit(1)
 
     classifier = ImageClassifier(config)
+    # build_manager resolves the memory budget (cgroup-aware), installs the
+    # decode budget, and logs the full "Resource budget: ..." line.
     manager = build_manager(config, classifier)
-    logger.info(
-        "Image workers: configured=%s -> resolved=%s (%s, cores=%s, free RAM=%.1f GB)",
-        config.image_worker_thread_count,
-        manager.resolved_worker_count,
-        type(manager).__name__,
-        os.cpu_count(),
-        _psutil.virtual_memory().available / 1e9,
-    )
+    logger.info("Image manager: %s", type(manager).__name__)
     logger.info("BW detection: %s", config.classifier_bw_detect_enabled)
 
     scheduler = ServeScheduler(manager)

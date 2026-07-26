@@ -22,12 +22,26 @@ if str(_REPO_ROOT) not in sys.path:
 register_heif_opener()
 
 from hokku.screens import huessen_epf1301, seeedstudio_e1004
+from hokku.webserver import image_renderer as _image_renderer
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.image_config import ImageConfig
 from hokku.webserver.image_manager_abstract import AbstractImageManager
 from hokku.webserver.image_manager_multi import MultiThreadedImageManager
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
+
+# The decode budget is a process global that build_manager() installs from the
+# host's memory budget (huge on a CI/dev box → the full 40 MP cap). Snapshot the
+# module default now (before any test builds a manager) and restore it before
+# every test, so a manager-building test can't leak its budget into the
+# budget-gate tests that assume the ~16 MP default.
+_DEFAULT_DECODE_BUDGET_PIXELS = _image_renderer.DECODE_BUDGET_PIXELS
+
+
+@pytest.fixture(autouse=True)
+def _reset_decode_budget():
+    _image_renderer.set_decode_budget_pixels(_DEFAULT_DECODE_BUDGET_PIXELS)
+    yield
 
 
 @pytest.fixture(
