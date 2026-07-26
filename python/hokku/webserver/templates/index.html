@@ -1420,6 +1420,10 @@ const FW_MODEL_LABELS = {
   bigme_f7: 'Bigme F7',
 };
 let firmwareLibraryLoaded = false;
+let firmwareRepo = '';
+// True once the user has confirmed the one online action this session — so
+// toggling "include pre-releases" afterwards re-queries without re-prompting.
+let firmwareOnlineConfirmed = false;
 
 function fwEsc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
@@ -1439,6 +1443,7 @@ async function loadFirmwareLibrary() {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
     firmwareLibraryLoaded = true;
+    firmwareRepo = data.repo || '';
     renderFirmwareModels(data);
   } catch (e) {
     container.innerHTML = '<div class="screens-empty">Could not load the firmware library: '
@@ -1506,9 +1511,33 @@ async function pinFirmware(model) {
   }
 }
 
-function onFwIncludePreChange() { checkGithubFirmware(); }
+// Re-toggling the beta filter only re-queries once the user has already agreed
+// to go online this session — it must not itself trigger the first online call.
+function onFwIncludePreChange() {
+  if (firmwareOnlineConfirmed) _fetchRemoteFirmware();
+}
 
+// Button entry point: confirm the online action once, then fetch the list.
 async function checkGithubFirmware() {
+  if (!firmwareOnlineConfirmed) {
+    const src = firmwareRepo ? ('github.com/' + firmwareRepo) : 'GitHub';
+    const ok = await showConfirm({
+      title: 'Check GitHub for firmware?',
+      message: 'This connects to GitHub over the internet to read the list of '
+        + 'published firmware releases from ' + src + ', the authoritative source. '
+        + 'It is a read-only request — nothing about your server, your screens, or '
+        + 'your network is sent — but it is an online action, so it only happens '
+        + 'when you ask for it.',
+      okLabel: 'Check GitHub',
+      okClass: 'btn-primary',
+    });
+    if (!ok) return;
+    firmwareOnlineConfirmed = true;
+  }
+  _fetchRemoteFirmware();
+}
+
+async function _fetchRemoteFirmware() {
   const btn = document.getElementById('fw-check-btn');
   const status = document.getElementById('fw-remote-status');
   const includePre = document.getElementById('fw-include-pre').checked;
@@ -3700,7 +3729,7 @@ function showDebugInfo() {
   });
 }
 
-function showConfirm({title, message, okLabel}) {
+function showConfirm({title, message, okLabel, okClass}) {
   return new Promise(resolve => {
     const modal = document.getElementById('confirm-modal');
     document.getElementById('confirm-title').textContent = title;
@@ -3708,6 +3737,9 @@ function showConfirm({title, message, okLabel}) {
     const okBtn = document.getElementById('confirm-ok');
     const cancelBtn = document.getElementById('confirm-cancel');
     okBtn.textContent = okLabel || 'OK';
+    // Default to the destructive (red) style so existing delete confirms are
+    // unchanged; a benign confirm can opt into a neutral primary button.
+    okBtn.className = 'btn ' + (okClass || 'btn-danger');
     modal.classList.add('show');
 
     const cleanup = (result) => {
