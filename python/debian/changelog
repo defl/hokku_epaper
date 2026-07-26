@@ -1,3 +1,20 @@
+hokku-server (4.0.0~beta1-1) unstable; urgency=medium
+
+  * First public beta of the 4.0 Pi Zero 2 W appliance line. Highlights since
+    the 4.0 alphas: bounded, OOM-safe image decode on the 464 MB board (ingest
+    decode budget rejects un-draftable sources over 16 MP before any phase
+    decodes them; shrink-first + reduce-staged downscale; JPEG draft), so a
+    mixed library — big JPEGs, HEIF, a 38.9 MP HEIF panorama — converts without
+    crash-looping. Serve on waitress (bounded thread pool) instead of the
+    Werkzeug dev server. Dropped the RLIMIT_AS render guard that broke native
+    decoders (JPEG XL). First-boot rootfs resize, pre-warmed numba dither cache,
+    pinned numeric-stack threads, USB gadget serial console, and the captive-
+    portal setup wizard. Validated end-to-end on hardware: flash -> boot ->
+    wizard -> WiFi -> serve, and the full reference set converts (15 ok, the one
+    oversized panorama refused gracefully).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 26 Jul 2026 03:16:33 +0000
+
 hokku-server (4.0.1~dev.25-1) unstable; urgency=medium
 
   * fix(render): drop the RLIMIT_AS memory guard from the render worker — it broke

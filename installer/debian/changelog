@@ -1,3 +1,12 @@
+hokku-installer (4.0.0~beta1-1) unstable; urgency=medium
+
+  * First public beta of the 4.0 appliance line. Captive-portal first-boot setup
+    wizard (WiFi, hostname, mDNS, SSH, timezone/country) on the "Hokku Setup" AP;
+    hands off to hokku-server once setup completes. No functional change since
+    dev.18 — version aligned to the 4.0.0-beta1 release.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 26 Jul 2026 03:16:33 +0000
+
 hokku-installer (4.0.1~dev.18-1) unstable; urgency=medium
 
   * setup AP: scan and pick the emptiest 2.4 GHz channel so iOS reliably

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hokku-installer"
-version = "4.0.1.dev18"
+version = "4.0.0b1"
 description = "First-boot setup wizard for Hokku appliance images"
 requires-python = ">=3.9"
 license = {text = "GPL-3.0 (non-commercial)"}
