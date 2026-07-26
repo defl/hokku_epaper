@@ -77,11 +77,20 @@ def _migrate_v7_to_v8(d: dict) -> dict:
 
 
 def _migrate_v8_to_v9(d: dict) -> dict:
-    """Add memory_budget_mb (default 0 = auto-detect, cgroup-aware) and drop
-    image_worker_thread_count — the render worker count is now derived from the
-    memory budget + cgroup-aware CPU count, so the manual knob is gone."""
+    """Add memory_budget_mb + the firmware-library fields, and drop the old
+    image_worker_thread_count knob.
+
+    - memory_budget_mb (default 0 = auto-detect, cgroup-aware): the render worker
+      count is now derived from the memory budget + cgroup-aware CPU count, so the
+      manual image_worker_thread_count knob is gone.
+    - firmware_dir / firmware_github_repo: the downloadable firmware library.
+      Offline-first is preserved by behaviour, not a flag — the download dir is
+      empty until the user acts and the server reaches GitHub only on a button click.
+    """
     d.setdefault("memory_budget_mb", 0)
     d.pop("image_worker_thread_count", None)
+    d.setdefault("firmware_dir", "/var/lib/hokku/firmware")
+    d.setdefault("firmware_github_repo", "defl/hokku_epaper")
     return d
 
 
@@ -169,6 +178,15 @@ class AppConfig:
     flash_wifi_pass: str = ""
     flash_wifi_ssid2: str = ""
     flash_wifi_pass2: str = ""
+
+    #: Writable directory holding firmware downloaded from GitHub (plus the pin
+    #: ``selection.json`` and per-file ``.meta.json`` sidecars). Layered on top of
+    #: the read-only bundled firmware that ships in the package.
+    firmware_dir: str = "/var/lib/hokku/firmware"
+    #: ``owner/repo`` whose GitHub Releases firmware is downloaded from. The server
+    #: only contacts GitHub when the user clicks "Check GitHub" / "Download" — that
+    #: click is the consent; there is no separate enable flag.
+    firmware_github_repo: str = "defl/hokku_epaper"
 
     def cache_slug(self) -> str:
         """Path-safe fingerprint of fields that affect cached panel output."""

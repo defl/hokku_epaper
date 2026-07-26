@@ -116,8 +116,17 @@ The Config tab controls how the server behaves and how images are converted. All
 - **`mdns_hostname`** — the mDNS/Bonjour hostname the server advertises on your network. When set (default: `"hokku"`), the server is reachable as `hokku.local` in addition to its IP address, which means you can bookmark `http://hokku.local:8080/` and never worry about the IP changing. Set to an empty string to disable mDNS.
 - **`port`** — the port the server listens on (default: `8080`). Change this if something else on your server is already using 8080.
 - **`upload_dir`** / **`cache_dir`** — where originals and converted images are stored. The defaults are sensible for a deb install; override these if you want to put your photo library on a different drive or mount point.
+- **`firmware_github_repo`** — the `owner/repo` the **Firmware library** (Admin tab) downloads GitHub releases from. Default `"defl/hokku_epaper"`. Change it only if you publish firmware from a fork. The server only contacts GitHub when you press the *Check GitHub for firmware* button — nothing is ever fetched automatically.
+- **`firmware_dir`** — where downloaded firmware and the per-model pin (`selection.json`) are stored. Default `/var/lib/hokku/firmware`.
 
 After editing the config file, restart the server (`systemctl restart hokku-server`) for changes to take effect.
+
+**Firmware library** (Admin tab) — the server ships with a bundled firmware for each screen model and works fully offline. The Firmware library lets you optionally pull newer firmware from GitHub and choose which version each model is offered:
+
+- Each model shows the version it is currently **serving** (what a screen receives over-the-air or when flashed). By default this is the highest **stable** bundled or downloaded version.
+- **Check GitHub for firmware** lists downloadable releases. Tick **Include pre-releases (beta)** to also see beta builds. Press **Download** to add one to the library — this does *not* change what's served.
+- To actually use a downloaded (or older) version, **pin** it from the version dropdown next to the model. Betas are never selected automatically; you must pin one deliberately. Choose *Auto (highest stable)* to unpin and return to the default.
+- Pinning takes effect the next time a screen updates (over-the-air via the per-screen "Update firmware on next refresh" toggle, or on the next USB flash).
 
 ---
 

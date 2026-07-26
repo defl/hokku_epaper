@@ -1,3 +1,14 @@
+hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
+
+  * Firmware library: optionally download firmware from GitHub Releases and pin a
+    specific version (including betas, never auto-selected) per screen model.
+    Offline-first preserved — the server only reaches the internet on an explicit
+    button press. Presented as a table with a "What to install" column. Bundled
+    firmware is labelled "bundled" (not "stable") — its upstream maturity isn't
+    known at runtime.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 26 Jul 2026 20:50:03 +0000
+
 hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
 
   * feat(server): drive the image decode budget AND render worker count from a

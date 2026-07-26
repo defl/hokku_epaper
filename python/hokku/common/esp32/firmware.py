@@ -16,11 +16,15 @@ import struct
 from pathlib import Path
 
 from hokku.common.esp32.spec import Esp32Spec
+from hokku.common.firmware_paths import BUNDLED_FIRMWARE_DIRS, version_key
 
-# python/hokku/common/esp32/firmware.py -> repo root is parents[4]
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-_DEV_FIRMWARE_DIR = _REPO_ROOT / "firmware" / "release"
-_INSTALLED_FIRMWARE_DIR = Path("/usr/share/hokku-server/firmware")
+# Bundled-artifact search dirs (shared with every screen family). Kept as
+# module-level names so tests can monkeypatch them per case.
+_DEV_FIRMWARE_DIR, _INSTALLED_FIRMWARE_DIR = BUNDLED_FIRMWARE_DIRS
+
+# Numeric version ordering lives in ``firmware_paths``; alias it under the
+# historical private name used throughout this module.
+_version_key = version_key
 
 
 def resolve_firmware_dir(spec: Esp32Spec) -> Path | None:
@@ -29,19 +33,6 @@ def resolve_firmware_dir(spec: Esp32Spec) -> Path | None:
         if merged_firmware_file(spec, d) is not None:
             return d
     return None
-
-
-def _version_key(version: str) -> tuple:
-    """A sort key that orders firmware versions numerically, not lexicographically.
-
-    ``"1.2.10"`` must rank above ``"1.2.9"`` (a plain string sort gets this wrong
-    and would silently pick the older build). Each dotted component sorts as an
-    int when numeric; any non-numeric component sorts after all numeric ones in
-    that slot so a malformed name can never outrank a real version."""
-    key: list = []
-    for part in version.split("."):
-        key.append((0, int(part)) if part.isdigit() else (1, part))
-    return tuple(key)
 
 
 def merged_firmware_file(spec: Esp32Spec, directory: Path | None = None) -> Path | None:
@@ -63,6 +54,22 @@ def merged_firmware_file(spec: Esp32Spec, directory: Path | None = None) -> Path
 
     matches = sorted(directory.glob(spec.merged_glob), key=lambda p: _version_key(version_of(p)))
     return matches[-1] if matches else None
+
+
+def list_firmware_files(spec: Esp32Spec, directory: Path) -> list[tuple[str, Path]]:
+    """Return every ``(version, path)`` merged image for *spec* in *directory*.
+
+    Unlike :func:`merged_firmware_file` this does not collapse to the highest
+    version — the caller (FirmwareStore) needs the full set so it can present
+    every downloaded/bundled version for selection."""
+    if not directory.exists():
+        return []
+    out: list[tuple[str, Path]] = []
+    for p in directory.glob(spec.merged_glob):
+        m = spec.merged_re.match(p.name)
+        if m:
+            out.append((m.group(1), p))
+    return out
 
 
 def release_app_header(spec: Esp32Spec, directory: Path | None = None) -> bytes | None:
@@ -121,20 +128,30 @@ def _esp_app_image_size(data: bytes) -> int | None:
     return pos
 
 
-def release_app_image(spec: Esp32Spec, directory: Path | None = None) -> bytes | None:
-    """Return the OTA-flashable **app-only** image from the bundled merged firmware.
+def app_image_from_file(spec: Esp32Spec, path: Path) -> bytes | None:
+    """Return the OTA-flashable **app-only** image sliced from the merged file at
+    *path*.
 
     Parses the ESP image header at ``spec.app_offset`` to determine the exact app
     byte length and returns only those bytes — not the 0xFF padding or
     ``ota_data_initial.bin`` that follow the app in the merged file. Returns None
-    if no bundled firmware is present or the image cannot be parsed."""
-    merged = merged_firmware_file(spec, directory)
-    if not merged:
-        return None
-    with open(merged, "rb") as f:
+    if the image cannot be parsed (also used to validate a freshly-downloaded
+    artifact before it is admitted to the firmware library)."""
+    with open(path, "rb") as f:
         f.seek(spec.app_offset)
         app_data = f.read()
     size = _esp_app_image_size(app_data)
     if size is None:
         return None
     return app_data[:size]
+
+
+def release_app_image(spec: Esp32Spec, directory: Path | None = None) -> bytes | None:
+    """Return the OTA-flashable **app-only** image from the bundled merged firmware.
+
+    Returns None if no bundled firmware is present or the image cannot be parsed.
+    See :func:`app_image_from_file` for the header-slicing details."""
+    merged = merged_firmware_file(spec, directory)
+    if not merged:
+        return None
+    return app_image_from_file(spec, merged)

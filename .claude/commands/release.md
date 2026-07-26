@@ -191,17 +191,32 @@ gh run view <run-id> --json jobs --jq '.jobs[] | {name, status, conclusion}'
 
 ## Step 9 — Download CI artifacts
 
-Download both build artifacts from the successful CI run:
+Download **all** firmware artifacts and the webserver `.deb` from the successful
+CI run. Every screen model's firmware must be attached to the release so the
+server's "download firmware from GitHub" feature works for all of them (not just
+huessen):
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:TEMP\hokku-release"
 gh run download <run-id> --name hokku-huessen_epf1301-firmware --dir "$env:TEMP\hokku-release"
+gh run download <run-id> --name hokku-seeedstudio_e1004-firmware --dir "$env:TEMP\hokku-release"
+gh run download <run-id> --name hokku-bigme_f7-firmware --dir "$env:TEMP\hokku-release"
 gh run download <run-id> --name hokku-server-deb --dir "$env:TEMP\hokku-release"
 ```
 
-List the downloaded files and their sizes. Verify that exactly one `.bin` file (firmware) and one `.deb` file (webserver) are present. If anything is missing, report and stop.
+List the downloaded files and their sizes. Verify that all of these are present:
+- `hokku-huessen_epf1301-<version>.bin`
+- `hokku-seeedstudio_e1004-<version>.bin`
+- `hokku-bigme_f7-<version>.img`
+- one `.deb` file (webserver)
 
-The firmware filename embeds the `firmware/huessen_epf1301/VERSION` string (e.g., `hokku-huessen_epf1301-1.2.0.bin`). Note whether this is a new firmware version compared to the previous release.
+If any firmware artifact is missing, report and stop — a release with an
+incomplete set of firmware assets breaks the in-app firmware download for the
+missing model(s).
+
+The firmware filenames embed each screen's `VERSION` string (e.g.,
+`hokku-huessen_epf1301-1.2.0.bin`, `hokku-bigme_f7-1.2.2.img`). Note whether any
+is a new firmware version compared to the previous release.
 
 ---
 
@@ -239,16 +254,20 @@ Set-Content -Path "$env:TEMP\hokku-release-notes.md" -Value @'
 '@
 ```
 
-Then create the release:
+Then create the release, attaching **every** firmware artifact plus the `.deb`:
 ```powershell
 gh release create <git-tag> `
-  "$env:TEMP\hokku-release\<firmware-filename>.bin" `
+  "$env:TEMP\hokku-release\<huessen-firmware>.bin" `
+  "$env:TEMP\hokku-release\<seeed-firmware>.bin" `
+  "$env:TEMP\hokku-release\<bigme_f7-firmware>.img" `
   "$env:TEMP\hokku-release\<webserver-filename>.deb" `
   --title "Hokku e-paper server <git-tag>" `
   --notes-file "$env:TEMP\hokku-release-notes.md"
 ```
 
-Use the actual filenames discovered in Step 9.
+Use the actual filenames discovered in Step 9. If this is a `-beta`/`-rc` tag,
+also pass `--prerelease` so the server's firmware-library treats these assets as
+beta (never auto-selected).
 
 **Do not execute yet.** Per AGENTS.md, ask explicitly: "Shall I create the GitHub release with the above assets and notes?" Wait for explicit approval before running `gh release create`.
 
@@ -257,4 +276,5 @@ After the release is created, verify it:
 gh release view <git-tag>
 ```
 
-Confirm the release title, tag, and that both assets (`.bin` and `.deb`) are listed with non-zero sizes. Report the release URL to the user.
+Confirm the release title, tag, and that all four assets (three firmware images
++ the `.deb`) are listed with non-zero sizes. Report the release URL to the user.

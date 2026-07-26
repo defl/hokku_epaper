@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- **Firmware library — download newer firmware from GitHub and pin it per model.**
+  The Admin tab has a new *Firmware library* panel. The server still ships bundled
+  firmware and works fully offline, but you can now press *Check GitHub for
+  firmware* to list downloadable releases (tick *Include pre-releases* to also see
+  betas), *Download* one into a writable overlay (`/var/lib/hokku/firmware`), and
+  *pin* which version each screen model is offered over-the-air or at flash time.
+  Nothing is downloaded or selected automatically — the server only reaches the
+  internet on an explicit button press (that click is the consent), and betas are
+  never chosen unless you pin one deliberately. Downloads are validated as real
+  images for their model before being admitted. New config keys:
+  `firmware_github_repo`, `firmware_dir`.
+
 ### Fixed
 
 - **The server package shipped incomplete data files.** The pip wheel declared

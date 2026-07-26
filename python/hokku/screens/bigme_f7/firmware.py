@@ -17,10 +17,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-# python/hokku/screens/bigme_f7/firmware.py -> repo root is parents[4]
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-_DEV_FIRMWARE_DIR = _REPO_ROOT / "firmware" / "release"
-_INSTALLED_FIRMWARE_DIR = Path("/usr/share/hokku-server/firmware")
+from hokku.common.firmware_paths import BUNDLED_FIRMWARE_DIRS
+
+# Bundled-artifact search dirs (shared with every screen family). Kept as
+# module-level names so tests can monkeypatch them per case.
+_DEV_FIRMWARE_DIR, _INSTALLED_FIRMWARE_DIR = BUNDLED_FIRMWARE_DIRS
 
 _IMG_GLOB = "hokku-bigme_f7-*.img"
 _IMG_RE = re.compile(r"^hokku-bigme_f7-(.+)\.img$")
@@ -48,12 +49,32 @@ def bundled_firmware_version() -> str | None:
     return m.group(1) if m else None
 
 
-def release_app_image() -> bytes | None:
-    """Return the full image bytes to stream for OTA, or None.
+def list_firmware_files(directory: Path) -> list[tuple[str, Path]]:
+    """Return every ``(version, path)`` Bigme F7 image in *directory*.
+
+    Unlike :func:`firmware_image_file` this returns the full set (not just the
+    highest) so the FirmwareStore can present every version for selection."""
+    if not directory.exists():
+        return []
+    out: list[tuple[str, Path]] = []
+    for p in directory.glob(_IMG_GLOB):
+        m = _IMG_RE.match(p.name)
+        if m:
+            out.append((m.group(1), p))
+    return out
+
+
+def app_image_from_file(path: Path) -> bytes:
+    """Return the full image bytes to stream for OTA from the file at *path*.
 
     Served verbatim: the device's OTA client skips the leading bootloader and
-    writes the remaining app-chain to its inactive slot."""
+    writes the remaining app-chain to its inactive slot — no slicing here."""
+    return path.read_bytes()
+
+
+def release_app_image() -> bytes | None:
+    """Return the full bundled image bytes to stream for OTA, or None."""
     img = firmware_image_file()
     if img is None:
         return None
-    return img.read_bytes()
+    return app_image_from_file(img)
