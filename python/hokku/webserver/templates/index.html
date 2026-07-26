@@ -1477,16 +1477,19 @@ function renderFirmwareModels(data) {
       continue;
     }
     // Currently serving.
+    let note;
+    if (pinned) note = 'pinned';
+    else if (m.effective_source === 'bundled') note = 'bundled with this install';
+    else note = 'auto — newest stable';
     html += '<td><strong>' + fwEsc(eff) + '</strong>' + fwChannelBadge(m.effective_channel)
-      + '<div style="font-size:0.8em;color:var(--stone,#888)">'
-      + (pinned ? 'pinned' : 'auto — highest stable') + '</div></td>';
+      + '<div style="font-size:0.8em;color:var(--stone,#888)">' + fwEsc(note) + '</div></td>';
     // What to install (pin control).
     const avail = m.available || [];
-    let opts = '<option value="">Auto (highest stable)</option>';
+    let opts = '<option value="">Auto (bundled / newest stable)</option>';
     for (const v of avail) {
       const sel = (pinned && v.version === pinned) ? ' selected' : '';
-      const lbl = v.version + (v.channel === 'beta' ? ' (beta)' : '')
-        + (v.source === 'downloaded' ? ' — downloaded' : '');
+      const src = v.source === 'downloaded' ? ' — downloaded' : ' — bundled';
+      const lbl = v.version + (v.channel === 'beta' ? ' (beta)' : '') + src;
       opts += '<option value="' + fwEsc(v.version) + '"' + sel + '>' + fwEsc(lbl) + '</option>';
     }
     html += '<td><select id="fw-pin-' + fwEsc(model) + '" onchange="pinFirmware(\'' + fwEsc(model) + '\')">'

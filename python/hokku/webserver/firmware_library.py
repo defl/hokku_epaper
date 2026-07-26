@@ -9,13 +9,18 @@ deliberately.
 It is a thin **override** over the existing bundled resolution in
 :mod:`hokku.screens.firmware_registry`. When nothing is downloaded and nothing is
 pinned it defers entirely to that registry, so a box that never touches the new
-UI behaves exactly as before (serves the highest bundled firmware, which is
-always stable). Only a download or a pin changes what is served — and:
+UI behaves exactly as before (serves the bundled firmware that shipped in the
+package). Only a download or a pin changes what is served — and:
 
   * the **effective** version (what a screen is offered over OTA / USB) is the
-    pinned version if set and present, otherwise the highest **stable** version
-    across bundled + downloaded; and
+    pinned version if set and present, otherwise the bundled default, which a
+    newer **stable** download supersedes; and
   * a **beta** is never the effective version unless it is explicitly pinned.
+
+The stable/beta channel is a property of firmware **downloaded from GitHub**
+(taken from its release's pre-release flag). Bundled firmware carries the neutral
+``bundled`` channel — its upstream maturity isn't knowable at runtime, so it is
+never labelled "stable" (that would be a claim we can't back up).
 
 Downloaded artifacts live in ``config.firmware_dir`` (``/var/lib/hokku/firmware``
 on a package install) next to a per-file ``<name>.meta.json`` sidecar recording
@@ -39,6 +44,12 @@ logger = logging.getLogger(__name__)
 
 CHANNEL_STABLE = "stable"
 CHANNEL_BETA = "beta"
+#: Bundled firmware ships inside the installed server package. Its upstream
+#: maturity (stable vs beta) is NOT knowable at runtime — a GitHub release's
+#: pre-release flag describes the *appliance* release, not the firmware — so we do
+#: not claim a stable/beta channel for it. It is simply the shipped default. The
+#: stable/beta distinction applies only to firmware downloaded from GitHub.
+CHANNEL_BUNDLED = "bundled"
 
 _SELECTION_FILE = "selection.json"
 
@@ -49,7 +60,7 @@ class FirmwareVariant:
 
     model_id: str
     version: str
-    channel: str  # CHANNEL_STABLE | CHANNEL_BETA
+    channel: str  # CHANNEL_STABLE | CHANNEL_BETA | CHANNEL_BUNDLED
     source: str  # "downloaded" | "bundled"
     path: Path | None = None  # concrete file (always set for downloaded)
     tag: str | None = None  # GitHub release tag, for downloaded variants
@@ -84,15 +95,16 @@ class FirmwareStore:
     def _bundled_variants(self, model_id: str) -> list[FirmwareVariant]:
         """Every bundled artifact for *model_id* (dir-scan, plus the registry's
         reported highest so a single installed file with no dir-scan hit — or a
-        test that stubs the version — is still represented). Always stable."""
+        test that stubs the version — is still represented). Channel is
+        ``bundled`` — we don't claim its upstream stable/beta maturity."""
         out: list[FirmwareVariant] = []
         seen: set[str] = set()
         for version, path in firmware_registry.list_bundled_firmware(model_id):
-            out.append(FirmwareVariant(model_id, version, CHANNEL_STABLE, "bundled", path=path))
+            out.append(FirmwareVariant(model_id, version, CHANNEL_BUNDLED, "bundled", path=path))
             seen.add(version)
         reported = firmware_registry.firmware_version_for(model_id)
         if reported and reported not in seen:
-            out.append(FirmwareVariant(model_id, reported, CHANNEL_STABLE, "bundled"))
+            out.append(FirmwareVariant(model_id, reported, CHANNEL_BUNDLED, "bundled"))
         return out
 
     def variants(self, model_id: str) -> list[FirmwareVariant]:
@@ -156,7 +168,7 @@ class FirmwareStore:
                     return v
             for version, path in firmware_registry.list_bundled_firmware(model_id):
                 if version == pin:  # pinned to an older bundled build
-                    return FirmwareVariant(model_id, version, CHANNEL_STABLE, "bundled", path=path)
+                    return FirmwareVariant(model_id, version, CHANNEL_BUNDLED, "bundled", path=path)
             logger.warning(
                 "Pinned firmware %s for %s not present; using bundled default", pin, model_id
             )
@@ -189,7 +201,7 @@ class FirmwareStore:
         for v in self._bundled_variants(model_id):
             if v.version == bundled_ver:
                 return v
-        return FirmwareVariant(model_id, bundled_ver, CHANNEL_STABLE, "bundled")
+        return FirmwareVariant(model_id, bundled_ver, CHANNEL_BUNDLED, "bundled")
 
     def effective_version(self, model_id: str | None) -> str | None:
         ov = self._override(model_id) if model_id else None

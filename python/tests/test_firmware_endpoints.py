@@ -81,7 +81,7 @@ def test_library_reports_bundled_effective(cfg, tmp_path):
     assert body["repo"] == cfg.firmware_github_repo
     m = body["models"][MODEL]
     assert m["effective"] == "1.2.2"
-    assert m["effective_channel"] == "stable"
+    assert m["effective_channel"] == "bundled"
     assert m["pinned"] is None
 
 

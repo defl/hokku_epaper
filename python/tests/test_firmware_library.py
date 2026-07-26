@@ -22,7 +22,12 @@ from pathlib import Path
 import pytest
 
 from hokku.screens import firmware_registry
-from hokku.webserver.firmware_library import CHANNEL_BETA, CHANNEL_STABLE, FirmwareStore
+from hokku.webserver.firmware_library import (
+    CHANNEL_BETA,
+    CHANNEL_BUNDLED,
+    CHANNEL_STABLE,
+    FirmwareStore,
+)
 
 MODEL = "bigme_f7"
 
@@ -77,7 +82,7 @@ def test_passthrough_when_nothing_downloaded_or_pinned(tmp_path, bundled):
     assert store.effective_version(MODEL) == "1.2.2"
     assert store.effective_app_image(MODEL) == b"BUNDLED_IMG"
     eff = store.effective(MODEL)
-    assert eff is not None and eff.source == "bundled" and eff.channel == CHANNEL_STABLE
+    assert eff is not None and eff.source == "bundled" and eff.channel == CHANNEL_BUNDLED
 
 
 def test_none_when_no_firmware_at_all(tmp_path, bundled):
