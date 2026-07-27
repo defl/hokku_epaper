@@ -1,3 +1,15 @@
+hokku-server (4.0.1~dev.10-1) unstable; urgency=medium
+
+  * fix(flash): do not reset the screen between flash steps. Every esptool step
+    reset the ESP32, and a cold boot immediately repaints the panel (~28s), so
+    each reset started a paint that the next step interrupted mid-refresh,
+    wedging the panel controller (BUSY held, every wait burning its 60s timeout,
+    a ~6 minute paint and a half-rendered image on the glass). All steps now run
+    --after no-reset and the app is booted exactly once, at the end. Scans reset
+    once instead of once per region read.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 27 Jul 2026 04:45:00 +0000
+
 hokku-server (4.0.1~dev.9-1) unstable; urgency=medium
 
   * flash: name every region a flash writes — the firmware file and its size to

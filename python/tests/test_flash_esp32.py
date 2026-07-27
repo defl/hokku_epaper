@@ -32,6 +32,16 @@ from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.serve_scheduler import ServeScheduler
 
 
+@pytest.fixture(autouse=True)
+def _never_touch_real_hardware(monkeypatch):
+    """Keep the suite hardware-free: boot_app would otherwise shell out to esptool.
+
+    Patched in both namespaces — flasher imports the symbol directly.
+    """
+    monkeypatch.setattr(esp32_device, "boot_app", lambda *a, **k: True)
+    monkeypatch.setattr(esp32_flasher, "boot_app", lambda *a, **k: True)
+
+
 def _make_app_header(version: bytes = b"20260101000000Z") -> bytes:
     """A 256-byte app header with the version string at bytes 48:80."""
     header = bytearray(256)
@@ -264,6 +274,49 @@ def test_describe_config_part_names_size_and_offset(esp32_mod):
     described = esp32_mod.describe_config_part()
     assert f"{spec.nvs_size:,} bytes" in described
     assert hex(spec.nvs_offset) in described
+
+
+def test_flash_device_never_resets_between_steps(esp32_mod, tmp_path, monkeypatch):
+    """A reset boots the app, and a boot starts a full ~28s panel repaint that the
+    next flash step then interrupts mid-refresh, wedging the panel controller. So
+    every step runs --after no-reset and the app is booted exactly once, at the end.
+    """
+    calls = []
+    boots = []
+    monkeypatch.setattr(esp32_flasher, "_run_esptool", lambda args, on_line: calls.append(args))
+    monkeypatch.setattr(esp32_flasher, "boot_app", lambda *a, **k: boots.append("boot") or True)
+    monkeypatch.setattr(esp32_device, "boot_app", lambda *a, **k: boots.append("boot") or True)
+    monkeypatch.setattr(esp32_device, "_read_region", lambda *a, **k: None)
+    monkeypatch.setattr(
+        esp32_flasher, "build_nvs_binary", lambda spec, cfg: b"\x00" * spec.nvs_size
+    )
+    img = tmp_path / "hokku-fw-1.2.3.bin"
+    img.write_bytes(b"\xe9" * 64)
+
+    esp32_mod.flash_device("/dev/null", {"wifi_ssid1": "n", "image_url": "u"}, img)
+
+    assert calls, "expected esptool writes"
+    for args in calls:
+        assert "--after" in args, f"no reset policy given: {args}"
+        assert args[args.index("--after") + 1] == "no-reset"
+    assert len(boots) == 1, f"the app must boot exactly once, got {len(boots)}"
+
+
+def test_flash_device_boots_the_app_even_if_a_step_fails(esp32_mod, tmp_path, monkeypatch):
+    """A failed step must not strand the screen halted in the flasher stub."""
+    boots = []
+
+    def boom(_args, _on_line):
+        raise esp32_flasher.EsptoolError("write failed")
+
+    monkeypatch.setattr(esp32_flasher, "_run_esptool", boom)
+    monkeypatch.setattr(esp32_flasher, "boot_app", lambda *a, **k: boots.append("boot") or True)
+    img = tmp_path / "hokku-fw-1.2.3.bin"
+    img.write_bytes(b"\xe9" * 64)
+
+    with pytest.raises(esp32_flasher.EsptoolError):
+        esp32_mod.flash_device("/dev/null", {"wifi_ssid1": "n", "image_url": "u"}, img)
+    assert boots == ["boot"]
 
 
 def test_flash_firmware_announces_every_region_before_writing(esp32_mod, tmp_path, monkeypatch):

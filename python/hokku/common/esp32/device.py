@@ -93,8 +93,33 @@ def active_ota_slot(otadata: bytes | None) -> int:
     return (max(seqs) - 1) % _OTA_APP_COUNT
 
 
+def boot_app(spec: Esp32Spec, port: str, timeout: int = 60) -> bool:
+    """Leave the device running its application firmware.
+
+    Every flash/read step runs with ``--after no-reset``, because an esptool
+    reset boots the app and a boot immediately downloads and repaints the panel
+    (~28 s). Resetting between steps therefore *starts* a paint that the next
+    step interrupts mid-refresh, which leaves the panel controller wedged
+    holding BUSY — every subsequent BUSY wait then burns its full 60 s timeout.
+    So the app is booted exactly once, here, when all flash traffic is done.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "esptool", "--chip", "esp32s3", "--port", port, "run"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _read_region(spec: Esp32Spec, port: str, offset: int, size: int, timeout: int) -> bytes | None:
-    """One esptool ``read-flash`` of *size* bytes at *offset*; None on failure."""
+    """One esptool ``read-flash`` of *size* bytes at *offset*; None on failure.
+
+    Never resets the chip afterwards — see :func:`boot_app`.
+    """
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
         tmp_path = f.name
     try:
@@ -109,6 +134,8 @@ def _read_region(spec: Esp32Spec, port: str, offset: int, size: int, timeout: in
                 port,
                 "--baud",
                 spec.baud,
+                "--after",
+                "no-reset",
                 "read-flash",
                 hex(offset),
                 hex(size),
@@ -132,7 +159,7 @@ def _read_region(spec: Esp32Spec, port: str, offset: int, size: int, timeout: in
 
 
 def read_device_flash(
-    spec: Esp32Spec, port: str, timeout: int = 60
+    spec: Esp32Spec, port: str, timeout: int = 60, boot_after: bool = True
 ) -> tuple[bytes | None, bytes | None]:
     """Read the NVS partition + the app header of the slot the device *boots*.
 
@@ -141,22 +168,30 @@ def read_device_flash(
     bootloader is ignoring — which is exactly how a stale device passes for
     up to date. Costs one extra esptool read, and a third only when ota_1 wins.
 
+    None of the reads reset the chip; unless *boot_after* is False the app is
+    booted once at the end (see :func:`boot_app`). Callers that will keep
+    flashing pass ``boot_after=False`` and boot when they are done.
+
     Returns ``(nvs_bytes, app_header_bytes)`` or ``(None, None)`` on failure.
     """
-    read_size = (spec.app_offset + 256) - spec.nvs_offset
-    data = _read_region(spec, port, spec.nvs_offset, read_size, timeout)
-    if data is None:
-        return None, None
-    nvs_data = data[: spec.nvs_size]
-    app_header = data[spec.app_offset - spec.nvs_offset :][:256]
+    try:
+        read_size = (spec.app_offset + 256) - spec.nvs_offset
+        data = _read_region(spec, port, spec.nvs_offset, read_size, timeout)
+        if data is None:
+            return None, None
+        nvs_data = data[: spec.nvs_size]
+        app_header = data[spec.app_offset - spec.nvs_offset :][:256]
 
-    # A failed otadata read falls back to the ota_0 header read above.
-    otadata = _read_region(spec, port, spec.otadata_offset, spec.otadata_size, timeout)
-    if active_ota_slot(otadata) == 1:
-        ota1_header = _read_region(spec, port, spec.ota1_offset, 256, timeout)
-        if ota1_header is not None:
-            app_header = ota1_header
-    return nvs_data, app_header
+        # A failed otadata read falls back to the ota_0 header read above.
+        otadata = _read_region(spec, port, spec.otadata_offset, spec.otadata_size, timeout)
+        if active_ota_slot(otadata) == 1:
+            ota1_header = _read_region(spec, port, spec.ota1_offset, 256, timeout)
+            if ota1_header is not None:
+                app_header = ota1_header
+        return nvs_data, app_header
+    finally:
+        if boot_after:
+            boot_app(spec, port, timeout)
 
 
 def _version_from_header(header: bytes | None) -> str | None:

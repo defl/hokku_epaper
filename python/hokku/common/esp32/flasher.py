@@ -16,7 +16,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from hokku.common.esp32.device import parse_device_state, read_device_flash
+from hokku.common.esp32.device import boot_app, parse_device_state, read_device_flash
 from hokku.common.esp32.nvs import build_nvs_binary
 from hokku.common.esp32.spec import Esp32Spec
 
@@ -92,7 +92,11 @@ def describe_config_part(spec: Esp32Spec) -> str:
 
 
 def flash_firmware(
-    spec: Esp32Spec, port: str, firmware_path: Path, on_line: OnLine = _noop
+    spec: Esp32Spec,
+    port: str,
+    firmware_path: Path,
+    on_line: OnLine = _noop,
+    boot_after: bool = True,
 ) -> None:
     """Write the merged firmware image and blank otadata, in one esptool pass.
 
@@ -103,10 +107,12 @@ def flash_firmware(
     silently ignores everything just written to ota_0.
 
     Blank otadata is simply all-0xFF, so it is written as another region of the
-    same ``write-flash`` rather than a separate ``erase-region`` call — one
-    connect and one reset instead of two. Each extra esptool cycle drops the
-    chip into download mode and hard-resets it, which is worth avoiding: the
-    panel controller does not always survive being reset mid-transaction.
+    same ``write-flash`` rather than a separate ``erase-region`` call.
+
+    The write itself never resets the chip. *boot_after* then boots the app so a
+    standalone caller does not strand the device halted in the flasher stub;
+    callers that will keep flashing pass False and boot when they are done (see
+    :func:`device.boot_app` for why the boot count matters).
     """
     parts = describe_flash_parts(spec, firmware_path)
     on_line(f"Flashing {len(parts)} regions (~30s):")
@@ -124,6 +130,8 @@ def flash_firmware(
                 port,
                 "--baud",
                 spec.baud,
+                "--after",
+                "no-reset",
                 "write-flash",
                 "--flash-mode",
                 "dio",
@@ -143,10 +151,22 @@ def flash_firmware(
             os.unlink(blank_otadata)
         except OSError:
             pass
+    if boot_after:
+        boot_app(spec, port)
 
 
-def write_config(spec: Esp32Spec, port: str, config: dict, on_line: OnLine = _noop) -> None:
-    """Build and write the NVS config partition at ``spec.nvs_offset``."""
+def write_config(
+    spec: Esp32Spec,
+    port: str,
+    config: dict,
+    on_line: OnLine = _noop,
+    boot_after: bool = True,
+) -> None:
+    """Build and write the NVS config partition at ``spec.nvs_offset``.
+
+    Does not reset the chip; *boot_after* boots the app afterwards (see
+    :func:`flash_firmware`).
+    """
     on_line(f"Writing {describe_config_part(spec)}")
     nvs_binary = build_nvs_binary(spec, config)
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
@@ -161,6 +181,8 @@ def write_config(spec: Esp32Spec, port: str, config: dict, on_line: OnLine = _no
                 port,
                 "--baud",
                 spec.baud,
+                "--after",
+                "no-reset",
                 "write-flash",
                 "--flash-mode",
                 "dio",
@@ -174,6 +196,8 @@ def write_config(spec: Esp32Spec, port: str, config: dict, on_line: OnLine = _no
             os.unlink(tmp_path)
         except OSError:
             pass
+    if boot_after:
+        boot_app(spec, port)
 
 
 def flash_device(
@@ -185,16 +209,27 @@ def flash_device(
 ) -> dict | None:
     """Full provisioning: flash firmware, then write NVS config, then verify.
 
+    The whole sequence runs without resetting the chip, and the app is booted
+    exactly once at the very end. Booting between steps would start a full panel
+    repaint that the next step then interrupts mid-refresh — see
+    :func:`device.boot_app`.
+
     Returns the verified device state (see :func:`device.parse_device_state`),
     or ``None`` if the post-flash read-back failed.
     """
-    flash_firmware(spec, port, firmware_path, on_line)
-    write_config(spec, port, config, on_line)
+    try:
+        flash_firmware(spec, port, firmware_path, on_line, boot_after=False)
+        write_config(spec, port, config, on_line, boot_after=False)
+    except BaseException:
+        # Never leave the screen halted in the flasher stub because a step failed.
+        boot_app(spec, port)
+        raise
 
     on_line(
         f"Verifying: reading back NVS at {hex(spec.nvs_offset)} and the app header of the "
         "slot the device boots..."
     )
+    # read_device_flash boots the app once its reads are done.
     nvs_data, app_header = read_device_flash(spec, port)
     state = parse_device_state(spec, nvs_data, app_header) if app_header is not None else None
     on_line("Done.")
