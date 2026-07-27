@@ -63,6 +63,16 @@ void frame_state_build(char *buf, size_t buflen, const frame_state_t *fs)
         strcpy(sleep_err_buf, "null");
     }
 
+    /* cal_ppm is optional: a calibrated device emits ,"cal_ppm":N after
+     * sleep_err_s; an uncalibrated one omits it entirely so the server never
+     * folds a placeholder 0 into the pinned long-term mean. */
+    char calfield[24];
+    if (fs->cal_known) {
+        snprintf(calfield, sizeof(calfield), ",\"cal_ppm\":%d", fs->cal_ppm);
+    } else {
+        calfield[0] = '\0';
+    }
+
     /* 64-bit fields are pre-rendered — see frame_state_i64 for why not "%lld". */
     char uptime_buf[24];
     char clk_buf[24];
@@ -76,12 +86,12 @@ void frame_state_build(char *buf, size_t buflen, const frame_state_t *fs)
         "\"uptime_s\":%s%s,\"usb\":\"%s\","
         "\"last_sleep\":\"%s\",\"rssi\":%d,\"heap_kb\":%u,"
         "\"spurious\":%u,\"cfg_ver\":%u,\"clk_now\":%s,"
-        "\"next_ep\":%s,\"sleep_err_s\":%s,\"wifi_cached\":%s,"
+        "\"next_ep\":%s,\"sleep_err_s\":%s%s,\"wifi_cached\":%s,"
         "\"ota\":1}",
         fs->fw, fs->boot, fs->wake, fs->regime,
         uptime_buf, batfield, fs->usb,
         fs->last_sleep, fs->rssi, fs->heap_kb,
         fs->spurious, fs->cfg_ver, clk_buf,
-        next_ep_buf, sleep_err_buf,
+        next_ep_buf, sleep_err_buf, calfield,
         fs->wifi_cached ? "true" : "false");
 }

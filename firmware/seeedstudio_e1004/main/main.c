@@ -71,6 +71,7 @@
 #include "text_render.h"
 #include "state.h"
 #include "scheduler.h"
+#include "nvs_cal.h"
 #include "log.h"
 #include "wifi.h"
 #include "net.h"
@@ -454,6 +455,8 @@ static void build_frame_state_json(char *buf, size_t buflen,
         .next_ep  = (long long)(next_refresh_epoch > 0 ? next_refresh_epoch : 0LL),
         .sleep_err_known = last_sleep_err_known,
         .sleep_err_s     = (int)last_sleep_err_s,
+        .cal_known       = (cal_samples > 0),
+        .cal_ppm         = (int)cal_ppm,
         .wifi_cached     = last_wifi_used_cache,
     };
     frame_state_build(buf, buflen, &fs);
@@ -497,6 +500,8 @@ static void perform_refresh(const char *wake_label, int64_t boot_time_us)
     int32_t sleep_seconds = 0;
     int64_t server_epoch  = 0;
     int     http_status   = 0;
+    int32_t cal_seed_ppm  = 0;
+    int     cal_seed_n    = -1;   /* < 0 until the server's seed headers arrive */
     char    fw_update[48] = "";
     hokku_fetch_out_t out = {
         .out_sleep_seconds = &sleep_seconds,
@@ -504,6 +509,8 @@ static void perform_refresh(const char *wake_label, int64_t boot_time_us)
         .out_http_status   = &http_status,
         .out_fw_update     = fw_update,
         .fw_update_buflen  = sizeof(fw_update),
+        .out_cal_seed_ppm  = &cal_seed_ppm,
+        .out_cal_seed_n    = &cal_seed_n,
     };
 
     bool ok = hokku_http_fetch_image(img, TOTAL_IMAGE_SIZE, config.image_url,
@@ -540,12 +547,16 @@ static void perform_refresh(const char *wake_label, int64_t boot_time_us)
     /* Got an image — server reached and healthy; clear any outage streak. */
     consecutive_refresh_failures = 0;
 
+    /* Cold-start seed: an uncalibrated device (fresh flash / wiped NVS) adopts
+     * the server's MAC-pinned mean so it doesn't re-converge from scratch. */
+    if (cal_seed_n >= 0 && scheduler_adopt_cal_seed(cal_seed_ppm, cal_seed_n)) {
+        hokku_cal_save_if_changed();
+    }
+
     /* Schedule the next refresh from the server's absolute clock (drift-free). */
-    save_pre_sleep_epoch(server_epoch, local_at_download);
-    if (sleep_seconds <= 0) sleep_seconds = SLEEP_FALLBACK_S;
-    last_sleep_seconds = sleep_seconds;
-    time_t now = now_epoch();
-    next_refresh_epoch = (now > 0 ? (int64_t)now : 0) + sleep_seconds;
+    if (!scheduler_set_after_refresh(server_epoch, sleep_seconds, local_at_download)) {
+        schedule_retry_in(REFRESH_RETRY_SECONDS, "server response missing/invalid schedule");
+    }
 
     /* Display the freshly-downloaded image (bytes are already panel-native). */
     split_and_display(img);
@@ -583,21 +594,13 @@ static void enter_deep_sleep(int64_t sleep_us)
     esp_deep_sleep_start();
 }
 
-/* Compute how long to sleep from the schedule anchor, then sleep. */
+/* Compute how long to sleep from the schedule anchor, then sleep. The shared
+ * scheduler handles all three anchor states, pre-distorts the interval by the
+ * learned oscillator drift so the wake lands on the slot, and records what it
+ * armed for the next cycle's measurement. */
 static void schedule_and_sleep(void)
 {
-    int64_t sleep_us;
-    if (next_refresh_epoch > 0) {
-        time_t now = now_epoch();
-        int64_t secs = (now > 0) ? (next_refresh_epoch - (int64_t)now) : (int64_t)last_sleep_seconds;
-        if (secs < 1) secs = 1;
-        sleep_us = secs * 1000000LL;
-    } else if (next_refresh_epoch < 0) {
-        int64_t remain_us = -next_refresh_epoch - esp_timer_get_time();
-        sleep_us = remain_us > 0 ? remain_us : 1000000LL;
-    } else {
-        sleep_us = (int64_t)SLEEP_FALLBACK_S * 1000000LL;
-    }
+    int64_t sleep_us = scheduler_next_sleep_us((int64_t)SLEEP_FALLBACK_S * 1000000LL);
     enter_deep_sleep(sleep_us);
 }
 
@@ -606,7 +609,7 @@ void app_main(void)
 {
     int64_t boot_time = esp_timer_get_time();
 
-    hokku_state_validate();
+    bool cold_por = hokku_state_validate();
     hokku_log_init();
     ESP_LOGI(TAG, "Firmware %s built %s", FW_VERSION_STRING, FW_BUILD_TIMESTAMP);
     boot_count++;
@@ -633,21 +636,19 @@ void app_main(void)
     }
     config_load();
 
+    /* On a cold POR the RTC calibration was just zeroed; restore the durable
+     * copy from NVS (survives battery swaps). On a deep-sleep/restart wake the
+     * RTC copy is authoritative — leave it. */
+    if (cold_por) hokku_cal_load();
+
     hw_gpio_init();
     last_battery_mv = read_battery_mv();
 
-    /* Sleep-error diagnostic: on a timer wake, compare actual vs expected. */
-    if (last_sleep_mode == LAST_SLEEP_MODE_TIMER_WAKE &&
-        pre_sleep_server_epoch > 0 && last_sleep_seconds > 0) {
-        time_t now = now_epoch();
-        if (now > 0) {
-            int64_t err = ((int64_t)now - pre_sleep_server_epoch) - last_sleep_seconds;
-            if (err > INT32_MAX) err = INT32_MAX;
-            if (err < INT32_MIN) err = INT32_MIN;
-            last_sleep_err_s = (int32_t)err;
-            last_sleep_err_known = true;
-        }
-    }
+    /* Measure the previous sleep's drift on a timer wake and update the
+     * calibration — before perform_refresh overwrites the schedule anchor.
+     * Records last_sleep_err_s (the slot error) and refines cal_ppm. */
+    scheduler_observe_sleep();
+    hokku_cal_save_if_changed();
 
     if (!config_version_ok()) {
         char msg[256];

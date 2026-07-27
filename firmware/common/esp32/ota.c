@@ -83,6 +83,10 @@ static bool ota_fetch_config(const char *base_url, const char *screen_name,
         esp_http_client_set_header(client, "X-Screen-Name", screen_name);
     if (screen_model && screen_model[0] != '\0')
         esp_http_client_set_header(client, "X-Screen-Model", screen_model);
+    char mac_str[18];
+    hokku_screen_mac_str(mac_str, sizeof(mac_str));
+    if (mac_str[0] != '\0')
+        esp_http_client_set_header(client, "X-Screen-Mac", mac_str);
     esp_http_client_set_header(client, "X-Config-State", cfgstate);
 
     esp_err_t perr = esp_http_client_perform(client);

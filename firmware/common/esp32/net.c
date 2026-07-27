@@ -10,6 +10,7 @@
 #include "esp_http_client.h"
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
+#include "esp_wifi.h"
 #include "esp_log.h"
 
 typedef struct {
@@ -24,6 +25,10 @@ typedef struct {
     /* X-Firmware-Update: <version> — present when the server wants this device
      * to OTA. The body (image) is ignored when set. */
     char     fw_update_hdr[48];
+    /* X-Sleep-Cal-PPM / X-Sleep-Cal-N — the server's pinned drift mean and how
+     * many measurements back it (a cold-start seed; see sleep_cal). */
+    char     cal_ppm_hdr[16];
+    char     cal_n_hdr[16];
 } http_download_ctx_t;
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
@@ -41,6 +46,8 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             ctx->sleep_seconds_hdr[0] = '\0';
             ctx->server_epoch_hdr[0]  = '\0';
             ctx->fw_update_hdr[0]     = '\0';
+            ctx->cal_ppm_hdr[0]       = '\0';
+            ctx->cal_n_hdr[0]         = '\0';
             break;
         case HTTP_EVENT_ON_HEADER:
             if (evt->header_key && evt->header_value) {
@@ -56,6 +63,14 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
                     strncpy(ctx->fw_update_hdr, evt->header_value,
                             sizeof(ctx->fw_update_hdr) - 1);
                     ctx->fw_update_hdr[sizeof(ctx->fw_update_hdr) - 1] = '\0';
+                } else if (strcasecmp(evt->header_key, "X-Sleep-Cal-PPM") == 0) {
+                    strncpy(ctx->cal_ppm_hdr, evt->header_value,
+                            sizeof(ctx->cal_ppm_hdr) - 1);
+                    ctx->cal_ppm_hdr[sizeof(ctx->cal_ppm_hdr) - 1] = '\0';
+                } else if (strcasecmp(evt->header_key, "X-Sleep-Cal-N") == 0) {
+                    strncpy(ctx->cal_n_hdr, evt->header_value,
+                            sizeof(ctx->cal_n_hdr) - 1);
+                    ctx->cal_n_hdr[sizeof(ctx->cal_n_hdr) - 1] = '\0';
                 }
             }
             break;
@@ -69,6 +84,18 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             break;
     }
     return ESP_OK;
+}
+
+void hokku_screen_mac_str(char *out, size_t len)
+{
+    if (!out || len == 0) return;
+    uint8_t mac[6] = {0};
+    if (esp_wifi_get_mac(WIFI_IF_STA, mac) != ESP_OK) {
+        out[0] = '\0';
+        return;
+    }
+    snprintf(out, len, "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
@@ -106,6 +133,11 @@ bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
         esp_http_client_set_header(client, "X-Screen-Name", screen_name);
     if (screen_model && screen_model[0] != '\0')
         esp_http_client_set_header(client, "X-Screen-Model", screen_model);
+    /* X-Screen-Mac: the server's durable per-device key (name is only a label). */
+    char mac_str[18];
+    hokku_screen_mac_str(mac_str, sizeof(mac_str));
+    if (mac_str[0] != '\0')
+        esp_http_client_set_header(client, "X-Screen-Mac", mac_str);
     esp_http_client_set_header(client, "X-Frame-State", frame_state);
 
     const esp_app_desc_t *app = esp_app_get_description();
@@ -162,6 +194,19 @@ bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
         }
     } else {
         ESP_LOGW("hokku", "X-Server-Time-Epoch header missing (status=%d)", status);
+    }
+
+    /* Server calibration seed: both headers arrive on every response. Report the
+     * pair only when both parsed, so the board can apply its adoption policy. */
+    if (ctx.cal_ppm_hdr[0] != '\0' && ctx.cal_n_hdr[0] != '\0' &&
+        out && out->out_cal_seed_ppm && out->out_cal_seed_n) {
+        int  n   = atoi(ctx.cal_n_hdr);
+        int  ppm = atoi(ctx.cal_ppm_hdr);
+        if (n >= 0) {
+            *out->out_cal_seed_ppm = (int32_t)ppm;
+            *out->out_cal_seed_n   = n;
+            ESP_LOGI("hokku", "X-Sleep-Cal: %d ppm from %d samples", ppm, n);
+        }
     }
 
     /* Surface any OTA-update request (server sends it only on the 200). */

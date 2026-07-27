@@ -63,6 +63,36 @@ def parse_firmware_build(raw: str | None) -> str | None:
     return v if v else None
 
 
+def parse_mac_header(raw: str | None) -> str | None:
+    """Parse the X-Screen-Mac header into a normalised lowercase
+    ``aa:bb:cc:dd:ee:ff``. Returns None for missing/malformed values. This MAC is
+    the device's durable per-screen key (the name is only a mutable label)."""
+    if not raw:
+        return None
+    v = str(raw).strip().lower()
+    parts = v.split(":")
+    if len(parts) != 6:
+        return None
+    for p in parts:
+        if len(p) != 2 or any(c not in "0123456789abcdef" for c in p):
+            return None
+    if v == "00:00:00:00:00:00":
+        return None
+    return v
+
+
+def parse_cal_ppm(raw) -> int | None:
+    """Parse a device-reported drift correction (frame-state ``cal_ppm``) into a
+    bounded int, or None if absent/implausible. The bound matches the firmware
+    clamp (+/-150000 ppm) so a garbled value can't poison the server mean."""
+    if raw is None or isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    v = int(raw)
+    if v < -150000 or v > 150000:
+        return None
+    return v
+
+
 def parse_frame_state(raw: str | None) -> dict | None:
     if not raw:
         return None
