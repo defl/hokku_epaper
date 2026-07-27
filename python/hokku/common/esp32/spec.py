@@ -28,6 +28,14 @@ class Esp32Spec:
     app_offset: int
     bootloader_offset: int = 0x0
 
+    # A/B OTA layout. ``app_offset`` is ota_0 (where the merged image lands);
+    # ``ota1_offset`` is the slot an OTA writes into, and ``otadata`` selects
+    # which of the two the bootloader runs. Identical on every board so far, but
+    # they come from the model's partitions.csv like the other offsets.
+    ota1_offset: int = 0x310000
+    otadata_offset: int = 0x610000
+    otadata_size: int = 0x2000
+
     # ESP32-S3 USB Serial/JTAG VID:PID (same for every board here).
     vid: int = 0x303A
     pid: int = 0x1001

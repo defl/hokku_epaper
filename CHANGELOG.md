@@ -18,6 +18,18 @@
 
 ### Fixed
 
+- **Flashing a screen over USB could leave it running its old firmware.** The
+  merged firmware image covers the bootloader, partition table and the `ota_0`
+  app slot, but not `otadata` — the record that tells the bootloader which of the
+  two A/B slots to run. A screen that had previously taken an over-the-air update
+  boots from `ota_1`, so a USB flash wrote the new firmware into a slot the
+  bootloader was ignoring: the flash reported success, the version in the GUI
+  went up, and the screen quietly carried on running the old build. Flashing now
+  clears `otadata` so the freshly written slot is the one that boots. Relatedly,
+  the screen scan used to read the version out of `ota_0` regardless of which
+  slot was active, which is what made this invisible; it now consults `otadata`
+  and reports the version the device actually runs.
+
 - **The server package shipped incomplete data files.** The pip wheel declared
   only the face-detection model as package data, so the Flask `templates/` and
   `static/` trees were silently dropped — a plain `pip install` of the server

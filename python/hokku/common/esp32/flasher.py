@@ -64,10 +64,40 @@ def _run_esptool(args: list[str], on_line: OnLine) -> None:
         raise EsptoolError(f"esptool exited {proc.returncode} (command: esptool {' '.join(args)})")
 
 
+def erase_otadata(spec: Esp32Spec, port: str, on_line: OnLine = _noop) -> None:
+    """Erase the otadata partition so the bootloader runs the app in ota_0.
+
+    The merged image covers bootloader + partition table + ota_0 only; it does
+    not include otadata. A device that has taken an OTA has otadata selecting
+    ota_1, so without this it would keep booting the *old* firmware left there
+    and silently ignore everything just written to ota_0. Blanking otadata makes
+    the bootloader fall back to ota_0 — the image we just flashed.
+    """
+    on_line("Clearing OTA slot selection...")
+    _run_esptool(
+        [
+            "--chip",
+            "esp32s3",
+            "--port",
+            port,
+            "--baud",
+            spec.baud,
+            "erase-region",
+            hex(spec.otadata_offset),
+            hex(spec.otadata_size),
+        ],
+        on_line,
+    )
+
+
 def flash_firmware(
     spec: Esp32Spec, port: str, firmware_path: Path, on_line: OnLine = _noop
 ) -> None:
-    """Write the merged firmware image at the bootloader offset (0x0)."""
+    """Write the merged firmware image at the bootloader offset (0x0).
+
+    Followed by :func:`erase_otadata`, without which the freshly written ota_0
+    is not what the device boots (see that function).
+    """
     on_line(f"Flashing firmware {Path(firmware_path).name} (~30s)...")
     _run_esptool(
         [
@@ -89,6 +119,7 @@ def flash_firmware(
         ],
         on_line,
     )
+    erase_otadata(spec, port, on_line)
 
 
 def write_config(spec: Esp32Spec, port: str, config: dict, on_line: OnLine = _noop) -> None:

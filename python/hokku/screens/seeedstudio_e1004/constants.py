@@ -35,6 +35,14 @@ CONFIG_VERSION = 2
 BOOTLOADER_OFFSET = 0x0
 APP_OFFSET = 0x10000
 
+# A/B OTA partitions (see firmware/seeedstudio_e1004/partitions.csv). The merged
+# image only covers ota_0; otadata selects which slot the bootloader runs, so a
+# USB flash must clear it (blank otadata -> ota_0) or the device keeps booting
+# whatever an earlier OTA left in ota_1.
+OTA1_OFFSET = 0x310000
+OTADATA_OFFSET = 0x610000
+OTADATA_SIZE = 0x2000
+
 # esptool --flash-size for this board (32 MB flash — the E1004's ESP32-S3R8).
 FLASH_SIZE = "32MB"
 
