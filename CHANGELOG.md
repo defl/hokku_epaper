@@ -18,6 +18,16 @@
 
 ### Fixed
 
+- **Flashing a screen no longer leaves a half-painted panel.** Each esptool step
+  reset the ESP32, and because a cold boot immediately downloads an image and
+  repaints the display (~28 s), every reset *started* a paint that the next step
+  then interrupted a second or two in. That left the panel controller wedged
+  holding BUSY, so the following paint spent its 60 s timeout on every BUSY wait
+  and took ~6 minutes instead of ~28 s — with a half-rendered image on the glass
+  in the meantime. A flash now runs every step with `--after no-reset` and boots
+  the app exactly once, when all flash traffic is done. A screen scan likewise
+  resets once instead of once per region read.
+
 - **Flashing now shows what it writes where.** Both the web *Flash a screen* page and
   the `tools/` CLI name every region a flash touches — the firmware file and its size
   going to `0x0`, the blank `otadata`, and the generated NVS config image — each with
