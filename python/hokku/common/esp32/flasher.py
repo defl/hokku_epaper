@@ -108,9 +108,10 @@ def flash_firmware(
     chip into download mode and hard-resets it, which is worth avoiding: the
     panel controller does not always survive being reset mid-transaction.
     """
-    for part in describe_flash_parts(spec, firmware_path):
-        on_line(f"Flashing {part}")
-    on_line("(~30s)...")
+    parts = describe_flash_parts(spec, firmware_path)
+    on_line(f"Flashing {len(parts)} regions (~30s):")
+    for part in parts:
+        on_line(f"  {part}")
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
         f.write(b"\xff" * spec.otadata_size)
         blank_otadata = f.name
