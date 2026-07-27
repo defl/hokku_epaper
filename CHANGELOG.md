@@ -18,6 +18,44 @@
 
 ### Fixed
 
+- **Scanning for a screen to flash no longer kicks it into a refresh.** The scan
+  used to leave the screen running, and since a screen repaints on boot, the act
+  of looking for a device to flash started a ~30-60s panel refresh — at exactly
+  the moment the operator was about to flash and interrupt it. A scan now leaves
+  the screen in its bootloader, which is what the flash wants anyway; the panel
+  keeps displaying its last image throughout, because e-paper holds its image
+  without power. If no flash follows within five minutes the server boots the
+  screen back into its firmware on its own, so a scan you abandon costs nothing.
+
+- **Flashing a screen no longer leaves a half-painted panel.** Each esptool step
+  reset the ESP32, and because a cold boot immediately downloads an image and
+  repaints the display (~28 s), every reset *started* a paint that the next step
+  then interrupted a second or two in. That left the panel controller wedged
+  holding BUSY, so the following paint spent its 60 s timeout on every BUSY wait
+  and took ~6 minutes instead of ~28 s — with a half-rendered image on the glass
+  in the meantime. A flash now runs every step with `--after no-reset` and boots
+  the app exactly once, when all flash traffic is done. A screen scan likewise
+  resets once instead of once per region read.
+
+- **Flashing now shows what it writes where.** Both the web *Flash a screen* page and
+  the `tools/` CLI name every region a flash touches — the firmware file and its size
+  going to `0x0`, the blank `otadata`, and the generated NVS config image — each with
+  its destination offset, before it is written. Previously the config step said only
+  "Writing configuration..." and the CLI printed nothing at all, so there was no way to
+  tell from the output which image had landed in which partition.
+
+- **Flashing a screen over USB could leave it running its old firmware.** The
+  merged firmware image covers the bootloader, partition table and the `ota_0`
+  app slot, but not `otadata` — the record that tells the bootloader which of the
+  two A/B slots to run. A screen that had previously taken an over-the-air update
+  boots from `ota_1`, so a USB flash wrote the new firmware into a slot the
+  bootloader was ignoring: the flash reported success, the version in the GUI
+  went up, and the screen quietly carried on running the old build. Flashing now
+  clears `otadata` so the freshly written slot is the one that boots. Relatedly,
+  the screen scan used to read the version out of `ota_0` regardless of which
+  slot was active, which is what made this invisible; it now consults `otadata`
+  and reports the version the device actually runs.
+
 - **The server package shipped incomplete data files.** The pip wheel declared
   only the face-detection model as package data, so the Flask `templates/` and
   `static/` trees were silently dropped — a plain `pip install` of the server
