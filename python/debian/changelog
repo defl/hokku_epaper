@@ -1,3 +1,15 @@
+hokku-server (4.0.1~dev.9-1) unstable; urgency=medium
+
+  * flash: name every region a flash writes — the firmware file and its size to
+    0x0, the blank otadata, and the generated NVS config image — each with its
+    destination offset, in both the web "Flash a screen" page and the tools/ CLI.
+  * fix(flash): write the blank otadata as part of the firmware write-flash pass
+    instead of a separate erase-region call, so a flash costs one esptool connect
+    and reset rather than two. Fewer resets mid-flash is safer for the panel
+    controller, which does not always survive being reset mid-transaction.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 27 Jul 2026 04:15:00 +0000
+
 hokku-server (4.0.1~dev.8-1) unstable; urgency=medium
 
   * fix(flash): clear otadata when flashing a screen over USB, so the bootloader

@@ -204,23 +204,81 @@ def test_read_device_flash_uses_ota0_when_otadata_blank(esp32_mod, monkeypatch):
 # ── esp32.flasher: a USB flash must reselect ota_0 ────────────────────────────
 
 
-def test_flash_firmware_clears_otadata(esp32_mod, tmp_path, monkeypatch):
-    """Without this the bootloader keeps running whatever an OTA left in ota_1,
-    so the flash appears to succeed while the old firmware stays live."""
+def _fake_esptool(monkeypatch, calls):
+    """Capture esptool argv and the temp file contents, which vanish on return."""
+
+    def run(args, _on_line):
+        snapshot = list(args)
+        payloads = {}
+        for i, a in enumerate(args[:-1]):
+            if isinstance(a, str) and a.startswith("0x"):
+                path = Path(args[i + 1])
+                if path.exists():
+                    payloads[a] = path.read_bytes()
+        calls.append((snapshot, payloads))
+
+    monkeypatch.setattr(esp32_flasher, "_run_esptool", run)
+
+
+def test_flash_firmware_blanks_otadata_in_the_same_pass(esp32_mod, tmp_path, monkeypatch):
+    """Without blanking otadata the bootloader keeps running whatever an OTA left
+    in ota_1, so the flash appears to succeed while the old firmware stays live.
+
+    It rides along in the firmware write rather than a second esptool call: each
+    extra invocation drops the chip into download mode and hard-resets it.
+    """
     calls = []
-    monkeypatch.setattr(esp32_flasher, "_run_esptool", lambda args, on_line: calls.append(args))
+    _fake_esptool(monkeypatch, calls)
     img = tmp_path / "hokku-fw-1.2.3.bin"
-    img.write_bytes(b"\xe9")
+    img.write_bytes(b"\xe9" * 64)
     esp32_mod.flash_firmware("/dev/null", img)
 
-    assert len(calls) == 2, "expected write-flash then erase-region"
-    assert "write-flash" in calls[0]
-    erase = calls[1]
-    assert "erase-region" in erase
-    at = erase.index("erase-region")
+    assert len(calls) == 1, "firmware + otadata must be one esptool pass"
+    args, payloads = calls[0]
     spec = esp32_mod.SPEC
-    assert erase[at + 1] == hex(spec.otadata_offset)
-    assert erase[at + 2] == hex(spec.otadata_size)
+    assert "write-flash" in args
+    assert args[args.index(hex(spec.bootloader_offset)) + 1] == str(img)
+    # Blank otadata is all-0xFF — what an erase leaves behind.
+    assert payloads[hex(spec.otadata_offset)] == b"\xff" * spec.otadata_size
+
+
+# ── every flashing front end names the file and region it writes ──────────────
+
+
+def test_describe_flash_parts_names_file_size_and_offset(esp32_mod, tmp_path):
+    img = tmp_path / "hokku-fw-9.9.9.bin"
+    img.write_bytes(b"\xe9" * 4096)
+    parts = esp32_mod.describe_flash_parts(img)
+    spec = esp32_mod.SPEC
+
+    joined = "\n".join(parts)
+    assert "hokku-fw-9.9.9.bin" in joined
+    assert "4,096 bytes" in joined
+    assert hex(spec.bootloader_offset) in joined
+    assert hex(spec.otadata_offset) in joined
+    assert "otadata" in joined
+
+
+def test_describe_config_part_names_size_and_offset(esp32_mod):
+    spec = esp32_mod.SPEC
+    described = esp32_mod.describe_config_part()
+    assert f"{spec.nvs_size:,} bytes" in described
+    assert hex(spec.nvs_offset) in described
+
+
+def test_flash_firmware_announces_every_region_before_writing(esp32_mod, tmp_path, monkeypatch):
+    """The rule: a flasher always says which file goes to which region."""
+    monkeypatch.setattr(esp32_flasher, "_run_esptool", lambda args, on_line: None)
+    img = tmp_path / "hokku-fw-1.2.3.bin"
+    img.write_bytes(b"\xe9" * 128)
+    lines = []
+    esp32_mod.flash_firmware("/dev/null", img, on_line=lines.append)
+
+    spec = esp32_mod.SPEC
+    joined = "\n".join(lines)
+    assert "hokku-fw-1.2.3.bin" in joined
+    assert hex(spec.bootloader_offset) in joined
+    assert hex(spec.otadata_offset) in joined
 
 
 # ── esp32.firmware: merged-file discovery + app-image slice ────────────────────

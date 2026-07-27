@@ -71,7 +71,8 @@ active_ota_slot = _device.active_ota_slot  # pure otadata parse, takes no spec
 
 # Flashing (spec-bound).
 flash_firmware = partial(_flasher.flash_firmware, SPEC)
-erase_otadata = partial(_flasher.erase_otadata, SPEC)
+describe_flash_parts = partial(_flasher.describe_flash_parts, SPEC)
+describe_config_part = partial(_flasher.describe_config_part, SPEC)
 write_config = partial(_flasher.write_config, SPEC)
 flash_device = partial(_flasher.flash_device, SPEC)
 
@@ -90,7 +91,8 @@ __all__ = [
     "build_nvs_binary",
     "bundled_firmware_version",
     "constants",
-    "erase_otadata",
+    "describe_config_part",
+    "describe_flash_parts",
     "flash_device",
     "flash_firmware",
     "list_firmware_files",

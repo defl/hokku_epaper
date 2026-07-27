@@ -315,7 +315,11 @@ def bootstrap_device(
     if img[:4] != b"AWIH":
         raise RuntimeError("bundled image is not an AWIH xr_system.img")
 
-    on_line(f"Bootstrapping Bigme F7 on {port} ({len(img):,} B image).")
+    on_line(f"Bootstrapping Bigme F7 on {port}.")
+    on_line(
+        f"Firmware: {Path(image_path).name} ({len(img):,} bytes) -> slot 0 and its A/B cfg "
+        "sector [slot 1 (OEM) is left untouched]"
+    )
     writer = _LineWriter(on_line)
 
     # Phase A — no-touch software entry (a unit already on Hokku firmware answers
@@ -343,6 +347,7 @@ def bootstrap_device(
     had_existing_cfg = False
     try:
         try:
+            on_line(f"Writing {Path(image_path).name} -> slot 0 (do NOT unplug now)...")
             with contextlib.redirect_stdout(writer):
                 flash_slot0(f, img, reboot=False)
             writer.flush()

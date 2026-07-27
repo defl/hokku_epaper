@@ -578,9 +578,11 @@ def _pi_config_mismatch(existing_config, pi_credentials):
 
 
 def write_config(port, config):
-    print("  Writing configuration...", end=" ", flush=True)
+    # esptool's own chatter stays suppressed (on_line defaults to noop), but the
+    # region being written is always named — same facts the web UI shows.
+    print(f"  Writing {SCREEN.describe_config_part()}", end=" ", flush=True)
     try:
-        SCREEN.write_config(port, config)  # on_line defaults to noop — keep CLI quiet
+        SCREEN.write_config(port, config)
         print("done.")
         return True
     except Exception as e:
@@ -599,6 +601,7 @@ def flash_firmware(port):
         return False
 
     try:
+        # flash_firmware names every region it writes via on_line before writing.
         SCREEN.flash_firmware(port, merged, on_line=lambda ln: print(f"    {ln}"))
         print("  Firmware flashed successfully.")
         return True
