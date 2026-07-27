@@ -64,67 +64,89 @@ def _run_esptool(args: list[str], on_line: OnLine) -> None:
         raise EsptoolError(f"esptool exited {proc.returncode} (command: esptool {' '.join(args)})")
 
 
-def erase_otadata(spec: Esp32Spec, port: str, on_line: OnLine = _noop) -> None:
-    """Erase the otadata partition so the bootloader runs the app in ota_0.
+def describe_flash_parts(spec: Esp32Spec, firmware_path: Path) -> list[str]:
+    """One line per flash region :func:`flash_firmware` writes: file, size, offset.
 
-    The merged image covers bootloader + partition table + ota_0 only; it does
-    not include otadata. A device that has taken an OTA has otadata selecting
-    ota_1, so without this it would keep booting the *old* firmware left there
-    and silently ignore everything just written to ota_0. Blanking otadata makes
-    the bootloader fall back to ota_0 — the image we just flashed.
+    Every front end prints these before writing, so an operator can always see
+    which image landed in which partition rather than a bare "flashing...".
     """
-    on_line("Clearing OTA slot selection...")
-    _run_esptool(
-        [
-            "--chip",
-            "esp32s3",
-            "--port",
-            port,
-            "--baud",
-            spec.baud,
-            "erase-region",
-            hex(spec.otadata_offset),
-            hex(spec.otadata_size),
-        ],
-        on_line,
+    fw = Path(firmware_path)
+    try:
+        fw_size = f"{fw.stat().st_size:,} bytes"
+    except OSError:
+        fw_size = "size unknown"
+    return [
+        f"{fw.name} ({fw_size}) -> {hex(spec.bootloader_offset)} "
+        "[bootloader + partition table + app slot ota_0]",
+        f"blank otadata ({spec.otadata_size:,} bytes of 0xFF) -> {hex(spec.otadata_offset)} "
+        "[clears the OTA slot selection so the bootloader runs the image above]",
+    ]
+
+
+def describe_config_part(spec: Esp32Spec) -> str:
+    """What :func:`write_config` writes, and where."""
+    return (
+        f"generated NVS config image ({spec.nvs_size:,} bytes) -> {hex(spec.nvs_offset)} "
+        "[Wi-Fi credentials + server URL + screen name]"
     )
 
 
 def flash_firmware(
     spec: Esp32Spec, port: str, firmware_path: Path, on_line: OnLine = _noop
 ) -> None:
-    """Write the merged firmware image at the bootloader offset (0x0).
+    """Write the merged firmware image and blank otadata, in one esptool pass.
 
-    Followed by :func:`erase_otadata`, without which the freshly written ota_0
-    is not what the device boots (see that function).
+    The merged image covers bootloader + partition table + ota_0 only; it does
+    not include otadata, the record that tells the bootloader which A/B slot to
+    run. A device that has taken an OTA has otadata selecting ota_1, so without
+    blanking it the device keeps booting the *old* firmware left there and
+    silently ignores everything just written to ota_0.
+
+    Blank otadata is simply all-0xFF, so it is written as another region of the
+    same ``write-flash`` rather than a separate ``erase-region`` call — one
+    connect and one reset instead of two. Each extra esptool cycle drops the
+    chip into download mode and hard-resets it, which is worth avoiding: the
+    panel controller does not always survive being reset mid-transaction.
     """
-    on_line(f"Flashing firmware {Path(firmware_path).name} (~30s)...")
-    _run_esptool(
-        [
-            "--chip",
-            "esp32s3",
-            "--port",
-            port,
-            "--baud",
-            spec.baud,
-            "write-flash",
-            "--flash-mode",
-            "dio",
-            "--flash-freq",
-            "80m",
-            "--flash-size",
-            spec.flash_size,
-            hex(spec.bootloader_offset),
-            str(firmware_path),
-        ],
-        on_line,
-    )
-    erase_otadata(spec, port, on_line)
+    for part in describe_flash_parts(spec, firmware_path):
+        on_line(f"Flashing {part}")
+    on_line("(~30s)...")
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        f.write(b"\xff" * spec.otadata_size)
+        blank_otadata = f.name
+    try:
+        _run_esptool(
+            [
+                "--chip",
+                "esp32s3",
+                "--port",
+                port,
+                "--baud",
+                spec.baud,
+                "write-flash",
+                "--flash-mode",
+                "dio",
+                "--flash-freq",
+                "80m",
+                "--flash-size",
+                spec.flash_size,
+                hex(spec.bootloader_offset),
+                str(firmware_path),
+                hex(spec.otadata_offset),
+                blank_otadata,
+            ],
+            on_line,
+        )
+    finally:
+        try:
+            os.unlink(blank_otadata)
+        except OSError:
+            pass
 
 
 def write_config(spec: Esp32Spec, port: str, config: dict, on_line: OnLine = _noop) -> None:
     """Build and write the NVS config partition at ``spec.nvs_offset``."""
-    on_line("Writing configuration...")
+    on_line(f"Writing {describe_config_part(spec)}")
     nvs_binary = build_nvs_binary(spec, config)
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
         f.write(nvs_binary)
@@ -168,7 +190,10 @@ def flash_device(
     flash_firmware(spec, port, firmware_path, on_line)
     write_config(spec, port, config, on_line)
 
-    on_line("Verifying...")
+    on_line(
+        f"Verifying: reading back NVS at {hex(spec.nvs_offset)} and the app header of the "
+        "slot the device boots..."
+    )
     nvs_data, app_header = read_device_flash(spec, port)
     state = parse_device_state(spec, nvs_data, app_header) if app_header is not None else None
     on_line("Done.")

@@ -18,6 +18,13 @@
 
 ### Fixed
 
+- **Flashing now shows what it writes where.** Both the web *Flash a screen* page and
+  the `tools/` CLI name every region a flash touches — the firmware file and its size
+  going to `0x0`, the blank `otadata`, and the generated NVS config image — each with
+  its destination offset, before it is written. Previously the config step said only
+  "Writing configuration..." and the CLI printed nothing at all, so there was no way to
+  tell from the output which image had landed in which partition.
+
 - **Flashing a screen over USB could leave it running its old firmware.** The
   merged firmware image covers the bootloader, partition table and the `ota_0`
   app slot, but not `otadata` — the record that tells the bootloader which of the
