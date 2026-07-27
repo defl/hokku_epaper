@@ -1223,9 +1223,18 @@ def create_app(
             return jsonify({"error": "a flash is in progress", "busy": True}), 409
         try:
             screen = esp32_screen(request.args.get("model")) or huessen_epf1301
-            devices = screen.scan_devices()
+            # Leave the scanned screens in the bootloader. Booting one starts a
+            # full panel repaint (~30-60s), and a scan is nearly always the step
+            # right before a flash — which would then interrupt that paint
+            # mid-refresh and wedge the panel controller. The panel keeps showing
+            # its last image meanwhile (e-paper holds without power), and
+            # arm_deferred_boot puts it back to work if no flash follows.
+            devices = screen.scan_devices(boot_after=False)
         finally:
             state.flash_jobs.end_scan()
+        state.flash_jobs.arm_deferred_boot(
+            screen, [d["port"] for d in devices if d.get("is_esp32")]
+        )
         # Classify non-ESP32 ports the UI knows how to guide: a CH340 bridge is a
         # Bigme F7 (XR872), which is USB-flashed by a different (vendor-tool)
         # procedure, not esptool — so the UI shows F7 guidance instead of the

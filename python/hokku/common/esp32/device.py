@@ -256,11 +256,20 @@ def parse_device_state(
     return result
 
 
-def scan_devices(spec: Esp32Spec) -> list[dict]:
+def scan_devices(spec: Esp32Spec, boot_after: bool = True) -> list[dict]:
     """Enumerate all serial ports; for ESP32-S3 ports, read on-flash state.
 
-    Each ESP32-S3 device is read (which resets it), so only call this when no
-    flash is in progress. Returns a list of dicts (one per serial port).
+    Each ESP32-S3 device is driven over the same serial port a flash uses, so
+    only call this when no flash is in progress.
+
+    *boot_after* controls whether a scanned device is left running its firmware.
+    A caller that is about to flash passes False: booting starts a full panel
+    repaint (~28 s) at exactly the moment the operator is about to flash, and the
+    flash then interrupts that paint and wedges the panel controller. The panel
+    keeps showing its last image while held in the bootloader (e-paper is
+    persistent), but such a caller MUST guarantee an eventual boot.
+
+    Returns a list of dicts (one per serial port).
     """
     all_ports = list_serial_ports(spec)
     logger.info(
@@ -283,7 +292,7 @@ def scan_devices(spec: Esp32Spec) -> list[dict]:
             }
         )
         if dev["is_esp32"]:
-            nvs_data, app_header = read_device_flash(spec, dev["port"])
+            nvs_data, app_header = read_device_flash(spec, dev["port"], boot_after=boot_after)
             dev.update(parse_device_state(spec, nvs_data, app_header, release_header))
             state = dev
             logger.info(

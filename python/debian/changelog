@@ -1,3 +1,14 @@
+hokku-server (4.0.1~dev.12-1) unstable; urgency=medium
+
+  * fix(flash): a device scan no longer starts a panel refresh. Scanning left the
+    screen running, and a screen repaints on boot, so looking for a device to
+    flash began a 30-60s refresh right before the flash interrupted it. The scan
+    now leaves the screen in its bootloader (the panel keeps its last image --
+    e-paper holds without power); if no flash follows within five minutes the
+    server boots it back into firmware by itself.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 27 Jul 2026 05:10:00 +0000
+
 hokku-server (4.0.1~dev.10-1) unstable; urgency=medium
 
   * fix(flash): do not reset the screen between flash steps. Every esptool step

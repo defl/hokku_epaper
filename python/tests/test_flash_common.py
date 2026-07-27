@@ -111,6 +111,43 @@ def test_job_manager_runs_and_streams(monkeypatch):
     assert st["finished_at"] is not None
 
 
+class _FakeScreen:
+    """Minimal stand-in exposing just the boot_app the deferred boot calls."""
+
+    def __init__(self):
+        self.booted: list[str] = []
+
+    def boot_app(self, port):
+        self.booted.append(port)
+        return True
+
+
+def test_deferred_boot_restarts_a_screen_a_scan_left_in_the_bootloader():
+    """A scan holds the screen in the bootloader so the flash that usually follows
+    cannot interrupt a panel repaint. If no flash comes, it must still recover."""
+    mgr = flashing.FlashJobManager()
+    screen = _FakeScreen()
+    mgr.arm_deferred_boot(screen, ["COM9"], delay=0.05)
+    _wait_until(lambda: screen.booted == ["COM9"])
+    assert screen.booted == ["COM9"]
+
+
+def test_starting_a_flash_cancels_the_deferred_boot(monkeypatch):
+    """The flash is what the hold was for, and it boots the screen itself."""
+
+    def fake_flash(port, config, firmware_path, on_line):
+        return {"config_version_ok": True}
+
+    monkeypatch.setattr(huessen_epf1301, "flash_device", fake_flash)
+    mgr = flashing.FlashJobManager()
+    screen = _FakeScreen()
+    mgr.arm_deferred_boot(screen, ["COM9"], delay=0.2)
+    assert mgr.start("COM9", {}, Path("fw.bin")) is not None
+    _wait_until(lambda: (mgr.status() or {}).get("state") != "running")
+    time.sleep(0.4)  # past when the timer would have fired
+    assert screen.booted == [], "the flash owns the boot; the timer must not fire"
+
+
 def test_job_manager_dispatches_by_model(monkeypatch):
     """start(screen_model=...) routes to that screen's flash_device (its spec)."""
     calls: list[str] = []
@@ -378,7 +415,7 @@ def test_flash_devices_allowed_when_only_seeed_has_firmware(app_config, tmp_path
     seeed_fw.write_bytes(b"\x00")
     monkeypatch.setattr(huessen_epf1301, "merged_firmware_file", lambda *a, **k: None)
     monkeypatch.setattr(seeedstudio_e1004, "merged_firmware_file", lambda *a, **k: seeed_fw)
-    monkeypatch.setattr(huessen_epf1301, "scan_devices", lambda: [])
+    monkeypatch.setattr(huessen_epf1301, "scan_devices", lambda **k: [])
     client = _client(_bare_state(app_config), tmp_path)
     assert client.get("/hokku/api/flash/devices").status_code == 200
 
@@ -484,7 +521,7 @@ def test_flash_devices_classifies_bigme_f7(app_config, tmp_path, monkeypatch):
     monkeypatch.setattr(
         huessen_epf1301,
         "scan_devices",
-        lambda: [
+        lambda **k: [
             {
                 "port": "COM7",
                 "description": "USB-SERIAL CH340",

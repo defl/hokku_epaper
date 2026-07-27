@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 _job_ids = itertools.count(1)
 
+# How long a scanned screen may sit in the bootloader waiting for the flash that
+# usually follows. Long enough to fill in the flash form, short enough that a scan
+# the operator then abandons does not leave the screen unable to update. The panel
+# keeps displaying its last image throughout — e-paper holds without power.
+DEFERRED_BOOT_SECONDS = 300.0
+
 
 class FlashJobManager:
     """Owns at most one in-flight flash job."""
@@ -34,6 +40,55 @@ class FlashJobManager:
         # thread, no log). It must still hold the single slot so a flash cannot
         # start mid-scan and have two esptools fight over one device.
         self._scanning = False
+        # Pending "boot the screen back into its firmware" timers, by port.
+        self._boot_timers: dict[str, threading.Timer] = {}
+
+    def arm_deferred_boot(
+        self, screen, ports: list[str], delay: float = DEFERRED_BOOT_SECONDS
+    ) -> None:
+        """Boot *ports* back into firmware after *delay*, unless a flash starts.
+
+        A scan deliberately leaves the device halted in the bootloader: booting it
+        would start a full panel repaint (~30-60s) at exactly the moment the
+        operator is about to flash, and the flash would interrupt that paint
+        mid-refresh and wedge the panel controller. Since a scan is not always
+        followed by a flash, this is the safety net that puts the screen back to
+        work on its own.
+        """
+        for port in ports:
+            self._cancel_deferred_boot(port)
+            timer = threading.Timer(delay, self._deferred_boot, args=(screen, port))
+            timer.daemon = True
+            with self._lock:
+                self._boot_timers[port] = timer
+            timer.start()
+
+    def _cancel_deferred_boot(self, port: str | None = None) -> None:
+        """Drop pending boot timers — for *port*, or all of them when None."""
+        with self._lock:
+            ports = [port] if port is not None else list(self._boot_timers)
+            timers = [self._boot_timers.pop(p) for p in ports if p in self._boot_timers]
+        for t in timers:
+            t.cancel()
+
+    def _deferred_boot(self, screen, port: str) -> None:
+        """Timer callback: boot the screen if the serial port is free.
+
+        If a flash is running it owns the port and will boot the device itself,
+        so this simply steps aside.
+        """
+        with self._lock:
+            self._boot_timers.pop(port, None)
+        if not self.begin_scan():
+            logger.info("Deferred boot for %s skipped: the serial port is busy", port)
+            return
+        try:
+            logger.info("Scan was not followed by a flash — booting %s back into firmware", port)
+            screen.boot_app(port)
+        except Exception as e:  # a best-effort recovery must never raise into a timer
+            logger.warning("Deferred boot for %s failed: %s", port, e)
+        finally:
+            self.end_scan()
 
     def _slot_taken(self) -> bool:
         """Whether the single serial slot is held (caller must hold ``_lock``)."""
@@ -59,6 +114,9 @@ class FlashJobManager:
     def _new_job(self, port: str, kind: str, screen_model: str | None = None) -> dict | None:
         """Create the single in-flight job (caller holds no lock). Returns the job
         dict, or ``None`` if the serial slot is already taken (flash or scan)."""
+        # The flash is what the scan was holding the device in the bootloader for,
+        # and it boots the screen itself when it finishes.
+        self._cancel_deferred_boot(port)
         with self._lock:
             if self._slot_taken():
                 return None
