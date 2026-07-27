@@ -1,3 +1,13 @@
+hokku-server (4.0.1~dev.8-1) unstable; urgency=medium
+
+  * fix(flash): clear otadata when flashing a screen over USB, so the bootloader
+    runs the firmware that was just written instead of whatever an earlier OTA
+    left in the other A/B slot. Also report the version of the slot the device
+    actually boots, so a screen can no longer appear up to date while running
+    older firmware.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 27 Jul 2026 03:30:00 +0000
+
 hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
 
   * Firmware library: optionally download firmware from GitHub Releases and pin a

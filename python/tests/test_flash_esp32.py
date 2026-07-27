@@ -15,10 +15,14 @@ esp-idf-nvs-partition-gen subprocess and is skipped if it is not installed.
 from __future__ import annotations
 
 import json
+import struct
+import zlib
 from pathlib import Path
 
 import pytest
 
+from hokku.common.esp32 import device as esp32_device
+from hokku.common.esp32 import flasher as esp32_flasher
 from hokku.common.esp32 import nvs as esp32_nvs
 from hokku.screens import huessen_epf1301, seeedstudio_e1004
 from hokku.webserver.app_config import AppConfig
@@ -105,6 +109,118 @@ def test_parse_device_state_reads_config(esp32_mod):
     state = esp32_mod.parse_device_state(nvs, _make_app_header())
     assert state["config_version_ok"] is True
     assert state["config"]["screen_name"] == "Den"
+
+
+# ── esp32.device: which OTA slot the device actually boots ────────────────────
+
+
+def _ota_select_entry(seq: int) -> bytes:
+    """One 32-byte ``esp_ota_select_entry_t`` carrying a valid CRC."""
+    entry = bytearray(32)
+    struct.pack_into("<I", entry, 0, seq)
+    struct.pack_into("<I", entry, 28, zlib.crc32(struct.pack("<I", seq), 0xFFFFFFFF) & 0xFFFFFFFF)
+    return bytes(entry)
+
+
+def _otadata(seq0: int | None, seq1: int | None) -> bytes:
+    """An 8 KB otadata partition; the two entries sit one 4 KB sector apart."""
+    blob = bytearray(b"\xff" * 0x2000)
+    if seq0 is not None:
+        blob[0:32] = _ota_select_entry(seq0)
+    if seq1 is not None:
+        blob[0x1000:0x1020] = _ota_select_entry(seq1)
+    return bytes(blob)
+
+
+def test_active_ota_slot_blank_otadata_boots_ota0(esp32_mod):
+    # What a USB flash leaves behind — erased otadata means the bootloader runs
+    # ota_0, which is the only slot the merged image covers.
+    assert esp32_mod.active_ota_slot(b"\xff" * 0x2000) == 0
+    assert esp32_mod.active_ota_slot(None) == 0
+
+
+def test_active_ota_slot_highest_seq_wins(esp32_mod):
+    # seq 7/8 are the real values read off a screen that had taken an OTA; it
+    # was booting ota_1 while ota_0 held freshly flashed (ignored) firmware.
+    assert esp32_mod.active_ota_slot(_otadata(7, 8)) == 1
+    assert esp32_mod.active_ota_slot(_otadata(9, 8)) == 0
+    assert esp32_mod.active_ota_slot(_otadata(None, 8)) == 1
+
+
+def test_active_ota_slot_ignores_crc_invalid_entry(esp32_mod):
+    blob = bytearray(_otadata(7, 8))
+    struct.pack_into("<I", blob, 0x1000 + 28, 0xDEADBEEF)  # corrupt entry 1's CRC
+    # Entry 1 is discarded like the bootloader would, leaving seq 7 -> ota_0.
+    assert esp32_mod.active_ota_slot(bytes(blob)) == 0
+
+
+def _first_read_blob(spec, nvs_bytes: bytes, ota0_header: bytes) -> bytes:
+    """The nvs..ota_0-header span that ``read_device_flash`` slices up."""
+    blob = bytearray(b"\x00" * (spec.app_offset - spec.nvs_offset))
+    blob[: len(nvs_bytes)] = nvs_bytes
+    return bytes(blob) + ota0_header
+
+
+def test_read_device_flash_reports_the_booting_slot(esp32_mod, monkeypatch):
+    """With otadata selecting ota_1, the version must come from ota_1.
+
+    Reading ota_0 unconditionally is what let a stale screen report the version
+    that had just been flashed into the slot it was not booting.
+    """
+    spec = esp32_mod.SPEC
+    ota0 = _make_app_header(b"20260726000000Z")  # freshly flashed, not booted
+    ota1 = _make_app_header(b"20260101000000Z")  # older, actually running
+
+    def fake_read(_spec, _port, offset, _size, _timeout):
+        if offset == spec.nvs_offset:
+            return _first_read_blob(spec, b"\x00" * spec.nvs_size, ota0)
+        if offset == spec.otadata_offset:
+            return _otadata(7, 8)  # -> ota_1
+        if offset == spec.ota1_offset:
+            return ota1
+        raise AssertionError(f"unexpected read at {offset:#x}")
+
+    monkeypatch.setattr(esp32_device, "_read_region", fake_read)
+    _nvs, header = esp32_mod.read_device_flash("/dev/null")
+    assert esp32_device._version_from_header(header) == "20260101000000Z"
+
+
+def test_read_device_flash_uses_ota0_when_otadata_blank(esp32_mod, monkeypatch):
+    spec = esp32_mod.SPEC
+    ota0 = _make_app_header(b"20260726000000Z")
+
+    def fake_read(_spec, _port, offset, _size, _timeout):
+        if offset == spec.nvs_offset:
+            return _first_read_blob(spec, b"\x00" * spec.nvs_size, ota0)
+        if offset == spec.otadata_offset:
+            return b"\xff" * spec.otadata_size
+        raise AssertionError(f"ota_1 must not be read when otadata is blank ({offset:#x})")
+
+    monkeypatch.setattr(esp32_device, "_read_region", fake_read)
+    _nvs, header = esp32_mod.read_device_flash("/dev/null")
+    assert esp32_device._version_from_header(header) == "20260726000000Z"
+
+
+# ── esp32.flasher: a USB flash must reselect ota_0 ────────────────────────────
+
+
+def test_flash_firmware_clears_otadata(esp32_mod, tmp_path, monkeypatch):
+    """Without this the bootloader keeps running whatever an OTA left in ota_1,
+    so the flash appears to succeed while the old firmware stays live."""
+    calls = []
+    monkeypatch.setattr(esp32_flasher, "_run_esptool", lambda args, on_line: calls.append(args))
+    img = tmp_path / "hokku-fw-1.2.3.bin"
+    img.write_bytes(b"\xe9")
+    esp32_mod.flash_firmware("/dev/null", img)
+
+    assert len(calls) == 2, "expected write-flash then erase-region"
+    assert "write-flash" in calls[0]
+    erase = calls[1]
+    assert "erase-region" in erase
+    at = erase.index("erase-region")
+    spec = esp32_mod.SPEC
+    assert erase[at + 1] == hex(spec.otadata_offset)
+    assert erase[at + 2] == hex(spec.otadata_size)
 
 
 # ── esp32.firmware: merged-file discovery + app-image slice ────────────────────
