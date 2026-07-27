@@ -68,6 +68,7 @@ read_device_flash = partial(_device.read_device_flash, SPEC)
 parse_device_state = partial(_device.parse_device_state, SPEC)
 scan_devices = partial(_device.scan_devices, SPEC)
 active_ota_slot = _device.active_ota_slot  # pure otadata parse, takes no spec
+boot_app = partial(_device.boot_app, SPEC)
 
 # Flashing (spec-bound).
 flash_firmware = partial(_flasher.flash_firmware, SPEC)
@@ -88,6 +89,7 @@ __all__ = [
     "SeeedstudioE1004Display",
     "active_ota_slot",
     "app_image_from_file",
+    "boot_app",
     "build_nvs_binary",
     "bundled_firmware_version",
     "constants",

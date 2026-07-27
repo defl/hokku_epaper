@@ -18,6 +18,15 @@
 
 ### Fixed
 
+- **Scanning for a screen to flash no longer kicks it into a refresh.** The scan
+  used to leave the screen running, and since a screen repaints on boot, the act
+  of looking for a device to flash started a ~30-60s panel refresh — at exactly
+  the moment the operator was about to flash and interrupt it. A scan now leaves
+  the screen in its bootloader, which is what the flash wants anyway; the panel
+  keeps displaying its last image throughout, because e-paper holds its image
+  without power. If no flash follows within five minutes the server boots the
+  screen back into its firmware on its own, so a scan you abandon costs nothing.
+
 - **Flashing a screen no longer leaves a half-painted panel.** Each esptool step
   reset the ESP32, and because a cold boot immediately downloads an image and
   repaints the display (~28 s), every reset *started* a paint that the next step

@@ -1,36 +1,27 @@
-hokku-server (4.0.1~dev.10-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.11-1) unstable; urgency=medium
 
-  * fix(flash): do not reset the screen between flash steps. Every esptool step
-    reset the ESP32, and a cold boot immediately repaints the panel (~28s), so
-    each reset started a paint that the next step interrupted mid-refresh,
-    wedging the panel controller (BUSY held, every wait burning its 60s timeout,
-    a ~6 minute paint and a half-rendered image on the glass). All steps now run
-    --after no-reset and the app is booted exactly once, at the end. Scans reset
-    once instead of once per region read.
-
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 27 Jul 2026 04:45:00 +0000
-
-hokku-server (4.0.1~dev.9-1) unstable; urgency=medium
-
-  * flash: name every region a flash writes — the firmware file and its size to
-    0x0, the blank otadata, and the generated NVS config image — each with its
+  * fix(flash): clear otadata when flashing a screen over USB. The merged image
+    only covers ota_0, so a screen that had taken an OTA kept booting the older
+    firmware left in ota_1 and silently ignored everything just written. The
+    screen scan also read the version out of ota_0 regardless of which slot was
+    active, which is what made this invisible; it now reports the slot the device
+    actually boots.
+  * fix(flash): never reset the screen between flash steps. A reset boots the app
+    and a boot repaints the panel (~30s), so each step started a paint the next
+    step interrupted mid-refresh -- wedging the panel controller, which then held
+    BUSY and burned a 60s timeout on every wait (a ~6 minute paint, half-rendered
+    image on the glass). Every step now runs --after no-reset and the app boots
+    exactly once, at the end.
+  * fix(flash): a device scan no longer starts a panel refresh. Scanning left the
+    screen running, so looking for a device to flash began a refresh right before
+    the flash interrupted it. The scan now leaves the screen in its bootloader
+    (the panel keeps its last image -- e-paper holds without power); if no flash
+    follows within five minutes the server boots it back into firmware itself.
+  * flash: name every region a flash writes -- the firmware file and its size to
+    0x0, the blank otadata, and the generated NVS config image -- each with its
     destination offset, in both the web "Flash a screen" page and the tools/ CLI.
-  * fix(flash): write the blank otadata as part of the firmware write-flash pass
-    instead of a separate erase-region call, so a flash costs one esptool connect
-    and reset rather than two. Fewer resets mid-flash is safer for the panel
-    controller, which does not always survive being reset mid-transaction.
 
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 27 Jul 2026 04:15:00 +0000
-
-hokku-server (4.0.1~dev.8-1) unstable; urgency=medium
-
-  * fix(flash): clear otadata when flashing a screen over USB, so the bootloader
-    runs the firmware that was just written instead of whatever an earlier OTA
-    left in the other A/B slot. Also report the version of the slot the device
-    actually boots, so a screen can no longer appear up to date while running
-    older firmware.
-
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 27 Jul 2026 03:30:00 +0000
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 27 Jul 2026 12:40:00 +0000
 
 hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
 
