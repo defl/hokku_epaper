@@ -52,7 +52,8 @@
 #include "../../../common/esp32/text_render.c"  /* font table + draw_char + draw_string */
 #include "../../../common/esp32/config.c"       /* NVS config struct + load/validate    */
 #include "../../../common/esp32/state.c"  /* RTC-persistent state + validation    */
-#include "../../../common/esp32/scheduler.c"  /* now_epoch / refresh_due / retry math */
+#include "../../../common/esp32/scheduler.c"  /* now_epoch / refresh_due / retry / drift cal */
+#include "../../../common/esp32/nvs_cal.c" /* drift-calibration NVS persistence   */
 #include "../../../common/esp32/log.c"    /* log ring + level gating              */
 #include "../../../common/esp32/wifi.c"   /* WiFi connect + fast-reconnect cache  */
 #include "../../../common/esp32/net.c"    /* HTTP image fetch + header capture    */
@@ -60,6 +61,7 @@
 #include "../../../common/all/firmware_url.c" /* firmware endpoint derivation      */
 #include "../../../common/all/backoff.c"      /* exponential retry backoff policy   */
 #include "../../../common/all/frame_state.c"  /* X-Frame-State JSON builder         */
+#include "../../../common/all/sleep_cal.c"    /* oscillator-drift calibration       */
 #include "../../../common/all/json_util.c"    /* json_escape                        */
 #include "../../../common/all/logbuf.c"       /* log buffer primitive (two-tier log)*/
 #include "../../main/main.c"                     /* all firmware logic                   */

@@ -12,7 +12,8 @@ static frame_state_t base_fs(void)
         .uptime_s = 42, .bat_mv = 3980, .usb = "none", .last_sleep = "timer_wake",
         .rssi = -58, .heap_kb = 210, .spurious = 0, .cfg_ver = 3,
         .clk_now = 1700000000LL, .next_ep = 1700003600LL,
-        .sleep_err_known = 1, .sleep_err_s = -3, .wifi_cached = 1,
+        .sleep_err_known = 1, .sleep_err_s = -3,
+        .cal_known = 1, .cal_ppm = 1234, .wifi_cached = 1,
     };
     return fs;
 }
@@ -27,7 +28,7 @@ static void test_full_object_exact(void)
         "\"uptime_s\":42,\"bat_mv\":3980,\"usb\":\"none\","
         "\"last_sleep\":\"timer_wake\",\"rssi\":-58,\"heap_kb\":210,"
         "\"spurious\":0,\"cfg_ver\":3,\"clk_now\":1700000000,"
-        "\"next_ep\":1700003600,\"sleep_err_s\":-3,\"wifi_cached\":true,"
+        "\"next_ep\":1700003600,\"sleep_err_s\":-3,\"cal_ppm\":1234,\"wifi_cached\":true,"
         "\"ota\":1}";
     CHECK(strcmp(buf, expect) == 0, "frame_state: full object matches the locked schema exactly");
 }
@@ -60,6 +61,28 @@ static void test_sleep_err_null_when_unknown(void)
     frame_state_build(buf, sizeof(buf), &fs);
     CHECK(strstr(buf, "\"sleep_err_s\":null") != NULL,
           "frame_state: sleep_err_s is JSON null when unknown");
+}
+
+static void test_cal_ppm_omitted_when_unknown(void)
+{
+    char buf[512];
+    frame_state_t fs = base_fs();
+    fs.cal_known = 0;
+    frame_state_build(buf, sizeof(buf), &fs);
+    CHECK(strstr(buf, "cal_ppm") == NULL,
+          "frame_state: cal_ppm omitted when uncalibrated");
+    CHECK(strstr(buf, "\"sleep_err_s\":-3,\"wifi_cached\":") != NULL,
+          "frame_state: sleep_err_s is followed directly by wifi_cached when cal_ppm omitted");
+}
+
+static void test_cal_ppm_negative(void)
+{
+    char buf[512];
+    frame_state_t fs = base_fs();
+    fs.cal_ppm = -8000;                /* fast oscillator */
+    frame_state_build(buf, sizeof(buf), &fs);
+    CHECK(strstr(buf, "\"cal_ppm\":-8000") != NULL,
+          "frame_state: negative cal_ppm renders with sign");
 }
 
 static void test_wifi_cached_bool(void)
@@ -105,6 +128,8 @@ int main(void)
     test_bat_mv_omitted_when_negative();
     test_bat_mv_zero_is_emitted();
     test_sleep_err_null_when_unknown();
+    test_cal_ppm_omitted_when_unknown();
+    test_cal_ppm_negative();
     test_wifi_cached_bool();
     test_always_ota_capable();
     test_epoch_beyond_int32();

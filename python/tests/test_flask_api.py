@@ -546,6 +546,54 @@ def test_screen_delete_removes_from_telemetry(bare_client):
     assert "frame-1" not in state.scheduler.screens()
 
 
+def test_screen_response_carries_cal_seed(bare_client):
+    """Every /hokku/screen/ response carries the MAC-pinned drift seed headers,
+    and a reported cal_ppm updates the pinned mean."""
+    client, state = bare_client
+    mac = "aa:bb:cc:dd:ee:ff"
+    # First check-in: no history yet -> seed is (0, 0).
+    r1 = client.get(
+        "/hokku/screen/",
+        headers={
+            "X-Screen-Name": "frame-1",
+            "X-Screen-Model": "huessen_epf1301",
+            "X-Screen-Mac": mac,
+            "X-Frame-State": '{"cal_ppm": 9000}',
+        },
+    )
+    assert r1.headers["X-Sleep-Cal-N"] == "1"
+    assert r1.headers["X-Sleep-Cal-PPM"] == "9000"
+    # The MAC is stored and the mean is resolvable by MAC.
+    assert state.scheduler.cal_seed_for(mac=mac) == (9000, 1)
+
+    # A brand-new device (unknown MAC) gets a zero-sample seed and ignores it.
+    r2 = client.get(
+        "/hokku/screen/",
+        headers={
+            "X-Screen-Name": "frame-2",
+            "X-Screen-Model": "huessen_epf1301",
+            "X-Screen-Mac": "00:11:22:33:44:55",
+        },
+    )
+    assert r2.headers["X-Sleep-Cal-N"] == "0"
+
+
+def test_screen_mac_is_durable_key_across_rename(bare_client):
+    """A rename (same MAC) does not create a second screen record."""
+    client, state = bare_client
+    mac = "de:ad:be:ef:00:09"
+    client.get(
+        "/hokku/screen/",
+        headers={"X-Screen-Name": "old", "X-Screen-Model": "huessen_epf1301", "X-Screen-Mac": mac},
+    )
+    client.get(
+        "/hokku/screen/",
+        headers={"X-Screen-Name": "new", "X-Screen-Model": "huessen_epf1301", "X-Screen-Mac": mac},
+    )
+    screens = state.scheduler.screens()
+    assert "new" in screens and "old" not in screens
+
+
 # ── navigation ────────────────────────────────────────────────────────────────
 
 

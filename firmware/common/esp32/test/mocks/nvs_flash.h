@@ -57,4 +57,18 @@ static inline int nvs_get_str(nvs_handle_t h, const char *k, char *v, size_t *l)
     return 0;
 }
 
+static inline int nvs_get_i32(nvs_handle_t h, const char *k, int32_t *v) {
+    (void)h; (void)k; (void)v; return -1;   /* namespace empty by default */
+}
+static inline int nvs_get_u16(nvs_handle_t h, const char *k, uint16_t *v) {
+    (void)h; (void)k; (void)v; return -1;
+}
+static inline int nvs_set_i32(nvs_handle_t h, const char *k, int32_t v) {
+    (void)h; (void)k; (void)v; return 0;
+}
+static inline int nvs_set_u16(nvs_handle_t h, const char *k, uint16_t v) {
+    (void)h; (void)k; (void)v; return 0;
+}
+static inline int nvs_commit(nvs_handle_t h) { (void)h; return 0; }
+
 static inline void nvs_close(nvs_handle_t h) { (void)h; }

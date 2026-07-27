@@ -70,10 +70,12 @@ from hokku.webserver.resource_budget import (
 from hokku.webserver.resource_limits import detect_memory_limit_bytes
 from hokku.webserver.screen_headers import (
     parse_battery_header,
+    parse_cal_ppm,
     parse_config_state,
     parse_firmware_build,
     parse_firmware_version,
     parse_frame_state,
+    parse_mac_header,
     parse_screen_model,
 )
 from hokku.webserver.time_utils import calculate_sleep_seconds, format_duration_human
@@ -250,6 +252,19 @@ def create_app(
         frame_state = parse_frame_state(request.headers.get("X-Frame-State"))
         fw_version = parse_firmware_version(request.headers.get("X-Firmware-Version"))
         fw_build = parse_firmware_build(request.headers.get("X-Firmware-Build"))
+        # X-Screen-Mac is the durable per-device key; cal_ppm (in the frame-state
+        # JSON) is the device's current drift correction, folded into the pinned
+        # long-term mean that seeds cold-start devices.
+        screen_mac = parse_mac_header(request.headers.get("X-Screen-Mac"))
+        cal_ppm = parse_cal_ppm(frame_state.get("cal_ppm")) if frame_state else None
+
+        def _add_cal_seed(resp):
+            """Attach the MAC-pinned drift seed to every response; the device
+            decides whether to adopt it (based on the sample count)."""
+            mean_ppm, samples = scheduler.cal_seed_for(screen_name, screen_mac)
+            resp.headers["X-Sleep-Cal-PPM"] = str(mean_ppm)
+            resp.headers["X-Sleep-Cal-N"] = str(samples)
+            return resp
 
         # A device that reports its model's bundled version has finished any
         # update — drop a stale OTA-migration error and, if an UPGRADE was
@@ -291,6 +306,8 @@ def create_app(
                 firmware_version=fw_version,
                 firmware_build=fw_build,
                 screen_model=screen_model,
+                mac=screen_mac,
+                cal_ppm=cal_ppm,
             )
             if converting:
                 msg, status, label = "Converting images, try again shortly", 503, "Converting"
@@ -299,7 +316,7 @@ def create_app(
             resp = make_response(msg, status)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
             logger.debug("%s: %s told to retry in %ss", label, screen_name, sleep_seconds)
-            return resp
+            return _add_cal_seed(resp)
 
         binary = manager.panel_bytes_for_model_orientation(chosen, screen_model, cfg.orientation)
         if binary is None:
@@ -316,10 +333,12 @@ def create_app(
                 firmware_version=fw_version,
                 firmware_build=fw_build,
                 screen_model=screen_model,
+                mac=screen_mac,
+                cal_ppm=cal_ppm,
             )
             resp = make_response("Cached binary missing, try again shortly", 503)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
-            return resp
+            return _add_cal_seed(resp)
 
         scheduler.mark_served(chosen)
         scheduler.record_screen_call(
@@ -333,6 +352,8 @@ def create_app(
             firmware_version=fw_version,
             firmware_build=fw_build,
             screen_model=screen_model,
+            mac=screen_mac,
+            cal_ppm=cal_ppm,
         )
         logger.debug("Serving: %s to %s (sleep_seconds=%s)", chosen, screen_name, sleep_seconds)
 
@@ -341,6 +362,7 @@ def create_app(
         response.headers["X-Sleep-Seconds"] = str(sleep_seconds)
         response.headers["X-Server-Time-Epoch"] = str(int(_time.time()))
         response.headers["Content-Disposition"] = "attachment; filename=hokku.bin"
+        _add_cal_seed(response)
 
         # Manual OTA: if the user toggled "update on next refresh" and the screen
         # is OTA-capable with firmware to ship, tell it to update (it ignores this
@@ -901,7 +923,8 @@ def create_app(
 
         screens_payload: dict[str, dict] = {}
         screen_peek_orientations: set[Orientation] = set()
-        for sname, t in scheduler.screens().items():
+        for _sid, t in scheduler.screens().items():
+            sname = t.name
             next_update_at = None
             if t.last_seen_at and t.last_sleep_seconds:
                 next_update_at = datetime.fromtimestamp(
@@ -913,6 +936,10 @@ def create_app(
             )
             screen_peek_orientations.add(peek_orientation)
             screens_payload[sname] = {
+                "mac": t.mac,
+                "cal_ppm": t.cal_ppm,
+                "cal_mean_ppm": (round(t.cal_mean_ppm, 1) if t.cal_mean_ppm is not None else None),
+                "cal_samples": t.cal_samples,
                 "ip": t.ip,
                 "request_count": t.request_count,
                 "last_seen": (
