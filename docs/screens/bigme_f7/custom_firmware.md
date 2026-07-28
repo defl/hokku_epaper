@@ -22,6 +22,14 @@ Related docs: [`hardware_facts.md`](hardware_facts.md) (pins, battery, display),
 | **Power / battery** | USB-aware hibernation: stay awake on USB, deep-sleep on battery (`power_mode` = auto/sleep/awake). `pm_enter_mode(PM_MODE_HIBERNATION)` + `HAL_Wakeup_SetTimer_Sec`; requires `PRJCONF_PM_EN=1` **and** `PRJCONF_NET_PM_EN=1` (WiFi is powered off before hibernate — without this it reset-loops). Battery via ADC ch4/PA14 (see [`hardware_facts.md`](hardware_facts.md#voltage-sensing)). |
 | **OTA** | A/B slot update over HTTP — see [`ota.md`](ota.md). |
 
+## Power button — invisible to firmware
+
+Unlike the ESP32 screens, the F7 cannot offer press-to-refresh, or react to its
+button in any way: the button is a hardware power latch with no line to the SoC.
+Measured, not assumed — see
+[`hardware_facts.md`](hardware_facts.md#power-button), which also covers the
+consequence that a USB replug is not a power cycle while the battery is charged.
+
 ## Boot + A/B rollback safety net
 
 Every boot is protected by a **try-boot rollback** so a bad image (ours or an
