@@ -54,11 +54,31 @@ echo "hokku-installer: $DEB_INSTALLER"
 
 PIGEN_DIR="${PIGEN_DIR:-$REPO_ROOT/.pigen}"
 
-if [ ! -d "$PIGEN_DIR/.git" ]; then
+# core.autocrlf=false is not optional: pi-gen is a tree of shell scripts that
+# run inside a Linux container, and this repo sets core.autocrlf=true (the
+# git-for-windows default), which a plain `git clone` inherits. That rewrites
+# pi-gen's own build.sh shebang as "#!/bin/bash -e\r", and the kernel hands
+# bash the option "-e\r" — reported as the memorable and completely misleading
+# "/bin/bash: -: invalid option", from a script nobody edited. The whole clone
+# is affected, not just build.sh. eol=lf pins it regardless of any global.
+clone_pigen() {
     echo "Cloning pi-gen (arm64 branch) to $PIGEN_DIR ..."
     # Use the arm64 branch — purpose-built for 64-bit Pi OS. It handles the
     # raspberrypi-archive keyring and ARCH correctly, unlike master (armhf).
-    git clone --depth 1 --branch arm64 https://github.com/RPi-Distro/pi-gen.git "$PIGEN_DIR"
+    git -c core.autocrlf=false -c core.eol=lf \
+        clone --depth 1 --branch arm64 \
+        https://github.com/RPi-Distro/pi-gen.git "$PIGEN_DIR"
+}
+
+if [ ! -d "$PIGEN_DIR/.git" ]; then
+    clone_pigen
+elif [ -f "$PIGEN_DIR/build.sh" ] && head -1 "$PIGEN_DIR/build.sh" | grep -q $'\r'; then
+    # An existing clone taken before the flags above were added is unusable and
+    # fails in a way that points nowhere near line endings. Replace it rather
+    # than trying to renormalise around the build inputs staged inside it.
+    echo "Existing pi-gen clone has CRLF line endings — re-cloning ..."
+    rm -rf "$PIGEN_DIR"
+    clone_pigen
 else
     echo "Using existing pi-gen at $PIGEN_DIR"
 fi

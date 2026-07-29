@@ -1,3 +1,12 @@
+hokku-server (4.0.1~dev.18-1) unstable; urgency=medium
+
+  * No server code changes. Build fix: os/pi/build-image.sh now clones pi-gen
+    with core.autocrlf=false, and re-clones an existing CRLF clone. Inheriting
+    this repo's core.autocrlf=true corrupted pi-gen's own shebangs, so the
+    image build died with "/bin/bash: -: invalid option" on Windows.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 23:52:50 -0500
+
 hokku-server (4.0.1~dev.17-1) unstable; urgency=medium
 
   * No server code changes. Build fix: the appliance image's pre-baked arm64
