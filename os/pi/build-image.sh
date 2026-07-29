@@ -72,7 +72,14 @@ clone_pigen() {
 
 if [ ! -d "$PIGEN_DIR/.git" ]; then
     clone_pigen
-elif [ -f "$PIGEN_DIR/build.sh" ] && head -1 "$PIGEN_DIR/build.sh" | grep -q $'\r'; then
+elif [ -f "$PIGEN_DIR/build.sh" ] && [ \
+        "$(head -1 "$PIGEN_DIR/build.sh" | wc -c)" \
+        -ne "$(head -1 "$PIGEN_DIR/build.sh" | tr -d '\r' | wc -c)" ]; then
+    # Byte-count comparison rather than `grep $'\r'`: MSYS grep opens files in
+    # text mode and strips the CR before matching, so the grep form silently
+    # never fires on the one platform this check exists for. `grep -U` fixes
+    # that but means something different on BSD grep. wc/tr are unambiguous
+    # everywhere.
     # An existing clone taken before the flags above were added is unusable and
     # fails in a way that points nowhere near line endings. Replace it rather
     # than trying to renormalise around the build inputs staged inside it.

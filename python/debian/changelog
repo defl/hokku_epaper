@@ -1,3 +1,13 @@
+hokku-server (4.0.1~dev.19-1) unstable; urgency=medium
+
+  * No server code changes. Build fix: the stale-pi-gen-clone check added in
+    dev.18 tested for a carriage return with grep, which MSYS grep can never
+    match because it opens files in text mode and strips CR first — so the
+    guard never fired on Windows, the one platform it exists for. It now
+    compares byte counts before and after stripping CR.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 23:55:39 -0500
+
 hokku-server (4.0.1~dev.18-1) unstable; urgency=medium
 
   * No server code changes. Build fix: os/pi/build-image.sh now clones pi-gen
