@@ -3627,6 +3627,13 @@ async function loadConfig() {
       const body2 = document.getElementById('flash-second-body');
       if (body2) body2.hidden = false;
     }
+    // Same credentials for the F7 form — but its console can't take spaces, so
+    // only pre-fill values it could actually accept.
+    const f7s = document.getElementById('flash-f7-ssid');
+    const f7p = document.getElementById('flash-f7-pass');
+    const noSpace = v => v && !/\s/.test(v);
+    if (f7s && !f7s.value && noSpace(cfg.flash_wifi_ssid)) f7s.value = cfg.flash_wifi_ssid;
+    if (f7p && !f7p.value && noSpace(cfg.flash_wifi_pass)) f7p.value = cfg.flash_wifi_pass;
 
     currentConfig = cfg;
 

@@ -369,6 +369,37 @@ def test_flash_start_dispatches_selected_model_end_to_end(app_config, tmp_path, 
     assert captured["port"] == "COM9"
 
 
+def test_flash_start_remembers_wifi_credentials(app_config, tmp_path, monkeypatch):
+    """Flashing persists the Wi-Fi credentials to config so the form pre-fills
+    next time — the same network provisions every screen."""
+    fw = tmp_path / "hokku-huessen_epf1301-1.2.9.bin"
+    fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
+    monkeypatch.setattr(huessen_epf1301, "merged_firmware_file", lambda *a, **k: fw)
+    monkeypatch.setattr(huessen_epf1301, "nvs_tool_available", lambda: True)
+    state = _bare_state(app_config)
+    monkeypatch.setattr(state.flash_jobs, "start", lambda *a, **k: 7)
+    client = _client(state, tmp_path)
+
+    r = client.post(
+        "/hokku/api/flash/start",
+        json={
+            "port": "COM9",
+            "wifi_ssid1": "Net",
+            "wifi_pass1": "secret",
+            "wifi_ssid2": "Net2",
+            "wifi_pass2": "secret2",
+            "image_url": "http://x/hokku/screen/",
+        },
+    )
+    assert r.status_code == 200
+    assert state.config.flash_wifi_ssid == "Net"
+    assert state.config.flash_wifi_pass == "secret"  # noqa: S105
+    assert state.config.flash_wifi_ssid2 == "Net2"
+    assert state.config.flash_wifi_pass2 == "secret2"
+    saved = json.loads((tmp_path / "cfg.json").read_text())
+    assert saved["flash_wifi_ssid"] == "Net"
+
+
 def _flash_ready_client(app_config, tmp_path, monkeypatch):
     """A client where huessen firmware + NVS tool are present, so /flash/start
     reaches field validation instead of short-circuiting on 503."""

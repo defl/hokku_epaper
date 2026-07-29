@@ -1241,6 +1241,30 @@ def create_app(
             {"address": ip, "via": "ip", "port": port, "url": f"http://{ip}:{port}/hokku/screen/"}
         )
 
+    def _remember_flash_wifi(ssid1: str, pass1: str, ssid2: str | None, pass2: str | None) -> None:
+        """Persist the Wi-Fi credentials a flash just used so the form pre-fills.
+
+        Shared by every flash route — the same network provisions every screen,
+        whatever the model. ``ssid2``/``pass2`` are ``None`` for models without a
+        fallback network (the F7): those keep whatever was remembered before
+        instead of being cleared by a flash that never asked for them."""
+        if not config_path:
+            return
+        cfg = state.config
+        fields = {"flash_wifi_ssid": ssid1, "flash_wifi_pass": pass1}
+        if ssid2 is not None:
+            fields["flash_wifi_ssid2"] = ssid2
+            fields["flash_wifi_pass2"] = pass2 or ""
+        if all(getattr(cfg, k) == v for k, v in fields.items()):
+            return
+        try:
+            new_cfg = replace(cfg, **fields)
+            new_cfg.save(config_path)
+            with state._lock:
+                state.config = new_cfg
+        except Exception as e:
+            logger.warning("Could not persist WiFi credentials to config: %s", e)
+
     @app.route("/hokku/api/flash/start", methods=["POST"])
     def api_flash_start():
         """Begin flashing firmware + NVS config to a connected screen.
@@ -1315,29 +1339,9 @@ def create_app(
             return jsonify({"error": "a flash is already in progress"}), 409
 
         # Persist WiFi credentials so the form pre-fills next time.
-        wifi_pass1 = body.get("wifi_pass1") or ""
-        wifi_pass2 = body.get("wifi_pass2") or ""
-        if config_path:
-            cfg = state.config
-            if (
-                wifi_ssid1 != cfg.flash_wifi_ssid
-                or wifi_pass1 != cfg.flash_wifi_pass
-                or ssid2 != cfg.flash_wifi_ssid2
-                or wifi_pass2 != cfg.flash_wifi_pass2
-            ):
-                try:
-                    new_cfg = replace(
-                        cfg,
-                        flash_wifi_ssid=wifi_ssid1,
-                        flash_wifi_pass=wifi_pass1,
-                        flash_wifi_ssid2=ssid2,
-                        flash_wifi_pass2=wifi_pass2,
-                    )
-                    new_cfg.save(config_path)
-                    with state._lock:
-                        state.config = new_cfg
-                except Exception as e:
-                    logger.warning("Could not persist WiFi credentials to config: %s", e)
+        _remember_flash_wifi(
+            wifi_ssid1, body.get("wifi_pass1") or "", ssid2, body.get("wifi_pass2") or ""
+        )
 
         return jsonify({"job_id": job_id})
 
@@ -1383,6 +1387,12 @@ def create_app(
         if job_id is None:
             logger.warning("F7 bootstrap rejected: a flash is already in progress")
             return jsonify({"error": "a flash is already in progress"}), 409
+
+        # Persist WiFi credentials so the form pre-fills next time. The F7 has no
+        # fallback network, so the remembered second network is left alone.
+        if ssid:
+            _remember_flash_wifi(ssid, psk, None, None)
+
         return jsonify({"job_id": job_id})
 
     @app.route("/hokku/api/flash/cancel", methods=["POST"])

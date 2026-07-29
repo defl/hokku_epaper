@@ -5,6 +5,7 @@ routes. Hardware-free — the BROM catch + slot-0 write are stubbed."""
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from hokku.screens import huessen_epf1301
@@ -508,6 +509,56 @@ def test_route_start_f7_no_provision_when_blank(app_config, tmp_path, monkeypatc
     assert r.status_code == 200
     _wait_state(state.flash_jobs, "done")
     assert captured["provision"] is None
+
+
+def _f7_ready(tmp_path, monkeypatch):
+    img = tmp_path / "xr_system.img"
+    img.write_bytes(b"AWIH" + b"\x00" * 32)
+    monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
+    monkeypatch.setattr("hokku.webserver.flask_app.bigme_firmware.firmware_image_file", lambda: img)
+    monkeypatch.setattr(
+        flashing.f7_bootstrap,
+        "bootstrap_device",
+        lambda port, image_path, on_line, should_cancel, provision=None, **kw: {"ok": True},
+    )
+
+
+def test_route_start_f7_remembers_wifi_credentials(app_config, tmp_path, monkeypatch):
+    """A bootstrap persists its Wi-Fi credentials like the ESP32 flash does, so
+    the form pre-fills next time. The F7 has no fallback network, so a previously
+    remembered second network must survive untouched."""
+    _f7_ready(tmp_path, monkeypatch)
+    cfg = replace(app_config, flash_wifi_ssid2="Old2", flash_wifi_pass2="oldpw2")
+    state = _bare_state(cfg)
+    client = _client(state, tmp_path)
+
+    r = client.post(
+        "/hokku/api/flash/start_f7",
+        json={"port": "COM7", "wifi_ssid1": "Net", "wifi_pass1": "secret"},
+    )
+    assert r.status_code == 200
+    _wait_state(state.flash_jobs, "done")
+    assert state.config.flash_wifi_ssid == "Net"
+    assert state.config.flash_wifi_pass == "secret"  # noqa: S105
+    assert state.config.flash_wifi_ssid2 == "Old2"  # not clobbered by a model without one
+    assert state.config.flash_wifi_pass2 == "oldpw2"
+
+
+def test_route_start_f7_without_wifi_keeps_remembered_credentials(
+    app_config, tmp_path, monkeypatch
+):
+    """Bootstrapping with the Wi-Fi fields blank (provision skipped) must not wipe
+    the remembered credentials."""
+    _f7_ready(tmp_path, monkeypatch)
+    cfg = replace(app_config, flash_wifi_ssid="Net", flash_wifi_pass="secret")
+    state = _bare_state(cfg)
+    client = _client(state, tmp_path)
+
+    r = client.post("/hokku/api/flash/start_f7", json={"port": "COM7"})
+    assert r.status_code == 200
+    _wait_state(state.flash_jobs, "done")
+    assert state.config.flash_wifi_ssid == "Net"
+    assert state.config.flash_wifi_pass == "secret"  # noqa: S105
 
 
 def test_route_start_f7_rejects_spaces(app_config, tmp_path, monkeypatch):
