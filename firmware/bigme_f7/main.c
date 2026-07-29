@@ -61,7 +61,7 @@
 #define HOKKU_SERVER_URL        "http://192.168.6.111:8080/hokku/screen/"
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.5"
+#define FIRMWARE_VERSION        "1.2.9"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -494,10 +494,12 @@ static void refresh_thread_fn(void *arg)
             refresh_failures = 0;              /* reached the server — reset streak */
         }
 
-        if (hokku_should_sleep())
+        if (hokku_should_sleep()) {
+            led_park_for_sleep();                   /* nothing driving the LEDs while asleep */
             hokku_hibernate((uint32_t)sleep_sec);   /* battery: deep sleep, restarts on wake */
-        else
+        } else {
             OS_MSleep((uint32_t)sleep_sec * 1000);  /* USB/awake: keep looping */
+        }
     }
 }
 
@@ -861,6 +863,12 @@ int main(void)
     OS_MutexCreate(&g_ota_lock);
 
     platform_init();
+
+    /* Immediately after platform_init(), which enables XIP and with it the flash
+     * pinmux that parks PB3 as FLASH_HOLD, driven HIGH. Claiming the pins here
+     * takes them back and leaves both dark. (Whether that pinmux is what lights
+     * the green LED is unconfirmed — see led.c.) */
+    led_init();
 
     printf("\nhokku bigme-f7 firmware\n");
 
