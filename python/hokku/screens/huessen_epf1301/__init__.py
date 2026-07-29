@@ -33,6 +33,9 @@ SPEC = Esp32Spec(
     nvs_size=constants.NVS_SIZE,
     app_offset=constants.APP_OFFSET,
     bootloader_offset=constants.BOOTLOADER_OFFSET,
+    ota1_offset=constants.OTA1_OFFSET,
+    otadata_offset=constants.OTADATA_OFFSET,
+    otadata_size=constants.OTADATA_SIZE,
     vid=constants.ESP32S3_VID,
     pid=constants.ESP32S3_PID,
     baud=constants.ESPTOOL_BAUD,
@@ -49,6 +52,8 @@ release_app_header = partial(_firmware.release_app_header, SPEC)
 bundled_firmware_version = partial(_firmware.bundled_firmware_version, SPEC)
 release_app_image = partial(_firmware.release_app_image, SPEC)
 resolve_firmware_dir = partial(_firmware.resolve_firmware_dir, SPEC)
+list_firmware_files = partial(_firmware.list_firmware_files, SPEC)
+app_image_from_file = partial(_firmware.app_image_from_file, SPEC)
 
 # NVS (spec-bound; nvs_tool_available takes no spec).
 build_nvs_binary = partial(_nvs.build_nvs_binary, SPEC)
@@ -61,9 +66,13 @@ list_serial_ports = partial(_device.list_serial_ports, SPEC)
 read_device_flash = partial(_device.read_device_flash, SPEC)
 parse_device_state = partial(_device.parse_device_state, SPEC)
 scan_devices = partial(_device.scan_devices, SPEC)
+active_ota_slot = _device.active_ota_slot  # pure otadata parse, takes no spec
+boot_app = partial(_device.boot_app, SPEC)
 
 # Flashing (spec-bound).
 flash_firmware = partial(_flasher.flash_firmware, SPEC)
+describe_flash_parts = partial(_flasher.describe_flash_parts, SPEC)
+describe_config_part = partial(_flasher.describe_config_part, SPEC)
 write_config = partial(_flasher.write_config, SPEC)
 flash_device = partial(_flasher.flash_device, SPEC)
 
@@ -76,11 +85,17 @@ __all__ = [
     "SPEC",
     "EsptoolError",
     "NvsToolUnavailable",
+    "active_ota_slot",
+    "app_image_from_file",
+    "boot_app",
     "build_nvs_binary",
     "bundled_firmware_version",
     "constants",
+    "describe_config_part",
+    "describe_flash_parts",
     "flash_device",
     "flash_firmware",
+    "list_firmware_files",
     "list_serial_ports",
     "merged_firmware_file",
     "migrate_config",

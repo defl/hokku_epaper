@@ -39,6 +39,14 @@ CONFIG_VERSION = 2
 BOOTLOADER_OFFSET = 0x0
 APP_OFFSET = 0x10000
 
+# A/B OTA partitions (see firmware/huessen_epf1301/partitions.csv). The merged
+# image only covers ota_0; otadata selects which slot the bootloader runs, so a
+# USB flash must clear it (blank otadata -> ota_0) or the device keeps booting
+# whatever an earlier OTA left in ota_1.
+OTA1_OFFSET = 0x310000
+OTADATA_OFFSET = 0x610000
+OTADATA_SIZE = 0x2000
+
 # esptool --flash-size for this board (16 MB flash).
 FLASH_SIZE = "16MB"
 

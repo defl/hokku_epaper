@@ -21,6 +21,8 @@ test_server/*
 !test_server/cache/
 test_server/cache/*
 !test_server/cache/.gitkeep
+# e2e/: the committed deb-in-docker test harness (Dockerfile, driver config, runner).
+!test_server/e2e/
 *.deb
 *.buildinfo
 *.changes

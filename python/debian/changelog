@@ -1,11 +1,72 @@
-hokku-server (4.0.1~dev.4-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.12-1) unstable; urgency=medium
 
   * docs(bigme_f7): record two measured hardware findings — the power button
     is a hardware power latch with no line to the SoC (so press-to-refresh is
     impossible on that screen), and a USB replug is not a power cycle while
     the battery is charged. Documentation only; no server or firmware change.
 
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 27 Jul 2026 22:27:55 -0500
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 22:20:18 -0500
+
+hokku-server (4.0.1~dev.11-1) unstable; urgency=medium
+
+  * fix(flash): clear otadata when flashing a screen over USB. The merged image
+    only covers ota_0, so a screen that had taken an OTA kept booting the older
+    firmware left in ota_1 and silently ignored everything just written. The
+    screen scan also read the version out of ota_0 regardless of which slot was
+    active, which is what made this invisible; it now reports the slot the device
+    actually boots.
+  * fix(flash): never reset the screen between flash steps. A reset boots the app
+    and a boot repaints the panel (~30s), so each step started a paint the next
+    step interrupted mid-refresh -- wedging the panel controller, which then held
+    BUSY and burned a 60s timeout on every wait (a ~6 minute paint, half-rendered
+    image on the glass). Every step now runs --after no-reset and the app boots
+    exactly once, at the end.
+  * fix(flash): a device scan no longer starts a panel refresh. Scanning left the
+    screen running, so looking for a device to flash began a refresh right before
+    the flash interrupted it. The scan now leaves the screen in its bootloader
+    (the panel keeps its last image -- e-paper holds without power); if no flash
+    follows within five minutes the server boots it back into firmware itself.
+  * flash: name every region a flash writes -- the firmware file and its size to
+    0x0, the blank otadata, and the generated NVS config image -- each with its
+    destination offset, in both the web "Flash a screen" page and the tools/ CLI.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 27 Jul 2026 12:40:00 +0000
+
+hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
+
+  * Firmware library: optionally download firmware from GitHub Releases and pin a
+    specific version (including betas, never auto-selected) per screen model.
+    Offline-first preserved — the server only reaches the internet on an explicit
+    button press. Presented as a table with a "What to install" column. Bundled
+    firmware is labelled "bundled" (not "stable") — its upstream maturity isn't
+    known at runtime.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 26 Jul 2026 20:50:03 +0000
+
+hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
+
+  * feat(server): drive the image decode budget AND render worker count from a
+    single cgroup-aware memory budget, replacing the hardcoded 16 MP decode cap
+    and the raw-CPU-count worker heuristic. New resource_limits.py reads the real
+    cgroup memory/CPU limits (docker --memory / systemd MemoryMax / k8s), which
+    psutil and os.cpu_count() miss — that blind spot let the server size itself to
+    the host and OOM inside a constrained container. resource_budget.py derives
+    both numbers from the budget, calibrated to reproduce the proven 464 MB Pi
+    operating point (~16 MP, 1 worker) so the appliance does not regress, while a
+    1 GB+ box now renders a 38.9 MP panorama the old cap wrongly rejected.
+  * feat(config): new memory_budget_mb setting (0 = auto/cgroup-aware, N = cap
+    clamped to physical RAM) with a GUI control showing detected memory and the
+    derived decode budget / workers. Removes the image_worker_thread_count knob
+    (config + GUI) — the worker count is now always derived. Config schema v9.
+  * fix(server): reject a memory_budget_mb below the usable floor (~366 MB) with a
+    clear error instead of silently producing a zero decode budget (which made
+    Clear-caches churn and OOM the Pi); a stale too-low value is coerced to auto.
+  * ux: report image-size limits in megapixels (matching the config/UI) in the
+    failed-conversion and upload-rejection messages, not raw pixels.
+  * test: add a deb-in-docker end-to-end smoke harness (build .deb -> install ->
+    boot -> upload every test image -> validate dither) under test_server/e2e/.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 26 Jul 2026 14:55:29 -0500
 
 hokku-server (4.0.0~beta1-1) unstable; urgency=medium
 

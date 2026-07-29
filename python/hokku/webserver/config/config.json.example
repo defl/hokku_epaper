@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "refresh_image_at_time": [
     "0600",
     "1200",
@@ -13,7 +13,7 @@
   "debug_fast_refresh": false,
   "auto_clear_cache": false,
   "crop_to_fill_threshold": 0.10,
-  "image_worker_thread_count": 0,
+  "memory_budget_mb": 0,
   "image_config_default": {
     "dither": {
       "algorithm": "floyd_steinberg",
@@ -50,6 +50,8 @@
   "flash_wifi_pass": "",
   "flash_wifi_ssid2": "",
   "flash_wifi_pass2": "",
+  "firmware_dir": "/var/lib/hokku/firmware",
+  "firmware_github_repo": "defl/hokku_epaper",
   "image_config_bw": {
     "dither": {
       "algorithm": "floyd_steinberg",

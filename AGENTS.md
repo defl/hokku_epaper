@@ -127,6 +127,19 @@ that the host mocks lack — that only fails later in CI's `test-firmware-*` job
 (on Windows/MSVC add `-C Debug` to ctest). When you call a new esp-idf function, add a
 stub for it under `firmware/common/esp32/test/mocks/`.
 
+## Flashing — always show what is being written
+
+**Rule**: every flasher MUST name, for **each** region it writes, the file (or what the
+image is), its size, and the destination offset/slot — before writing it. This holds
+equally for the web "Flash a screen" UI and the `tools/` CLI scripts; a bare
+"Flashing firmware..." or "Writing configuration..." is not enough. A flash that writes
+three regions prints three lines. The descriptions live next to the flashing code (e.g.
+`describe_flash_parts` / `describe_config_part` in `hokku.common.esp32.flasher`) and are
+shared by every front end, so the web UI and the CLI cannot drift apart.
+
+Rationale: a flash silently landing in a partition the device does not boot cost real
+debugging time. What the operator sees must match what the flasher actually does.
+
 ## Tool scripts
 - All standalone Python helper/dev scripts belong in `tools/`
 - Do not create or leave `.py` files in the repo root

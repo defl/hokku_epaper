@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import logging
 import os
+import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 
 import serial.tools.list_ports
 
@@ -42,14 +44,82 @@ def list_serial_ports(spec: Esp32Spec) -> list[dict]:
     return ports
 
 
-def read_device_flash(
-    spec: Esp32Spec, port: str, timeout: int = 60
-) -> tuple[bytes | None, bytes | None]:
-    """One esptool read covering the NVS partition + app header.
+# otadata holds two ``esp_ota_select_entry_t`` records, each at the start of its
+# own 4 KB sector; the app slots they choose between are ota_0 and ota_1.
+_OTA_SELECT_SECTOR = 0x1000
+_OTA_SELECT_ENTRY_SIZE = 32
+_OTA_APP_COUNT = 2
 
-    Returns ``(nvs_bytes, app_header_bytes)`` or ``(None, None)`` on failure.
+
+def _ota_select_seq(entry: bytes) -> int | None:
+    """``ota_seq`` from one otadata entry, or None if blank or CRC-invalid.
+
+    Layout is ``uint32 ota_seq; uint8 label[20]; uint32 state; uint32 crc``, with
+    ``crc = crc32_le(UINT32_MAX, &ota_seq, 4)`` — the bootloader ignores entries
+    whose CRC does not match, so this must too.
     """
-    read_size = (spec.app_offset + 256) - spec.nvs_offset
+    if len(entry) < _OTA_SELECT_ENTRY_SIZE:
+        return None
+    (seq,) = struct.unpack_from("<I", entry, 0)
+    (crc,) = struct.unpack_from("<I", entry, 28)
+    if seq == 0xFFFFFFFF:
+        return None
+    if zlib.crc32(struct.pack("<I", seq), 0xFFFFFFFF) & 0xFFFFFFFF != crc:
+        return None
+    return seq
+
+
+def active_ota_slot(otadata: bytes | None) -> int:
+    """Which app slot the bootloader will run, from the raw otadata partition.
+
+    Mirrors the IDF bootloader: the higher of the two valid ``ota_seq`` values
+    wins and selects slot ``(seq - 1) % 2``. When neither entry is valid — blank
+    otadata, which is what a USB flash leaves behind — it falls back to ota_0.
+    """
+    if not otadata:
+        return 0
+    seqs = [
+        seq
+        for seq in (
+            _ota_select_seq(otadata[:_OTA_SELECT_ENTRY_SIZE]),
+            _ota_select_seq(
+                otadata[_OTA_SELECT_SECTOR : _OTA_SELECT_SECTOR + _OTA_SELECT_ENTRY_SIZE]
+            ),
+        )
+        if seq is not None
+    ]
+    if not seqs:
+        return 0
+    return (max(seqs) - 1) % _OTA_APP_COUNT
+
+
+def boot_app(spec: Esp32Spec, port: str, timeout: int = 60) -> bool:
+    """Leave the device running its application firmware.
+
+    Every flash/read step runs with ``--after no-reset``, because an esptool
+    reset boots the app and a boot immediately downloads and repaints the panel
+    (~28 s). Resetting between steps therefore *starts* a paint that the next
+    step interrupts mid-refresh, which leaves the panel controller wedged
+    holding BUSY — every subsequent BUSY wait then burns its full 60 s timeout.
+    So the app is booted exactly once, here, when all flash traffic is done.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "esptool", "--chip", "esp32s3", "--port", port, "run"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _read_region(spec: Esp32Spec, port: str, offset: int, size: int, timeout: int) -> bytes | None:
+    """One esptool ``read-flash`` of *size* bytes at *offset*; None on failure.
+
+    Never resets the chip afterwards — see :func:`boot_app`.
+    """
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
         tmp_path = f.name
     try:
@@ -64,9 +134,11 @@ def read_device_flash(
                 port,
                 "--baud",
                 spec.baud,
+                "--after",
+                "no-reset",
                 "read-flash",
-                hex(spec.nvs_offset),
-                hex(read_size),
+                hex(offset),
+                hex(size),
                 tmp_path,
             ],
             capture_output=True,
@@ -74,19 +146,52 @@ def read_device_flash(
             timeout=timeout,
         )
         if result.returncode != 0:
-            return None, None
+            return None
         with open(tmp_path, "rb") as f:
-            data = f.read()
-        nvs_data = data[: spec.nvs_size]
-        app_header = data[spec.app_offset - spec.nvs_offset :][:256]
-        return nvs_data, app_header
+            return f.read()
     except (OSError, subprocess.SubprocessError):
-        return None, None
+        return None
     finally:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+def read_device_flash(
+    spec: Esp32Spec, port: str, timeout: int = 60, boot_after: bool = True
+) -> tuple[bytes | None, bytes | None]:
+    """Read the NVS partition + the app header of the slot the device *boots*.
+
+    otadata is consulted rather than assuming ota_0: a device that has taken an
+    OTA boots ota_1, and reading ota_0's header would report a version the
+    bootloader is ignoring — which is exactly how a stale device passes for
+    up to date. Costs one extra esptool read, and a third only when ota_1 wins.
+
+    None of the reads reset the chip; unless *boot_after* is False the app is
+    booted once at the end (see :func:`boot_app`). Callers that will keep
+    flashing pass ``boot_after=False`` and boot when they are done.
+
+    Returns ``(nvs_bytes, app_header_bytes)`` or ``(None, None)`` on failure.
+    """
+    try:
+        read_size = (spec.app_offset + 256) - spec.nvs_offset
+        data = _read_region(spec, port, spec.nvs_offset, read_size, timeout)
+        if data is None:
+            return None, None
+        nvs_data = data[: spec.nvs_size]
+        app_header = data[spec.app_offset - spec.nvs_offset :][:256]
+
+        # A failed otadata read falls back to the ota_0 header read above.
+        otadata = _read_region(spec, port, spec.otadata_offset, spec.otadata_size, timeout)
+        if active_ota_slot(otadata) == 1:
+            ota1_header = _read_region(spec, port, spec.ota1_offset, 256, timeout)
+            if ota1_header is not None:
+                app_header = ota1_header
+        return nvs_data, app_header
+    finally:
+        if boot_after:
+            boot_app(spec, port, timeout)
 
 
 def _version_from_header(header: bytes | None) -> str | None:
@@ -151,11 +256,20 @@ def parse_device_state(
     return result
 
 
-def scan_devices(spec: Esp32Spec) -> list[dict]:
+def scan_devices(spec: Esp32Spec, boot_after: bool = True) -> list[dict]:
     """Enumerate all serial ports; for ESP32-S3 ports, read on-flash state.
 
-    Each ESP32-S3 device is read (which resets it), so only call this when no
-    flash is in progress. Returns a list of dicts (one per serial port).
+    Each ESP32-S3 device is driven over the same serial port a flash uses, so
+    only call this when no flash is in progress.
+
+    *boot_after* controls whether a scanned device is left running its firmware.
+    A caller that is about to flash passes False: booting starts a full panel
+    repaint (~28 s) at exactly the moment the operator is about to flash, and the
+    flash then interrupts that paint and wedges the panel controller. The panel
+    keeps showing its last image while held in the bootloader (e-paper is
+    persistent), but such a caller MUST guarantee an eventual boot.
+
+    Returns a list of dicts (one per serial port).
     """
     all_ports = list_serial_ports(spec)
     logger.info(
@@ -178,7 +292,7 @@ def scan_devices(spec: Esp32Spec) -> list[dict]:
             }
         )
         if dev["is_esp32"]:
-            nvs_data, app_header = read_device_flash(spec, dev["port"])
+            nvs_data, app_header = read_device_flash(spec, dev["port"], boot_after=boot_after)
             dev.update(parse_device_state(spec, nvs_data, app_header, release_header))
             state = dev
             logger.info(

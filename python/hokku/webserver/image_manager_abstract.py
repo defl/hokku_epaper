@@ -40,6 +40,7 @@ from hokku.webserver.image_renderer import (
     IMAGE_EXTENSIONS,
     JPEG_SUFFIXES,
     SVG_PROBE_DIMS,
+    decode_budget_error,
     decoded_pixels_exceed_budget,
     open_image_for_render,
 )
@@ -647,14 +648,7 @@ class AbstractImageManager(ABC):
         # pending/failed logic and the needs-thumbnail filter both skip it.
         is_jpeg = path.suffix.lower() in JPEG_SUFFIXES
         if decoded_pixels_exceed_budget(w, h, is_jpeg=is_jpeg):
-            return (
-                None,
-                None,
-                (
-                    f"image is too large to decode on this device ({w}x{h}, "
-                    f"{w * h:,} px) — downscale it, or re-save as JPEG"
-                ),
-            )
+            return None, None, decode_budget_error(w, h)
         return w, h, None
 
     def _atomic_write_json(self, payload: dict) -> None:

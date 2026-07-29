@@ -1,0 +1,9 @@
+{
+  "_comment": "Expected per-image outcome for a WELL-PROVISIONED server (the default docker run, ~2 GB). Any file NOT listed defaults to 'ok' (dither to <=6 palette colours). 'reject' = refused at upload; 'fail' = accepted but render FAILED. The decode budget scales with the memory budget (resource_budget.py), so a roomy server renders the 38.9 MP Albi panorama; only the 100 MP synth bomb is refused. For a memory-constrained run pass expectations-constrained.json.",
+  "images": {
+    "synth_black_10000x10000.png": {
+      "expect": "reject",
+      "reason": "100 MP > 40 MP upload cap (decompression-bomb guard) — refused at upload regardless of memory budget"
+    }
+  }
+}

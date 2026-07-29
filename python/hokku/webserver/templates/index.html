@@ -515,6 +515,11 @@
   .state-modal td:first-child { color: var(--stone); width: 35%; }
   .state-modal .stale { color: var(--persimmon); font-size: 0.85em; }
   .state-modal .state-missing { color: var(--bamboo); font-style: italic; }
+  #sec-firmware .fw-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  #sec-firmware .fw-table th { text-align: left; font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--stone); font-weight: 700; padding: 4px 14px 6px 0; border-bottom: 1px solid var(--bamboo-soft); white-space: nowrap; }
+  #sec-firmware .fw-table td { padding: 9px 14px 9px 0; border-bottom: 1px solid var(--bamboo-soft); vertical-align: top; }
+  #sec-firmware .fw-table th:last-child, #sec-firmware .fw-table td:last-child { padding-right: 0; }
+  #sec-firmware .fw-table select { max-width: 100%; }
 
   /* ── Toast ────────────────────────────────────────────────── */
   .toast {
@@ -1021,6 +1026,35 @@
   </div>
 </section>
 
+<!-- Firmware library -->
+<section id="sec-firmware" class="config-section">
+  <h2>Firmware library</h2>
+  <div class="section-card">
+    <p class="config-section-label">Choose which firmware each screen model is offered</p>
+    <div class="flash-note">
+      The server ships bundled firmware and works fully offline. You can also download
+      newer versions from GitHub and <strong>pin</strong> a specific one per model — the
+      pinned version is what a screen receives over-the-air or when flashed. Betas are
+      never chosen automatically; pin one deliberately to use it.
+    </div>
+
+    <div id="firmware-models"><div class="screens-empty">Loading…</div></div>
+
+    <div id="firmware-online">
+      <div class="config-row" style="flex-wrap:wrap;gap:10px;">
+        <button type="button" class="btn btn-secondary btn-small" id="fw-check-btn"
+                onclick="checkGithubFirmware()">Check GitHub for firmware</button>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+          <input type="checkbox" id="fw-include-pre" onchange="onFwIncludePreChange()">
+          <span>Include pre-releases (beta)</span>
+        </label>
+        <span id="fw-remote-status" class="flash-status"></span>
+      </div>
+      <div id="firmware-remote"></div>
+    </div>
+  </div>
+</section>
+
 <!-- Image rendering -->
 <section id="sec-image-rendering" class="config-section">
   <h2>Image rendering</h2>
@@ -1200,20 +1234,15 @@
     </div>
 
     <div class="config-row">
-      <label>Image workers:</label>
-      <span class="ctrl-tip" data-tip="Auto: uses all CPU cores minus 1, capped by free memory (~50 MB per worker).&#10;Single threaded: serial processing — safest, lowest memory.&#10;Custom: enter an exact worker count (1–1000).&#10;More workers = faster batch conversion but more RAM and CPU.">
-        <select id="image-worker-mode" onchange="onWorkerModeChange()">
-          <option value="auto">Auto</option>
-          <option value="serial" selected>Single threaded</option>
-          <option value="custom">Custom</option>
-        </select>
+      <label>Memory budget:</label>
+      <span class="ctrl-tip" data-tip="Maximum memory the server may use, in MB. Leave empty for automatic detection — honours a container / cgroup memory limit if there is one, otherwise physical RAM.&#10;The image decode budget (largest image it will render) and the number of parallel render workers are both derived from this.&#10;Lower it to cap RAM use on a shared box. Setting it above the detected physical RAM has no effect. Too low (below ~370 MB) is rejected — the server can't decode images with less.">
+        <input type="number" id="memory-budget-mb" min="370" step="1" placeholder="auto" style="width:100px;">
+        <span class="info">MB (empty = auto)</span>
       </span>
-      <input type="number" id="image-worker-count" min="1" max="1000" step="1" style="width:80px; display:none;" value="2">
     </div>
     <div class="config-row" style="margin-top:-6px; margin-bottom:8px;">
       <label></label>
-      <span class="info" id="image-worker-system-info" style="font-style:italic;"></span>
-      <span class="info" id="image-worker-count-resolved" style="font-style:italic;"></span>
+      <span class="info" id="memory-budget-info" style="font-style:italic;"></span>
     </div>
 
     <div class="config-row">
@@ -1379,6 +1408,228 @@ function toggleAdmin() {
   const body   = document.getElementById('admin-body');
   const open   = body.classList.toggle('open');
   toggle.classList.toggle('open', open);
+  // Load the firmware library the first time Admin is expanded (it's hidden
+  // during normal use, so there's no reason to fetch it on every page load).
+  if (open && !firmwareLibraryLoaded) loadFirmwareLibrary();
+}
+
+// ── Firmware library ────────────────────────────────────────────
+const FW_MODEL_LABELS = {
+  huessen_epf1301: 'Huessen EPF1301',
+  seeedstudio_e1004: 'Seeed reTerminal E1004',
+  bigme_f7: 'Bigme F7',
+};
+let firmwareLibraryLoaded = false;
+let firmwareRepo = '';
+// True once the user has confirmed the one online action this session — so
+// toggling "include pre-releases" afterwards re-queries without re-prompting.
+let firmwareOnlineConfirmed = false;
+
+function fwEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fwLabel(model) { return FW_MODEL_LABELS[model] || model; }
+function fwChannelBadge(channel) {
+  if (channel === 'beta')
+    return ' <span title="Pre-release / beta" style="color:#a60;font-weight:700;font-size:0.82em">BETA</span>';
+  return '';
+}
+
+async function loadFirmwareLibrary() {
+  const container = document.getElementById('firmware-models');
+  try {
+    const r = await fetch('/hokku/api/firmware/library');
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    firmwareLibraryLoaded = true;
+    firmwareRepo = data.repo || '';
+    renderFirmwareModels(data);
+  } catch (e) {
+    container.innerHTML = '<div class="screens-empty">Could not load the firmware library: '
+      + fwEsc(e.message) + '</div>';
+  }
+}
+
+function renderFirmwareModels(data) {
+  const container = document.getElementById('firmware-models');
+  const models = data.models || {};
+  const rows = Object.keys(models);
+  if (!rows.length) {
+    container.innerHTML = '<div class="screens-empty">No firmware-capable models.</div>';
+    return;
+  }
+  let html = '<table class="fw-table"><thead><tr>'
+    + '<th>Screen model</th><th>Currently serving</th><th>What to install</th>'
+    + '</tr></thead><tbody>';
+  for (const model of rows) {
+    const m = models[model];
+    const eff = m.effective;
+    const pinned = m.pinned;
+    html += '<tr><td><strong>' + fwEsc(fwLabel(model)) + '</strong></td>';
+    if (!eff) {
+      html += '<td colspan="2" style="color:var(--stone,#888)">No firmware available.</td></tr>';
+      continue;
+    }
+    // Currently serving.
+    let note;
+    if (pinned) note = 'pinned';
+    else if (m.effective_source === 'bundled') note = 'bundled with this install';
+    else note = 'auto — newest stable';
+    html += '<td><strong>' + fwEsc(eff) + '</strong>' + fwChannelBadge(m.effective_channel)
+      + '<div style="font-size:0.8em;color:var(--stone,#888)">' + fwEsc(note) + '</div></td>';
+    // What to install (pin control).
+    const avail = m.available || [];
+    let opts = '<option value="">Auto (bundled / newest stable)</option>';
+    for (const v of avail) {
+      const sel = (pinned && v.version === pinned) ? ' selected' : '';
+      const src = v.source === 'downloaded' ? ' — downloaded' : ' — bundled';
+      const lbl = v.version + (v.channel === 'beta' ? ' (beta)' : '') + src;
+      opts += '<option value="' + fwEsc(v.version) + '"' + sel + '>' + fwEsc(lbl) + '</option>';
+    }
+    html += '<td><select id="fw-pin-' + fwEsc(model) + '" onchange="pinFirmware(\'' + fwEsc(model) + '\')">'
+      + opts + '</select> <span id="fw-pin-status-' + fwEsc(model) + '" class="flash-status"></span></td>';
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+async function pinFirmware(model) {
+  const sel = document.getElementById('fw-pin-' + model);
+  const status = document.getElementById('fw-pin-status-' + model);
+  const version = sel.value || null;  // '' -> clear pin (auto)
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/hokku/api/firmware/select', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model, version}),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    status.textContent = '';
+    showToast(version ? (fwLabel(model) + ' pinned to ' + version)
+                      : (fwLabel(model) + ' set to auto'));
+    loadFirmwareLibrary();  // refresh the "Serving:" line
+  } catch (e) {
+    status.textContent = '';
+    showToast('Could not pin firmware: ' + e.message);
+    loadFirmwareLibrary();
+  }
+}
+
+// The full GitHub list (stable + beta) from the last online check, so toggling
+// the beta filter re-renders instantly without another request.
+let firmwareRemoteAll = null;
+
+// Re-toggling the beta filter only re-renders what we already fetched — it does
+// not go back online.
+function onFwIncludePreChange() {
+  if (firmwareRemoteAll !== null) renderRemoteFirmware();
+}
+
+// Button entry point: confirm the online action once, then fetch the list.
+async function checkGithubFirmware() {
+  if (!firmwareOnlineConfirmed) {
+    const src = firmwareRepo ? ('github.com/' + firmwareRepo) : 'GitHub';
+    const ok = await showConfirm({
+      title: 'Check GitHub for firmware?',
+      message: 'This connects to GitHub over the internet to read the list of '
+        + 'published firmware releases from ' + src + ', the authoritative source. '
+        + 'It is a read-only request — nothing about your server, your screens, or '
+        + 'your network is sent — but it is an online action, so it only happens '
+        + 'when you approve it below.',
+      okLabel: 'Check GitHub',
+      okClass: 'btn-primary',
+    });
+    if (!ok) return;
+    firmwareOnlineConfirmed = true;
+  }
+  _fetchRemoteFirmware();
+}
+
+async function _fetchRemoteFirmware() {
+  const btn = document.getElementById('fw-check-btn');
+  const status = document.getElementById('fw-remote-status');
+  const prev = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Checking…';
+  status.textContent = 'Contacting GitHub…';
+  try {
+    // Always fetch everything (stable + pre-releases) in one go; the checkbox
+    // then filters the display so the empty state can point at hidden betas.
+    const r = await fetch('/hokku/api/firmware/remote?prereleases=1');
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    status.textContent = '';
+    firmwareRemoteAll = data.releases || [];
+    renderRemoteFirmware();
+  } catch (e) {
+    status.textContent = '';
+    document.getElementById('firmware-remote').innerHTML =
+      '<div class="screens-empty">Could not reach GitHub: ' + fwEsc(e.message) + '</div>';
+  } finally {
+    btn.disabled = false; btn.textContent = prev;
+  }
+}
+
+function renderRemoteFirmware() {
+  const el = document.getElementById('firmware-remote');
+  const all = firmwareRemoteAll || [];
+  const includePre = document.getElementById('fw-include-pre').checked;
+  const releases = all.filter(r => includePre || !r.prerelease);
+  if (!releases.length) {
+    const betas = all.filter(r => r.prerelease).length;
+    let msg;
+    if (!all.length) {
+      msg = 'No downloadable firmware found in GitHub releases.';
+    } else if (betas && !includePre) {
+      msg = 'No stable firmware published. ' + betas + ' pre-release (beta) build'
+        + (betas === 1 ? '' : 's') + ' available — tick “Include pre-releases (beta)” above to show '
+        + (betas === 1 ? 'it' : 'them') + '.';
+    } else {
+      msg = 'No downloadable firmware found.';
+    }
+    el.innerHTML = '<div class="screens-empty">' + fwEsc(msg) + '</div>';
+    return;
+  }
+  let html = '<p class="config-section-label" style="margin-top:10px">Available on GitHub</p>';
+  for (const rel of releases) {
+    const sizeMb = rel.size ? (rel.size / 1048576).toFixed(1) + ' MB' : '';
+    html += '<div class="config-row" style="flex-wrap:wrap;gap:8px;align-items:baseline;">';
+    html += '<span style="min-width:180px">' + fwEsc(fwLabel(rel.model)) + '</span>';
+    html += '<span><strong>' + fwEsc(rel.version) + '</strong>' + fwChannelBadge(rel.channel)
+      + ' <span style="color:var(--stone,#888);font-size:0.82em">' + fwEsc(rel.tag)
+      + (sizeMb ? ' · ' + sizeMb : '') + '</span></span>';
+    if (rel.downloaded) {
+      html += '<span style="color:var(--accent,#2a6);font-size:0.85em">✓ in library</span>';
+    } else {
+      html += '<button type="button" class="btn btn-secondary btn-small" '
+        + 'onclick="downloadFirmware(\'' + fwEsc(rel.model) + '\',\'' + fwEsc(rel.tag) + '\',this)">'
+        + 'Download</button>';
+    }
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+async function downloadFirmware(model, tag, btn) {
+  const prev = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Downloading…';
+  try {
+    const r = await fetch('/hokku/api/firmware/fetch', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model, tag}),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    showToast('Downloaded ' + fwLabel(model) + ' ' + j.version
+      + (j.channel === 'beta' ? ' (beta) — pin it to use it' : ''));
+    await loadFirmwareLibrary();     // it now appears in the picker
+    await _fetchRemoteFirmware();    // refresh so it shows "in library"
+  } catch (e) {
+    btn.disabled = false; btn.textContent = prev;
+    showToast('Download failed: ' + e.message);
+  }
 }
 
 // Dither config UI state. `ditherState` is the form's working copy; it's
@@ -2429,11 +2680,6 @@ function removeTime(idx) {
   renderRefreshTimes();
 }
 
-function onWorkerModeChange() {
-  const mode = document.getElementById('image-worker-mode').value;
-  document.getElementById('image-worker-count').style.display = mode === 'custom' ? '' : 'none';
-}
-
 async function saveConfig() {
   if (document.getElementById('mdns-enabled').checked &&
       !document.getElementById('mdns-hostname').value.trim()) {
@@ -2449,12 +2695,9 @@ async function saveConfig() {
       ? (document.getElementById('mdns-hostname').value.trim() || '')
       : '',
     crop_to_fill_threshold: (parseInt(document.getElementById('crop-to-fill-threshold').value) || 0) / 100,
-    image_worker_thread_count: (() => {
-      const mode = document.getElementById('image-worker-mode').value;
-      if (mode === 'auto') return 0;
-      if (mode === 'serial') return 1;
-      const v = parseInt(document.getElementById('image-worker-count').value, 10);
-      return Number.isNaN(v) || v < 1 ? 2 : Math.min(v, 1000);
+    memory_budget_mb: (() => {
+      const v = parseInt(document.getElementById('memory-budget-mb').value, 10);
+      return Number.isNaN(v) || v < 1 ? 0 : v;  // empty / invalid → 0 = auto
     })(),
     image_config_default: ditherState,
     classifier_bw_detect_enabled: document.getElementById('bw-detect-enabled').checked,
@@ -2487,7 +2730,9 @@ async function saveConfig() {
       // user just submitted.
       refreshStatus();
     } else {
-      showToast('Failed to save configuration');
+      let msg = 'Failed to save configuration';
+      try { const j = await resp.json(); if (j && j.error) msg = j.error; } catch (_) { /* keep default */ }
+      showToast(msg);
     }
   } catch (e) {
     showToast('Error: ' + e.message);
@@ -3330,13 +3575,8 @@ async function loadConfig() {
     document.getElementById('crop-to-fill-threshold').value = fillPct;
     document.getElementById('fill-threshold-val').textContent = fillPct + '%';
     (function() {
-      const count = cfg.image_worker_thread_count ?? 1;
-      const modeEl = document.getElementById('image-worker-mode');
-      const customEl = document.getElementById('image-worker-count');
-      if (count === 0) { modeEl.value = 'auto'; }
-      else if (count === 1) { modeEl.value = 'serial'; }
-      else { modeEl.value = 'custom'; customEl.value = count; }
-      onWorkerModeChange();
+      const mb = cfg.memory_budget_mb ?? 0;  // 0 = auto → empty field
+      document.getElementById('memory-budget-mb').value = mb > 0 ? mb : '';
     })();
 
     document.getElementById('server-time').textContent = data.server_time || '';
@@ -3462,18 +3702,25 @@ async function refreshStatus() {
     lastBundledFirmwareVersions = data.bundled_firmware_versions || {};
     renderScreens(data.screens, lastBundledFirmwareVersions);
 
-    // Image worker system info (cores + RAM) + resolved count
-    const sysInfoEl = document.getElementById('image-worker-system-info');
-    const resolvedEl = document.getElementById('image-worker-count-resolved');
-    if (sysInfoEl) {
+    // Memory budget: detected system memory + the derived decode budget / workers.
+    const memInfoEl = document.getElementById('memory-budget-info');
+    if (memInfoEl) {
       const parts = [];
-      if (data.cpu_cores != null) parts.push(`${data.cpu_cores} cores`);
-      if (data.memory_available_gb != null) parts.push(`${data.memory_available_gb} GB free RAM`);
-      sysInfoEl.textContent = parts.join(', ');
-    }
-    if (resolvedEl && data.image_worker_count_resolved != null) {
-      const r = data.image_worker_count_resolved;
-      resolvedEl.textContent = r === 1 ? '→ 1 worker (serial)' : `→ ${r} workers active`;
+      if (data.memory_limit_mb != null) parts.push(`system: ${data.memory_limit_mb} MB detected`);
+      if (data.cpu_limit != null) parts.push(`${data.cpu_limit} CPU${data.cpu_limit === 1 ? '' : 's'}`);
+      if (data.memory_budget_effective_mb != null && data.memory_budget_auto === false) {
+        parts.push(`budget: ${data.memory_budget_effective_mb} MB (cap)`);
+      }
+      if (data.decode_budget_pixels != null) {
+        parts.push(data.decode_budget_pixels > 0
+          ? `→ decode budget ${(data.decode_budget_pixels / 1e6).toFixed(0)} MP`
+          : '→ decode budget 0 (under-provisioned)');
+      }
+      if (data.image_worker_count_resolved != null) {
+        const r = data.image_worker_count_resolved;
+        parts.push(`${r} worker${r === 1 ? '' : 's'}`);
+      }
+      memInfoEl.textContent = parts.join(' · ');
     }
 
     // Disk usage next to auto-clear toggle
@@ -3505,7 +3752,7 @@ function showDebugInfo() {
   });
 }
 
-function showConfirm({title, message, okLabel}) {
+function showConfirm({title, message, okLabel, okClass}) {
   return new Promise(resolve => {
     const modal = document.getElementById('confirm-modal');
     document.getElementById('confirm-title').textContent = title;
@@ -3513,6 +3760,9 @@ function showConfirm({title, message, okLabel}) {
     const okBtn = document.getElementById('confirm-ok');
     const cancelBtn = document.getElementById('confirm-cancel');
     okBtn.textContent = okLabel || 'OK';
+    // Default to the destructive (red) style so existing delete confirms are
+    // unchanged; a benign confirm can opt into a neutral primary button.
+    okBtn.className = 'btn ' + (okClass || 'btn-danger');
     modal.classList.add('show');
 
     const cleanup = (result) => {

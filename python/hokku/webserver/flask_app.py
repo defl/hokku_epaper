@@ -38,19 +38,16 @@ from pillow_heif import register_heif_opener
 from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
-from hokku.screens import huessen_epf1301
+from hokku.screens import firmware_registry, huessen_epf1301
 from hokku.screens.bigme_f7 import bootstrap as bigme_bootstrap
 from hokku.screens.bigme_f7 import firmware as bigme_firmware
-from hokku.screens.firmware_registry import (
-    bundled_firmware_versions,
-    firmware_version_for,
-    release_app_image_for,
-)
 from hokku.screens.flasher_registry import esp32_screen, esp32_screens
 from hokku.screens.registry import DISPLAY_REGISTRY
+from hokku.webserver import firmware_github
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
+from hokku.webserver.firmware_library import FirmwareStore
 from hokku.webserver.image_abc import transform_bboxes_to_canvas_norm
 from hokku.webserver.image_config import _image_config_from_dict
 from hokku.webserver.image_record import ConvertStatus
@@ -59,11 +56,18 @@ from hokku.webserver.image_renderer import (
     MAX_UPLOAD_PIXELS,
     SVG_PROBE_DIMS,
     ImageRenderer,
+    format_megapixels,
     open_image_for_render,
 )
 from hokku.webserver.mdns import _get_local_ip
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS, PRESET_META
+from hokku.webserver.resource_budget import (
+    MIN_MEMORY_BUDGET_MB,
+    compute_budget,
+    memory_budget_too_low,
+)
+from hokku.webserver.resource_limits import detect_memory_limit_bytes
 from hokku.webserver.screen_headers import (
     parse_battery_header,
     parse_config_state,
@@ -204,6 +208,14 @@ def create_app(
         else None
     ) or None
 
+    def _firmware_store() -> FirmwareStore:
+        """A live FirmwareStore over the current config's download dir.
+
+        Built per request (cheap: a couple of globs + a small JSON read) so it
+        always reflects on-disk downloads/pins, mirroring how handlers read
+        ``state.config`` fresh each request."""
+        return FirmwareStore(Path(state.config.firmware_dir))
+
     # ── Firmware-facing ────────────────────────────────────────
 
     @app.route("/hokku/screen/", strict_slashes=False, methods=["GET", "POST"])
@@ -243,7 +255,7 @@ def create_app(
         # update — drop a stale OTA-migration error and, if an UPGRADE was
         # pending, clear it (the retry succeeded). Re-flash requests are one-shot
         # and clear themselves when signalled, so leave those alone.
-        model_fw_version = firmware_version_for(screen_model)
+        model_fw_version = _firmware_store().effective_version(screen_model)
         if fw_version and fw_version == model_fw_version:
             scheduler.clear_ota_error(screen_name)
             if scheduler.is_ota_pending(screen_name) and not scheduler.is_ota_reflash(screen_name):
@@ -379,7 +391,7 @@ def create_app(
         an absent model defaults to the huessen reference model."""
         model_arg = request.args.get("model") or request.headers.get("X-Screen-Model")
         model = parse_screen_model(model_arg) if model_arg else "huessen_epf1301"
-        app_image = release_app_image_for(model)
+        app_image = _firmware_store().effective_app_image(model)
         if not app_image:
             logger.error("OTA firmware.bin requested for model %r but no firmware found", model)
             abort(404)
@@ -532,7 +544,7 @@ def create_app(
                     skipped.append(
                         {
                             "name": name,
-                            "reason": f"image too large; cap {MAX_UPLOAD_PIXELS:,} px",
+                            "reason": f"image too large; limit {format_megapixels(MAX_UPLOAD_PIXELS)}",
                         }
                     )
                     continue
@@ -544,7 +556,8 @@ def create_app(
                 skipped.append(
                     {
                         "name": name,
-                        "reason": f"image too large ({w}x{h}); cap {MAX_UPLOAD_PIXELS:,} px",
+                        "reason": f"image too large: {format_megapixels(w * h)} ({w}x{h}); "
+                        f"limit {format_megapixels(MAX_UPLOAD_PIXELS)}",
                     }
                 )
                 continue
@@ -669,9 +682,12 @@ def create_app(
         model = state.scheduler.get_screen_model(name)
         # Block only when there is nothing to serve for this screen: its own
         # model has no firmware, and (for a screen that hasn't reported a model
-        # yet) the server has no bundled firmware at all.
-        model_version = firmware_version_for(model)
-        has_firmware = model_version if model else any(bundled_firmware_versions().values())
+        # yet) the server has no firmware at all. Uses the *effective* version
+        # (pin/highest-stable) so a re-flash vs upgrade is judged against what
+        # will actually be served.
+        store = _firmware_store()
+        model_version = store.effective_version(model)
+        has_firmware = model_version if model else any(store.effective_versions().values())
         if not has_firmware:
             return jsonify({"error": "no bundled firmware available for this screen"}), 409
         body = request.get_json(silent=True) or {}
@@ -685,6 +701,141 @@ def create_app(
         state.scheduler.set_ota_pending(name, enabled, reflash=reflash)
         return jsonify({"ok": True, "ota_pending": enabled})
 
+    # ── API: firmware library (bundled + downloaded + pins) ────────
+
+    @app.route("/hokku/api/firmware/library")
+    def api_firmware_library():
+        """The local firmware library: per-model available versions plus which is
+        effective (served) and which is pinned. No network access."""
+        store = _firmware_store()
+        models = {}
+        for model in firmware_registry.known_models():
+            eff = store.effective(model)
+            models[model] = {
+                "effective": eff.version if eff else None,
+                "effective_channel": eff.channel if eff else None,
+                "effective_source": eff.source if eff else None,
+                "pinned": store.pinned(model),
+                "available": [
+                    {
+                        "version": v.version,
+                        "channel": v.channel,
+                        "source": v.source,
+                        "tag": v.tag,
+                    }
+                    for v in store.variants(model)
+                ],
+            }
+        return jsonify(
+            {
+                "repo": state.config.firmware_github_repo,
+                "models": models,
+            }
+        )
+
+    @app.route("/hokku/api/firmware/remote")
+    def api_firmware_remote():
+        """List firmware downloadable from GitHub Releases. On demand only.
+
+        Prereleases (betas) are excluded unless ``?prereleases=1``. This is the
+        only route that reaches the internet, and only because the user asked."""
+        cfg = state.config
+        include_pre = request.args.get("prereleases") == "1"
+        try:
+            remote = firmware_github.available_firmware(
+                cfg.firmware_github_repo, include_prereleases=include_pre
+            )
+        except firmware_github.FirmwareFetchError as e:
+            return jsonify({"error": str(e)}), 502
+        store = _firmware_store()
+        have = {m: {v.version for v in store.variants(m)} for m in firmware_registry.known_models()}
+        items = [
+            {
+                "model": r.model_id,
+                "version": r.version,
+                "tag": r.tag,
+                "channel": r.channel,
+                "prerelease": r.prerelease,
+                "size": r.size,
+                "downloaded": r.version in have.get(r.model_id, set()),
+            }
+            for r in remote
+        ]
+        return jsonify({"releases": items, "include_prereleases": include_pre})
+
+    @app.route("/hokku/api/firmware/fetch", methods=["POST"])
+    def api_firmware_fetch():
+        """Download one firmware asset from GitHub into the library.
+
+        Body: ``{"model": <id>, "tag": <release-tag>}`` (or ``"version"``). The
+        download is validated as a real image for the model before it is admitted
+        (a bad asset is rejected, not stored). Does NOT change what is served —
+        the user must pin it separately."""
+        cfg = state.config
+        body = request.get_json(silent=True) or {}
+        model = body.get("model")
+        tag = body.get("tag")
+        version = body.get("version")
+        if model not in firmware_registry.known_models():
+            return jsonify({"error": "unknown model"}), 400
+        if not tag and not version:
+            return jsonify({"error": "tag or version required"}), 400
+        # Include prereleases so a beta can be fetched by its exact tag/version.
+        try:
+            remote = firmware_github.available_firmware(
+                cfg.firmware_github_repo, include_prereleases=True
+            )
+        except firmware_github.FirmwareFetchError as e:
+            return jsonify({"error": str(e)}), 502
+        match = next(
+            (r for r in remote if r.model_id == model and (r.tag == tag or r.version == version)),
+            None,
+        )
+        if match is None:
+            return jsonify({"error": "no matching firmware asset in that release"}), 404
+        try:
+            data = firmware_github.download(match)
+        except firmware_github.FirmwareFetchError as e:
+            return jsonify({"error": str(e)}), 502
+        try:
+            variant = _firmware_store().add_download(
+                match.model_id, match.version, data, channel=match.channel, tag=match.tag
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 422
+        logger.info(
+            "Downloaded firmware %s %s (%s) from %s",
+            model,
+            variant.version,
+            variant.channel,
+            match.tag,
+        )
+        return jsonify(
+            {"ok": True, "model": model, "version": variant.version, "channel": variant.channel}
+        )
+
+    @app.route("/hokku/api/firmware/select", methods=["POST"])
+    def api_firmware_select():
+        """Pin a model to a specific version, or clear the pin.
+
+        Body: ``{"model": <id>, "version": <ver>|null}``. Clearing reverts the
+        model to the highest-stable default. A pin must reference a version that
+        is actually present in the library."""
+        store = _firmware_store()
+        body = request.get_json(silent=True) or {}
+        model = body.get("model")
+        version = body.get("version")
+        if model not in firmware_registry.known_models():
+            return jsonify({"error": "unknown model"}), 400
+        if version is not None:
+            if not isinstance(version, str):
+                return jsonify({"error": "version must be a string or null"}), 400
+            available = {v.version for v in store.variants(model)}
+            if version not in available:
+                return jsonify({"error": "version not present in the firmware library"}), 404
+        store.set_pin(model, version)
+        return jsonify({"ok": True, "model": model, "pinned": version})
+
     @app.route("/hokku/api/scrub", methods=["POST"])
     def api_scrub():
         """Remove stale-slug panel/preview files immediately (preserves thumbs)."""
@@ -697,6 +848,9 @@ def create_app(
     def api_status():
         manager = state.manager
         scheduler = state.scheduler
+
+        # Re-derive the resource budget for display (cheap; reads cgroup/psutil).
+        _budget = compute_budget(state.config.memory_budget_mb)
 
         records = manager.list()
         progress = manager.conversion_progress()
@@ -826,10 +980,23 @@ def create_app(
                 "image_worker_count_resolved": state.manager.resolved_worker_count,
                 "cpu_cores": os.cpu_count(),
                 "memory_available_gb": round(psutil.virtual_memory().available / 1e9, 1),
+                # Cgroup-aware resource picture (honours docker --memory / --cpus /
+                # systemd MemoryMax, unlike cpu_cores / memory_available_gb which
+                # report the host). memory_limit_mb is what's physically detected;
+                # memory_budget_effective_mb is after the memory_budget_mb cap.
+                "cpu_limit": _budget.cpu_count,
+                "memory_limit_mb": round(detect_memory_limit_bytes() / (1024 * 1024)),
+                "memory_budget_effective_mb": round(_budget.memory_bytes / (1024 * 1024)),
+                "memory_budget_auto": _budget.memory_auto,
+                "decode_budget_pixels": _budget.decode_budget_pixels,
+                "under_provisioned": _budget.under_provisioned,
                 "bundled_firmware_version": bundled_firmware_version,
-                # Per-model bundled firmware versions, keyed by model id (the
-                # legacy scalar above mirrors the huessen reference model).
-                "bundled_firmware_versions": bundled_firmware_versions(),
+                # Per-model EFFECTIVE firmware versions (pin, else highest stable
+                # across bundled + downloaded), keyed by model id. Kept under the
+                # historical key so the GUI's outdated-firmware comparison targets
+                # what will actually be served. Equals the bundled version when
+                # nothing has been downloaded or pinned.
+                "bundled_firmware_versions": _firmware_store().effective_versions(),
             }
         )
 
@@ -889,6 +1056,14 @@ def create_app(
         except (TypeError, ValueError) as e:
             logger.info("Config save: invalid config: %s", e)
             return jsonify({"error": f"invalid config: {e}"}), 400
+        if memory_budget_too_low(new_cfg.memory_budget_mb):
+            msg = (
+                f"Memory budget too low: {new_cfg.memory_budget_mb} MB. "
+                f"Minimum is {MIN_MEMORY_BUDGET_MB} MB — below this the server can't "
+                f"decode images. Leave the field empty for automatic detection."
+            )
+            logger.info("Config save rejected: %s", msg)
+            return jsonify({"error": msg}), 400
         try:
             new_cfg.save(config_path)
         except OSError as e:
@@ -1021,9 +1196,18 @@ def create_app(
             return jsonify({"error": "a flash is in progress", "busy": True}), 409
         try:
             screen = esp32_screen(request.args.get("model")) or huessen_epf1301
-            devices = screen.scan_devices()
+            # Leave the scanned screens in the bootloader. Booting one starts a
+            # full panel repaint (~30-60s), and a scan is nearly always the step
+            # right before a flash — which would then interrupt that paint
+            # mid-refresh and wedge the panel controller. The panel keeps showing
+            # its last image meanwhile (e-paper holds without power), and
+            # arm_deferred_boot puts it back to work if no flash follows.
+            devices = screen.scan_devices(boot_after=False)
         finally:
             state.flash_jobs.end_scan()
+        state.flash_jobs.arm_deferred_boot(
+            screen, [d["port"] for d in devices if d.get("is_esp32")]
+        )
         # Classify non-ESP32 ports the UI knows how to guide: a CH340 bridge is a
         # Bigme F7 (XR872), which is USB-flashed by a different (vendor-tool)
         # procedure, not esptool — so the UI shows F7 guidance instead of the
