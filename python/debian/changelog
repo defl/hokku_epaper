@@ -1,3 +1,11 @@
+hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
+
+  * docs(agents): derive the dev-version N from main's declared version rather
+    than a commit count. The old rev-list formula regressed as soon as PRs were
+    squash-merged, so apt could stop seeing an upgrade.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 22:27:13 -0500
+
 hokku-server (4.0.1~dev.12-1) unstable; urgency=medium
 
   * docs(bigme_f7): record two measured hardware findings — the power button
