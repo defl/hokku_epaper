@@ -18,6 +18,7 @@ first boot
    -> Flask wizard on port 80          flask_app.py
    -> user submits the form
    -> system_config.py applies hostname/tz/country/WiFi/SSH/Samba/password
+   -> usb-mode.sh host                 USB data port -> host (frame flashing)
    -> setup_state.py writes the sentinel
    -> reboot
    -> hokku-installer.service skips    (sentinel present)
@@ -50,6 +51,12 @@ AP comes back instead of leaving a headless brick on the shelf.
 the same thing on demand: clears the sentinel and reboots. Photos and server
 settings are untouched.
 
+Both revert paths also call `usb-mode.sh peripheral`, so an appliance that drops
+back to setup mode gets its USB serial console back — which is the point of the
+whole arrangement: the console is available in exactly the situations where the
+appliance is unreachable any other way. See
+[`docs/os_pi_usb_console.md`](../docs/os_pi_usb_console.md).
+
 ## Layout
 
 | Path | Purpose |
@@ -63,6 +70,7 @@ settings are untouched.
 | `files/dnsmasq-ap.conf` | DHCP range and catch-all DNS for the portal |
 | `files/wifi-watchdog.sh` | The automatic-recovery check |
 | `files/reset.sh` | Manual revert to setup mode |
+| `files/usb-mode.sh` | USB data-port role: gadget serial console vs USB host |
 | `debian/` | Packaging, systemd units, postinst |
 
 ## Notes for changes here
@@ -79,6 +87,12 @@ settings are untouched.
   image, and the mechanism that normally regenerates them is wired to
   raspi-config's own SSH toggle, not ours. Without it sshd exits with
   "no hostkeys available" and SSH silently never comes up.
+- **The USB data port has one role per boot**, so `usb-mode.sh` is the single
+  place that decides it — called by the wizard, by both revert paths, and by the
+  image build (`os/pi/stage-hokku/01-pi-tweaks`, which runs after the `.deb` is
+  installed and so can use the installed script). Don't reintroduce a second
+  copy of the `config.txt`/`cmdline.txt` edits anywhere; `dr_mode=otg` is not a
+  way out, it was tried and reverted.
 - Field names in `flask_app.py` and `templates/index.html` must stay in sync with
   `validators.py`; `python/tests/` covers the validation paths.
 

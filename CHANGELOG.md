@@ -18,6 +18,18 @@
 
 ### Changed
 
+- **The appliance can flash a frame over USB again.** The Pi Zero 2 W's single
+  data port can only be one thing per boot, and the image hard-wired it to the
+  USB gadget serial console — so **Flash a screen** on the appliance had no port
+  to drive. The port role now follows the appliance's mode: setup mode keeps the
+  serial console, and the wizard hands the port over to USB host on the reboot
+  that ends setup, where it stays. Both routes back to setup mode — the manual
+  `reset.sh` and the automatic WiFi watchdog — restore the console, so an
+  appliance that can't reach the network still puts a login prompt on a cable.
+  (Earlier attempts at dual-role OTG, which made a frame plugged in at boot wedge
+  startup, are not coming back.) See
+  [`docs/os_pi_usb_console.md`](docs/os_pi_usb_console.md).
+
 - **The Bigme F7 bootstrap form now remembers the Wi-Fi credentials**, like the
   ESP32 flash form already did — every screen you provision joins the same
   network, so the SSID and password now pre-fill from the last flash of *either*

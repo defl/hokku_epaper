@@ -4,39 +4,17 @@
 # GPU memory: minimum (16 MB) — server is headless. disable-bt turns off the
 # unused Bluetooth radio (smaller attack surface, one less background daemon).
 #
-# dwc2/dr_mode=peripheral: the single USB data port is a rock-solid USB gadget
-# serial console (/dev/ttyGS0 — see below and the cmdline stanza). We tried
-# dr_mode=otg to make the same port ALSO able to host a screen for "Flash a
-# screen", but it was a bad trade: OTG's peripheral role only appears after host
-# negotiation, so the console enumerated unreliably on Windows ("Device
-# Descriptor Request Failed"), AND merely inserting the (even empty) OTG adapter
-# grounds the ID pin → the port comes up as a host at boot → USB host-init wedges
-# the whole boot. A reliable console beats host-flashing from the appliance
-# (flash screens from a laptop instead). So: hard-wired peripheral.
-# See docs/os_pi_usb_console.md for the console; the hardening notes in this
-# stage cover the rest.
+# The USB data port's role (dwc2 dr_mode, the g_serial gadget and its getty) is
+# NOT set here — it is set in the on_chroot block below by hokku-installer's
+# usb-mode.sh, the same script the wizard and the recovery paths call at
+# runtime. The image ships in "peripheral": a USB gadget serial console on
+# /dev/ttyGS0, which is what setup mode wants. See docs/os_pi_usb_console.md.
 for cfg in \
     "${ROOTFS_DIR}/boot/firmware/config.txt" \
     "${ROOTFS_DIR}/boot/config.txt"; do
     if [ -f "$cfg" ]; then
         echo "gpu_mem=16" >> "$cfg"
-        echo "dtoverlay=dwc2,dr_mode=peripheral" >> "$cfg"
         echo "dtoverlay=disable-bt" >> "$cfg"
-        break
-    fi
-done
-
-# USB gadget serial console: load dwc2 + g_serial at boot so /dev/ttyGS0
-# exists. Idempotent — strip any pre-existing modules-load= token first.
-# See docs/os_pi_usb_console.md for the full mechanism and the traps to
-# avoid (serial-getty@ vs getty@, host-side DTR gotchas).
-for cmdline in \
-    "${ROOTFS_DIR}/boot/firmware/cmdline.txt" \
-    "${ROOTFS_DIR}/boot/cmdline.txt"; do
-    if [ -f "$cmdline" ]; then
-        line="$(cat "$cmdline")"
-        line="$(echo "$line" | sed -E 's/(^| )modules-load=[^ ]*//')"
-        echo "${line} modules-load=dwc2,g_serial" > "$cmdline"
         break
     fi
 done
@@ -198,12 +176,23 @@ chmod +x /usr/local/sbin/hokku-resize-rootfs
 systemctl enable hokku-resize-rootfs.service 2>/dev/null || \
     echo "WARNING: could not enable hokku-resize-rootfs.service"
 
-# USB gadget serial console login. Use the generic getty@.service template —
-# NOT serial-getty@ttyGS0, which BindsTo=dev-ttyGS0.device and gets torn
-# down because the late-loading USB gadget tty never fires a proper udev
-# device-active event. (Confirmed the hard way against real hardware —
-# see docs/os_pi_usb_console.md.)
-systemctl enable getty@ttyGS0
+# USB data port: ship the image in peripheral mode — the gadget serial console
+# on /dev/ttyGS0 (dwc2 overlay + g_serial + a getty). That is the state setup
+# mode wants, and the image always boots into setup mode first.
+#
+# Delegated to hokku-installer's usb-mode.sh (installed by the .deb in the 00-
+# install stage, which runs before this one) rather than written out here, so
+# the build-time default and the runtime switches — the wizard flipping the port
+# to host mode on the way into hokku mode, reset.sh and the WiFi watchdog
+# flipping it back — are all the same code. The script carries the full
+# rationale, including why dr_mode=otg was tried and rejected.
+usb_mode_script=/usr/lib/hokku-installer/usb-mode.sh
+if [ ! -x "$usb_mode_script" ]; then
+    echo "ERROR: $usb_mode_script missing — is hokku-installer installed" >&2
+    echo "       before this stage? (os/pi/stage-hokku/00-install)" >&2
+    exit 1
+fi
+"$usb_mode_script" peripheral
 
 # Bluetooth radio unused by this appliance — disabled at the hardware level
 # above (dtoverlay=disable-bt); also stop the services so nothing lingers.

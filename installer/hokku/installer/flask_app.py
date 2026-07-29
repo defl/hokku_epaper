@@ -346,6 +346,19 @@ def _apply_settings(form) -> None:
 
     system_config.seed_hokku_server_config(mdns_name if mdns_on else None)
 
+    # Hand the USB data port over to host mode on the way out of setup, so the
+    # appliance can flash a frame ("Flash a screen") once it's up. It costs the
+    # gadget serial console, which is why this happens HERE and not in the
+    # image: setup mode keeps the console, and every route back to setup mode
+    # (reset.sh, the WiFi watchdog) restores it. Deliberately non-fatal — a
+    # wrong port role is a missing convenience, not a reason to fail a setup
+    # that has already applied the network config and can no longer be retried
+    # from this AP.
+    try:
+        system_config.set_usb_mode("host")
+    except Exception:
+        logger.exception("Could not switch the USB port to host mode — continuing")
+
     setup_state.mark_setup_complete()
     logger.info("Setup complete — rebooting")
 

@@ -1,10 +1,14 @@
 # Pi OS image: USB serial console
 
-The appliance image (`os/pi/`) bakes in a USB gadget serial console: the
+The appliance image (`os/pi/`) ships with a USB gadget serial console: the
 Pi's single micro-USB data port carries both power and a login shell over
 one cable. No keyboard, no monitor, no HDMI needed — just a USB cable to a
 PC. This is the console of last resort for a headless appliance whose only
 other interface is its own web UI.
+
+**It is available in setup mode, not in normal operation.** The same port
+is what the appliance uses to flash a frame, so the two roles alternate —
+see [When the console is available](#when-the-console-is-available) below.
 
 ## Why this exists
 
@@ -16,8 +20,11 @@ prompt, regardless of network state.
 
 ## The exact configuration
 
-Baked into the image at build time by
-[`os/pi/stage-hokku/01-pi-tweaks/00-run.sh`](../os/pi/stage-hokku/01-pi-tweaks/00-run.sh):
+Applied by [`installer/files/usb-mode.sh`](../installer/files/usb-mode.sh)
+— once at image build time (from
+[`os/pi/stage-hokku/01-pi-tweaks/00-run.sh`](../os/pi/stage-hokku/01-pi-tweaks/00-run.sh),
+which is why the image boots with the console on) and again at every mode
+transition afterwards:
 
 1. **`config.txt`**: `dtoverlay=dwc2,dr_mode=peripheral`
 2. **`cmdline.txt`**: append `modules-load=dwc2,g_serial`
@@ -26,6 +33,39 @@ Baked into the image at build time by
 That's the whole thing. It was arrived at the hard way, live, against a
 real Pi Zero 2 W — the two traps below cost real debugging time and are
 easy to reintroduce if this ever gets "cleaned up" without this context.
+
+## When the console is available
+
+One port, one role per boot. `dr_mode=otg` (both at once) was tried and
+rejected: the console enumerated unreliably on Windows ("Device Descriptor
+Request Failed"), and merely inserting an *empty* OTG adapter grounds the
+ID pin, so the port came up as a host at boot and USB host-init wedged the
+whole boot. So the role is switched at the mode transitions, each of which
+already ends in a reboot:
+
+| Mode | `dr_mode` | Console | Set by |
+|---|---|---|---|
+| Setup (`Hokku Setup` AP is up) | `peripheral` | **yes**, `/dev/ttyGS0` | the image build, and both revert paths below |
+| Hokku (normal operation) | `host` | no — the port can flash a frame instead | the wizard, on the reboot out of setup |
+
+Getting the console back on a configured appliance means sending it back to
+setup mode, which any of these do:
+
+- `sudo /usr/lib/hokku-installer/reset.sh` (over SSH, or from the web UI)
+- the WiFi watchdog, **automatically**, on any boot where WiFi doesn't
+  connect within ~3.5 minutes — so an appliance that falls off the network
+  restores its own console without anyone touching it
+- rewriting the SD card
+
+Each clears the setup sentinel, flips the port back to `peripheral`, and
+reboots. If you only need to *flip the port* and can already get a shell,
+`sudo /usr/lib/hokku-installer/usb-mode.sh peripheral && sudo reboot` does
+just that part, leaving the appliance configured.
+
+The practical consequence to design around: **on a working appliance the
+console is not the console of last resort — SSH is.** Enable SSH in the
+wizard on anything you expect to debug. The console covers the case the
+watchdog covers, which is the case that actually strands the device.
 
 ## Trap 1: `serial-getty@ttyGS0` looks right but isn't
 

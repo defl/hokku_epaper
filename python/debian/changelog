@@ -1,3 +1,11 @@
+hokku-server (4.0.1~dev.14-1) unstable; urgency=medium
+
+  * No server changes. Version bumped alongside hokku-installer, which now
+    switches the Pi's USB data port between gadget serial console (setup mode)
+    and USB host (hokku mode, so "Flash a screen" has a port to drive).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 23:04:22 -0500
+
 hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
 
   * feat(webserver): remember the flash Wi-Fi credentials for the Bigme F7
