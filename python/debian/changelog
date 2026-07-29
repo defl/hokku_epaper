@@ -1,3 +1,12 @@
+hokku-server (4.0.1~dev.16-1) unstable; urgency=medium
+
+  * No server code changes. Build fix: .gitattributes now pins the installer
+    package's debian/ files and the pi-gen inputs (os/pi/config, 00-packages)
+    to LF, so the .deb and the appliance image can be built from a Windows
+    checkout. Version bumped to keep one dev version per pushed change.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 23:33:12 -0500
+
 hokku-server (4.0.1~dev.15-1) unstable; urgency=medium
 
   * Firmware version ordering now uses packaging.version (PEP 440) instead of

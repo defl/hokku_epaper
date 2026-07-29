@@ -35,3 +35,24 @@ python/debian/changelog    text eol=lf
 python/debian/install      text eol=lf
 python/debian/*.service    text eol=lf
 python/debian/hokku-server text eol=lf
+
+# The same rule, for the same reason, for the installer package — this was
+# missing, and a Windows checkout could not build the .deb at all: `make` reads
+# a CRLF debian/rules as one long garbage target ("make: : No such file or
+# directory", then cc tries to build .o from nothing), and postinst would have
+# hit the /bin/sh\r ENOENT described above. Directory-wide rather than
+# enumerated, so a maintainer script added later is covered on the day it
+# appears instead of the day someone builds on Windows.
+installer/debian/*         text eol=lf
+# dnsmasq-ap.conf is parsed by dnsmasq on the appliance; a trailing CR ends up
+# inside option values (the setup AP's own DHCP/DNS config). The .sh files here
+# are already covered by the global *.sh rule, but keep the whole directory
+# consistent.
+installer/files/*          text eol=lf
+
+# pi-gen build inputs. `config` is sourced by bash, so a CR becomes part of
+# every value it sets (IMG_NAME, TARGET_HOSTNAME, ...); 00-packages is fed to
+# apt one line at a time, which then looks for a package literally named
+# "zram-tools\r". Both fail in ways that point nowhere near line endings.
+os/pi/config                     text eol=lf
+os/pi/stage-hokku/**/00-packages text eol=lf
