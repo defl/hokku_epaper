@@ -16,6 +16,14 @@
   images for their model before being admitted. New config keys:
   `firmware_github_repo`, `firmware_dir`.
 
+### Changed
+
+- **The Bigme F7 bootstrap form now remembers the Wi-Fi credentials**, like the
+  ESP32 flash form already did — every screen you provision joins the same
+  network, so the SSID and password now pre-fill from the last flash of *either*
+  kind instead of being retyped per screen. The F7 has no fallback network, so
+  bootstrapping one leaves a remembered second network untouched.
+
 ### Fixed
 
 - **Scanning for a screen to flash no longer kicks it into a refresh.** The scan

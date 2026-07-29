@@ -1,3 +1,12 @@
+hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
+
+  * feat(webserver): remember the flash Wi-Fi credentials for the Bigme F7
+    bootstrap form too. The persist step is now shared by both flash routes,
+    so the SSID/password pre-fill from the last flash of either kind; the F7
+    has no fallback network, so it leaves a remembered second one untouched.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 22:39:55 -0500
+
 hokku-server (4.0.1~dev.12-1) unstable; urgency=medium
 
   * docs(bigme_f7): record two measured hardware findings — the power button
