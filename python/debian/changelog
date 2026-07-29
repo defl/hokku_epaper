@@ -1,3 +1,13 @@
+hokku-server (4.0.1~dev.17-1) unstable; urgency=medium
+
+  * No server code changes. Build fix: the appliance image's pre-baked arm64
+    wheel download asked pip for the "linux_aarch64" platform tag, which no
+    project publishes, so it silently fetched nothing and every image needed
+    internet on first boot to pip-install numba/opencv/scipy/pillow-heif.
+    Now asks for the manylinux aarch64 tags that actually exist.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 23:42:52 -0500
+
 hokku-server (4.0.1~dev.16-1) unstable; urgency=medium
 
   * No server code changes. Build fix: .gitattributes now pins the installer
