@@ -531,6 +531,29 @@ def test_bigme_firmware_module_discovers_release_image(tmp_path, monkeypatch):
     assert bigme_f7.bundled_firmware_version() == "1.2.2"
 
 
+def test_bigme_firmware_module_picks_highest_version(tmp_path, monkeypatch):
+    # Regression: firmware/release/ is not pruned between builds, so several
+    # versions coexist. This used to be a plain sorted() over the filenames,
+    # which ranks ...-1.2.9.img above ...-1.2.10.img ('9' > '1' at the first
+    # differing character) — so the moment the minor version reached double
+    # digits the server silently served and flashed the OLDER build. Mirrors
+    # test_merged_firmware_file_picks_highest on the ESP32 side.
+    for name in (
+        "hokku-bigme_f7-1.2.4.img",
+        "hokku-bigme_f7-1.2.9.img",
+        "hokku-bigme_f7-1.2.10.img",
+        "ignore.txt",
+    ):
+        (tmp_path / name).write_bytes(b"\x00")
+    monkeypatch.setattr(bigme_f7_firmware, "_DEV_FIRMWARE_DIR", tmp_path)
+    monkeypatch.setattr(bigme_f7_firmware, "_INSTALLED_FIRMWARE_DIR", tmp_path / "nonexistent")
+
+    picked = bigme_f7.firmware_image_file()
+    assert picked is not None
+    assert picked.name == "hokku-bigme_f7-1.2.10.img"
+    assert bigme_f7.bundled_firmware_version() == "1.2.10"
+
+
 def test_status_reports_per_model_firmware_versions(app_config, tmp_path, monkeypatch):
     monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "1.2.9")
     monkeypatch.setattr(seeedstudio_e1004, "bundled_firmware_version", lambda *a, **k: "1.2.0")

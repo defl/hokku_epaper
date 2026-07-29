@@ -38,6 +38,17 @@
 
 ### Fixed
 
+- **A Bigme F7 firmware release numbered 1.2.10 would have been ignored in
+  favour of 1.2.9.** The bundled-image lookup picked the newest build by sorting
+  release *filenames* as text, and `hokku-bigme_f7-1.2.9.img` sorts above
+  `...-1.2.10.img` — so the first time a minor version reached double digits the
+  server would have quietly served, flashed and offered over-the-air the older
+  firmware, with nothing in the logs to say so. Version comparison across the
+  server now goes through `packaging.version` (PEP 440), which also fixes a
+  second case: a file whose name didn't parse as a version — a truncated
+  download, a hand-renamed file — used to outrank every genuine release.
+  Pre-releases now correctly rank below the final release of the same version.
+
 - **Scanning for a screen to flash no longer kicks it into a refresh.** The scan
   used to leave the screen running, and since a screen repaints on boot, the act
   of looking for a device to flash started a ~30-60s panel refresh — at exactly

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hokku-server"
-version = "4.0.1.dev14"
+version = "4.0.1.dev15"
 description = "Spectra 6 e-ink image server for Hokku EL133UF1 display"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -26,6 +26,9 @@ dependencies = [
     "zstd",
     "resvg-py>=0.3",
     "defusedxml>=0.7",
+    # Firmware version ordering (hokku.common.firmware_paths.version_key) — the
+    # only correct way to rank 1.2.10 above 1.2.9. Debian: python3-packaging.
+    "packaging>=20",
     # Screen flashing (hokku.screens.huessen_epf1301). esptool / esp-idf-nvs-partition-gen
     # are invoked as subprocesses; on the Debian package they are pip-installed by
     # postinst (not packaged), and python3-serial provides pyserial.
