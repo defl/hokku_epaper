@@ -204,6 +204,68 @@ Full driver analysis: [`display_driver.md`](display_driver.md)
   PA19=MOSI/DC, PA21=SCLK, PA22=CS (active low), PA9=BUSY input (HIGH = ready)
 - **Refresh time**: ~20–30 seconds for full ACeP refresh
 
+## Wakeup IOs
+
+The XR872 can only be pulled out of hibernation by its wakeup timer or by one of
+ten wakeup IOs, all on GPIOA. This chip is arch v2, which has its own pin map —
+different from arch v1 (XR871/XR809) from io5 upwards, so the v1 table is off by
+one pin at exactly the interesting end:
+
+| Wakeup IO | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **Pin (arch v2)** | PA4 | PA5 | PA6 | PA7 | PA17 | PA19 | **PA20** | PA21 | PA22 | PA23 |
+
+`HAL_Wakeup_GetEvent()` reports them as bits 0-9; the wakeup timer is bit 10.
+
+**The OEM firmware arms exactly one of them: IO6 = PA20, falling edge with a
+pull-up, with the 32 kHz debounce clock** — confirmed 2026-07-27 by disassembling
+the OEM bootloader payload (`HAL_Wakeup_SetIO(6, 0, 1)` preceded by
+`HAL_GPIO_Init` on `WakeIo_To_Gpio(6)` and the matching
+`HAL_PRCM_SetWakeupIOxDeb*` calls). PA20 is the USB/charge-detect line, so this
+is a **charger-insert wake**, not a button.
+
+**No button GPIO exists in the OEM firmware.** Its application image calls
+`HAL_GPIO_ReadPin` / `HAL_GPIO_EnableIRQ` / `HAL_Wakeup_SetIO` only from the
+stock SDK console commands (`cmd_gpio.c`, `cmd_pm.c`), and contains no
+button/press/power-off strings.
+
+## Power button
+
+**The power button is a hardware power latch with no line to the SoC. Firmware
+cannot see a press.** Measured on hardware 2026-07-28 with a throwaway probe
+firmware (built for this measurement, deliberately not kept in the tree — there
+is nothing to build on it): all 13 GPIOA pins the firmware does not itself drive
+— PA0-7, PA10-11, PA17-18, PA23 — were configured as pulled inputs and polled at
+50 Hz over the UART console while the button was pressed ~24 times at about
+1 Hz, once with pull-ups and once with pull-downs. **Not one pin changed level in
+either pass.**
+
+Consistent with everything else known: the OEM firmware reads no button GPIO
+(above), and a long-press cuts power to the whole board — the CH340 drops with
+it — even when the running firmware contains no button code at all. Press-on /
+hold-off is done entirely in hardware.
+
+Consequences:
+
+- There is no press-to-refresh on this screen, and none can be written. Any
+  "refresh now" gesture has to come from the server side or the console.
+- **A USB unplug/replug is NOT a power cycle when the battery is charged** — it
+  only toggles the USB-detect line; the SoC (and its PRCM domain, which holds the
+  sticky `CPUA_BOOT_FLAG`) stays powered off the battery. A unit left in the BROM
+  by `upgrade`/`flash_slot0` therefore re-enters the BROM on every reset until a
+  **long-press** actually removes power. Confirmed 2026-07-28: three replugs left
+  it in the BROM; one long-press plus a short press booted it.
+
+Caveat on scope: the probe could not see the 11 pins the firmware already drives
+(EPD SPI, LEDs, battery ADC, USB detect) — reconfiguring those mid-run would
+glitch the panel. A button wired to one of those is not excluded by this
+measurement, only by its implausibility.
+
+To re-measure on another unit or board revision: configure those 13 pins as
+inputs with pull-ups, poll them every 20 ms for ~10 s while pressing, repeat with
+pull-downs, and restore each pin afterwards. Roughly 90 lines against
+`HAL_GPIO_Init` / `HAL_GPIO_ReadPin` / `HAL_GPIO_DeInit`.
+
 ## SDK Ecosystem
 
 The device firmware was built with **XRADIO Skylark SDK 1.2.3** (Aug 7 2025). Research conducted 2026-06-06 found no public availability of this version anywhere — making it the newest confirmed SDK version and suggesting the manufacturer has a private/NDA channel with Allwinner.

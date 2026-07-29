@@ -44,9 +44,13 @@ python tools/f7_initial_flasher.py --port COM7
    validated `flash_slot0` write: app-chain into **slot 0 only**, read-back verified,
    the A/B cfg flipped to seq0 **last**, and the **bootloader + slot 1 left
    untouched**. Nothing outside slot 0 + its cfg sector is written.
-3. **Power-cycle to boot.** `sys_reboot` only re-enters BROM on this chip, so the
-   flasher does **not** auto-reboot — **unplug/replug USB (or long-press)** to
-   cold-boot the app. The e-paper stays on its old image until WiFi is set (it only
+3. **Power-cycle to boot — this means a LONG-PRESS, not a replug.** `sys_reboot`
+   only re-enters BROM on this chip, so the flasher does **not** auto-reboot.
+   With a charged battery a USB unplug/replug does **not** remove power: the SoC
+   keeps running off the pack, the PRCM domain holds the sticky boot flag, and
+   the unit drops straight back into the BROM on every reset. **Long-press the
+   power button until it powers off, then short-press to power on.** (Confirmed
+   2026-07-28: three replugs left it in the BROM; one long-press booted it.) The e-paper stays on its old image until WiFi is set (it only
    redraws once it can fetch an image), so use the console to confirm the boot.
 4. **Provision over the UART console** (115200) — no persistent WiFi exists yet:
    ```

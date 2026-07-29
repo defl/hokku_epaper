@@ -86,7 +86,14 @@ PB3 is also the SDK-default SWD_SWDCLK pin (PB3 = SWDCLK). The OEM repurposes it
 - Logic: `HAL_GPIO_ReadPin(PORT_A, PIN_20)` result compared to zero; non-zero (HIGH) branches to a different code path — interpreted as USB present
 - **Polarity unconfirmed**; if green/off is inverted after first flash, flip `GPIO_PIN_HIGH` → `GPIO_PIN_LOW` in `led_usb_present()` in `firmware/bigme_f7/led.c`
 - The boot log shows `HAL_ADC_Init success!!` — ADC is likely used for battery voltage measurement, not for USB detect (USB detect appears to be a simple GPIO)
-- The OEM firmware uses wakeup IO 2 (`CHARGE_WAKEUP_IO_PIN_DEF=2`) for charge-triggered wakeup from deep sleep; this likely maps to PA20 via `WakeIo_To_Gpio()`
+- ~~The OEM firmware uses wakeup IO 2 for charge-triggered wakeup from deep sleep; this likely maps to PA20 via `WakeIo_To_Gpio()`~~ — **superseded 2026-07-27.** The OEM arms **wakeup IO 6**, and on this chip (arch v2) `WakeIo_To_Gpio(6)` *is* PA20, so the charge-wake conclusion was right but the IO index was wrong. Moved to facts (→ `hardware_facts.md` "Wakeup IOs")
+
+## Power button
+
+**Resolved 2026-07-28 — moved to [`hardware_facts.md`](hardware_facts.md) ("Power button").**
+Measured with a throwaway GPIO-probe firmware: no free GPIOA pin moves when the button is
+pressed, in either polarity. It is a hardware power latch the SoC cannot see. The hypothesis that lived here
+(latch, press-on/hold-off in hardware) was correct.
 
 ## Secure Boot
 

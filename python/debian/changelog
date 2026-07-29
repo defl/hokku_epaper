@@ -1,3 +1,12 @@
+hokku-server (4.0.1~dev.12-1) unstable; urgency=medium
+
+  * docs(bigme_f7): record two measured hardware findings — the power button
+    is a hardware power latch with no line to the SoC (so press-to-refresh is
+    impossible on that screen), and a USB replug is not a power cycle while
+    the battery is charged. Documentation only; no server or firmware change.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 22:20:18 -0500
+
 hokku-server (4.0.1~dev.11-1) unstable; urgency=medium
 
   * fix(flash): clear otadata when flashing a screen over USB. The merged image
