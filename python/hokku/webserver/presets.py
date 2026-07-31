@@ -58,6 +58,30 @@ def _bw(algorithm: AlgorithmName, serpentine: bool = False) -> ImageConfig:
         color_enhance=1.05,
         adaptive_saturate_space="off",
         adaptive_vivid=False,
+        # A monochrome image carries all its structure in luminance, so it can
+        # take a harder local-contrast push than a colour photo before the
+        # result looks processed.
+        clahe_clip_limit=2.25,
+        # Saturation boosting is off above; leave the ceiling at neutral so the
+        # value doesn't read as if a boost were configured.
+        saturate_max_enhance=1.0,
+    )
+
+
+def _face(algorithm: AlgorithmName = "atkinson", serpentine: bool = False) -> ImageConfig:
+    """Tuning for photos with detected faces.
+
+    Skin is the least forgiving subject on a 6-colour panel: aggressive local
+    contrast turns cheeks blotchy and a hard unsharp halo reads as a bad
+    print. So relative to the default pipeline this pulls CLAHE well down and
+    trades it for a slightly wider, stronger unsharp mask, which sharpens
+    features (eyes, hairline) without amplifying skin texture.
+    """
+    return replace(
+        _hue_aware(algorithm, serpentine),
+        clahe_clip_limit=1.25,
+        prepare_usm_amount=130,
+        prepare_usm_radius=1.2,
     )
 
 
@@ -68,6 +92,19 @@ PRESET_IMAGE_CONFIGS: dict[str, ImageConfig] = {
 }
 
 FALLBACK_PRESET = "floyd_steinberg_hue_aware"
+
+
+# Per-pipeline defaults for a fresh install: what the classifier dispatches to
+# for an ordinary photo, a black-and-white one, and one with faces in it.
+#
+# These are deliberately NOT all entries of PRESET_IMAGE_CONFIGS. That dict is
+# the UI dropdown — a short list of general-purpose starting points. The face
+# pipeline wants tuning (gentle CLAHE, stronger USM) that is right for skin and
+# wrong as a general-purpose choice, so it lives here instead of being forced
+# onto the "Atkinson (hue-aware)" preset that users pick by hand.
+DEFAULT_IMAGE_CONFIG: ImageConfig = PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
+DEFAULT_BW_IMAGE_CONFIG: ImageConfig = PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+DEFAULT_FACE_IMAGE_CONFIG: ImageConfig = _face()
 
 
 # UI-only metadata. Kept out of the dataclass so cache_slug() stays stable

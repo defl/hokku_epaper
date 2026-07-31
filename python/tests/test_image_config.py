@@ -104,16 +104,44 @@ def test_image_config_from_dict_none_returns_default():
     assert result == PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
 
 
-def test_image_config_from_dict_missing_dither_returns_default():
-    d = asdict(_default_image_config())
+def test_image_config_from_dict_missing_dither_keeps_default_dither():
+    """An absent dither block keeps the default's dither — the rest survives."""
+    base = _default_image_config()
+    d = asdict(base)
     d.pop("dither")
-    assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
+    d["prepare_brightness"] = 1.42
+    restored = _image_config_from_dict(d, default=base)
+    assert restored.dither == base.dither
+    assert restored.prepare_brightness == pytest.approx(1.42)
 
 
-def test_image_config_from_dict_missing_field_returns_default():
-    d = asdict(_default_image_config())
+def test_image_config_from_dict_missing_field_keeps_only_that_field_default():
+    """One absent field must not discard every other stored value.
+
+    This is the regression that shipped: a single missing field reset the whole
+    pipeline to the fallback preset, so the example config — and any config
+    predating a newly added field — silently lost all of its tuning.
+    """
+    base = _default_image_config()
+    d = asdict(base)
     d.pop("prepare_brightness")
-    assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
+    d["prepare_gamma"] = 0.55  # a deliberately non-default value
+    d["color_enhance"] = 1.9
+
+    restored = _image_config_from_dict(d)
+
+    assert restored.prepare_brightness == base.prepare_brightness  # filled from default
+    assert restored.prepare_gamma == pytest.approx(0.55)  # stored value survives
+    assert restored.color_enhance == pytest.approx(1.9)
+
+
+def test_image_config_from_dict_merges_onto_the_supplied_default():
+    """Each pipeline merges onto its own default, not onto the fallback preset."""
+    face_like = replace(_default_image_config(), clahe_clip_limit=1.25, prepare_usm_amount=130)
+    restored = _image_config_from_dict({"prepare_gamma": 0.7}, default=face_like)
+    assert restored.clahe_clip_limit == pytest.approx(1.25)
+    assert restored.prepare_usm_amount == 130
+    assert restored.prepare_gamma == pytest.approx(0.7)
 
 
 def test_image_config_from_dict_not_dict_raises():
@@ -125,47 +153,33 @@ def test_image_config_from_dict_not_dict_raises():
 
 
 def test_new_fields_use_defaults_when_absent():
-    """Missing new fields reset the whole config to the default preset."""
-    d = asdict(_default_image_config())
+    """A config predating several fields keeps everything it does carry."""
+    base = _default_image_config()
+    d = asdict(base)
     for key in (
         "prepare_midtone",
         "clahe_clip_limit",
         "prepare_usm_radius",
         "prepare_usm_amount",
         "dither_noise",
+        # The field whose omission caused the shipped example to reset.
+        "clahe_keepout_feather",
     ):
         d.pop(key, None)
-    assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
+    d["prepare_contrast"] = 1.33
+
+    restored = _image_config_from_dict(d, default=base)
+
+    assert restored.prepare_contrast == pytest.approx(1.33)
+    for key in ("prepare_midtone", "clahe_clip_limit", "clahe_keepout_feather"):
+        assert getattr(restored, key) == getattr(base, key)
 
 
-# ── legacy prepare_sharpness backward compat ──────────────────────────────────
-
-
-def test_legacy_sharpness_derives_usm_amount():
-    """prepare_sharpness present but no USM keys → derive prepare_usm_amount."""
+def test_renamed_use_adaptive_saturate_still_honoured():
+    """A rename is not a missing field — the old key must still carry meaning."""
     d = asdict(_default_image_config())
-    d.pop("prepare_usm_amount")
-    d.pop("prepare_usm_radius")
-    d["prepare_sharpness"] = 1.3
-    restored = _image_config_from_dict(d)
-    # max(0, int((1.3 - 1.0) * 400)) = 120
-    assert restored.prepare_usm_amount == 120
-    assert restored.prepare_usm_radius == pytest.approx(1.0)
-
-
-def test_legacy_sharpness_identity_resets_to_default():
-    """prepare_sharpness with missing USM fields resets to default preset."""
-    d = asdict(_default_image_config())
-    d.pop("prepare_usm_amount")
-    d.pop("prepare_usm_radius")
-    d["prepare_sharpness"] = 1.0
-    assert _image_config_from_dict(d) == PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
-
-
-def test_explicit_usm_wins_over_legacy_sharpness():
-    """When both keys are present, explicit prepare_usm_amount takes precedence."""
-    d = asdict(_default_image_config())
-    d["prepare_sharpness"] = 2.0  # would imply 400
-    d["prepare_usm_amount"] = 50  # explicit — must win
-    restored = _image_config_from_dict(d)
-    assert restored.prepare_usm_amount == 50
+    d.pop("adaptive_saturate_space")
+    d["use_adaptive_saturate"] = False
+    assert _image_config_from_dict(d).adaptive_saturate_space == "off"
+    d["use_adaptive_saturate"] = True
+    assert _image_config_from_dict(d).adaptive_saturate_space == "cielab"

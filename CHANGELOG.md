@@ -38,6 +38,21 @@
 
 ### Fixed
 
+- **Black-and-white and portrait photos were being processed exactly like every
+  other photo.** The server keeps three image pipelines — default, B&W, and
+  faces — but on every install all three were collapsing into the default one,
+  so the B&W pipeline's neutral palette and the face pipeline's gentler local
+  contrast never applied. The cause was a config loader that discarded an
+  entire pipeline's settings if a single field was missing from the stored
+  config, combined with a shipped example config that was missing one. Stored
+  settings are now merged over the defaults instead of replacing them
+  wholesale, so a config written before a setting existed keeps everything else
+  it specifies — which also means upgrading no longer quietly resets tuning you
+  had adjusted. The face pipeline is tuned for skin again (softer local
+  contrast, a wider and stronger sharpening pass), and the B&W pipeline gets
+  its stronger local contrast back. The example config is now generated from
+  the code, with a test that fails if the two drift apart.
+
 - **A Bigme F7 firmware release numbered 1.2.10 would have been ignored in
   favour of 1.2.9.** The bundled-image lookup picked the newest build by sorting
   release *filenames* as text, and `hokku-bigme_f7-1.2.9.img` sorts above

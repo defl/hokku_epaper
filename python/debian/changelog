@@ -1,3 +1,22 @@
+hokku-server (4.0.1~dev.20-1) unstable; urgency=medium
+
+  * Fix: the B&W and face image pipelines were silently collapsing onto the
+    default pipeline on every load, so all three behaved identically. A config
+    blob missing any single field reset that pipeline to the fallback preset,
+    and the shipped config.json.example was missing clahe_keepout_feather —
+    so every install ran the colour pipeline for B&W and face photos.
+  * Config blobs now MERGE onto their pipeline's defaults instead of being
+    reset wholesale, so a config predating a field keeps the tuning it does
+    carry. Removes the _LENIENT_DEFAULTS table this made unnecessary.
+  * The face pipeline default is tuned for skin again (gentler CLAHE 1.25,
+    stronger/wider unsharp 130/1.2, Atkinson); the B&W default regains its
+    harder CLAHE 2.25 and neutral saturation ceiling.
+  * config.json.example is now generated from the code
+    (python -m hokku.webserver.gen_example_config) with a test that fails if
+    the checked-in file drifts.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 30 Jul 2026 21:39:10 -0500
+
 hokku-server (4.0.1~dev.19-1) unstable; urgency=medium
 
   * No server code changes. Build fix: the stale-pi-gen-clone check added in

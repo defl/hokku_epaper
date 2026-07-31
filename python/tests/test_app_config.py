@@ -10,18 +10,51 @@ from pathlib import Path
 import pytest
 
 from hokku.webserver.app_config import _CURRENT_VERSION, AppConfig, _migrate
-from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
+from hokku.webserver.presets import (
+    DEFAULT_BW_IMAGE_CONFIG,
+    DEFAULT_FACE_IMAGE_CONFIG,
+    DEFAULT_IMAGE_CONFIG,
+    PRESET_IMAGE_CONFIGS,
+)
 
 
 def test_defaults():
     cfg = AppConfig()
     assert cfg.port == 8080
     assert cfg.version == _CURRENT_VERSION
-    assert cfg.image_config_default == PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
-    assert cfg.image_config_bw == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
-    assert cfg.image_config_face == PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
+    assert cfg.image_config_default == DEFAULT_IMAGE_CONFIG
+    assert cfg.image_config_bw == DEFAULT_BW_IMAGE_CONFIG
+    assert cfg.image_config_face == DEFAULT_FACE_IMAGE_CONFIG
     assert cfg.classifier_bw_detect_enabled is True
     assert not hasattr(cfg, "orientation")
+
+
+def test_pipeline_defaults_are_actually_different():
+    """The three pipelines must not collapse onto one another.
+
+    They did: every install ran the colour pipeline for B&W and face photos
+    because a missing field reset each of them to the fallback preset.
+    """
+    cfg = AppConfig()
+    assert cfg.image_config_default != cfg.image_config_bw
+    assert cfg.image_config_default != cfg.image_config_face
+    assert cfg.image_config_bw != cfg.image_config_face
+
+
+def test_face_default_is_tuned_for_skin():
+    """Face pipeline: gentler local contrast, stronger/wider unsharp than default."""
+    cfg = AppConfig()
+    face, default = cfg.image_config_face, cfg.image_config_default
+    assert face.clahe_clip_limit < default.clahe_clip_limit
+    assert face.prepare_usm_amount > default.prepare_usm_amount
+    assert face.prepare_usm_radius > default.prepare_usm_radius
+    assert face.dither.algorithm == "atkinson"
+
+
+def test_dropdown_presets_unchanged_by_pipeline_defaults():
+    """The face tuning must not leak into the general-purpose Atkinson preset."""
+    assert DEFAULT_FACE_IMAGE_CONFIG != PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
+    assert PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].clahe_clip_limit == 1.75
 
 
 def test_cache_slug_invariant_to_port():

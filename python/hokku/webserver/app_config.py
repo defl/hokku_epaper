@@ -20,7 +20,11 @@ from hokku.webserver.image_config import (
     ImageConfig,
     _image_config_from_dict,
 )
-from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
+from hokku.webserver.presets import (
+    DEFAULT_BW_IMAGE_CONFIG,
+    DEFAULT_FACE_IMAGE_CONFIG,
+    DEFAULT_IMAGE_CONFIG,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -150,22 +154,16 @@ class AppConfig:
     memory_budget_mb: int = 0
 
     # Image pipeline: default, B&W, and face presets.
-    image_config_default: ImageConfig = field(
-        default_factory=lambda: PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
-    )
+    image_config_default: ImageConfig = field(default_factory=lambda: DEFAULT_IMAGE_CONFIG)
     classifier_bw_detect_enabled: bool = True
-    image_config_bw: ImageConfig = field(
-        default_factory=lambda: PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
-    )
+    image_config_bw: ImageConfig = field(default_factory=lambda: DEFAULT_BW_IMAGE_CONFIG)
     classifier_face_detect_enabled: bool = True
     classifier_face_detect_clahe_keepout: bool = True
     #: When a photo has detected face(s), center the crop-to-fill window on
     #: them instead of the image center ("face-aware cropping") so an
     #: aggressive crop doesn't cut off heads. Opt-in — off by default.
     classifier_face_aware_crop_enabled: bool = False
-    image_config_face: ImageConfig = field(
-        default_factory=lambda: PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
-    )
+    image_config_face: ImageConfig = field(default_factory=lambda: DEFAULT_FACE_IMAGE_CONFIG)
 
     #: mDNS / Bonjour hostname (the part before ``.local``).
     #: The server advertises itself as ``<mdns_hostname>.local`` on the LAN.
@@ -215,14 +213,23 @@ class AppConfig:
 
         data = _migrate(data)
 
+        # Each pipeline merges onto its OWN default, so a sparse or older
+        # image_config_bw keeps B&W behaviour instead of silently inheriting
+        # the colour pipeline.
         image_config_default = _image_config_from_dict(
-            data.get("image_config_default"), field_path="image_config_default"
+            data.get("image_config_default"),
+            field_path="image_config_default",
+            default=DEFAULT_IMAGE_CONFIG,
         )
         image_config_bw = _image_config_from_dict(
-            data.get("image_config_bw"), field_path="image_config_bw"
+            data.get("image_config_bw"),
+            field_path="image_config_bw",
+            default=DEFAULT_BW_IMAGE_CONFIG,
         )
         image_config_face = _image_config_from_dict(
-            data.get("image_config_face"), field_path="image_config_face"
+            data.get("image_config_face"),
+            field_path="image_config_face",
+            default=DEFAULT_FACE_IMAGE_CONFIG,
         )
 
         _image_fields = {"image_config_default", "image_config_bw", "image_config_face"}

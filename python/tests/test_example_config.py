@@ -11,6 +11,7 @@ from dataclasses import fields
 from pathlib import Path
 
 from hokku.webserver.app_config import _CURRENT_VERSION, AppConfig
+from hokku.webserver.gen_example_config import render
 
 _EXAMPLE = (
     Path(__file__).resolve().parents[1] / "hokku" / "webserver" / "config" / "config.json.example"
@@ -94,6 +95,42 @@ def test_example_config_classifier_flags():
     """Classifier flags should be explicitly set in the example (not left to defaults)."""
     data = _load_example()
     assert "classifier_bw_detect_enabled" in data
+
+
+# ── generated, not hand-maintained ────────────────────────────────────────────
+
+
+def test_example_config_matches_the_generator():
+    """The checked-in file must be exactly what gen_example_config produces.
+
+    The example used to be hand-edited and drifted out of the schema, which is
+    how it ended up written in a pre-oklab shape while stamped with the current
+    version. Everything downstream is seeded from it, so drift means every new
+    install starts from a stale config.
+    """
+    assert _EXAMPLE.read_text(encoding="utf-8") == render(), (
+        "config.json.example is out of date. Regenerate it with:\n"
+        "    python -m hokku.webserver.gen_example_config"
+    )
+
+
+def test_example_config_pipelines_survive_a_load():
+    """Loading the example must preserve its three pipelines, not reset them.
+
+    The regression this guards: a single field missing from a pipeline blob
+    reset that pipeline to the fallback preset. Because all three reset, every
+    install ran the default pipeline for B&W and face photos too — the symptom
+    being "all the presets look the same".
+    """
+    cfg = AppConfig.from_dict(_load_example())
+
+    assert cfg.image_config_default != cfg.image_config_bw
+    assert cfg.image_config_default != cfg.image_config_face
+    # And specifically, the tuning that was being lost:
+    assert cfg.image_config_face.dither.algorithm == "atkinson"
+    assert cfg.image_config_face.clahe_clip_limit < cfg.image_config_default.clahe_clip_limit
+    assert cfg.image_config_bw.dither.lut_name == "bw"
+    assert cfg.image_config_bw.adaptive_saturate_space == "off"
 
 
 def test_example_config_upload_and_cache_dirs_are_nonempty():

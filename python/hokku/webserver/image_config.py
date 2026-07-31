@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any, Literal
 
 from hokku.webserver.dither_config import DitherConfig
+
+logger = logging.getLogger(__name__)
 
 AdaptiveSaturateSpace = Literal["off", "cielab", "oklab"]
 DrcSpace = Literal["cielab", "oklab"]
@@ -64,65 +67,90 @@ def _bw_safe_image_config(cfg: ImageConfig) -> ImageConfig:
     )
 
 
-# Defaults for fields added after the original config schema. Used to migrate
-# config blobs from older versions that don't carry the new field names.
-_LENIENT_DEFAULTS: dict[str, Any] = {
-    "saturate_low_chroma_thresh_oklab": 0.025,
-    "saturate_high_chroma_thresh_oklab": 0.075,
-    "vivid_chroma_low_oklab": 0.025,
-    "vivid_chroma_high_oklab": 0.075,
-    "drc_l_space": "cielab",
-    "drc_chroma_space": "cielab",
-}
+# NOTE: there used to be a _LENIENT_DEFAULTS table here, listing the fields a
+# stored config was allowed to omit. It existed because the parser reset a
+# pipeline wholesale when any field was missing, so every field added to
+# ImageConfig had to be hand-registered in a second place or it would silently
+# wipe people's tuning on upgrade. That is what happened: clahe_keepout_feather
+# was added without being listed, and from then on the shipped
+# config.json.example (and any config predating that field) reset all three
+# pipelines to the fallback preset. Merging onto the defaults makes the table
+# unnecessary — a missing field is simply a field that keeps its default.
 
 
-def _image_config_from_dict(blob: Any, *, field_path: str = "image_config") -> ImageConfig:
-    """Build an ImageConfig from a nested JSON object (or default if absent).
+def _image_config_from_dict(
+    blob: Any,
+    *,
+    field_path: str = "image_config",
+    default: ImageConfig | None = None,
+) -> ImageConfig:
+    """Build an ImageConfig by merging a stored JSON object onto the defaults.
 
-    All fields are required. If blob is None or any field is missing the
-    default preset is returned, resetting the config rather than patching it.
+    Fields present in *blob* win; fields absent keep their value from
+    *default*. A config that predates a field therefore keeps every setting it
+    does carry, instead of being discarded.
+
+    This used to reset the whole pipeline to the fallback preset if a single
+    field was missing, which silently wiped tuning on upgrade — the entire
+    shipped example config was being reset that way. See the note where
+    _LENIENT_DEFAULTS used to live.
 
     Args:
         blob:       The dict (or None) to parse.
-        field_path: Used in error messages to identify which config field is bad.
+        field_path: Used in log/error messages to identify which config field is bad.
+        default:    Base to merge onto. Defaults to the fallback preset; callers
+                    should pass the default for *their* pipeline so a sparse
+                    B&W or face blob falls back to B&W or face values rather
+                    than to the generic default pipeline.
     """
     from hokku.webserver.presets import (  # noqa: PLC0415 — deferred to break circular import
         FALLBACK_PRESET,
         PRESET_IMAGE_CONFIGS,
     )
 
+    base = default if default is not None else PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
+
     if blob is None:
-        return PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
+        return base
     if not isinstance(blob, dict):
         raise ValueError(f"config['{field_path}'] must be an object")
 
-    # Migrate old fields that have been replaced or renamed before the strict
-    # presence check kicks in.  This lets older config.json files load without
-    # losing the user's tuning.
+    # Renames still need handling explicitly — a renamed field is not the same
+    # thing as a missing one, and dropping it would lose a real setting.
     blob = dict(blob)  # shallow copy — don't mutate the caller's dict
     if "adaptive_saturate_space" not in blob and "use_adaptive_saturate" in blob:
         blob["adaptive_saturate_space"] = "cielab" if blob["use_adaptive_saturate"] else "off"
     blob.pop("use_adaptive_saturate", None)  # tolerate either presence; ignore now
-    for name, default in _LENIENT_DEFAULTS.items():
-        blob.setdefault(name, default)
 
     dither_blob = blob.get("dither")
-    if not isinstance(dither_blob, dict):
-        return PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
+    if dither_blob is not None and not isinstance(dither_blob, dict):
+        raise ValueError(f"config['{field_path}']['dither'] must be an object")
+    dither_blob = dither_blob or {}
     dither_kwargs = {
-        f.name: dither_blob[f.name] for f in fields(DitherConfig) if f.name in dither_blob
+        f.name: (dither_blob[f.name] if f.name in dither_blob else getattr(base.dither, f.name))
+        for f in fields(DitherConfig)
     }
-    missing_dither = {f.name for f in fields(DitherConfig)} - dither_kwargs.keys()
-    if missing_dither:
-        return PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
     dither = DitherConfig(**dither_kwargs)
 
     image_kwargs: dict[str, Any] = {"dither": dither}
+    filled_from_default: list[str] = []
     for f in fields(ImageConfig):
         if f.name == "dither":
             continue
-        if f.name not in blob:
-            return PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
-        image_kwargs[f.name] = blob[f.name]
+        if f.name in blob:
+            image_kwargs[f.name] = blob[f.name]
+        else:
+            image_kwargs[f.name] = getattr(base, f.name)
+            filled_from_default.append(f.name)
+
+    if filled_from_default:
+        # Say so. The old reset was completely silent, which is why a shipped
+        # example config could be discarded on every single load unnoticed.
+        logger.info(
+            "config['%s']: %d field(s) absent, kept defaults: %s",
+            field_path,
+            len(filled_from_default),
+            ", ".join(sorted(filled_from_default)),
+        )
 
     return ImageConfig(**image_kwargs)
