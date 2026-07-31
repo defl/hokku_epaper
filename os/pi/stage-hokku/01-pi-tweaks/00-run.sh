@@ -149,17 +149,55 @@ ALGO=zstd
 PERCENT=100
 PRIORITY=100
 ZRAM
-systemctl enable zramswap.service 2>/dev/null || \
-    echo "WARNING: zramswap.service missing (zram-tools not installed?)"
+systemctl enable zramswap.service || {
+    echo "ERROR: could not enable zramswap.service (zram-tools not installed?)" >&2
+    exit 1
+}
 
 # Last-resort on-SD swapfile via dphys-swapfile: 512 MB, created on first boot
 # (not baked into the image, so the .img stays small). Its default swap
 # priority is negative — well below zram's 100 — so it is only ever used once
 # zram is exhausted, keeping SD writes to genuine emergencies.
-if [ -f /etc/dphys-swapfile ]; then
-    sed -i 's/^#\?CONF_SWAPSIZE=.*/CONF_SWAPSIZE=512/' /etc/dphys-swapfile
+#
+# This layer did not exist on any image before now. dphys-swapfile was never in
+# 00-packages and is not part of pi-gen's stage2 either, so /etc/dphys-swapfile
+# was absent, the `if [ -f ]` below skipped the sizing, `systemctl enable`
+# failed into `|| true`, and the build said nothing. Appliances shipped with
+# zram as their ONLY swap. Both steps are now loud: if the package is missing
+# the build fails here rather than producing an image quietly missing a layer
+# of its memory policy.
+if [ ! -f /etc/dphys-swapfile ]; then
+    echo "ERROR: /etc/dphys-swapfile missing — is dphys-swapfile in 00-packages?" >&2
+    exit 1
 fi
-systemctl enable dphys-swapfile 2>/dev/null || true
+sed -i 's/^#\?CONF_SWAPSIZE=.*/CONF_SWAPSIZE=512/' /etc/dphys-swapfile
+grep -q '^CONF_SWAPSIZE=512$' /etc/dphys-swapfile || {
+    echo "ERROR: could not set CONF_SWAPSIZE in /etc/dphys-swapfile" >&2
+    exit 1
+}
+systemctl enable dphys-swapfile || {
+    echo "ERROR: could not enable dphys-swapfile.service" >&2
+    exit 1
+}
+
+# Order zram AFTER the swapfile so that, on shutdown, it is torn down BEFORE
+# it — systemd stops units in reverse start order. This is the difference
+# between a clean reboot and a hang: `swapoff` on zram has to pull every
+# compressed page back into RAM, and on a 464 MB board that can be more than
+# will fit. With the SD swapfile still active at that moment the kernel has
+# somewhere to put the overflow; without it there is nowhere to go and the
+# shutdown wedges with no console message and no journal (observed on real
+# hardware, 2026-07-30 — the appliance froze mid-reboot after the setup wizard
+# and had to be power-cycled).
+mkdir -p /etc/systemd/system/zramswap.service.d
+cat > /etc/systemd/system/zramswap.service.d/10-after-swapfile.conf <<'ZRAMORDER'
+# Managed by the Hokku appliance image (os/pi/stage-hokku/01-pi-tweaks).
+# Start after the on-SD swapfile => stop before it. Keeps the last-resort swap
+# available while zram is being swapped off during shutdown.
+[Unit]
+After=dphys-swapfile.service
+Wants=dphys-swapfile.service
+ZRAMORDER
 
 # Prefer swapping cold anon pages to zram over dropping/re-reading page cache.
 cat > /etc/sysctl.d/99-hokku-vm.conf <<'SYSCTL'

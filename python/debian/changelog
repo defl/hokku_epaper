@@ -1,3 +1,16 @@
+hokku-server (4.0.1~dev.22-1) unstable; urgency=medium
+
+  * No server code changes. Appliance image fix: the last-resort on-SD swapfile
+    documented in the image's memory policy was never actually present.
+    dphys-swapfile was missing from 00-packages (and is not in pi-gen stage2),
+    so the config step skipped itself and `systemctl enable` failed into
+    `|| true` — every image shipped with zram as its only swap. Adds the
+    package, makes both swap layers fail the build loudly if they cannot be
+    configured, and orders zram after the swapfile so the swapfile is still
+    available while zram is swapped off during shutdown.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 30 Jul 2026 23:24:12 -0500
+
 hokku-server (4.0.1~dev.21-1) unstable; urgency=medium
 
   * Deep-sleep oscillator-drift calibration. Screens learn their RC-oscillator

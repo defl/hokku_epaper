@@ -61,6 +61,21 @@
 
 ### Fixed
 
+- **The appliance could hang instead of rebooting, and its documented
+  last-resort swap was never actually there.** The image's memory policy has
+  three layers — compressed RAM swap (zram), a small on-SD swapfile as a
+  last resort, and a kernel tuning knob — but the package providing the
+  swapfile was never installed, and the two steps that were supposed to set it
+  up both failed silently. Every image so far has run with zram as its only
+  swap. That matters most at shutdown: releasing zram means pulling every
+  compressed page back into a 464 MB board's RAM, and with nowhere to put the
+  overflow a reboot can freeze with no message on screen and nothing in the
+  log — seen on real hardware, needing a power cycle. The swapfile is now
+  installed and sized as documented, zram is ordered so the swapfile is still
+  available while zram is being released, and the image build now fails loudly
+  if either layer can't be configured rather than shipping an appliance that is
+  quietly missing one.
+
 - **Black-and-white and portrait photos were being processed exactly like every
   other photo.** The server keeps three image pipelines — default, B&W, and
   faces — but on every install all three were collapsing into the default one,
