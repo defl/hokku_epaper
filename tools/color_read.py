@@ -200,6 +200,19 @@ def analyse(manifest: dict, readings: dict, white_lab: np.ndarray | None) -> dic
             "rgb": np.rint(np.clip(_lab_to_rgb(lab), 0, 255)).astype(int).tolist(),
         }
 
+    return assemble(manifest, measured)
+
+
+def assemble(manifest: dict, measured: dict[str, dict]) -> dict:
+    """Derive palette anchors + tone response from already-normalised readings.
+
+    Split out from analyse() because an absolute instrument (a reflective
+    spectrophotometer, which self-calibrates against its own white tile) needs
+    everything below but none of the white-reference normalisation above —
+    applying that division to absolute readings would re-reference them to a
+    chosen patch and throw away the absolute lightness the DRC stage needs.
+    See tools/color_calibrate.py.
+    """
     # ── Ink anchors ─────────────────────────────────────────────────────────
     n_ink = len(manifest["palette_measured_rgb"])
     anchors: list[dict | None] = [None] * n_ink
