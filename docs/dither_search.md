@@ -4,13 +4,16 @@ An investigation into why warm mid-tones (lips, skin) pick up blue ink, and an
 attempt to find better settings for the three pipelines — general, B&W and
 faces — by searching the existing configuration space.
 
-**The headline result is negative, and the reason is the interesting part:** the
-search finds no better settings, because the test corpus does not contain the
-failure it is meant to fix. Two claims in [dithering.md](dithering.md) also turn
-out to be wrong. Both are documented below with the evidence.
+**The first attempt under-searched — algorithm × LUT only, 2 of ~20 dimensions —
+and wrongly concluded "no improvement". The corrected search finds 4–5 % gains
+on all three pipelines**, driven by exactly the settings the first pass held
+fixed. Two claims in [dithering.md](dithering.md) also turn out to be wrong, and
+the photo corpus turns out to be unable to see the artifact at all. Everything
+is documented below with the evidence, including one contradiction that is
+still open (§4d).
 
-Everything here is reproducible with `tools/dither_search.py` and the scripts
-described in §2 — no hardware, no measurements.
+Everything here is reproducible with `tools/dither_search.py` — no hardware, no
+measurements.
 
 ---
 
@@ -85,8 +88,9 @@ geometry*, so the residual never heads toward blue to begin with.
 invented — every candidate is expressible in `config.json` today.
 
 ```
-python tools/dither_search.py --all --stage 1 --canvas 640x480
-python tools/dither_search.py --profile faces          # full two-stage
+python tools/dither_search.py --all --corpus swatches --stage 2 --refine 3   # the real run
+python tools/dither_search.py --all --corpus photos  --stage 2              # photo corpus (see §5)
+python tools/dither_search.py --profile faces --corpus swatches
 ```
 
 **Corpus split** uses the server's own classifiers (`ImageClassifier._check_grayscale`,
@@ -118,22 +122,76 @@ a 6× difference on lips vanishes into the average.
 Per-profile weights live in `PROFILE_WEIGHTS`. They are the opinion in this tool
 and the thing to argue with.
 
-## 4. Results — no improvement found
+## 4. Results
 
-Stage 1, 640×480 canvas, huessen_epf1301:
+### 4a. First attempt, and why it was wrong
+
+The first run swept **algorithm × LUT only** — 2 of roughly 20 available
+dimensions — and concluded the presets were "already at the optimum". That
+conclusion was an artifact of under-searching, and it is worth recording because
+the omitted dimensions are exactly the ones that matter:
+
+`adaptive_saturate_space` (off / cielab / **oklab**), `drc_l_space` and
+`drc_chroma_space` (cielab / **oklab**), `adaptive_vivid`, `serpentine`, plus
+`hue_cutoff_deg`, `neutral_chroma` and `dither_noise`.
+
+§1 already pointed at them: the artifact got *worse* under the tonal chain, and
+that chain **is** adaptive-saturate + DRC. Sweeping the dither while holding the
+thing that amplifies the problem fixed was the wrong experiment.
+
+Measured directly on lip swatches (dither + stripe prep, atkinson):
+
+| config | mean blue on lips |
+|---|---:|
+| **production** — `hue_aware`, sat=cielab, drc=cielab | **9.39 %** |
+| `oklab` LUT, sat=cielab, drc=cielab | 2.20 % |
+| `oklab` LUT, sat=cielab, **drc=oklab** | **1.47 %** |
+
+**6.4× better on existing settings.** The DRC space alone is worth a further
+1.5× on top of the LUT change.
+
+### 4b. Flat swatches need a sheet, not one image each
+
+The first synthetic corpus rendered each colour as its own uniform image and
+reported a suspicious `lips_blue` of 0.00 %. A uniform image has **zero dynamic
+range**, and the pipeline's first step is `ImageOps.autocontrast` — which
+stretches a single histogram value to arbitrary output. Nothing lip-coloured
+survived to reach the dither.
+
+Fixed by tiling every swatch into one sheet with explicit black and white anchor
+tiles, so autocontrast has real endpoints to preserve, then taking metrics per
+tile region. `swatch_sheet()` in the tool.
+
+### 4c. Full search, swatch sheet
 
 | profile | baseline | best found | change |
 |---|---|---|---|
-| general | `atkinson_hue_aware` 59.641 | `atkinson+hue_aware` 59.653 | none |
-| B&W | `floyd_steinberg_bw` 40.225 | `atkinson+bw` 39.841 | **1.0 % better** |
-| faces | `atkinson_hue_aware` 61.018 | `atkinson+euclidean` 61.064 | none |
+| general | `atkinson_hue_aware` 40.756 | `stucki+cam16ucs_hue_aware` sat=off vivid=1 **drc=oklab** serp=1 → 38.733 | **5.0 % better** |
+| B&W | `floyd_steinberg_bw` 35.572 | `stucki+bw` sat=off **drc=oklab** → 35.197 | **1.1 % better** |
+| faces | `atkinson_hue_aware` 65.153 | `stucki+cam16ucs` sat=off vivid=1 drc=cielab serp=0 → 62.383 | **4.3 % better** |
 
-The only real result is B&W: **Atkinson beats Floyd–Steinberg** with the `bw`
-LUT (39.841 vs 40.222, ~1 %). Small but consistent, and free to adopt.
+Consistent across all three:
 
-For general and faces the current presets are already at the optimum of this
-search space. Worse, `oklab` and `cam16ucs` rank *below* the CIELAB LUTs on
-faces (`lips_blue` 1.74 % vs 1.22 %) — the exact opposite of §1.
+- **Stucki wins everywhere**, over the current Atkinson (general, faces) and
+  Floyd–Steinberg (B&W). Its wider two-row kernel spreads the residual further,
+  so it accumulates less locally — which is precisely what drives the cascade.
+- **CAM16-UCS (or OKLAB) for the colour profiles**, never the CIELAB LUTs.
+- **`drc=oklab`** for general and B&W; faces is near-indifferent.
+
+### 4d. One contradiction, unresolved
+
+The sheet prefers `adaptive_saturate=off`; the dither-only test in §4a prefers
+`sat=cielab` and rates `off` far worse (4.74 % vs 1.47 %).
+
+The difference is the PIL prep phase — autocontrast, gamma, CLAHE, unsharp mask
+— which the sheet includes and the direct test does not. CLAHE on *flat tiles*
+is a degenerate case: it manufactures local contrast where a real lip has
+texture. So the sheet is trustworthy for the LUT and algorithm choice (both
+robust across the two methods) and **not** trustworthy for the saturation
+setting.
+
+Resolving it needs test signals with realistic texture — either real photos
+containing saturated lips, or synthetic patches with plausible noise/gradient.
 
 ## 5. Why the search cannot see the problem
 
@@ -164,19 +222,33 @@ fit for this question.
 
 ## 6. What to do with this
 
-1. **Adopt the B&W change.** `atkinson` + `bw` LUT, ~1 % better and free.
-2. **Trust the synthetic-swatch evidence for the blue-lips artifact**, not the
-   photo corpus. It is 6× and unambiguous; the corpus simply cannot see it.
-3. **Fix the corpus before re-running the search.** It needs images with
-   saturated red lips, and ideally a synthetic swatch sheet spanning the warm
-   high-chroma region. Until then a photo-corpus search cannot answer the
-   question that prompted it.
-4. **Correct [dithering.md §5a](dithering.md)** — the hue-aware LUT is not the
+Robust across both measurement methods, and therefore safe to act on:
+
+1. **Switch the colour LUTs off CIELAB.** `cam16ucs` or `oklab` for the general
+   and face pipelines. This is the single biggest lever on the blue-lips
+   artifact — 4.3× on its own, 6.4× combined with the DRC space.
+2. **Switch the DRC space to OKLAB** (`drc_l_space` / `drc_chroma_space`) for
+   general and B&W. Worth a further ~1.5×.
+3. **Use Stucki** for all three pipelines. Its wider kernel spreads the residual
+   that drives the cascade, and it wins on every profile.
+
+Less settled:
+
+4. **Leave `adaptive_saturate_space` alone for now** — the two methods disagree
+   (§4d) and the disagreement is a known artifact of flat tiles under CLAHE.
+5. **Get test signals that contain the failure.** Real photos with saturated
+   lips, or textured synthetic patches. Both current corpora are compromised:
+   the photo set has no saturated lips at all (§5), the swatch sheet has no
+   texture (§4d).
+6. **Correct [dithering.md §5a](dithering.md)** — the hue-aware LUT is not the
    fix it is described as.
-5. The palette anchors these decisions rest on are themselves unverified — see
+7. The palette anchors these decisions rest on are themselves unverified — see
    [color_calibration.md](color_calibration.md). Measuring them makes every
    number above more trustworthy, including the LUT comparison, since the LUTs
    are built from `palette_measured_rgb`.
+
+Nothing here has been applied to the shipped presets. These are measurements and
+a recommendation, not a change.
 
 ## 7. Caveats
 

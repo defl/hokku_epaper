@@ -31,9 +31,9 @@ Staging assumes the algorithm/LUT choice dominates and the rest refines it —
 true here because the blue cascade is a geometry problem, not a tonal one.
 
 Usage:
-    python tools/dither_search.py --profile faces
-    python tools/dither_search.py --all --canvas 800x600
-    python tools/dither_search.py --all --stage 1        # quick pass
+    python tools/dither_search.py --all --corpus swatches --stage 2 --refine 3
+    python tools/dither_search.py --profile faces --corpus swatches
+    python tools/dither_search.py --all --corpus photos --stage 2   # see docs 5
 """
 
 from __future__ import annotations
@@ -111,6 +111,74 @@ def warm_blue_fractions(src_rgb: np.ndarray, idx: np.ndarray, valid: np.ndarray)
     return out
 
 
+# ── synthetic swatch corpus ──────────────────────────────────────────────────
+#
+# The photo corpus cannot answer the blue-lips question: it contains no
+# saturated red lips at all (see docs/dither_search.md 5). Its high-chroma warm
+# population is a synthetic RGB gradient plus jackets and backgrounds, so
+# optimising lips_blue over photos optimises noise.
+#
+# These swatches put the failing colours in front of the search directly. Flat
+# fields are deliberate — a large uniform area is where the error-diffusion
+# cascade has room to develop, and it is exactly the case (a lip, a painted
+# wall) where the artifact is most visible.
+
+SWATCH_COLOURS: dict[str, tuple[int, int, int]] = {
+    # The complaint: saturated warm mid-tones.
+    "lips_deep": (150, 60, 70),
+    "lips_mid": (190, 90, 95),
+    "lips_pale": (215, 130, 130),
+    "lipstick_red": (170, 40, 55),
+    "blush": (225, 165, 160),
+    # Skin, which must not regress while fixing lips.
+    "skin_light": (240, 200, 180),
+    "skin_mid": (215, 170, 145),
+    "skin_tan": (190, 140, 115),
+    "skin_deep": (140, 95, 75),
+    # Other hues, so a fix is not bought by wrecking the rest of the gamut.
+    "sky_blue": (120, 165, 210),
+    "foliage": (95, 135, 70),
+    "gold": (205, 165, 70),
+    "terracotta": (185, 100, 65),
+    "plum": (110, 65, 105),
+    "neutral_mid": (150, 150, 150),
+}
+
+SWATCH_H, SWATCH_W = 96, 160
+SWATCH_COLS = 4
+
+
+def swatch_sheet() -> tuple[np.ndarray, list[tuple[str, tuple[int, int, int, int]]]]:
+    """One sheet holding every swatch, plus its per-swatch regions.
+
+    A sheet, not one image per colour. A uniform image has zero dynamic range,
+    and the pipeline's first step is ``ImageOps.autocontrast`` — on a flat field
+    that stretches a single histogram value to arbitrary output, so the colour
+    reaching the dither is not the colour requested and every measurement is
+    meaningless (it reads 0 % blue because nothing lip-coloured survives).
+
+    Tiling them together, with explicit black and white anchor tiles, gives
+    autocontrast real endpoints to preserve, so each tile arrives at the dither
+    as the colour asked for. Metrics are then taken per tile region.
+    """
+    names = ["_black", *SWATCH_COLOURS, "_white"]
+    rows = (len(names) + SWATCH_COLS - 1) // SWATCH_COLS
+    sheet = np.zeros((rows * SWATCH_H, SWATCH_COLS * SWATCH_W, 3), dtype=np.uint8)
+    regions: list[tuple[str, tuple[int, int, int, int]]] = []
+    for i, name in enumerate(names):
+        r, c = divmod(i, SWATCH_COLS)
+        y, x = r * SWATCH_H, c * SWATCH_W
+        rgb = (
+            (0, 0, 0)
+            if name == "_black"
+            else ((255, 255, 255) if name == "_white" else SWATCH_COLOURS[name])
+        )
+        sheet[y : y + SWATCH_H, x : x + SWATCH_W] = rgb
+        if not name.startswith("_"):  # anchors are scaffolding, not measured
+            regions.append((name, (y, x, SWATCH_H, SWATCH_W)))
+    return sheet, regions
+
+
 # ── corpus selection, using the server's own classifiers ─────────────────────
 
 
@@ -185,6 +253,30 @@ def score(metrics: dict[str, float], profile: str) -> float:
 # ── rendering ────────────────────────────────────────────────────────────────
 
 
+def evaluate_arrays(cfg, items, renderer, display) -> dict:
+    """Mean metrics for *cfg* across in-memory (name, HxWx3 uint8) arrays.
+
+    Used for the synthetic swatch corpus, which needs no files and no resize —
+    the array IS the canvas, so nothing resamples the flat field.
+    """
+    from PIL import Image  # noqa: PLC0415 — only the swatch path needs PIL directly
+
+    sheet, regions = items
+    h, w = sheet.shape[:2]
+    idx = renderer.render_indices(
+        Image.fromarray(sheet), cfg, Orientation.LANDSCAPE, w, h, crop_to_fill_threshold=0.0
+    )
+    acc: dict[str, list[float]] = {}
+    for _name, (y, x, th, tw) in regions:
+        src_t = sheet[y : y + th, x : x + tw]
+        idx_t = idx[y : y + th, x : x + tw]
+        m = image_compare(src_t, display.palette_measured_rgb[idx_t])
+        m.update(warm_blue_fractions(src_t, idx_t, np.ones(idx_t.shape, dtype=bool)))
+        for k, v in m.items():
+            acc.setdefault(k, []).append(float(v))
+    return {k: float(np.mean(v)) for k, v in acc.items()}
+
+
 def evaluate(cfg, images: list[Path], renderer, display, canvas: tuple[int, int]) -> dict:
     """Mean metrics for *cfg* across *images*."""
     acc: dict[str, list[float]] = {}
@@ -242,18 +334,28 @@ BASE_PRESET = {
 
 
 def run_profile(profile: str, corpus, args, renderer, display, canvas) -> dict:
-    images = corpus[profile]
+    swatches = swatch_sheet() if args.corpus == "swatches" else None
+    images = [] if swatches else corpus[profile]
     base = PRESET_IMAGE_CONFIGS[BASE_PRESET[profile]]
     print("=" * 92)
-    print(f"  {profile.upper()}  — {len(images)} image(s), base preset {BASE_PRESET[profile]}")
+    n = len(swatches[1]) if swatches else len(images)
+    kind = "swatch" if swatches else "image"
+    print(f"  {profile.upper()}  — {n} {kind}(s), base preset {BASE_PRESET[profile]}")
     print("=" * 92)
-    if not images:
+    if not swatches and not images:
         print("  (no images in this class)")
         return {}
 
+    def _eval(c):
+        return (
+            evaluate_arrays(c, swatches, renderer, display)
+            if swatches
+            else evaluate(c, images, renderer, display, canvas)
+        )
+
     # Baseline: what ships today.
     t0 = time.monotonic()
-    base_m = evaluate(base, images, renderer, display, canvas)
+    base_m = _eval(base)
     base_s = score(base_m, profile)
     print(
         f"  baseline {BASE_PRESET[profile]:<26} score {base_s:8.3f}"
@@ -276,7 +378,7 @@ def run_profile(profile: str, corpus, args, renderer, display, canvas) -> dict:
             )
     print(f"  stage 1: {len(cands)} algorithm x LUT combinations")
     for i, (name, cfg) in enumerate(cands, 1):
-        m = evaluate(cfg, images, renderer, display, canvas)
+        m = _eval(cfg)
         s = score(m, profile)
         results.append({"name": name, "score": s, "metrics": m, "stage": 1})
         print(
@@ -293,7 +395,7 @@ def run_profile(profile: str, corpus, args, renderer, display, canvas) -> dict:
         for entry in top:
             cfg = dict(cands)[entry["name"]]
             for name, cand in stage2_candidates(entry["name"], cfg):
-                m = evaluate(cand, images, renderer, display, canvas)
+                m = _eval(cand)
                 s = score(m, profile)
                 results.append({"name": name, "score": s, "metrics": m, "stage": 2})
         results.sort(key=lambda r: r["score"])
@@ -326,6 +428,12 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--all", action="store_true")
     ap.add_argument("--model", default="huessen_epf1301", choices=sorted(DISPLAY_REGISTRY))
     ap.add_argument("--canvas", default="800x600", help="render canvas WxH (smaller = faster)")
+    ap.add_argument(
+        "--corpus",
+        default="photos",
+        choices=("photos", "swatches"),
+        help="photos = images/test; swatches = synthetic flat colour fields",
+    )
     ap.add_argument("--stage", type=int, default=2, choices=(1, 2))
     ap.add_argument("--refine", type=int, default=2, help="how many stage-1 winners to refine")
     ap.add_argument("--out", default="build/dither_search", help="where to write the JSON")
@@ -336,7 +444,9 @@ def main(argv: list[str] | None = None) -> int:
     renderer = ImageRenderer(NumbaStreamingDither(display), display=display)
 
     print(f"model {args.model}, canvas {cw}x{ch}, corpus {TEST_IMAGES}")
-    corpus = classify_corpus()
+    corpus = (
+        {"general": [], "bw": [], "faces": []} if args.corpus == "swatches" else classify_corpus()
+    )
     for k, v in corpus.items():
         print(f"  {k:<8} {len(v):>2} image(s): {', '.join(p.stem[:22] for p in v)}")
     print()
