@@ -1,3 +1,13 @@
+hokku-installer (4.0.0~beta2-1) unstable; urgency=medium
+
+  * Release v4.0.0-beta2. The USB data port's role now follows the appliance's
+    mode, so "Flash a screen" works on the appliance and a stranded unit still
+    gets a serial console. Setup-mode reboots no longer wedge: PID 1 is kept
+    from opening the gadget tty during shutdown, and the last-resort swapfile
+    is actually installed.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 01 Aug 2026 20:15:00 +0000
+
 hokku-installer (4.0.1~dev.14-1) unstable; urgency=medium
 
   * The USB data port's role now follows the appliance's mode. New shared
