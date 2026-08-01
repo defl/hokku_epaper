@@ -84,7 +84,50 @@ Use the **plain, generic `getty@.service` template** instead
 binding, retries on its own, and is what every working guide for gadget
 serial actually uses.
 
-## Trap 2: the host-side library matters as much as the Pi-side config
+## Trap 2: a getty on this tty stops the board rebooting — with no cable
+
+This one costs a power cycle every time and gives you nothing to debug with.
+
+`getty@.service` defaults make **systemd itself** open `/dev/ttyGS0` around
+service stop — that's what `TTYReset`, `TTYVHangup` and `TTYVTDisallocate` do.
+Opening a USB gadget tty with **no host attached** blocks in an uninterruptible
+`open()`. So PID 1 wedges mid-shutdown, and because the process that's stuck is
+the one that prints progress, you get:
+
+- no `A stop job is running for …` countdown,
+- no further console output at all — the screen freezes mid-shutdown,
+- nothing in the journal (journald is already stopped),
+- a board that still answers ping, because the kernel is fine,
+- recovery only when the hardware watchdog fires — ten minutes, by default.
+
+The trap is that **the failing case is the normal one**. A deployed appliance
+has no USB cable attached. Every test that had a cable plugged in for the
+console rebooted perfectly, which is exactly why this survived so long:
+reproduced here 2026-07-31, cable out it hung every time, cable in it rebooted
+every time.
+
+The image fixes it in
+[`01-pi-tweaks`](../os/pi/stage-hokku/01-pi-tweaks/00-run.sh) with a drop-in:
+
+```ini
+# /etc/systemd/system/getty@ttyGS0.service.d/10-no-tty-reset.conf
+[Service]
+TTYReset=no
+TTYVHangup=no
+TTYVTDisallocate=no
+```
+
+Known upstream for years — [raspberrypi/linux#1929](https://github.com/raspberrypi/linux/issues/1929),
+the Pi forum thread [*Pi Zero gadget serial hangs on shutdown*](https://forums.raspberrypi.com/viewtopic.php?t=178917),
+and the same symptom on [systemd-devel in 2015](https://lists.freedesktop.org/archives/systemd-devel/2015-March/029540.html).
+**Watch the spelling**: the forum snippet everyone copies says
+`TTYVDisallocate`, which is not a real directive and is silently ignored. It is
+`TTYVTDisallocate`.
+
+The image also lowers `RebootWatchdogSec` to 60s, so a shutdown wedged by
+anything at all recovers in a minute instead of ten.
+
+## Trap 3: the host-side library matters as much as the Pi-side config
 
 Once the Pi side is correct, connecting from Windows still isn't
 guaranteed to work with an arbitrary serial library. `pyserial` and .NET's

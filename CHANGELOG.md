@@ -61,6 +61,21 @@
 
 ### Fixed
 
+- **The appliance could freeze instead of rebooting, and the more normal your
+  setup the more likely it was.** Finishing the setup wizard reboots the Pi —
+  and that reboot could wedge partway through, with a frozen screen, nothing in
+  the log, and a board that still answered ping but served nothing. It looked
+  bricked; the only way out was pulling the power, or waiting ten minutes for
+  the watchdog. The cause was the USB serial console: the login prompt sitting
+  on that port makes the system itself touch the port while shutting down, and
+  doing that with **nothing plugged into the USB cable** blocks forever. So the
+  failure needed no unusual setup at all — it needed the *absence* of one, which
+  is why it never showed up in testing, where a cable was always attached for
+  the console. This is a long-standing Raspberry Pi issue
+  ([raspberrypi/linux#1929](https://github.com/raspberrypi/linux/issues/1929)),
+  now fixed in the image. A shutdown that wedges for any other reason now
+  recovers by itself after a minute rather than ten.
+
 - **The appliance could hang instead of rebooting, and its documented
   last-resort swap was never actually there.** The image's memory policy has
   three layers — compressed RAM swap (zram), a small on-SD swapfile as a

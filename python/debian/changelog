@@ -1,3 +1,17 @@
+hokku-server (4.0.1~dev.23-1) unstable; urgency=medium
+
+  * No server code changes. Appliance image fix: the board could not reboot
+    with no USB cable attached. getty@.service has PID 1 itself open
+    /dev/ttyGS0 around service stop (TTYReset/TTYVHangup/TTYVTDisallocate);
+    opening a gadget tty with no host attached blocks uninterruptibly, so
+    systemd wedged mid-shutdown with no message, no timeout and no journal
+    until the hardware watchdog fired ten minutes later. Since a deployed
+    appliance has no cable attached, this was the default case. Adds a drop-in
+    disabling those three, and lowers RebootWatchdogSec from 10min to 60s so
+    any wedged shutdown self-recovers. Known upstream: raspberrypi/linux#1929.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 01 Aug 2026 10:16:02 -0500
+
 hokku-server (4.0.1~dev.22-1) unstable; urgency=medium
 
   * No server code changes. Appliance image fix: the last-resort on-SD swapfile

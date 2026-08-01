@@ -232,6 +232,47 @@ if [ ! -x "$usb_mode_script" ]; then
 fi
 "$usb_mode_script" peripheral
 
+# Keep PID 1 away from the gadget tty, or the appliance cannot reboot.
+#
+# getty@.service defaults have systemd ITSELF open /dev/ttyGS0 around service
+# stop (TTYReset / TTYVHangup / TTYVTDisallocate). Opening a USB gadget tty with
+# no host attached blocks in an uninterruptible open() — so PID 1 wedges, and
+# because the thing that is stuck is the thing that prints progress, there is no
+# "A stop job is running" message, no timeout, and nothing in the journal. The
+# board sits there answering ping until the hardware watchdog fires ten minutes
+# later. An appliance normally has NO cable attached, so this is the DEFAULT
+# case, not an edge case: reproduced here 2026-07-31, cable out it hangs every
+# time, cable in it reboots every time.
+#
+# Long known upstream — raspberrypi/linux#1929 and the Pi forum thread
+# "Pi Zero gadget serial hangs on shutdown" (t=178917); same symptom reported on
+# systemd-devel back in 2015. Note the widely copy-pasted forum snippet spells
+# it TTYVDisallocate, which is not a real directive and is silently ignored;
+# the correct name is TTYVTDisallocate.
+#
+# Applies to the unit, so it is harmless in host mode where the getty is off.
+mkdir -p /etc/systemd/system/getty@ttyGS0.service.d
+cat > /etc/systemd/system/getty@ttyGS0.service.d/10-no-tty-reset.conf <<'GETTYEOF'
+# Managed by the Hokku appliance image (os/pi/stage-hokku/01-pi-tweaks).
+# Without this the board cannot reboot with no USB host attached — see the
+# comment in 01-pi-tweaks and docs/os_pi_usb_console.md.
+[Service]
+TTYReset=no
+TTYVHangup=no
+TTYVTDisallocate=no
+GETTYEOF
+
+# Bound the damage of ANY wedged shutdown, not just this one. systemd already
+# arms the BCM2835 hardware watchdog while shutting down, but at its 10-minute
+# default — long enough that a headless appliance looks bricked and gets its
+# power pulled. A minute is plenty for a board whose clean reboot takes ~30s.
+mkdir -p /etc/systemd/system.conf.d
+cat > /etc/systemd/system.conf.d/10-hokku-reboot-watchdog.conf <<'WDEOF'
+# Managed by the Hokku appliance image (os/pi/stage-hokku/01-pi-tweaks).
+[Manager]
+RebootWatchdogSec=60
+WDEOF
+
 # Bluetooth radio unused by this appliance — disabled at the hardware level
 # above (dtoverlay=disable-bt); also stop the services so nothing lingers.
 systemctl disable --now bluetooth hciuart 2>/dev/null || true
