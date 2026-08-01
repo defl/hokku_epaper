@@ -200,9 +200,9 @@ bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
      * pair only when both parsed, so the board can apply its adoption policy. */
     if (ctx.cal_ppm_hdr[0] != '\0' && ctx.cal_n_hdr[0] != '\0' &&
         out && out->out_cal_seed_ppm && out->out_cal_seed_n) {
-        int  n   = atoi(ctx.cal_n_hdr);
-        int  ppm = atoi(ctx.cal_ppm_hdr);
+        int n = atoi(ctx.cal_n_hdr);
         if (n >= 0) {
+            int ppm = atoi(ctx.cal_ppm_hdr);
             *out->out_cal_seed_ppm = (int32_t)ppm;
             *out->out_cal_seed_n   = n;
             ESP_LOGI("hokku", "X-Sleep-Cal: %d ppm from %d samples", ppm, n);

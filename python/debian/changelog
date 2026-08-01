@@ -1,3 +1,13 @@
+hokku-server (4.0.1~dev.24-1) unstable; urgency=medium
+
+  * No server code changes. Firmware lint fix: reduce the scope of 'ppm' in
+    common/esp32/net.c, which failed CI's cppcheck (variableScope) and so
+    blocked the release build. Behaviour is unchanged; firmware N bumped on
+    the two boards that compile that file - huessen_epf1301 1.2.21,
+    seeedstudio_e1004 1.2.5. bigme_f7 is xr872 and unaffected at 1.2.10.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 01 Aug 2026 16:05:00 -0500
+
 hokku-server (4.0.1~dev.23-1) unstable; urgency=medium
 
   * No server code changes. Appliance image fix: the board could not reboot
