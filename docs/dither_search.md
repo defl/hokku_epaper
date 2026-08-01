@@ -4,13 +4,19 @@ An investigation into why warm mid-tones (lips, skin) pick up blue ink, and an
 attempt to find better settings for the three pipelines — general, B&W and
 faces — by searching the existing configuration space.
 
-**The first attempt under-searched — algorithm × LUT only, 2 of ~20 dimensions —
-and wrongly concluded "no improvement". The corrected search finds 4–5 % gains
-on all three pipelines**, driven by exactly the settings the first pass held
-fixed. Two claims in [dithering.md](dithering.md) also turn out to be wrong, and
-the photo corpus turns out to be unable to see the artifact at all. Everything
-is documented below with the evidence, including one contradiction that is
-still open (§4d).
+**Outcome: one adoptable change (B&W), one confirmed documentation error, and a
+tempting recommendation that failed validation.**
+
+The blue-lips artifact is real and reproducible, and OKLAB/CAM16-UCS reduce it
+6× *in isolation* (§1, §4a). But on real photographs those same settings score
+4–19 % **worse** and make the artifact worse still (§4d), because they leak
+substantially more colour into neutrals — a cost the synthetic swatches are
+structurally blind to. The two corpora fail in opposite directions and neither
+alone can settle it.
+
+Also established here: `hue_aware` does nothing for this artifact despite
+[dithering.md §5a](dithering.md) presenting it as the fix (§2), and the photo
+corpus contains no saturated lips at all (§5).
 
 Everything here is reproducible with `tools/dither_search.py` — no hardware, no
 measurements.
@@ -178,7 +184,46 @@ Consistent across all three:
 - **CAM16-UCS (or OKLAB) for the colour profiles**, never the CIELAB LUTs.
 - **`drc=oklab`** for general and B&W; faces is near-indifferent.
 
-### 4d. One contradiction, unresolved
+### 4d. Validation on real photos — the swatch winners do **not** transfer
+
+The swatch-derived configs were then run head-to-head against the shipped
+presets on the real photo corpus. Three candidates per pipeline: **A** production,
+**B** exactly what the swatch search picked, **C** "conservative" — only the
+changes robust across both methods (Stucki + CAM16-UCS/bw + `drc=oklab`,
+saturation left alone).
+
+| profile | variant | score | dE2000 | neutral_leak | warm % | lips % | vs production |
+|---|---|---:|---:|---:|---:|---:|---|
+| general | A production | 59.466 | 34.29 | 15.62 | 7.72 | 6.01 | — |
+| | B swatch winner | 62.053 | 34.88 | 23.47 | 9.47 | 5.01 | **−4.4 % worse** |
+| | C conservative | 64.142 | 34.88 | 23.35 | 10.13 | 5.70 | **−7.9 % worse** |
+| B&W | A production | 40.222 | 28.14 | 3.02 | 0.00 | 0.00 | — |
+| | B / C | 39.988 | 27.76 | 3.06 | 0.00 | 0.00 | **+0.6 % better** |
+| faces | A production | 61.041 | 34.75 | 15.04 | 1.66 | 1.22 | — |
+| | B swatch winner | 67.141 | 35.65 | 20.53 | 3.85 | 2.21 | **−10.0 % worse** |
+| | C conservative | 72.575 | 36.34 | 23.18 | 4.98 | 3.19 | **−18.9 % worse** |
+
+**The recommendation does not survive contact with real photographs.** On faces
+it is nearly 19 % worse, and it makes the very artifact it was meant to fix
+*worse*: `lips_blue` goes 1.22 % → 3.19 %.
+
+The clearest regression is `neutral_leak`, 15 → 23 on both colour profiles. The
+CAM16-UCS and OKLAB LUTs leak substantially more colour into near-neutral areas
+on real images — skies, walls, grey clothing. The swatch sheet has exactly one
+neutral tile, so it could not see that cost at all, while the photo corpus is
+full of neutrals.
+
+So the two corpora fail in *opposite* directions:
+
+| corpus | can see | cannot see |
+|---|---|---|
+| swatch sheet | saturated warm colour, the cascade in flat areas | neutrals, texture, CLAHE behaving sanely |
+| photo corpus | neutrals, texture, realistic tonal chain | saturated lips (none exist in it — §5) |
+
+Optimising against either alone produces a config that is worse in the other's
+blind spot. **Only the B&W result is robust**, winning on both.
+
+### 4e. One contradiction, unresolved
 
 The sheet prefers `adaptive_saturate=off`; the dither-only test in §4a prefers
 `sat=cielab` and rates `off` far worse (4.74 % vs 1.47 %).
@@ -222,33 +267,47 @@ fit for this question.
 
 ## 6. What to do with this
 
-Robust across both measurement methods, and therefore safe to act on:
+**Safe to adopt — one change only:**
 
-1. **Switch the colour LUTs off CIELAB.** `cam16ucs` or `oklab` for the general
-   and face pipelines. This is the single biggest lever on the blue-lips
-   artifact — 4.3× on its own, 6.4× combined with the DRC space.
-2. **Switch the DRC space to OKLAB** (`drc_l_space` / `drc_chroma_space`) for
-   general and B&W. Worth a further ~1.5×.
-3. **Use Stucki** for all three pipelines. Its wider kernel spreads the residual
-   that drives the cascade, and it wins on every profile.
+1. **B&W: Stucki + `bw` LUT + `drc=oklab`.** The only result that wins on both
+   corpora (+1.1 % on swatches, +0.6 % on photos), with no regression anywhere.
 
-Less settled:
+**Not justified on the current evidence:**
 
-4. **Leave `adaptive_saturate_space` alone for now** — the two methods disagree
-   (§4d) and the disagreement is a known artifact of flat tiles under CLAHE.
-5. **Get test signals that contain the failure.** Real photos with saturated
-   lips, or textured synthetic patches. Both current corpora are compromised:
-   the photo set has no saturated lips at all (§5), the swatch sheet has no
-   texture (§4d).
+2. **Do not switch the general or face LUTs to CAM16-UCS/OKLAB yet.** It is the
+   biggest lever on blue lips in isolation (6.4×), but on real photographs it is
+   4–19 % worse overall and makes `lips_blue` *worse* (§4d). The cost lands in
+   `neutral_leak` (15 → 23), which the swatch sheet is structurally blind to.
+   Something real is being traded here and the current test signals cannot price
+   it.
+3. **Leave `adaptive_saturate_space` alone** — the two methods disagree (§4e).
+
+**What would actually settle it**, roughly in order of value:
+
+4. **Test signals that contain the failure *and* the cost.** The blocking gap:
+   no corpus here has both saturated lips and realistic neutrals/texture. A
+   handful of real portraits with lipstick would resolve almost everything
+   above; failing that, textured synthetic patches (noise/gradient rather than
+   flat fill) plus more neutral tiles.
+5. **A neutral-leak-aware search.** The regression suggests the LUT choice
+   trades warm-hue accuracy against neutral purity. That trade should be
+   measured deliberately, not discovered.
 6. **Correct [dithering.md §5a](dithering.md)** — the hue-aware LUT is not the
-   fix it is described as.
-7. The palette anchors these decisions rest on are themselves unverified — see
-   [color_calibration.md](color_calibration.md). Measuring them makes every
-   number above more trustworthy, including the LUT comparison, since the LUTs
-   are built from `palette_measured_rgb`.
+   fix it is described as (§2). That finding is independent of all the above
+   and stands on its own.
+7. The palette anchors every number here rests on are unverified — see
+   [color_calibration.md](color_calibration.md). The LUTs are built from
+   `palette_measured_rgb`, so a CIELAB-vs-OKLAB comparison is partly a
+   comparison of how each space tolerates *wrong anchors*. Measuring them makes
+   the whole exercise more trustworthy.
 
-Nothing here has been applied to the shipped presets. These are measurements and
-a recommendation, not a change.
+Nothing here has been applied to the shipped presets.
+
+> **Method note.** Two recommendations in this document were retracted after
+> further measurement: "the presets are already optimal" (wrong — under-searched,
+> §4a) and "switch the colour LUTs" (wrong — did not survive photo validation,
+> §4d). Both were plausible and both were premature. Anything below the B&W
+> result should be treated as a hypothesis with a test attached, not a finding.
 
 ## 7. Caveats
 
