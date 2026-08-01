@@ -45,9 +45,6 @@ hokku-server (4.0.1~dev.21-1) unstable; urgency=medium
     reflash; legacy name-keyed databases migrate on load. Responses carry
     X-Sleep-Cal-PPM / X-Sleep-Cal-N and screens send X-Screen-Mac.
     Firmware: huessen 1.2.20, seeed 1.2.4, bigme_f7 1.2.10.
-  * Colour-calibration tooling: tools/color_target.py generates a colorimeter
-    target, tools/color_read.py converts readings into a palette block, and a
-    new "calibration_raw" preset renders the target pixel-exact.
 
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 30 Jul 2026 22:02:49 -0500
 

@@ -85,63 +85,10 @@ def _face(algorithm: AlgorithmName = "atkinson", serpentine: bool = False) -> Im
     )
 
 
-def _calibration_raw() -> ImageConfig:
-    """Pixel-exact passthrough: every tonal and chromatic stage neutralised.
-
-    Intended for images that are already authored in the panel's own inks at
-    exact canvas dimensions — the colour-calibration target from
-    ``tools/color_target.py`` above all. Every knob here is set to its
-    identity value and the dither is ``noop`` (nearest ink, no error
-    diffusion), so each source pixel maps to one panel pixel and lands on the
-    ink it was painted in. Error diffusion would smear the flat patches; the
-    tonal chain would shift them off their anchors.
-
-    Dynamic-range compression still runs — it has no off switch — but it maps
-    L\\* onto the panel's own black/white anchors, so pixels already sitting
-    on a palette entry quantise straight back to it. ``test_color_target``
-    pins that behaviour.
-    """
-    return ImageConfig(
-        dither=DitherConfig(
-            algorithm="noop",
-            lut_name="euclidean",
-            serpentine=False,
-            hue_cutoff_deg=95.0,
-            neutral_chroma=8.0,
-        ),
-        prepare_autocontrast_cutoff=0.0,
-        prepare_gamma=1.0,
-        prepare_brightness=1.0,
-        prepare_contrast=1.0,
-        color_enhance=1.0,
-        adaptive_saturate_space="off",
-        saturate_max_enhance=1.0,
-        saturate_low_chroma_thresh=5.0,
-        saturate_high_chroma_thresh=15.0,
-        saturate_low_chroma_thresh_oklab=0.025,
-        saturate_high_chroma_thresh_oklab=0.075,
-        scale_chroma=False,
-        adaptive_vivid=False,
-        vivid_chroma_low=5.0,
-        vivid_chroma_high=15.0,
-        vivid_chroma_low_oklab=0.025,
-        vivid_chroma_high_oklab=0.075,
-        drc_l_space="cielab",
-        drc_chroma_space="cielab",
-        prepare_midtone=1.0,
-        clahe_clip_limit=0.0,
-        clahe_keepout_feather=0.015,
-        prepare_usm_radius=1.0,
-        prepare_usm_amount=0,
-        dither_noise=0.0,
-    )
-
-
 PRESET_IMAGE_CONFIGS: dict[str, ImageConfig] = {
     "floyd_steinberg_hue_aware": _hue_aware("floyd_steinberg", serpentine=True),
     "floyd_steinberg_bw": _bw("floyd_steinberg", serpentine=True),
     "atkinson_hue_aware": _hue_aware("atkinson"),
-    "calibration_raw": _calibration_raw(),
 }
 
 FALLBACK_PRESET = "floyd_steinberg_hue_aware"
@@ -174,9 +121,5 @@ PRESET_META: dict[str, dict[str, str]] = {
     "atkinson_hue_aware": {
         "label": "Atkinson (hue-aware)",
         "description": "Default. Atkinson with hue-constrained LUT and adaptive saturation/vivid. Bold output with believable colours.",
-    },
-    "calibration_raw": {
-        "label": "Calibration (raw passthrough)",
-        "description": "Service preset. No dithering, no tonal or colour processing — each pixel maps straight to its nearest ink. For the colour-calibration target (tools/color_target.py) and other art already authored in the panel's inks at exact panel size. Photos rendered with this will band badly.",
     },
 }

@@ -41,10 +41,7 @@ quote-style = "double"
 pythonVersion = "3.11"
 venvPath = "."
 venv = ".venv"
-# "tools" is on the path because a few tests under python/tests exercise the
-# scripts there (test_color_target, test_color_read) the same way the scripts
-# themselves do — via a sys.path insert.
-extraPaths = ["python", "tools"]
+extraPaths = ["python"]
 include = [
     "python/hokku",
     "python/tests",
