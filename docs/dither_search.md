@@ -7,16 +7,17 @@ faces — by searching the existing configuration space.
 **Outcome: one adoptable change (B&W), one confirmed documentation error, and a
 tempting recommendation that failed validation.**
 
-The blue-lips artifact is real and reproducible, and OKLAB/CAM16-UCS reduce it
-6× *in isolation* (§1, §4a). But on real photographs those same settings score
-4–19 % **worse** and make the artifact worse still (§4d), because they leak
-substantially more colour into neutrals — a cost the synthetic swatches are
-structurally blind to. The two corpora fail in opposite directions and neither
-alone can settle it.
+The blue-lips artifact is real and reproducible on **flat colour fields**, where
+OKLAB/CAM16-UCS reduce it 6× (§1, §4a). That result does not transfer. Two
+freely-licensed portraits with genuinely saturated lipstick were added to close
+the corpus gap, and with them in place the shipped pipeline measures **0.64 %**
+blue on real lipstick at full panel resolution while the proposed "fix" measures
+3.09 % — about 5× worse, and 10–26 % worse overall (§4e). A uniform colour field
+is the pathological case for error diffusion; real lips have texture and
+gradient, which break the cascade before it runs.
 
-Also established here: `hue_aware` does nothing for this artifact despite
-[dithering.md §5a](dithering.md) presenting it as the fix (§2), and the photo
-corpus contains no saturated lips at all (§5).
+Also established: `hue_aware` does nothing for this artifact despite
+[dithering.md §5a](dithering.md) presenting it as the fix (§2).
 
 Everything here is reproducible with `tools/dither_search.py` — no hardware, no
 measurements.
@@ -218,10 +219,45 @@ So the two corpora fail in *opposite* directions:
 | corpus | can see | cannot see |
 |---|---|---|
 | swatch sheet | saturated warm colour, the cascade in flat areas | neutrals, texture, CLAHE behaving sanely |
-| photo corpus | neutrals, texture, realistic tonal chain | saturated lips (none exist in it — §5) |
+| photo corpus | neutrals, texture, realistic tonal chain | saturated lips (none existed in it — §5) |
 
 Optimising against either alone produces a config that is worse in the other's
 blind spot. **Only the B&W result is robust**, winning on both.
+
+### 4e. Corpus gap closed — the answer is now definitive
+
+Two freely-licensed portraits with genuinely saturated lipstick were added to
+`images/test/` (see its `CREDITS.md`): `Brunette_red_lipstick.jpg` — red lips
+against a grey backdrop, dark hair and black clothing, so it carries the
+saturated warm colour **and** the neutrals in one frame — and
+`Applying_red_lipstick_model_Eve_Casini.jpg`, an extreme close-up at 58.7 % of
+pixels above C\* 38 (versus 0.13 % for the best previous portrait).
+
+With the blind spot closed, the verdict does not soften — it hardens:
+
+| corpus / resolution | production | swatch winner | conservative |
+|---|---:|---:|---:|
+| faces, 640×480 | **58.257** | 65.321 (−12.1 %) | 73.491 (−26.2 %) |
+| faces, **3200×1600** (full panel) | **62.067** | 68.539 (−10.4 %) | 74.972 (−20.8 %) |
+
+And on the metric that motivated all of this — `lips_blue`, now measured on real
+lipstick at full panel resolution:
+
+| variant | lips_blue |
+|---|---:|
+| **production** | **0.64 %** |
+| swatch winner | 1.88 % |
+| conservative | 3.09 % |
+
+**The shipped pipeline already handles real lipstick well, and the proposed
+"fix" makes it ~5× worse.** Full panel resolution was checked specifically
+because lips occupy far more pixels there, approaching the flat-field case —
+it changes nothing.
+
+The flat-swatch catastrophe (30 % blue) therefore does **not** occur in
+photographs. A uniform colour field is the pathological case for error
+diffusion; real lips carry texture, specular highlight and gradient, all of
+which break the cascade before it can run.
 
 ### 4e. One contradiction, unresolved
 
@@ -272,26 +308,28 @@ fit for this question.
 1. **B&W: Stucki + `bw` LUT + `drc=oklab`.** The only result that wins on both
    corpora (+1.1 % on swatches, +0.6 % on photos), with no regression anywhere.
 
-**Not justified on the current evidence:**
+**Ruled out:**
 
-2. **Do not switch the general or face LUTs to CAM16-UCS/OKLAB yet.** It is the
-   biggest lever on blue lips in isolation (6.4×), but on real photographs it is
-   4–19 % worse overall and makes `lips_blue` *worse* (§4d). The cost lands in
-   `neutral_leak` (15 → 23), which the swatch sheet is structurally blind to.
-   Something real is being traded here and the current test signals cannot price
-   it.
+2. **Do not switch the general or face LUTs to CAM16-UCS/OKLAB.** This is
+   settled, not merely unproven (§4e): with real lipstick in the corpus and at
+   full panel resolution it is 10–26 % worse overall, and it makes `lips_blue`
+   ~5× worse (0.64 % → 3.09 %). The cost lands in `neutral_leak` (18 → 26).
+   The 6.4× win exists only on flat colour fields, which do not occur in
+   photographs.
 3. **Leave `adaptive_saturate_space` alone** — the two methods disagree (§4e).
 
 **What would actually settle it**, roughly in order of value:
 
-4. **Test signals that contain the failure *and* the cost.** The blocking gap:
-   no corpus here has both saturated lips and realistic neutrals/texture. A
-   handful of real portraits with lipstick would resolve almost everything
-   above; failing that, textured synthetic patches (noise/gradient rather than
-   flat fill) plus more neutral tiles.
-5. **A neutral-leak-aware search.** The regression suggests the LUT choice
-   trades warm-hue accuracy against neutral purity. That trade should be
-   measured deliberately, not discovered.
+4. **If blue lips are still seen in the field, look past the dither.** The
+   pipeline measures at 0.64 % blue on real lipstick at full panel resolution,
+   so the renderer is probably not the culprit. The likeliest remaining suspect
+   is the palette itself: every LUT is built from `palette_measured_rgb`, and
+   those anchors are unverified (item 6). If the panel's real inks differ from
+   the assumed ones, the dither is optimising toward the wrong targets and no
+   amount of LUT tuning fixes it.
+5. **A neutral-leak-aware search**, if the LUT question is ever revisited. The
+   regression shows the LUT choice trades warm-hue accuracy against neutral
+   purity; that trade should be measured deliberately.
 6. **Correct [dithering.md §5a](dithering.md)** — the hue-aware LUT is not the
    fix it is described as (§2). That finding is independent of all the above
    and stands on its own.
@@ -305,9 +343,11 @@ Nothing here has been applied to the shipped presets.
 
 > **Method note.** Two recommendations in this document were retracted after
 > further measurement: "the presets are already optimal" (wrong — under-searched,
-> §4a) and "switch the colour LUTs" (wrong — did not survive photo validation,
-> §4d). Both were plausible and both were premature. Anything below the B&W
-> result should be treated as a hypothesis with a test attached, not a finding.
+> §4a) and "switch the colour LUTs" (wrong — 6.4× on flat swatches, 10–26 %
+> worse on photographs, §4d/§4e). Both were plausible, both were premature, and
+> in both cases the error was generalising from a test signal that could not see
+> the whole cost. The corpus gap is now closed and the LUT question is settled;
+> treat the remaining open items as hypotheses with tests attached.
 
 ## 7. Caveats
 
