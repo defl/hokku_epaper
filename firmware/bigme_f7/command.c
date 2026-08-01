@@ -11,6 +11,7 @@
 extern int      hokku_wifi_provision(const char *ssid, const char *psk);
 extern uint32_t hokku_battery_mv(void);
 extern void     hokku_ota_manual(void);
+extern int      hokku_frame_receive(void);
 
 static const struct cmd_data g_net_cmds[] = {
     { "sta", cmd_wlan_sta_exec },
@@ -134,11 +135,28 @@ static enum cmd_status cmd_hokku_ota_exec(char *cmd)
     return CMD_STATUS_ACKED;
 }
 
+/*
+ * `frame` — upload one ready-made panel buffer over this console and display it.
+ * No server, no WiFi, no render pipeline: the host sends exact bytes, the device
+ * shows them. For bring-up and colour measurement, where the picture on the
+ * glass has to be known precisely. Protocol in firmware/common/all/frame_proto.h;
+ * host side is tools/f7_send_frame.py.
+ */
+static enum cmd_status cmd_frame_exec(char *cmd)
+{
+    (void)cmd;
+    /* No cmd_write_respond here: hokku_frame_receive prints READY itself and
+     * then takes the UART, so an extra ACK line would land mid-handshake. */
+    hokku_frame_receive();
+    return CMD_STATUS_ACKED;
+}
+
 static const struct cmd_data g_main_cmds[] = {
     { "net",     cmd_net_exec },
     { "wifi",    cmd_wifi_exec },
     { "cfg",     cmd_cfg_exec },
     { "ota",     cmd_hokku_ota_exec },
+    { "frame",   cmd_frame_exec },
     { "upgrade", cmd_upgrade_exec },
 };
 

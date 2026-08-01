@@ -75,6 +75,23 @@ OTA. The version is reported in `X-Firmware-Version` and the frame-state `fw`.
 - `wifi <ssid> <password>` — persist WiFi creds to sysinfo + connect.
 - `cfg show | server <url> | name <n> | ip <ip> <gw> <nm> | dhcp | static | sleep <s> | power <auto|sleep|awake> | save`
 - `ota` — trigger an OTA from the configured server right now (test hook).
+- `frame` — upload one ready-made 192000-byte panel buffer over this console and
+  display it. No server, no WiFi, no render pipeline: the host sends exact bytes,
+  the device shows them. For bring-up and colour measurement, where the picture
+  on the glass has to be known precisely (see [`../../color_calibration.md`](../../color_calibration.md)).
+  Wire exchange is in [`firmware/common/all/frame_proto.h`](../../../firmware/common/all/frame_proto.h);
+  drive it with `tools/f7_send_frame.py`. Takes the same OTA/refresh mutex as
+  `ota`, so it refuses rather than racing a refresh.
+
+  The device holds no patterns and no list — the host decides what to display
+  and uploads it, so new test images never need a rebuild or a reflash.
+
+  While a frame is in flight the console's UART RX callback is detached
+  (`console_disable()`), because the transfer needs the raw byte stream. Every
+  exit path restores it — success, CRC mismatch, and the bounded per-chunk
+  timeout alike — so a host that dies mid-transfer costs ~5 s, not the console.
+  `console_disable()` state is pure RAM, so a reboot restores it regardless, and
+  the mask-BROM replug+press catch is unaffected either way.
 - `upgrade` — SDK command that drops to the mask-BROM (used by the flashers).
   **Only our firmware answers `upgrade`; stock OEM does not.**
 

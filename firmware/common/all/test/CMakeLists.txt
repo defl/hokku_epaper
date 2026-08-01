@@ -14,7 +14,7 @@ endif()
 
 enable_testing()
 
-foreach(t logbuf firmware_url json frame_state backoff sleep_cal)
+foreach(t logbuf firmware_url json frame_state backoff sleep_cal frame_proto)
     add_executable(test_${t} test_${t}.c)
     target_include_directories(test_${t} PRIVATE .. .)
     add_test(NAME ${t} COMMAND test_${t})

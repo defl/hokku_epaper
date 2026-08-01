@@ -90,7 +90,26 @@ The target is 15 patches on a 5×3 grid: six flat ink anchors, seven
 Bayer-dithered ramp patches at exactly k/8 black-ink coverage, and repeats of
 white and black at the end of the sequence as a drift check.
 
-To get it onto the glass **unmodified**:
+### Route A — over the serial console (preferred, Bigme F7)
+
+If the unit runs firmware with the `frame` command, skip the server entirely:
+
+```powershell
+python tools\f7_send_frame.py --port COM9 --target
+```
+
+This pushes the exact bytes down the console UART (~17 s at 115200) and refreshes
+the panel. Nothing about the picture depends on the server's configured preset,
+on WiFi, or on which host the screen happens to point at — which is what you want
+while metering, and what makes a measurement session reproducible.
+
+`--cycle` walks every ink and then the target, which is also the quickest way to
+confirm all six inks actually fire on a given unit.
+
+### Route B — through the server
+
+For screens without the `frame` command, upload the PNG and let the server render
+it. To get it onto the glass **unmodified**:
 
 1. Set the screen's preset to **`calibration_raw`**. This matters. The normal
    presets run autocontrast, gamma, CLAHE, unsharp mask and error diffusion —
