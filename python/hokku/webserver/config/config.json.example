@@ -126,5 +126,5 @@
   ],
   "server_threads": 4,
   "upload_dir": "/var/lib/hokku/images",
-  "version": 9
+  "version": 10
 }
