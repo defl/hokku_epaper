@@ -1,3 +1,33 @@
+hokku-server (4.0.1~dev.10-1) unstable; urgency=medium
+
+  * Per-picture conversion overrides. Any image's details view can now pin its
+    own dither pipeline and/or its own letterbox-fill limit, independently of
+    the library-wide settings, and "Compare presets" renders several candidates
+    for that one picture side by side to choose from. The comparison sweeps the
+    palette LUT as well as the presets, because all three built-in presets share
+    one LUT — so a picture that converts to the wrong colours cannot be fixed by
+    picking a different preset. Setting an override re-converts only that
+    picture. Overrides survive Clear Cache & Re-convert and a re-upload of the
+    same filename.
+  * The dither editor is now one component mounted four times rather than three
+    hand-written copies plus a new one; the copies had already drifted (the B&W
+    panel was missing the face keep-out overlay).
+  * ImageConfig is parsed strictly everywhere: every field required, enum values
+    checked, unknown keys rejected. Config-shape changes move to the AppConfig
+    migration chain (v10), which completes older stored blobs once. Previously a
+    misspelled knob was silently ignored on every load and an invalid lut_name
+    was only caught inside a render worker, as a failed conversion.
+  * Fixes a hot-reload race that let a retiring image manager write its stale
+    snapshot over the live one's database. It cost only recomputable fields
+    before; it would have cost the new per-picture settings.
+  * Fixes dither previews ignoring the crop-to-fill setting: the preview always
+    letterboxed while its face-box overlay was computed for a cropped canvas.
+    Previews are also now bounded in concurrency.
+  * Declares waitress in requirements.txt — recreating the venv as documented
+    produced an environment where the server could not start.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 02 Aug 2026 12:00:00 -0500
+
 hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
 
   * Per-pipeline dither defaults are now measured rather than chosen. General

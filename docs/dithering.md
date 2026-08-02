@@ -397,17 +397,51 @@ landing on a monochrome image, at the cost of pure two-tone rendering
 ## 6. Image classifier — per-image config dispatch
 
 ```
-ImageClassifier.decision_for(path, sha1)
+AbstractImageManager._decision_for_record(src_path, rec)
   │
-  ├─ B&W detection enabled? → is_grayscale(path)?
-  │      → yes → use AppConfig.image_config_bw
+  ├─ ImageClassifier.decision_for(path, sha1)
+  │    │
+  │    ├─ B&W detection enabled? → is_grayscale(path)?
+  │    │      → yes → use AppConfig.image_config_bw
+  │    │
+  │    ├─ Face detection enabled? → has_faces(path)?
+  │    │      → yes → use AppConfig.image_config_face
+  │    │               clahe_keepout_bboxes = all detected face bboxes
+  │    │
+  │    └─ otherwise → use AppConfig.image_config_default
   │
-  ├─ Face detection enabled? → has_faces(path)?
-  │      → yes → use AppConfig.image_config_face
-  │               clahe_keepout_bboxes = all detected face bboxes
-  │
-  └─ otherwise → use AppConfig.image_config_default
+  └─ per-picture overrides on the ImageRecord, applied on top:
+         rec.image_config            → replaces the pipeline chosen above
+         rec.crop_to_fill_threshold  → replaces AppConfig's global value
+       (each is independent; None means "leave this one automatic")
 ```
+
+### Per-picture overrides
+
+Two nullable fields on `ImageRecord`, stored in `<cache_dir>/image_manager.json`
+and set from the image's Details panel in the web UI. They are the only
+user-authored data in that file — everything else is derived from the source
+image and can be recomputed.
+
+They are applied by the **manager**, not the classifier, and deliberately so:
+
+* `ImageClassifier` observes image *content* and is wired to `AppConfig`. It has
+  no handle on the record store, and it is rebuilt on every config reload while
+  overrides live in the manager's DB — the wrong lifetime.
+* Overlaying on the finished `ImageClassifierDecision` keeps
+  `clahe_keepout_bboxes` and `face_crop_bboxes` **by construction**. An override
+  replaces the *choice of pipeline*, never the observations, so hand-picking a
+  dither for a portrait cannot cost it its skin-tone protection.
+* Every path that needs a decision goes through `_decision_for_record()`, so the
+  invalidation check in `_reconcile_with_disk()` and the render dispatch in
+  `_submit_one()` cannot disagree. That agreement is what makes setting an
+  override re-render exactly one picture and leave every other cached render
+  valid: both fields feed `ScreenImageConfig.cache_slug()`, so the slug changes
+  on its own and nothing else has to invalidate anything.
+
+An override survives Clear Cache & Re-convert, a content change to the source
+file, and a `_DB_VERSION` wipe (`_salvage_overrides()` rescues them; everything
+derived is discarded as intended). It is dropped when the image is deleted.
 
 Orientation is not part of the classifier's output — the image manager
 combines the decision with each render target's orientation
@@ -776,14 +810,56 @@ Called per 100-row batch, returning float32 data ready for the dither loop.
 
 The web UI's preset dropdown populates from `PRESET_META` (labels +
 descriptions) in `presets.py`. Selecting a preset loads the full
-`ImageConfig` into all the Advanced panel knobs via the JS `ditherState`
-object. Touching any knob flips the preset label to "Custom (your edits)"
-without changing values. Saving writes the complete nested config to
-`config.json`.
+`ImageConfig` into all the Advanced panel knobs. Touching any knob flips the
+preset label to "Custom (your edits)" without changing values. Saving writes
+the complete nested config to `config.json`.
 
-The config round-trips through `_image_config_from_dict()` in `image_config.py`
-which validates every field and raises on any missing key — no silent
-defaults inside the serialised form.
+### One editor, four mounts
+
+The pipeline editor is a component: `mountDitherEditor(panelId, mountEl, opts)`
+generates its markup and wires its handlers. It is mounted four times — the
+`default` / `bw` / `face` pipelines in the Config tab, and `imgcfg`, the
+per-picture editor inside the image Details modal. Each instance's working
+`ImageConfig` lives in `ditherStates[panelId]`, and DOM ids are prefixed by
+`_pfx(panelId)` (`default` keeps the historical `dither-` prefix).
+
+It was previously written out three times by hand, which is how the B&W panel
+came to be missing the face keep-out overlay the other two had. Adding a
+per-picture editor as a fourth copy would have made that worse, so anything
+that only one instance needs is an `opts` flag rather than a separate copy —
+`pinnedImage`, for example, hides the "Preview on:" picker and pins it to the
+one picture, so `runDitherPreview()` needs no special case.
+
+The per-picture editor additionally offers **Automatic** (hand the picture back
+to the classifier), an independent letterbox-fill override, and **Compare
+presets**, which renders several candidates for that one picture into a
+clickable grid. The grid sweeps the palette LUT as well as the named presets:
+all three presets share `lut_name="hue_aware"`, so a picture that comes out the
+wrong colour cannot be fixed by choosing a different preset — the fix is a LUT
+change, which is otherwise buried in the advanced knobs. Tiles render strictly
+one at a time; the source decode dominates their cost and the server serialises
+it anyway (`_DECODE_LOCK`), and `/hokku/api/dither/preview` caps concurrency
+with its own semaphore.
+
+### Parsing
+
+`image_config_from_dict_strict()` in `image_config.py` is the only
+`ImageConfig` parser. Every field must be present, every enum value must be
+one of the `Literal`'s members, and an unrecognised key is an error — it
+reports all the problems at once so the UI can list them.
+
+Nothing is lenient, because nothing has to cope with an old shape: a stored
+config is brought up to the current shape once, by the migration on
+`AppConfig`'s chain that introduced the change, via
+`complete_image_config_blob()`. Any future change to `ImageConfig`'s fields
+needs a migration for the same reason.
+
+> This replaced a parser that merged whatever was stored onto the defaults on
+> every load. That kept old configs working but meant a config could stay
+> incomplete forever, a misspelled knob was silently ignored rather than
+> reported, and an invalid `lut_name` was accepted here and only rejected later
+> inside a render worker — surfacing to the user as a failed conversion instead
+> of a bad setting.
 
 ---
 
@@ -870,7 +946,8 @@ webserver/hokku_server/
   dither_streaming_numba.py JIT-compiled wrapper: NumbaStreamingDither (default)
   dither_unconstrained.py   Reference full-canvas dither (~60 MB dither peak):
                               dither() — quality comparison / regression baseline only
-  image_config.py           ImageConfig dataclass + _image_config_from_dict()
+  image_config.py           ImageConfig dataclass, image_config_from_dict_strict(),
+                              complete_image_config_blob() (migration only)
   presets.py                PRESET_IMAGE_CONFIGS, DEFAULT_PRESET, PRESET_META
   image_abc.py              AbstractImageRenderer + _apply_prepare_enhancements()
   image_renderer.py         ImageRenderer: open_image_for_render(),

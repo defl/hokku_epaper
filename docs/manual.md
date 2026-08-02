@@ -38,7 +38,18 @@ The conversion process is smarter than a simple filter. The server analyses each
 
 <a href="../images/ui_images_details.png"><img src="../images/ui_images_details.png" width="480"></a>
 
-The details view shows the original and the converted version side by side at full size, so you can judge exactly how well the conversion worked for that particular photo. It also shows the source dimensions, which conversion algorithm was used (the server picks automatically, but you can override per-image in Config), and how long the conversion took. If the converted version doesn't look right you can adjust the dither preset in Config and use the Clear Cache & Re-convert button to regenerate everything.
+The details view shows the original and the converted version side by side at full size, so you can judge exactly how well the conversion worked for that particular photo. It also shows the source dimensions, which pipeline the server chose for it, and how long the conversion took.
+
+**Conversion for this picture** — most photos are fine on the automatic settings, but some are not: flat-colour illustrations and posters in particular can come out with the wrong colours entirely, and no single global setting fixes those without spoiling everything else. The bottom of the details view lets you override the conversion for that one picture.
+
+- **Compare presets** is the quickest route. It converts the picture several different ways — the built-in presets, plus a sweep of the palette matching methods — and shows them as a grid. Click whichever looks right, then Apply. This is worth reaching for first: the palette method is what usually fixes a wrong-coloured picture, and trying them by hand is tedious.
+- **Dither** picks a preset directly, or *Automatic* to hand the picture back to the server's own choice. **Custom…** opens the same advanced panel as the Config tab, with a Preview button that renders this picture with your current settings before you commit to them.
+- **Letterbox fill limit** overrides the global cropping setting for this picture only — useful for the odd photo whose shape doesn't suit the frame. It tells you the minimum percentage this particular picture needs to fill the frame without bars.
+- **Use automatic** clears both overrides and puts the picture back on the server's choices.
+
+Applying re-converts just that one picture; everything else keeps its existing conversion. Your settings survive Clear Cache & Re-convert, and survive re-uploading a new version of the file under the same name — but deleting the picture and uploading it again starts fresh.
+
+Pictures using something other than the plain default show a small badge on their thumbnail: *Custom* for your own settings, *B&W* or *Face* when the server detected the picture's content and picked a matching pipeline.
 
 **Queue control** — each thumbnail has a "Show next" button that immediately queues that photo to be shown on the frame at its next refresh. Use this when you want a specific photo on the wall without waiting for normal rotation. The server uses a fair rotation algorithm — each image gets equal screen time over the long run, with newly uploaded photos jumping to the front of the queue. The "Show next" button effectively sets an image's priority to maximum.
 
@@ -93,11 +104,13 @@ The Config tab controls how the server behaves and how images are converted. All
 
 **Image workers** — how many photos the server converts in parallel. Set to Auto and the server picks based on available CPU cores and memory. Set it higher on a faster machine to convert large libraries faster; set it to 1 on very constrained hardware. Each worker uses around 50 MB of RAM during conversion.
 
-**Crop to fill** — when a photo's aspect ratio is close to the frame's but not exact, the server can crop slightly rather than showing a thin letterbox band. The threshold controls how much cropping is acceptable (e.g. 0.05 = up to 5%). Set to 0 to always letterbox. See [dithering.md](dithering.md) for more detail on how this interacts with the conversion pipeline.
+**Crop to fill** — when a photo's aspect ratio is close to the frame's but not exact, the server can crop slightly rather than showing a thin letterbox band. The threshold controls how much cropping is acceptable (e.g. 0.05 = up to 5%). Set to 0 to always letterbox. This is the library-wide default; a single awkward photo can override it from its own details view. See [dithering.md](dithering.md) for more detail on how this interacts with the conversion pipeline.
 
 <a href="../images/ui_config_dither.png"><img src="../images/ui_config_dither.png" width="480"></a>
 
 **Dither preset** — three curated presets cover the common cases: a hue-aware Floyd–Steinberg conversion (smooth gradients, faithful colours), a B&W-safe variant that disables colour-boosting (for black-and-white scans), and a hue-aware Atkinson conversion (bolder contrast, punchier output — the default for face detection). There are three independent preset slots: one for general images, one for detected black-and-white photos, and one for detected faces — so the server can route each kind of photo to the conversion that suits it best. Beyond the presets, the **Custom…** button opens an advanced panel with every individual knob exposed: palette LUT (CIELAB, weighted CIELAB, OKLAB, CAM16-UCS, each with optional hue gating, plus a B&W-only LUT), error-diffusion algorithm (Floyd–Steinberg, Atkinson, Stucki), per-stripe adaptive saturation (off / CIELAB / OKLAB), and dynamic-range compression with independent CIELAB/OKLAB selectors for lightness and chroma. Changing any setting doesn't automatically re-convert existing images — use the **Clear Cache & Re-convert** button to regenerate everything. For a full explanation of what each setting does and the reasoning behind the defaults, see [dithering.md](dithering.md).
+
+These three presets are the *defaults* for the whole library. Any individual photo that doesn't suit them can be given its own conversion from its details view — see [Conversion for this picture](#11-images) above — and a per-picture setting always wins over what is chosen here.
 
 **Context-aware conversion** — two toggles control whether the server analyses image content before choosing a conversion approach. B&W detection identifies monochrome photos and routes them through a separate pipeline tuned for black-and-white rather than colour dithering. Face detection identifies photos containing faces and routes them through a pipeline that prioritises skin tone rendering — all detected faces, not just the largest one. Both run entirely locally using on-device models — nothing leaves your network. You can disable either toggle if you prefer a single consistent approach across all images, or if the detection is occasionally misclassifying something.
 
