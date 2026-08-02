@@ -20,15 +20,15 @@
     "clahe_keepout_feather": 0.015,
     "color_enhance": 1.05,
     "dither": {
-      "algorithm": "floyd_steinberg",
+      "algorithm": "atkinson",
       "hue_cutoff_deg": 95.0,
       "lut_name": "bw",
       "neutral_chroma": 8.0,
       "serpentine": true
     },
     "dither_noise": 2.0,
-    "drc_chroma_space": "cielab",
-    "drc_l_space": "cielab",
+    "drc_chroma_space": "oklab",
+    "drc_l_space": "oklab",
     "prepare_autocontrast_cutoff": 0.5,
     "prepare_brightness": 1.0,
     "prepare_contrast": 1.1,
@@ -48,21 +48,21 @@
     "vivid_chroma_low_oklab": 0.025
   },
   "image_config_default": {
-    "adaptive_saturate_space": "cielab",
+    "adaptive_saturate_space": "oklab",
     "adaptive_vivid": true,
     "clahe_clip_limit": 1.75,
     "clahe_keepout_feather": 0.015,
     "color_enhance": 1.25,
     "dither": {
-      "algorithm": "floyd_steinberg",
+      "algorithm": "atkinson",
       "hue_cutoff_deg": 95.0,
       "lut_name": "hue_aware",
       "neutral_chroma": 8.0,
       "serpentine": true
     },
     "dither_noise": 2.0,
-    "drc_chroma_space": "cielab",
-    "drc_l_space": "cielab",
+    "drc_chroma_space": "oklab",
+    "drc_l_space": "oklab",
     "prepare_autocontrast_cutoff": 0.5,
     "prepare_brightness": 1.0,
     "prepare_contrast": 1.1,
@@ -82,8 +82,8 @@
     "vivid_chroma_low_oklab": 0.025
   },
   "image_config_face": {
-    "adaptive_saturate_space": "cielab",
-    "adaptive_vivid": true,
+    "adaptive_saturate_space": "off",
+    "adaptive_vivid": false,
     "clahe_clip_limit": 1.25,
     "clahe_keepout_feather": 0.015,
     "color_enhance": 1.25,
@@ -92,7 +92,7 @@
       "hue_cutoff_deg": 95.0,
       "lut_name": "hue_aware",
       "neutral_chroma": 8.0,
-      "serpentine": false
+      "serpentine": true
     },
     "dither_noise": 2.0,
     "drc_chroma_space": "cielab",

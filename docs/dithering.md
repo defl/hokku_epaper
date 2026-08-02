@@ -160,16 +160,44 @@ LUTs, OKLAB/CAM16-UCS spaces) is reachable via the **Custom…** advanced panel.
 
 | Preset key                  | Algorithm       | LUT       | Adaptive sat | Adaptive vivid | Used for     |
 |-----------------------------|-----------------|-----------|:------------:|:--------------:|:------------:|
-| `floyd_steinberg_hue_aware` | Floyd-Steinberg | hue_aware | CIELAB       | ✓              | General      |
-| `floyd_steinberg_bw`        | Floyd-Steinberg | bw        | Off          |                | B&W detected |
-| `atkinson_hue_aware`        | Atkinson        | hue_aware | CIELAB       | ✓              | Face detected |
+| `floyd_steinberg_hue_aware` | Floyd-Steinberg | hue_aware | CIELAB       | ✓              | dropdown     |
+| `floyd_steinberg_bw`        | Floyd-Steinberg | bw        | Off          |                | dropdown     |
+| `atkinson_hue_aware`        | Atkinson        | hue_aware | CIELAB       | ✓              | dropdown     |
 
-The default pipeline uses `floyd_steinberg_hue_aware`; the auto-classifier
-swaps to `floyd_steinberg_bw` for near-greyscale photos and to
-`atkinson_hue_aware` when faces are detected (see §6).  All three presets
-enable hue-aware palette mapping; the B&W preset additionally turns off
-chroma boosting since there's no meaningful colour to enhance in a
-monochrome image.
+### Per-pipeline defaults
+
+The dropdown presets above are hand-picked starting points a user selects.
+What a *fresh install* actually dispatches to is separate, and is **measured**
+rather than chosen — see [dither_search.md](dither_search.md) for the method,
+the numbers, and the things that did not work:
+
+| Pipeline | Algorithm | LUT       | Serpentine | Adaptive sat | Adaptive vivid | DRC space |
+|----------|-----------|-----------|:----------:|:------------:|:--------------:|-----------|
+| General  | Atkinson  | hue_aware | ✓          | **OKLAB**    | ✓              | **OKLAB** |
+| B&W      | Atkinson  | bw        | ✓          | Off          |                | **OKLAB** |
+| Faces    | Atkinson  | hue_aware | ✓          | **Off**      |                | CIELAB    |
+
+Each row is the best-scoring combination of algorithm × LUT × saturation space
+× DRC space × adaptive-vivid × serpentine over the test corpus for that
+pipeline. Only those six dimensions were swept; the tonal chain (CLAHE,
+unsharp, gamma) is unchanged and still hand-tuned, and the face pipeline keeps
+its gentler CLAHE and stronger unsharp.
+
+Three things are worth knowing about that table:
+
+- **The DRC space differs per pipeline.** OKLAB won for general and B&W and
+  scored *worse* on faces, so it is set per pipeline rather than globally.
+- **Faces turn both chroma boosters off.** That measured best by a clear margin
+  and cut blue ink in saturated lips by roughly two thirds.
+- **No OKLAB or CAM16-UCS *LUT* survived.** On flat colour swatches those look
+  6× better for warm tones, but on photographs they leak markedly more colour
+  into neutrals and score worse overall. `dither_search.md` §4d/§4e has the
+  numbers; it is the clearest example in this codebase of a synthetic test
+  signal giving a confidently wrong answer.
+
+The auto-classifier picks between the three per image (see §6). All enable
+hue-aware palette mapping; the B&W pipeline additionally turns off chroma
+boosting since there's no meaningful colour to enhance in a monochrome image.
 
 Presets live in `presets.py` as `PRESET_IMAGE_CONFIGS`, a plain
 `dict[str, ImageConfig]`. There are no partials; every field is spelled out so

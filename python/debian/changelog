@@ -1,3 +1,18 @@
+hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
+
+  * Per-pipeline dither defaults are now measured rather than chosen. General
+    and B&W move to Atkinson; general gains OKLAB adaptive-saturation and OKLAB
+    dynamic-range compression; B&W gains OKLAB DRC; faces turn both chroma
+    boosters off. Each is the best-scoring combination of algorithm x LUT x
+    saturation space x DRC space x adaptive-vivid x serpentine over the test
+    corpus for that pipeline. Existing installs keep their stored settings —
+    this changes defaults only. See docs/dither_search.md.
+  * Adds tools/dither_search.py (the search harness) and two freely-licensed
+    lipstick portraits to images/test/, without which the artifact that
+    motivated this could not be measured on photographs at all.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 01 Aug 2026 22:30:00 -0500
+
 hokku-server (4.0.0~beta2-1) unstable; urgency=medium
 
   * Release v4.0.0-beta2. Second beta of the 4.0 appliance line: fixes the
