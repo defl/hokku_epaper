@@ -333,11 +333,14 @@ fit for this question.
 6. **Correct [dithering.md §5a](dithering.md)** — the hue-aware LUT is not the
    fix it is described as (§2). That finding is independent of all the above
    and stands on its own.
-7. The palette anchors every number here rests on are unverified — see
-   [color_calibration.md](color_calibration.md). The LUTs are built from
-   `palette_measured_rgb`, so a CIELAB-vs-OKLAB comparison is partly a
-   comparison of how each space tolerates *wrong anchors*. Measuring them makes
-   the whole exercise more trustworthy.
+7. The palette anchors every number here rests on are unverified. Each model's
+   `palette_measured_rgb` in `python/hokku/screens/*/display.py` has weak
+   provenance — borrowed from a third party for the Bigme F7, inherited
+   wholesale for the Seeed, unrecorded for the Hokku/Huessen — and every LUT is
+   built from it. So a CIELAB-vs-OKLAB comparison is partly a comparison of how
+   each space tolerates *wrong anchors*. Measuring them on real glass with a
+   colorimeter would make the whole exercise more trustworthy; that work is on a
+   separate branch.
 
 Nothing here has been applied to the shipped presets.
 

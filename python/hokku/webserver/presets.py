@@ -102,9 +102,64 @@ FALLBACK_PRESET = "floyd_steinberg_hue_aware"
 # pipeline wants tuning (gentle CLAHE, stronger USM) that is right for skin and
 # wrong as a general-purpose choice, so it lives here instead of being forced
 # onto the "Atkinson (hue-aware)" preset that users pick by hand.
-DEFAULT_IMAGE_CONFIG: ImageConfig = PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
-DEFAULT_BW_IMAGE_CONFIG: ImageConfig = PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
-DEFAULT_FACE_IMAGE_CONFIG: ImageConfig = _face()
+#
+# The dither settings below are measured, not chosen: each is the best scoring
+# combination of algorithm x LUT x saturation space x DRC space x adaptive-vivid
+# x serpentine over the test corpus, per pipeline. Method, numbers and the
+# things that did NOT work are in docs/dither_search.md. Only those six
+# dimensions were swept — the tonal chain (CLAHE, unsharp, gamma) is unchanged
+# and still hand-tuned.
+
+
+def _general_default() -> ImageConfig:
+    """Ordinary photos: Atkinson, with saturation and DRC in OKLAB.
+
+    Atkinson over Floyd-Steinberg is the larger part of the win; moving the
+    adaptive-saturation and dynamic-range-compression stages into OKLAB is the
+    rest, and shows up mainly as less colour bleeding into near-neutral areas
+    (measured neutral_leak 19.6 -> 16.4).
+    """
+    return replace(
+        _hue_aware("atkinson", serpentine=True),
+        adaptive_saturate_space="oklab",
+        drc_l_space="oklab",
+        drc_chroma_space="oklab",
+    )
+
+
+def _bw_default() -> ImageConfig:
+    """Black-and-white photos: Atkinson, DRC in OKLAB.
+
+    Saturation stays off, as _bw() sets it: with the two-ink LUT the saturation
+    space cannot change which ink is picked, so the top scorers differed by
+    less than 0.01 and "off" is the honest description of what happens.
+    """
+    return replace(
+        _bw("atkinson", serpentine=True),
+        drc_l_space="oklab",
+        drc_chroma_space="oklab",
+    )
+
+
+def _face_default() -> ImageConfig:
+    """Faces: Atkinson, and both chroma boosters off.
+
+    Skin and lips are where boosting hurts. Turning adaptive saturation and
+    adaptive vivid off measured best by a clear margin and cut blue ink in
+    saturated lips by about two thirds (lips_blue 2.9 % -> 0.9 %). DRC stays in
+    CIELAB here — OKLAB won for the other two pipelines but scored worse on
+    faces, which is why the spaces are set per pipeline rather than globally.
+    """
+    return replace(
+        _face("atkinson", serpentine=True),
+        adaptive_saturate_space="off",
+        adaptive_vivid=False,
+    )
+
+
+DEFAULT_IMAGE_CONFIG: ImageConfig = _general_default()
+DEFAULT_BW_IMAGE_CONFIG: ImageConfig = _bw_default()
+DEFAULT_FACE_IMAGE_CONFIG: ImageConfig = _face_default()
 
 
 # UI-only metadata. Kept out of the dataclass so cache_slug() stays stable

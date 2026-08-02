@@ -142,7 +142,13 @@ def test_image_configs_roundtrip(tmp_path: Path):
 
 
 def test_image_field_with_partial_blob_falls_back_to_default(tmp_path: Path):
-    """A corrupt image_config_default blob (partial dither) falls back to the default preset."""
+    """A corrupt image_config_default blob (partial dither) falls back to the default.
+
+    Asserts against DEFAULT_IMAGE_CONFIG rather than a named preset: the
+    contract under test is "a partial blob merges onto the pipeline's default",
+    not "the default happens to be preset X". Naming the preset made this fail
+    whenever the default was retuned, which is a false positive.
+    """
     p = tmp_path / "c.json"
     p.write_text(
         json.dumps(
@@ -153,7 +159,7 @@ def test_image_field_with_partial_blob_falls_back_to_default(tmp_path: Path):
         )
     )
     cfg = AppConfig.load(p)
-    assert cfg.image_config_default == PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
+    assert cfg.image_config_default == DEFAULT_IMAGE_CONFIG
 
 
 def test_v1_migrates_to_current():
