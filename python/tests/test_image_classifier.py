@@ -202,3 +202,54 @@ def test_screen_config_slug_differs_by_dispatch_outcome(tmp_path):
         clahe_keepout_bboxes=dec_default.clahe_keepout_bboxes,
     )
     assert sc_bw.cache_slug() != sc_default.cache_slug()
+
+
+# ── detect=False (read-only callers) ─────────────────────────────────────────
+
+
+def test_detect_false_never_builds_the_face_detector(tmp_path):
+    """A read-only lookup must not load the ~57 MB YuNet graph.
+
+    It would run inside a request thread — the server has only a handful — to
+    produce a result nobody is waiting on.
+    """
+    cfg = _config(tmp_path, face=True)
+    clf = ImageClassifier(cfg)
+
+    with patch(
+        "hokku.webserver.image_classifier.OpenCVYuNetFaceDetector",
+        side_effect=AssertionError("detector must not be constructed"),
+    ):
+        dec = clf.decision_for(_COLOUR_LANDSCAPE, _sha1(_COLOUR_LANDSCAPE), detect=False)
+
+    assert dec.image_config == cfg.image_config_default
+    assert not dec.clahe_keepout_bboxes
+
+
+def test_detect_false_uses_cached_observations(tmp_path):
+    """Once observed, a read-only lookup gives the same answer as a full one."""
+    cfg = _config(tmp_path, bw=True)
+    clf = ImageClassifier(cfg)
+    sha = _sha1(_BW_IMAGE)
+
+    warm = clf.decision_for(_BW_IMAGE, sha)  # populates the cache
+    assert warm.image_config == cfg.image_config_bw
+
+    with patch.object(
+        ImageClassifier,
+        "_check_grayscale",
+        side_effect=AssertionError("must not re-detect"),
+    ):
+        cold = clf.decision_for(_BW_IMAGE, sha, detect=False)
+
+    assert cold.image_config == cfg.image_config_bw
+
+
+def test_detect_false_does_not_persist_anything(tmp_path):
+    """Skipping detection must not write an empty observation to the cache file."""
+    cfg = _config(tmp_path, bw=True)
+    clf = ImageClassifier(cfg)
+
+    clf.decision_for(_COLOUR_LANDSCAPE, _sha1(_COLOUR_LANDSCAPE), detect=False)
+
+    assert not (Path(cfg.cache_dir) / "image_classifier.json").exists()

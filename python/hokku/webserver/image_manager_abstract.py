@@ -291,7 +291,7 @@ class AbstractImageManager(ABC):
             if rec_now is None:
                 continue
             try:
-                decisions[rec.name] = self._classifier.decision_for(src_path, rec_now.original_sha1)
+                decisions[rec.name] = self._decision_for_record(src_path, rec_now)
             except Exception as e:
                 logger.warning("Classification failed for %r: %s", rec.name, e)
         # Phase 3: dispatch renders with the pre-computed ImageClassifierDecisions.
@@ -694,6 +694,33 @@ class AbstractImageManager(ABC):
     def _thumb_path(self, rec: ImageRecord) -> Path:
         return self._images_dir / f"{rec.name_hash}{_THUMB_SUFFIX}"
 
+    def _decision_for_record(
+        self, src_path: Path, rec: ImageRecord, *, detect: bool = True
+    ) -> ImageClassifierDecision:
+        """The classifier's decision for *rec*, with its per-picture overrides applied.
+
+        Every path that needs a decision goes through here, so the invalidation
+        check in _reconcile_with_disk() and the render dispatch in _submit_one()
+        cannot disagree about what a picture should look like — which is what
+        makes an override re-render exactly one image and nothing else.
+
+        The classifier still runs when an override is set. An override replaces
+        the *choice* of pipeline, not the observations: face and B&W detection
+        results are what the CLAHE keep-out and face-aware crop are built from,
+        and /api/status reports them. Overriding on top of the finished decision
+        rather than in place of it keeps them by construction.
+
+        ``detect=False`` answers from cached observations only — for read-only
+        callers that must not pay for (or block on) a first-time detection.
+        """
+        decision = self._classifier.decision_for(src_path, rec.original_sha1, detect=detect)
+        changes = {}
+        if rec.image_config is not None:
+            changes["image_config"] = rec.image_config
+        if rec.crop_to_fill_threshold is not None:
+            changes["crop_to_fill_threshold"] = rec.crop_to_fill_threshold
+        return replace(decision, **changes) if changes else decision
+
     def _load_db(self) -> None:
         if not self._db_path.exists():
             return
@@ -808,7 +835,7 @@ class AbstractImageManager(ABC):
                     continue
 
             if existing.convert_status == "ok":
-                decision = self._classifier.decision_for(src_path, existing.original_sha1)
+                decision = self._decision_for_record(src_path, existing)
                 # Compare against the LANDSCAPE slug specifically — it's the
                 # lifecycle-primary orientation, and PORTRAIT shares the same
                 # decision so its slug changes in lockstep.
@@ -966,8 +993,8 @@ class AbstractImageManager(ABC):
             if decision is None:
                 # Fallback: classification failed or was skipped; compute now.
                 with self._db_lock:
-                    original_sha1 = self._records[name].original_sha1
-                decision = self._classifier.decision_for(src_path, original_sha1)
+                    rec_now = self._records[name]
+                decision = self._decision_for_record(src_path, rec_now)
 
             # _inflight was already populated by sync() under the lock, so no need
             # to add here.  The assert is a safety net during development.
