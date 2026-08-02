@@ -18,7 +18,8 @@ from typing import Any, Callable
 from hokku.webserver.filesystem import atomic_write_json
 from hokku.webserver.image_config import (
     ImageConfig,
-    _image_config_from_dict,
+    complete_image_config_blob,
+    image_config_from_dict_strict,
 )
 from hokku.webserver.presets import (
     DEFAULT_BW_IMAGE_CONFIG,
@@ -28,7 +29,7 @@ from hokku.webserver.presets import (
 
 logger = logging.getLogger(__name__)
 
-_CURRENT_VERSION = 9
+_CURRENT_VERSION = 10
 
 
 def _migrate_v1_to_v2(d: dict) -> dict:
@@ -98,6 +99,29 @@ def _migrate_v8_to_v9(d: dict) -> dict:
     return d
 
 
+def _migrate_v9_to_v10(d: dict) -> dict:
+    """Complete the three image_config blobs so they can be parsed strictly.
+
+    The ImageConfig parser used to merge whatever was stored onto the pipeline
+    defaults on every single load. That kept old configs working, but it also
+    meant a config could stay incomplete forever and a misspelled knob was
+    silently ignored on every load instead of being reported once. Filling the
+    gaps here — and dropping keys that are no longer fields — means the parser
+    can be strict from now on, which is what makes a bad value in the UI or the
+    API an error the user actually sees.
+
+    Any future change to ImageConfig's shape gets its own migration, for the
+    same reason: the upgrade knowledge belongs on this chain, not in the parser.
+    """
+    for key, default in (
+        ("image_config_default", DEFAULT_IMAGE_CONFIG),
+        ("image_config_bw", DEFAULT_BW_IMAGE_CONFIG),
+        ("image_config_face", DEFAULT_FACE_IMAGE_CONFIG),
+    ):
+        d[key] = complete_image_config_blob(d.get(key), default=default, field_path=key)
+    return d
+
+
 # v(N) → v(N+1) upgrade functions. Populated as the schema evolves.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     1: _migrate_v1_to_v2,
@@ -108,12 +132,25 @@ _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     6: _migrate_v6_to_v7,
     7: _migrate_v7_to_v8,
     8: _migrate_v8_to_v9,
+    9: _migrate_v9_to_v10,
 }
 
 
 def _migrate(data: dict) -> dict:
-    """Walk the migration chain to the current version."""
+    """Walk the migration chain to the current version.
+
+    Raises:
+        ValueError: if the config comes from a newer version than this build
+            understands. There is no downgrade path — the parser is strict, so
+            a field this build has never heard of would otherwise surface as a
+            baffling validation error rather than as what it is.
+    """
     ver = int(data["version"])
+    if ver > _CURRENT_VERSION:
+        raise ValueError(
+            f"config is version {ver}, but this server understands up to "
+            f"{_CURRENT_VERSION} — it was written by a newer version of hokku-server"
+        )
     while ver < _CURRENT_VERSION:
         data = _MIGRATIONS[ver](data)
         ver += 1
@@ -213,24 +250,19 @@ class AppConfig:
 
         data = _migrate(data)
 
-        # Each pipeline merges onto its OWN default, so a sparse or older
-        # image_config_bw keeps B&W behaviour instead of silently inheriting
-        # the colour pipeline.
-        image_config_default = _image_config_from_dict(
-            data.get("image_config_default"),
-            field_path="image_config_default",
-            default=DEFAULT_IMAGE_CONFIG,
-        )
-        image_config_bw = _image_config_from_dict(
-            data.get("image_config_bw"),
-            field_path="image_config_bw",
-            default=DEFAULT_BW_IMAGE_CONFIG,
-        )
-        image_config_face = _image_config_from_dict(
-            data.get("image_config_face"),
-            field_path="image_config_face",
-            default=DEFAULT_FACE_IMAGE_CONFIG,
-        )
+        # An absent key means "not configured" and takes the pipeline default,
+        # exactly like every other field below. A key that IS present must be
+        # complete and valid: migration has already brought every stored blob up
+        # to the current shape, so anything still wrong here is a real mistake
+        # and is reported rather than papered over.
+        def _pipeline(key: str, default: ImageConfig) -> ImageConfig:
+            if key not in data:
+                return default
+            return image_config_from_dict_strict(data[key], field_path=key)
+
+        image_config_default = _pipeline("image_config_default", DEFAULT_IMAGE_CONFIG)
+        image_config_bw = _pipeline("image_config_bw", DEFAULT_BW_IMAGE_CONFIG)
+        image_config_face = _pipeline("image_config_face", DEFAULT_FACE_IMAGE_CONFIG)
 
         _image_fields = {"image_config_default", "image_config_bw", "image_config_face"}
 

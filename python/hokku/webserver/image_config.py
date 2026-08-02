@@ -174,19 +174,17 @@ def image_config_from_dict_strict(
     *,
     field_path: str = "image_config",
 ) -> ImageConfig:
-    """Build an ImageConfig from a caller-supplied blob, rejecting anything odd.
+    """Build an ImageConfig from a blob, rejecting anything that isn't exactly right.
 
-    This is the parser for data arriving over the API. It is deliberately the
-    opposite of ``_image_config_from_dict``, which merges onto defaults so an
-    older stored config keeps loading: here every field must be present and
-    valid, and an unrecognised key is an error rather than something to ignore.
+    The only ImageConfig parser. Every field must be present and valid, and an
+    unrecognised key is an error rather than something to ignore — so a typo'd
+    knob name, an invalid ``lut_name`` or a nonsensical gamma is reported here
+    instead of appearing to succeed and then doing nothing (or failing much
+    later inside a render worker).
 
-    The difference matters because the two have opposite failure modes. Quietly
-    keeping a default is right for a config file written by a previous version;
-    it is wrong for a request, where it would answer 200 while discarding the
-    setting the user actually asked for — a typo'd field name, an invalid
-    ``lut_name`` or a nonsensical gamma would all appear to succeed and then
-    either do nothing or fail later inside a render worker.
+    Nothing needs to be lenient because nothing has to cope with an old shape:
+    a stored config is brought up to the current shape once, by the migration
+    that introduced the change, via ``complete_image_config_blob``.
 
     Raises:
         ImageConfigError: listing every problem found.
@@ -240,79 +238,63 @@ def parse_crop_to_fill_threshold(
     return float(value)
 
 
-def _image_config_from_dict(
-    blob: Any,
-    *,
-    field_path: str = "image_config",
-    default: ImageConfig | None = None,
-) -> ImageConfig:
-    """Build an ImageConfig by merging a stored JSON object onto the defaults.
+def complete_image_config_blob(blob: Any, *, default: ImageConfig, field_path: str) -> dict:
+    """Bring a stored ImageConfig blob up to the current shape. Migration only.
 
-    Fields present in *blob* win; fields absent keep their value from
-    *default*. A config that predates a field therefore keeps every setting it
-    does carry, instead of being discarded.
+    Returns a plain dict carrying exactly the fields ImageConfig has today:
+    values present in *blob* are kept, absent ones take *default*'s, renamed
+    ones are translated, and keys that are no longer fields are dropped.
 
-    This used to reset the whole pipeline to the fallback preset if a single
-    field was missing, which silently wiped tuning on upgrade — the entire
-    shipped example config was being reset that way. See the note where
-    _LENIENT_DEFAULTS used to live.
+    This is upgrade knowledge, and it belongs in the migration chain rather
+    than in the parser. It used to run on *every* load, which meant a config
+    could stay permanently incomplete and — worse — a misspelled knob was
+    silently ignored forever instead of being reported once. Doing it once, at
+    the version bump that needs it, lets the parser be strict from then on.
 
-    Args:
-        blob:       The dict (or None) to parse.
-        field_path: Used in log/error messages to identify which config field is bad.
-        default:    Base to merge onto. Defaults to the fallback preset; callers
-                    should pass the default for *their* pipeline so a sparse
-                    B&W or face blob falls back to B&W or face values rather
-                    than to the generic default pipeline.
+    Pass the default for the pipeline being migrated, so a sparse B&W or face
+    blob falls back to B&W or face values rather than to the colour pipeline's.
     """
-    from hokku.webserver.presets import (  # noqa: PLC0415 — deferred to break circular import
-        FALLBACK_PRESET,
-        PRESET_IMAGE_CONFIGS,
-    )
-
-    base = default if default is not None else PRESET_IMAGE_CONFIGS[FALLBACK_PRESET]
-
+    base = asdict(default)
     if blob is None:
         return base
     if not isinstance(blob, dict):
         raise ValueError(f"config['{field_path}'] must be an object")
 
-    # Renames still need handling explicitly — a renamed field is not the same
-    # thing as a missing one, and dropping it would lose a real setting.
     blob = dict(blob)  # shallow copy — don't mutate the caller's dict
+    # A renamed field is not a missing one; dropping it would lose a real
+    # setting rather than fall back to a default.
     if "adaptive_saturate_space" not in blob and "use_adaptive_saturate" in blob:
         blob["adaptive_saturate_space"] = "cielab" if blob["use_adaptive_saturate"] else "off"
-    blob.pop("use_adaptive_saturate", None)  # tolerate either presence; ignore now
+    blob.pop("use_adaptive_saturate", None)
 
     dither_blob = blob.get("dither")
     if dither_blob is not None and not isinstance(dither_blob, dict):
         raise ValueError(f"config['{field_path}']['dither'] must be an object")
     dither_blob = dither_blob or {}
-    dither_kwargs = {
-        f.name: (dither_blob[f.name] if f.name in dither_blob else getattr(base.dither, f.name))
-        for f in fields(DitherConfig)
-    }
-    dither = DitherConfig(**dither_kwargs)
 
-    image_kwargs: dict[str, Any] = {"dither": dither}
-    filled_from_default: list[str] = []
+    out: dict[str, Any] = {
+        "dither": {
+            f.name: dither_blob.get(f.name, base["dither"][f.name]) for f in fields(DitherConfig)
+        }
+    }
+    filled: list[str] = []
     for f in fields(ImageConfig):
         if f.name == "dither":
             continue
         if f.name in blob:
-            image_kwargs[f.name] = blob[f.name]
+            out[f.name] = blob[f.name]
         else:
-            image_kwargs[f.name] = getattr(base, f.name)
-            filled_from_default.append(f.name)
+            out[f.name] = base[f.name]
+            filled.append(f.name)
 
-    if filled_from_default:
-        # Say so. The old reset was completely silent, which is why a shipped
-        # example config could be discarded on every single load unnoticed.
+    dropped = sorted(blob.keys() - {f.name for f in fields(ImageConfig)})
+    if filled:
         logger.info(
-            "config['%s']: %d field(s) absent, kept defaults: %s",
+            "config['%s']: %d field(s) absent, took defaults: %s",
             field_path,
-            len(filled_from_default),
-            ", ".join(sorted(filled_from_default)),
+            len(filled),
+            ", ".join(sorted(filled)),
         )
-
-    return ImageConfig(**image_kwargs)
+    if dropped:
+        logger.info("config['%s']: dropped unknown field(s): %s", field_path, ", ".join(dropped))
+    return out
