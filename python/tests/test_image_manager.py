@@ -11,16 +11,21 @@ is a no-op.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from PIL import Image as _Image
 
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
+from hokku.webserver.bounding_box import BoundingBox
+from hokku.webserver.image_classifier import ImageClassifierDecision
 from hokku.webserver.image_manager_abstract import AbstractImageManager
 from hokku.webserver.orientation import Orientation
+from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 from hokku.webserver.screen_image_config import ScreenImageConfig
 from tests._helpers import make_declared_size_png
 
@@ -169,6 +174,95 @@ def test_db_survives_restart(app_config: AppConfig, image_manager_factory, make_
     mgr2 = image_manager_factory(app_config)
     rec2 = mgr2.status("a.png")
     assert rec2 == rec
+
+
+def test_override_replaces_the_classifier_choice(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    rec = mgr.status("a.png")
+    assert rec is not None
+
+    chosen = PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+    overridden = replace(rec, image_config=chosen)
+    decision = mgr._decision_for_record(upload / "a.png", overridden)
+
+    assert decision.image_config == chosen
+
+
+def test_crop_override_is_independent_of_the_pipeline_override(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """Each override applies on its own; neither implies the other."""
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    rec = mgr.status("a.png")
+    assert rec is not None
+
+    auto = mgr._decision_for_record(upload / "a.png", rec)
+    crop_only = mgr._decision_for_record(
+        upload / "a.png", replace(rec, crop_to_fill_threshold=0.42)
+    )
+
+    assert crop_only.crop_to_fill_threshold == pytest.approx(0.42)
+    assert crop_only.image_config == auto.image_config  # pipeline untouched
+
+
+def test_override_keeps_the_classifier_observations(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """An override replaces the pipeline choice, not the detection results.
+
+    The face keep-out boxes and face-aware crop anchors come from detection, so
+    they have to survive an override or a portrait would lose its skin-tone
+    protection the moment someone hand-picked a dither for it.
+    """
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    rec = mgr.status("a.png")
+    assert rec is not None
+
+    bboxes = (BoundingBox(x=0.1, y=0.2, w=0.3, h=0.4),)
+    stub = ImageClassifierDecision(
+        image_config=PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
+        crop_to_fill_threshold=0.1,
+        clahe_keepout_bboxes=bboxes,
+        face_crop_bboxes=bboxes,
+    )
+    with patch.object(mgr._classifier, "decision_for", return_value=stub):
+        decision = mgr._decision_for_record(
+            upload / "a.png",
+            replace(rec, image_config=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]),
+        )
+
+    assert decision.image_config == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+    assert decision.clahe_keepout_bboxes == bboxes
+    assert decision.face_crop_bboxes == bboxes
+
+
+def test_no_override_leaves_the_decision_untouched(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    rec = mgr.status("a.png")
+    assert rec is not None
+
+    direct = mgr._classifier.decision_for(upload / "a.png", rec.original_sha1)
+    assert mgr._decision_for_record(upload / "a.png", rec) == direct
 
 
 def test_retire_does_not_flush(app_config: AppConfig, image_manager_factory, make_test_image):
