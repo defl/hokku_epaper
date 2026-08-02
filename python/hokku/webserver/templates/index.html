@@ -1694,6 +1694,10 @@ function _mountedPanelIds() {
 //   presetLabel   text of the preset row's label
 //   title/intro   heading and blurb for the advanced panel
 //   pinnedImage   preview is fixed to one picture, so no "Preview on:" picker
+//   showFaceKeepout
+//                 offer the "show face keep-out zones" preview overlay. Only
+//                 for pipelines that can actually receive keep-out boxes — see
+//                 the mounts below.
 function ditherEditorMarkup(panelId, opts) {
   const pfx = _pfx(panelId);
   const previewRow = opts.pinnedImage
@@ -1730,16 +1734,17 @@ function ditherEditorMarkup(panelId, opts) {
       <div id="${pfx}-advanced-panel"></div>
       <div class="dither-preview-block">
         <div class="config-row">${previewRow}</div>
+        ${opts.showFaceKeepout ? `
         <div id="${pfx}-preview-face-controls" hidden style="margin-top: 8px; font-size: 0.9em;">
           <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
             <input type="checkbox" id="${pfx}-preview-show-faces">
             <span>Show face CLAHE keep-out zones</span>
           </label>
-        </div>
+        </div>` : ''}
         <div id="${pfx}-preview-result" class="dither-preview-result" hidden>
           <div style="position: relative; display: inline-block;">
             <img id="${pfx}-preview-img" alt="Dither preview">
-            <canvas id="${pfx}-preview-faces" style="position: absolute; inset: 0; display: none; border-radius: 4px;"></canvas>
+            ${opts.showFaceKeepout ? `<canvas id="${pfx}-preview-faces" style="position: absolute; inset: 0; display: none; border-radius: 4px;"></canvas>` : ''}
           </div>
           <div class="dither-preview-mask" id="${pfx}-preview-mask" hidden>Dithering…</div>
         </div>
@@ -3654,6 +3659,11 @@ function setupImageOverrideEditor(fname, entry) {
     title: 'Advanced pipeline for this picture',
     intro: 'These settings apply to this picture only. Everything else keeps using the pipelines from the Config tab.',
     pinnedImage: true,
+    // On here because an override replaces the choice of pipeline, not the
+    // detection: a face-routed picture keeps its keep-out boxes even when you
+    // pin it to a different dither, so the overlay still means something. It
+    // hides itself when the picture has no detected faces.
+    showFaceKeepout: true,
     // Widen the modal while the knobs are open — they do not fit in 460px.
     onCustomToggle: () => {
       const panel = document.getElementById('imgcfg-advanced');
@@ -4035,6 +4045,11 @@ async function loadConfig() {
     lastPanelData = data.panel || {visual_w: {{visual_w}}, visual_h: {{visual_h}}};
     configDefaults = data.config_defaults || null;
     ditherPresets = data.dither_presets || {};
+    // showFaceKeepout is on for the face pipeline only. The classifier hands
+    // face bounding boxes to the *face* branch alone — the B&W and default
+    // branches both return an empty tuple — so CLAHE keep-out never runs for a
+    // picture routed to those pipelines, and offering the overlay there would
+    // advertise a stage that cannot happen.
     mountDitherEditor('default', document.getElementById('default-editor-mount'), {
       presetLabel: 'Default dither preset:',
       title: 'Advanced dithering pipeline',
@@ -4046,6 +4061,7 @@ async function loadConfig() {
     mountDitherEditor('face', document.getElementById('face-editor-mount'), {
       title: 'Advanced face pipeline',
       intro: 'The image processing pipeline runs top to bottom. Hover any knob label to see what it does.',
+      showFaceKeepout: true,
     });
     populatePresetDropdown();
     ['default', 'bw', 'face'].forEach(panelId => {
