@@ -174,6 +174,35 @@ def test_reload_builds_new_classifier(app_config: AppConfig, tmp_path: Path):
     assert state.classifier is not old_classifier
 
 
+def test_reload_does_not_revert_the_image_db(
+    app_config: AppConfig, tmp_path: Path, make_test_image
+):
+    """The outgoing manager must not write its snapshot over its successor's file.
+
+    reload() builds the replacement first, and that constructor reads
+    image_manager.json. The old manager's render callbacks keep firing after
+    the swap, so if it were still allowed to persist it would revert whatever
+    the live manager had loaded or has since written. Only derived fields are
+    at risk today, but per-picture overrides live in this file too.
+    """
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    state = _make_state(app_config)
+    state.manager.sync()
+    state.manager.wait_for_idle()
+    old_manager = state.manager
+
+    state.reload(_alt_config(app_config, tmp_path))
+    assert state.manager is not old_manager
+
+    # Whatever the retired manager still holds, it may no longer persist it.
+    old_manager._records.clear()
+    old_manager.shutdown()
+
+    db = json.loads((Path(app_config.cache_dir) / "image_manager.json").read_text())
+    assert "a.png" in db["images"]
+
+
 def test_reload_manager_wired_with_new_classifier(app_config: AppConfig, tmp_path: Path):
     """After reload, state.manager._classifier is state.classifier."""
     state = _make_state(app_config)

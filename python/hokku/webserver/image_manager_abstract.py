@@ -105,6 +105,13 @@ class AbstractImageManager(ABC):
         self._progress = ConversionProgress(current_name=None, done=0, total=0)
         self._batch_failed: int = 0
 
+        # Set by shutdown(); silences every later _save_db(). AppState.reload()
+        # builds the replacement manager (which loads the DB) *before* shutting
+        # this one down, and a multi-threaded manager's in-flight render
+        # callbacks keep firing after that, so without this flag a retiring
+        # manager writes its stale snapshot over the live one's file.
+        self._closed = False
+
         # Names of images currently being rendered. Protected by _db_lock.
         self._inflight: set[str] = set()
 
@@ -150,9 +157,33 @@ class AbstractImageManager(ABC):
     # ── lifecycle ────────────────────────────────────────────────
 
     def shutdown(self) -> None:
-        """Flush DB to disk. Override in subclasses to also tear down workers."""
+        """Flush the DB, then stop the workers and freeze further writes.
+
+        For real teardown — process exit and tests. A hot-reload wants
+        ``retire()`` instead.
+        """
         with self._db_lock:
             self._save_db()
+        self.retire()
+
+    def retire(self) -> None:
+        """Stop the workers and freeze writes, *without* flushing the DB.
+
+        Used when a replacement manager has already been built: it read the DB
+        file in its constructor, so writing our snapshot over it would revert
+        whatever it loaded. Nothing is lost by skipping the flush — every
+        mutation persists itself as it happens, so the file is already current.
+
+        Freezing comes first so that render callbacks still landing from the
+        workers we are about to stop cannot write either.
+        """
+        with self._db_lock:
+            self._closed = True
+        self._stop_workers()
+
+    @abstractmethod
+    def _stop_workers(self) -> None:
+        """Tear down any render workers, so no further callbacks are dispatched."""
 
     def wait_for_idle(self, timeout: float = 120.0) -> None:
         """Block until all in-flight renders have completed.
@@ -690,6 +721,11 @@ class AbstractImageManager(ABC):
                 logger.warning("Skipping malformed db entry %r: %s", name, e)
 
     def _save_db(self) -> None:
+        if self._closed:
+            # A retired manager's in-flight render callbacks still land here.
+            # Its successor already owns the file; writing would revert it.
+            logger.debug("Ignoring _save_db() on a shut-down manager")
+            return
         payload = {
             "version": _DB_VERSION,
             "images": {n: r.to_dict() for n, r in self._records.items()},

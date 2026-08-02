@@ -10,6 +10,7 @@ is a no-op.
 
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from pathlib import Path
 
@@ -168,6 +169,46 @@ def test_db_survives_restart(app_config: AppConfig, image_manager_factory, make_
     mgr2 = image_manager_factory(app_config)
     rec2 = mgr2.status("a.png")
     assert rec2 == rec
+
+
+def test_retire_does_not_flush(app_config: AppConfig, image_manager_factory, make_test_image):
+    """retire() leaves the DB file alone — its successor already owns it.
+
+    Diverging _records first proves the file is untouched rather than merely
+    rewritten with identical content.
+    """
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    db_path = Path(app_config.cache_dir) / "image_manager.json"
+
+    mgr._records.clear()
+    mgr.retire()
+
+    assert "a.png" in json.loads(db_path.read_text())["images"]
+
+
+def test_writes_frozen_after_retire(app_config: AppConfig, image_manager_factory, make_test_image):
+    """A retired manager cannot write, even when asked directly.
+
+    This is what stops a hot-reload's outgoing manager — whose render callbacks
+    keep firing after the swap — from reverting the live manager's file.
+    """
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    db_path = Path(app_config.cache_dir) / "image_manager.json"
+
+    mgr.retire()
+    mgr._records.clear()
+    mgr._save_db()  # a late render callback
+    mgr.shutdown()  # and an explicit teardown afterwards
+
+    assert "a.png" in json.loads(db_path.read_text())["images"]
 
 
 def test_disk_change_detected(app_config: AppConfig, image_manager_factory, make_test_image):
