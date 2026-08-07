@@ -1,5 +1,11 @@
-hokku-server (4.0.1~dev.10-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
 
+  * The three shipped pipeline defaults are now named presets ("General
+    (default)", "Black & white (default)", "Faces (default)") and lead the
+    dropdown. A fresh install previously displayed "Custom (your edits)" for all
+    three, because the UI names the selected entry by matching against the
+    preset catalog and the defaults were deliberately kept out of it — so
+    nothing ever matched, and untouched settings looked edited.
   * Per-picture conversion overrides. Any image's details view can now pin its
     own dither pipeline and/or its own letterbox-fill limit, independently of
     the library-wide settings, and "Compare presets" renders several candidates
