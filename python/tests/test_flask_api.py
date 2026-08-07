@@ -704,6 +704,50 @@ def test_screen_mac_is_durable_key_across_rename(bare_client):
 # ── navigation ────────────────────────────────────────────────────────────────
 
 
+def test_stock_config_matches_a_named_preset_in_the_api_payload(tmp_path: Path):
+    """A fresh install must not show "Custom (your edits)" in the dropdown.
+
+    Reproduces exactly what selectPresetMatching() does in the browser: take
+    each catalog entry from /api/config, strip the two UI-only keys, and compare
+    the serialised remainder against the serialised pipeline config. Asserting
+    it here rather than only on the dataclasses covers the endpoint's own dict
+    merge — it is the ordering of THAT payload the browser actually sees.
+
+    Builds its own AppConfig rather than using the shared fixture, which swaps
+    in a noop-kernel pipeline for speed and so is not a stock install.
+    """
+    upload, cache = tmp_path / "up", tmp_path / "ca"
+    upload.mkdir()
+    cache.mkdir()
+    stock = AppConfig(upload_dir=str(upload), cache_dir=str(cache))
+    app = create_app(_make_state(stock), config_path=tmp_path / "cfg.json", template_folder=None)
+    app.config["TESTING"] = True
+
+    data = app.test_client().get("/hokku/api/config").get_json()
+    presets = data["dither_presets"]
+
+    def matched(pipeline_key: str) -> str | None:
+        target = json.dumps(data["config"][pipeline_key])
+        for key, preset in presets.items():
+            fields = {k: v for k, v in preset.items() if k not in ("label", "description")}
+            if json.dumps(fields) == target:
+                return key
+        return None
+
+    assert matched("image_config_default") == "default_general"
+    assert matched("image_config_bw") == "default_bw"
+    assert matched("image_config_face") == "default_face"
+
+
+def test_api_config_presets_all_carry_ui_metadata(bare_client):
+    client, _ = bare_client
+    presets = client.get("/hokku/api/config").get_json()["dither_presets"]
+    assert len(presets) >= 6
+    for key, preset in presets.items():
+        assert preset["label"], f"{key} has no label"
+        assert preset["description"], f"{key} has no description"
+
+
 # ── /hokku/api/image/<name>/config — per-picture overrides ────────────────────
 
 

@@ -85,23 +85,8 @@ def _face(algorithm: AlgorithmName = "atkinson", serpentine: bool = False) -> Im
     )
 
 
-PRESET_IMAGE_CONFIGS: dict[str, ImageConfig] = {
-    "floyd_steinberg_hue_aware": _hue_aware("floyd_steinberg", serpentine=True),
-    "floyd_steinberg_bw": _bw("floyd_steinberg", serpentine=True),
-    "atkinson_hue_aware": _hue_aware("atkinson"),
-}
-
-FALLBACK_PRESET = "floyd_steinberg_hue_aware"
-
-
 # Per-pipeline defaults for a fresh install: what the classifier dispatches to
 # for an ordinary photo, a black-and-white one, and one with faces in it.
-#
-# These are deliberately NOT all entries of PRESET_IMAGE_CONFIGS. That dict is
-# the UI dropdown — a short list of general-purpose starting points. The face
-# pipeline wants tuning (gentle CLAHE, stronger USM) that is right for skin and
-# wrong as a general-purpose choice, so it lives here instead of being forced
-# onto the "Atkinson (hue-aware)" preset that users pick by hand.
 #
 # The dither settings below are measured, not chosen: each is the best scoring
 # combination of algorithm x LUT x saturation space x DRC space x adaptive-vivid
@@ -162,9 +147,49 @@ DEFAULT_BW_IMAGE_CONFIG: ImageConfig = _bw_default()
 DEFAULT_FACE_IMAGE_CONFIG: ImageConfig = _face_default()
 
 
+# The dropdown catalog. The three shipped defaults come first and are the SAME
+# objects as the DEFAULT_* constants above, not copies — so a fresh install
+# matches a named entry exactly and the UI says "General (default)" instead of
+# "Custom (your edits)", which is what it used to do and which read as though
+# someone had already been fiddling.
+#
+# Keeping them out of here was a deliberate choice originally, on the grounds
+# that the face tuning is wrong as a general-purpose starting point. That is
+# still true — but it is a reason to describe them accurately, not to hide the
+# settings the server actually ships with.
+#
+# The three hand-picked entries below them remain as alternatives. They are not
+# redundant: "Atkinson (hue-aware)" differs from the general default in
+# serpentine scan and in doing saturation and DRC in CIELAB rather than OKLAB.
+PRESET_IMAGE_CONFIGS: dict[str, ImageConfig] = {
+    "default_general": DEFAULT_IMAGE_CONFIG,
+    "default_bw": DEFAULT_BW_IMAGE_CONFIG,
+    "default_face": DEFAULT_FACE_IMAGE_CONFIG,
+    "floyd_steinberg_hue_aware": _hue_aware("floyd_steinberg", serpentine=True),
+    "floyd_steinberg_bw": _bw("floyd_steinberg", serpentine=True),
+    "atkinson_hue_aware": _hue_aware("atkinson"),
+}
+
+# No production code falls back to this any more — the strict parser removed the
+# last caller. Kept as the canonical "ordinary photo" starting point for tests.
+FALLBACK_PRESET = "default_general"
+
+
 # UI-only metadata. Kept out of the dataclass so cache_slug() stays stable
 # across copy edits and so dataclass equality isn't perturbed by labels.
 PRESET_META: dict[str, dict[str, str]] = {
+    "default_general": {
+        "label": "General (default)",
+        "description": "What the server ships with for ordinary photos. Atkinson with a hue-constrained palette LUT, serpentine scan, and both adaptive saturation and dynamic-range compression in OKLAB. Not hand-picked: this scored best of every algorithm × LUT × colour-space combination over the test corpus. See docs/dither_search.md.",
+    },
+    "default_bw": {
+        "label": "Black & white (default)",
+        "description": "What the server ships with for photos it detects as black-and-white. Restricted to the two neutral inks with colour boosting off, so JPEG noise and film grain cannot be amplified into a pink or yellow cast, plus dynamic-range compression in OKLAB.",
+    },
+    "default_face": {
+        "label": "Faces (default)",
+        "description": "What the server ships with for photos containing faces. Local contrast is pulled well down and traded for a wider, stronger unsharp mask — aggressive CLAHE makes cheeks blotchy — and both chroma boosters are off, which measured a two-thirds cut in blue ink landing on saturated lips. Deliberately gentle, so it is a poor general-purpose choice.",
+    },
     "floyd_steinberg_hue_aware": {
         "label": "Floyd-Steinberg (hue-aware)",
         "description": "Floyd-Steinberg with a hue-constrained palette LUT, adaptive saturation + adaptive vivid. Punchier reds/blues without bleeding into other inks.",
