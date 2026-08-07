@@ -1,5 +1,8 @@
-hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.15-1) unstable; urgency=medium
 
+  * The preset dropdown now follows the catalog's own order (shipped defaults
+    first) rather than whatever order the JSON encoder produced, which was
+    alphabetical.
   * The three shipped pipeline defaults are now named presets ("General
     (default)", "Black & white (default)", "Faces (default)") and lead the
     dropdown. A fresh install previously displayed "Custom (your edits)" for all
