@@ -748,6 +748,21 @@ def test_api_config_presets_all_carry_ui_metadata(bare_client):
         assert preset["description"], f"{key} has no description"
 
 
+def test_api_config_carries_an_explicit_preset_order(bare_client):
+    """The dropdown order cannot be read off the presets object.
+
+    jsonify sorts object keys, so the catalog's own order does not survive the
+    wire — relying on it put "Atkinson (hue-aware)" at the top of the list and
+    scattered the three shipped defaults through it alphabetically.
+    """
+    client, _ = bare_client
+    data = client.get("/hokku/api/config").get_json()
+    order = data["dither_preset_order"]
+
+    assert set(order) == set(data["dither_presets"])
+    assert order[:3] == ["default_general", "default_bw", "default_face"]
+
+
 # ── /hokku/api/image/<name>/config — per-picture overrides ────────────────────
 
 
