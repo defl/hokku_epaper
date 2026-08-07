@@ -154,28 +154,40 @@ per image.
 
 ## 4. Presets
 
-Three curated presets cover the common cases. They're the only entries shown
-in the main preset dropdown; everything else (algorithm variants, alternative
-LUTs, OKLAB/CAM16-UCS spaces) is reachable via the **Custom…** advanced panel.
+`PRESET_IMAGE_CONFIGS` is the dropdown catalog. Everything outside it
+(algorithm variants, alternative LUTs, OKLAB/CAM16-UCS spaces) is reachable via
+the **Custom…** advanced panel.
 
-| Preset key                  | Algorithm       | LUT       | Adaptive sat | Adaptive vivid | Used for     |
-|-----------------------------|-----------------|-----------|:------------:|:--------------:|:------------:|
-| `floyd_steinberg_hue_aware` | Floyd-Steinberg | hue_aware | CIELAB       | ✓              | dropdown     |
-| `floyd_steinberg_bw`        | Floyd-Steinberg | bw        | Off          |                | dropdown     |
-| `atkinson_hue_aware`        | Atkinson        | hue_aware | CIELAB       | ✓              | dropdown     |
+The three shipped defaults come first and are the **same objects** as
+`DEFAULT_IMAGE_CONFIG` / `DEFAULT_BW_IMAGE_CONFIG` / `DEFAULT_FACE_IMAGE_CONFIG`,
+so a fresh install matches a named entry exactly. That matters: the UI picks the
+selected preset by comparing the serialised config against each catalog entry,
+so while the defaults sat outside the catalog a stock install displayed
+"Custom (your edits)" — as though someone had already been editing it.
+
+| Preset key                  | Algorithm       | LUT       | Serpentine | Adaptive sat | Adaptive vivid | DRC space |
+|-----------------------------|-----------------|-----------|:----------:|:------------:|:--------------:|-----------|
+| `default_general`           | Atkinson        | hue_aware | ✓          | **OKLAB**    | ✓              | **OKLAB** |
+| `default_bw`                | Atkinson        | bw        | ✓          | Off          |                | **OKLAB** |
+| `default_face`              | Atkinson        | hue_aware | ✓          | **Off**      |                | CIELAB    |
+| `floyd_steinberg_hue_aware` | Floyd-Steinberg | hue_aware |            | CIELAB       | ✓              | CIELAB    |
+| `floyd_steinberg_bw`        | Floyd-Steinberg | bw        | ✓          | Off          |                | CIELAB    |
+| `atkinson_hue_aware`        | Atkinson        | hue_aware |            | CIELAB       | ✓              | CIELAB    |
+
+The bottom three are hand-picked alternatives and are not redundant with the
+defaults: `atkinson_hue_aware` differs from `default_general` in serpentine scan
+and in doing saturation and DRC in CIELAB rather than OKLAB.
+
+`default_face` is deliberately gentle — it is the right pipeline for skin and a
+poor general-purpose choice, which is why its description says so. Keeping it
+out of the catalog for that reason was the earlier design; describing it
+accurately is better than hiding a setting the server actually ships with.
 
 ### Per-pipeline defaults
 
-The dropdown presets above are hand-picked starting points a user selects.
-What a *fresh install* actually dispatches to is separate, and is **measured**
-rather than chosen — see [dither_search.md](dither_search.md) for the method,
-the numbers, and the things that did not work:
-
-| Pipeline | Algorithm | LUT       | Serpentine | Adaptive sat | Adaptive vivid | DRC space |
-|----------|-----------|-----------|:----------:|:------------:|:--------------:|-----------|
-| General  | Atkinson  | hue_aware | ✓          | **OKLAB**    | ✓              | **OKLAB** |
-| B&W      | Atkinson  | bw        | ✓          | Off          |                | **OKLAB** |
-| Faces    | Atkinson  | hue_aware | ✓          | **Off**      |                | CIELAB    |
+The default rows above are **measured** rather than chosen — see
+[dither_search.md](dither_search.md) for the method, the numbers, and the
+things that did not work.
 
 Each row is the best-scoring combination of algorithm × LUT × saturation space
 × DRC space × adaptive-vivid × serpentine over the test corpus for that
@@ -948,7 +960,9 @@ webserver/hokku_server/
                               dither() — quality comparison / regression baseline only
   image_config.py           ImageConfig dataclass, image_config_from_dict_strict(),
                               complete_image_config_blob() (migration only)
-  presets.py                PRESET_IMAGE_CONFIGS, DEFAULT_PRESET, PRESET_META
+  presets.py                PRESET_IMAGE_CONFIGS (dropdown catalog), PRESET_META,
+                              DEFAULT_{,BW_,FACE_}IMAGE_CONFIG (shipped defaults,
+                              also the first three catalog entries)
   image_abc.py              AbstractImageRenderer + _apply_prepare_enhancements()
   image_renderer.py         ImageRenderer: open_image_for_render(),
                               render_indices(), render_panel_bytes(),

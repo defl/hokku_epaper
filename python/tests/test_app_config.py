@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from hokku.webserver.presets import (
     DEFAULT_FACE_IMAGE_CONFIG,
     DEFAULT_IMAGE_CONFIG,
     PRESET_IMAGE_CONFIGS,
+    PRESET_META,
 )
 
 
@@ -55,6 +57,67 @@ def test_dropdown_presets_unchanged_by_pipeline_defaults():
     """The face tuning must not leak into the general-purpose Atkinson preset."""
     assert DEFAULT_FACE_IMAGE_CONFIG != PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
     assert PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].clahe_clip_limit == 1.75
+
+
+# ── the shipped defaults are named presets ───────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("preset_key", "default_config"),
+    [
+        ("default_general", DEFAULT_IMAGE_CONFIG),
+        ("default_bw", DEFAULT_BW_IMAGE_CONFIG),
+        ("default_face", DEFAULT_FACE_IMAGE_CONFIG),
+    ],
+)
+def test_shipped_default_is_a_named_preset(preset_key: str, default_config):
+    """Each pipeline default has to BE a catalog entry, not merely resemble one."""
+    assert PRESET_IMAGE_CONFIGS[preset_key] is default_config
+
+
+@pytest.mark.parametrize(
+    ("preset_key", "field"),
+    [
+        ("default_general", "image_config_default"),
+        ("default_bw", "image_config_bw"),
+        ("default_face", "image_config_face"),
+    ],
+)
+def test_stock_config_serialises_identically_to_its_preset(preset_key: str, field: str):
+    """A fresh install must show a preset name, not "Custom (your edits)".
+
+    The web UI decides which preset is selected by comparing JSON.stringify() of
+    the config against JSON.stringify() of each catalog entry, so equality is not
+    enough — the serialisation has to match byte for byte, key order included.
+    Both sides come from asdict() on the same dataclass, which is what makes
+    that safe; this test is what stops it quietly ceasing to be true.
+    """
+    stock = json.dumps(asdict(getattr(AppConfig(), field)))
+    preset = json.dumps(asdict(PRESET_IMAGE_CONFIGS[preset_key]))
+    assert stock == preset
+
+
+def test_every_preset_has_a_label_and_description():
+    """A catalog entry with no metadata shows its raw key in the dropdown."""
+    assert set(PRESET_META) == set(PRESET_IMAGE_CONFIGS)
+    for key, meta in PRESET_META.items():
+        assert meta.get("label"), f"{key} has no label"
+        assert meta.get("description"), f"{key} has no description"
+
+
+def test_presets_are_all_distinct():
+    """Two entries rendering identically would make the dropdown ambiguous.
+
+    selectPresetMatching() returns the first match, so a duplicate would be
+    unreachable and the UI would flip between two names for one config.
+    """
+    slugs = {key: cfg.cache_slug() for key, cfg in PRESET_IMAGE_CONFIGS.items()}
+    assert len(set(slugs.values())) == len(slugs), slugs
+
+
+def test_defaults_are_listed_before_the_alternatives():
+    """Insertion order is dropdown order; the shipped choices come first."""
+    assert list(PRESET_IMAGE_CONFIGS)[:3] == ["default_general", "default_bw", "default_face"]
 
 
 def test_cache_slug_invariant_to_port():
