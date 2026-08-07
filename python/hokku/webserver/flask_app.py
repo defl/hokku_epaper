@@ -1194,6 +1194,10 @@ def create_app(
                 "config": state.config.to_dict(),
                 "config_defaults": AppConfig().to_dict(),
                 "dither_presets": presets,
+                # jsonify sorts object keys, so the catalog's own order does not
+                # survive the wire — without this the dropdown would be
+                # alphabetical and the three shipped defaults would not lead it.
+                "dither_preset_order": list(PRESET_IMAGE_CONFIGS),
                 "server_time": datetime.now().isoformat(timespec="seconds"),
                 # Per-model panel geometry, keyed by model id — auto-includes any
                 # model added to the registry.  The legacy "panel" key mirrors the

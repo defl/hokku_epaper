@@ -1579,6 +1579,7 @@ async function downloadFirmware(model, tag, btn) {
 // `ditherPresets` is the catalog from /api/config so we don't have to mirror
 // the backend's preset definitions in JS.
 let ditherPresets = {};
+let ditherPresetOrder = [];   // catalog order; see /api/config dither_preset_order
 let configDefaults = null;
 let lastPanelData = {visual_w: {{visual_w}}, visual_h: {{visual_h}}};
 
@@ -1792,10 +1793,16 @@ function populatePresetDropdown(only) {
       autoOpt.textContent = 'Automatic (let the server choose)';
       sel.appendChild(autoOpt);
     }
-    Object.entries(ditherPresets).forEach(([key, p]) => {
+    // Explicit order from the server: jsonify sorts object keys, so
+    // Object.keys(ditherPresets) would be alphabetical rather than the
+    // catalog's own order (shipped defaults first).
+    const order = ditherPresetOrder.length
+      ? ditherPresetOrder.filter(k => ditherPresets[k])
+      : Object.keys(ditherPresets);
+    order.forEach(key => {
       const opt = document.createElement('option');
       opt.value = key;
-      opt.textContent = p.label;
+      opt.textContent = ditherPresets[key].label;
       sel.appendChild(opt);
     });
     const customOpt = document.createElement('option');
@@ -4045,6 +4052,7 @@ async function loadConfig() {
     lastPanelData = data.panel || {visual_w: {{visual_w}}, visual_h: {{visual_h}}};
     configDefaults = data.config_defaults || null;
     ditherPresets = data.dither_presets || {};
+    ditherPresetOrder = data.dither_preset_order || [];
     // showFaceKeepout is on for the face pipeline only. The classifier hands
     // face bounding boxes to the *face* branch alone — the B&W and default
     // branches both return an empty tuple — so CLAHE keep-out never runs for a
