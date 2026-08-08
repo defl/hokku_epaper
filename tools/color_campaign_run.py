@@ -141,6 +141,12 @@ def main(argv: list[str] | None = None) -> int:
     # for hours, recording nothing — the expensive failure mode, because the panel
     # time is spent either way. Stop early and keep what was measured.
     ap.add_argument("--max-consecutive-failures", type=int, default=3)
+    # This unit discharges even on USB (measured -80 mV/h), so a long campaign
+    # walks the battery down. Warn well before it matters, and stop cleanly rather
+    # than let it die mid-refresh: a half-written panel plus an unmeasured patch is
+    # a worse place to resume from than a deliberate stop.
+    ap.add_argument("--battery-warn-mv", type=int, default=3800)
+    ap.add_argument("--battery-stop-mv", type=int, default=3600)
     ap.add_argument("--dry-run", action="store_true", help="display only, no readings")
     args = ap.parse_args(argv)
 
@@ -183,6 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     t_start = time.monotonic()
     n_ok = n_fail = 0
     consecutive_fail = 0
+    stop_for_battery: int | None = None
     stopped_early = False
     battery_first = battery_last = None
     try:
@@ -254,11 +261,29 @@ def main(argv: list[str] | None = None) -> int:
                     if mv:
                         battery_first = battery_first if battery_first is not None else mv
                         battery_last = mv
-                        print(f"    battery {mv} mV", flush=True)
+                        note = ""
+                        if mv <= args.battery_stop_mv:
+                            note = "  *** TOO LOW — STOPPING ***"
+                        elif mv <= args.battery_warn_mv:
+                            note = "  *** LOW — CHARGE THE SCREEN SOON ***"
+                        print(f"    battery {mv} mV{note}", flush=True)
+                        if mv <= args.battery_stop_mv:
+                            stop_for_battery = mv
 
                 fh.write(json.dumps(rec) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())  # survive a hard kill, not just a clean exit
+
+                if stop_for_battery is not None:
+                    stopped_early = True
+                    print(
+                        f"\nSTOPPING: battery {stop_for_battery} mV is at or below the "
+                        f"{args.battery_stop_mv} mV floor.\n"
+                        "  CHARGE THE SCREEN, then re-run the SAME command — every\n"
+                        "  measured patch is on disk and will be skipped.",
+                        flush=True,
+                    )
+                    break
 
                 if consecutive_fail >= args.max_consecutive_failures:
                     stopped_early = True
@@ -282,6 +307,8 @@ def main(argv: list[str] | None = None) -> int:
         delta = battery_last - battery_first
         trend = "charging/held" if delta >= -20 else "DRAINING"
         print(f"battery {battery_first} -> {battery_last} mV ({delta:+d}) — {trend}")
+        if battery_last <= args.battery_warn_mv:
+            print("*** CHARGE THE SCREEN before the next cycle ***")
     if stopped_early:
         print("STOPPED EARLY — re-run the same command after recalibrating to continue.")
     print(f"results: {args.out}  (resume by re-running the same command)")
