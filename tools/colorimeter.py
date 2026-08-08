@@ -188,6 +188,11 @@ class SpotreadInstrument(Instrument):
 
     DEFAULT_ARGS = ("-O", "-N", "-i", "D65")
 
+    # Set when a read fails, so a caller can tell "this instrument needs the dial
+    # rotated" apart from "one reading glitched". They need opposite responses:
+    # the first must stop the run immediately, the second should be retried.
+    last_error: str | None = None
+
     def __init__(
         self,
         exe: str = "spotread",
@@ -213,6 +218,7 @@ class SpotreadInstrument(Instrument):
         # Log to a file rather than scraping stdout: with a logfile argument
         # spotread writes a clean tab-separated "reading X Y Z L* a* b*" row,
         # which is far more robust than parsing prose. Verified on hardware.
+        self.last_error = None  # cleared per attempt; only the latest matters
         with tempfile.TemporaryDirectory() as td:
             logfile = Path(td) / "reading.txt"
             outfile = Path(td) / "stdout.txt"
@@ -275,6 +281,11 @@ class SpotreadInstrument(Instrument):
                 raw = parse_xyz(line)
                 if raw is not None:
                     return Reading(xyz_d65=raw.copy(), raw=raw, source=self.name)
+        # Classify the failure. "needs a calibration" / "Calibration failed" means
+        # the ~1 h expiry has hit and every subsequent read will fail the same way
+        # until a human rotates the dial — there is nothing to retry.
+        lowered = out.lower()
+        self.last_error = "calibration" if "calibration" in lowered else "unknown"
         print(f"    ! no XYZ in {self.exe} output; last lines:")
         for line in out.strip().splitlines()[-4:]:
             print(f"      | {line}")

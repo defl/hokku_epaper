@@ -147,6 +147,10 @@ def main(argv: list[str] | None = None) -> int:
     # a worse place to resume from than a deliberate stop.
     ap.add_argument("--battery-warn-mv", type=int, default=3800)
     ap.add_argument("--battery-stop-mv", type=int, default=3600)
+    # Reflective calibration expires on a timer (~58 min measured), regardless of
+    # how much it is used, and ArgyllCMS offers no way to extend it.
+    ap.add_argument("--calibration-warn-min", type=float, default=45.0)
+    ap.add_argument("--calibration-expect-min", type=float, default=58.0)
     ap.add_argument("--dry-run", action="store_true", help="display only, no readings")
     args = ap.parse_args(argv)
 
@@ -190,6 +194,8 @@ def main(argv: list[str] | None = None) -> int:
     n_ok = n_fail = 0
     consecutive_fail = 0
     stop_for_battery: int | None = None
+    calibration_expired = False
+    warned_cal = False
     stopped_early = False
     battery_first = battery_last = None
     try:
@@ -200,6 +206,17 @@ def main(argv: list[str] | None = None) -> int:
                 inks = ink_histogram(idx)
 
                 elapsed = time.monotonic() - t_start
+                # The ColorMunki's reflective calibration expires on a timer, not
+                # on use: measured at ~58 min of CONTINUOUS reading. Warn before it
+                # lands so the dial rotation can be planned rather than discovered.
+                if not warned_cal and elapsed > args.calibration_warn_min * 60:
+                    warned_cal = True
+                    print(
+                        f"\n*** HEADS UP: {elapsed / 60:.0f} min since calibration. "
+                        f"It expires around {args.calibration_expect_min:.0f} min, so this "
+                        "cycle will stop soon and need the dial rotated. ***",
+                        flush=True,
+                    )
                 eta = (elapsed / max(n - 1, 1)) * (len(todo) - n + 1) if n > 1 else 0.0
                 print(
                     f"\n[{n}/{len(todo)}] {patch['uid']} {patch['phase']}/{patch['label']}"
@@ -236,6 +253,11 @@ def main(argv: list[str] | None = None) -> int:
                             reading = instrument.read(f"{patch['label']} #{r + 1}")
                             if reading is None:
                                 print(f"    ! no reading #{r + 1}")
+                                if getattr(instrument, "last_error", None) == "calibration":
+                                    # Nothing to retry: every later read fails the
+                                    # same way until a human rotates the dial.
+                                    calibration_expired = True
+                                    break
                                 continue
                             raws.append(reading.raw)
                             print(f"    raw XYZ = {reading.raw}")
@@ -273,6 +295,17 @@ def main(argv: list[str] | None = None) -> int:
                 fh.write(json.dumps(rec) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())  # survive a hard kill, not just a clean exit
+
+                if calibration_expired:
+                    stopped_early = True
+                    print(
+                        "\n*** CALIBRATION EXPIRED — the meter needs recalibrating. ***\n"
+                        "  Rotate the dial to the CALIBRATION position and say so; I will\n"
+                        "  run the calibration, then you rotate back to MEASUREMENT.\n"
+                        "  Every measured patch is on disk; the same command resumes.",
+                        flush=True,
+                    )
+                    break
 
                 if stop_for_battery is not None:
                     stopped_early = True
