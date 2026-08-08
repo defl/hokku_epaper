@@ -136,6 +136,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--console-timeout", type=float, default=900.0)
     ap.add_argument("--instrument-timeout", type=float, default=45.0)
     ap.add_argument("--limit", type=int, default=0, help="stop after N patches (0 = all)")
+    # A ColorMunki that loses calibration mid-run fails identically for every
+    # subsequent patch. Without this the run would keep displaying and refreshing
+    # for hours, recording nothing — the expensive failure mode, because the panel
+    # time is spent either way. Stop early and keep what was measured.
+    ap.add_argument("--max-consecutive-failures", type=int, default=3)
     ap.add_argument("--dry-run", action="store_true", help="display only, no readings")
     args = ap.parse_args(argv)
 
@@ -177,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
 
     t_start = time.monotonic()
     n_ok = n_fail = 0
+    consecutive_fail = 0
+    stopped_early = False
     battery_first = battery_last = None
     try:
         with args.out.open("a", encoding="utf-8") as fh:
@@ -239,6 +246,8 @@ def main(argv: list[str] | None = None) -> int:
                             rec["error"] = "no_readings"
                             n_fail += 1
 
+                consecutive_fail = 0 if "error" not in rec else consecutive_fail + 1
+
                 if n % args.battery_every == 1 or n == len(todo):
                     mv = read_battery_mv(s)
                     rec["battery_mv"] = mv
@@ -250,6 +259,17 @@ def main(argv: list[str] | None = None) -> int:
                 fh.write(json.dumps(rec) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())  # survive a hard kill, not just a clean exit
+
+                if consecutive_fail >= args.max_consecutive_failures:
+                    stopped_early = True
+                    print(
+                        f"\nSTOPPING: {consecutive_fail} patches in a row produced nothing.\n"
+                        "  Most likely the instrument lost its calibration (it sleeps when\n"
+                        "  idle). Recalibrate via the dial, then re-run the SAME command —\n"
+                        "  every measured patch is on disk and will be skipped.",
+                        flush=True,
+                    )
+                    break
     except KeyboardInterrupt:
         print("\ninterrupted — everything measured so far is already on disk", flush=True)
     finally:
@@ -262,6 +282,8 @@ def main(argv: list[str] | None = None) -> int:
         delta = battery_last - battery_first
         trend = "charging/held" if delta >= -20 else "DRAINING"
         print(f"battery {battery_first} -> {battery_last} mV ({delta:+d}) — {trend}")
+    if stopped_early:
+        print("STOPPED EARLY — re-run the same command after recalibrating to continue.")
     print(f"results: {args.out}  (resume by re-running the same command)")
     return 0
 
