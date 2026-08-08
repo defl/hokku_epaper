@@ -245,6 +245,41 @@ def build_index_raster(
     return idx
 
 
+def fullscreen_ramp_raster(panel_w: int, panel_h: int, eighths: int) -> np.ndarray:
+    """A whole-panel Bayer field at exactly *eighths*/8 black coverage.
+
+    The grid target assumes the operator re-aims the meter at each patch. When
+    the instrument is clamped to the glass and cannot be moved, the measured
+    area is fixed, so each patch has to become its OWN full-screen frame —
+    otherwise the meter reads whatever patch happens to sit under it, plus
+    gutters, plus registration frames.
+
+    Same thresholded BAYER_8 as build_index_raster, so a level here and the
+    corresponding grid patch are the identical pattern at the identical
+    coverage — the two routes stay comparable.
+    """
+    threshold = round((eighths / 8.0) * 64)
+    tile = np.where(BAYER_8 < threshold, BLACK_IDX, WHITE_IDX).astype(np.uint8)
+    reps_y = -(-panel_h // 8)  # ceil, then crop: panels need not be 8-multiples
+    reps_x = -(-panel_w // 8)
+    return np.tile(tile, (reps_y, reps_x))[:panel_h, :panel_w]
+
+
+def fullscreen_sequence(display) -> list[tuple[str, str, float | None, np.ndarray]]:
+    """Every measurement field as a full-panel raster: (name, kind, coverage, idx).
+
+    Six flat inks then the seven ramp levels. Black and white appear once, as
+    inks — ramp 0/8 and 8/8 would duplicate them exactly.
+    """
+    h, w = display.panel_h, display.panel_w
+    n_ink = int(display.palette_measured_rgb.shape[0])
+    out: list[tuple[str, str, float | None, np.ndarray]] = [
+        (INK_NAMES[i], "ink", None, np.full((h, w), i, dtype=np.uint8)) for i in range(n_ink)
+    ]
+    out += [(f"ramp {k}/8", "ramp", k / 8.0, fullscreen_ramp_raster(w, h, k)) for k in RAMP_EIGHTHS]
+    return out
+
+
 def actual_black_fraction(idx: np.ndarray, patch: Patch) -> float:
     """Measured-from-the-raster black coverage — what the panel will really show."""
     region = idx[patch.y : patch.y + patch.h, patch.x : patch.x + patch.w]

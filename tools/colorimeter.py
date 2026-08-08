@@ -215,15 +215,38 @@ class SpotreadInstrument(Instrument):
         # which is far more robust than parsing prose. Verified on hardware.
         with tempfile.TemporaryDirectory() as td:
             logfile = Path(td) / "reading.txt"
+            outfile = Path(td) / "stdout.txt"
+            errfile = Path(td) / "stderr.txt"
             cmd = [self.exe, *self.extra_args, str(logfile)]
             try:
                 # -O measures once and exits on its own — no trigger needed once
-                # the instrument has been calibrated. stdin is closed here only
-                # because -O never reaches the interactive prompt.
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout_s)
+                # the instrument has been calibrated.
+                #
+                # Redirect to FILES, never pipes. capture_output=True makes
+                # subprocess.run wait for the stdout/stderr pipes to close, and the
+                # ColorMunki driver runs a background switch-monitor thread that can
+                # keep those handles open after the measurement is done — so the
+                # call blocks on a reading that already succeeded (observed on
+                # hardware: the meter visibly took both readings, the second never
+                # returned). The reading itself is parsed from `logfile`, so the
+                # pipes were pure risk.
+                with (
+                    outfile.open("w", encoding="utf-8") as so,
+                    errfile.open("w", encoding="utf-8") as se,
+                ):
+                    subprocess.run(
+                        cmd,
+                        stdout=so,
+                        stderr=se,
+                        stdin=subprocess.DEVNULL,
+                        text=True,
+                        timeout=self.timeout_s,
+                    )
             except subprocess.TimeoutExpired:
                 print(f"    ! {self.exe} timed out after {self.timeout_s:.0f}s")
-                return None
+                # The measurement may still have landed before the hang, so fall
+                # through and try the logfile rather than discarding it.
+                pass
 
             if logfile.exists():
                 for line in logfile.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -239,8 +262,14 @@ class SpotreadInstrument(Instrument):
                         except ValueError:
                             pass
 
+            # Read the console text BEFORE the temp dir is removed; the fallback
+            # below needs it and the directory does not outlive this block.
+            out = "\n".join(
+                f.read_text(encoding="utf-8", errors="replace") if f.exists() else ""
+                for f in (outfile, errfile)
+            )
+
         # Fall back to stdout scraping if the logfile route produced nothing.
-        out = (proc.stdout or "") + "\n" + (proc.stderr or "")
         for line in out.splitlines():
             if "XYZ" in line.upper():
                 raw = parse_xyz(line)
@@ -275,5 +304,6 @@ def make_instrument(kind: str, **kw) -> Instrument:
             exe=kw.get("exe", "spotread"),
             extra_args=kw.get("extra_args"),
             illuminant=kw.get("illuminant", "d50"),
+            timeout_s=kw.get("timeout_s", 120.0),
         )
     raise ValueError(f"unknown instrument {kind!r}")
