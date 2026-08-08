@@ -128,6 +128,13 @@ def send_frame(s: serial.Serial, data: bytes, label: str, verbose: bool = True) 
         print(f"    ! chunk size mismatch: device {chunk}, host {CHUNK_BYTES}")
         return False
 
+    # Drop whatever is still buffered from the READY line before the first chunk.
+    # _read_line() returns on the FIRST of \r or \n, so its partner is still queued
+    # and would otherwise be read as chunk 0's ACK — which fails as `got b'\n'` on
+    # the very first chunk. Safe here: the device sends nothing between READY and
+    # the ACK for a chunk we have not written yet.
+    s.reset_input_buffer()
+
     sent = 0
     t0 = time.monotonic()
     while sent < total:
@@ -160,12 +167,26 @@ def send_frame(s: serial.Serial, data: bytes, label: str, verbose: bool = True) 
     if verbose:
         print(f"    CRC OK (0x{dev_crc:08X}) — refreshing panel (~30 s)")
 
-    line = _read_line(s, timeout_s=REFRESH_TIMEOUT_S)
-    if not line.startswith(REFRESHED):
-        print(f"    ! expected REFRESHED, got {line!r}")
+    # Keep reading until REFRESHED rather than testing a single line. The device
+    # writes an hlog line ("hokku: frame received ... — refreshing") between DONE
+    # and REFRESHED, and hlog can interleave at any moment, so a one-shot read
+    # reports failure for an upload that actually succeeded — the panel then gets
+    # needlessly repainted by a retry.
+    deadline = time.monotonic() + REFRESH_TIMEOUT_S
+    while time.monotonic() < deadline:
+        line = _read_line(s, timeout_s=max(0.1, deadline - time.monotonic()))
+        if line.startswith(REFRESHED):
+            if verbose:
+                print("    REFRESHED")
+            break
+        if "ABORTED" in line:
+            print(f"    ! device aborted the refresh: {line!r}")
+            return False
+        if line and verbose:
+            print(f"    (device: {line})")
+    else:
+        print(f"    ! no REFRESHED within {REFRESH_TIMEOUT_S:.0f}s")
         return False
-    if verbose:
-        print("    REFRESHED")
     return True
 
 
