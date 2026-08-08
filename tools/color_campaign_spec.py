@@ -75,16 +75,27 @@ COLOUR_CONFIGS: tuple[tuple[str, DitherConfig], ...] = (
 GAMUT_CONFIG = COLOUR_CONFIGS[0]
 
 
+INK_NAMES = ("black", "white", "yellow", "red", "blue", "green")
+
+# How many times each solid ink is re-measured across the campaign. These are the
+# PRIMARIES of the area-coverage model — every ink fraction in the dataset is a
+# weight on them — so they are measured repeatedly and spread through the run
+# rather than once at the start, making primary drift observable.
+INK_REPEATS = 3
+
+
 @dataclass
 class Patch:
     """One measurable full-panel field."""
 
     uid: str
     phase: str
-    source: str  # "bayer" | "pipeline"
+    source: str  # "bayer" | "ink" | "pipeline"
     label: str
     # bayer patches
     bayer_k: int | None = None  # black cells out of 64
+    # solid-ink patches
+    ink_index: int | None = None
     # pipeline patches
     rgb: tuple[int, int, int] | None = None
     config_name: str | None = None
@@ -198,6 +209,22 @@ def build_patches(*, seed: int, gamut_steps: int, n_skin: int, control_every: in
 
     phases: list[list[Patch]] = []
 
+    # Phase 0 — the six solid inks, the model's primaries. Repeated and shuffled
+    # through the campaign so a drifting primary shows up as spread between its
+    # own repeats rather than silently biasing every fitted coverage.
+    p0 = [
+        Patch(
+            uid=nxt(),
+            phase="inks",
+            source="ink",
+            label=f"ink {INK_NAMES[i]} r{rep + 1}",
+            ink_index=i,
+        )
+        for rep in range(INK_REPEATS)
+        for i in range(len(INK_NAMES))
+    ]
+    phases.append(p0)
+
     # Phase 1 — fine tone response. Bayer k/64 gives an exactly known coverage at
     # every step, turning the 7-point arch measured earlier into a real curve.
     p1 = [
@@ -286,24 +313,9 @@ def build_patches(*, seed: int, gamut_steps: int, n_skin: int, control_every: in
         ("ctl_black", 64),
         ("ctl_mid", 32),
     ]
-    out: list[Patch] = []
-    for i, p in enumerate(ordered):
-        if i % control_every == 0:
-            for label, k in controls:
-                out.append(
-                    Patch(
-                        uid=nxt(),
-                        phase="control",
-                        source="bayer",
-                        label=label,
-                        bayer_k=k,
-                        is_control=True,
-                    )
-                )
-        out.append(p)
-    # Close the campaign with a final control block so drift is bracketed.
-    for label, k in controls:
-        out.append(
+
+    def neutral_block() -> list[Patch]:
+        return [
             Patch(
                 uid=nxt(),
                 phase="control",
@@ -312,7 +324,36 @@ def build_patches(*, seed: int, gamut_steps: int, n_skin: int, control_every: in
                 bayer_k=k,
                 is_control=True,
             )
-        )
+            for label, k in controls
+        ]
+
+    def ink_block(tag: str) -> list[Patch]:
+        """All six solid inks. Used to bracket the campaign at both ends.
+
+        Anchoring the start AND the end on the primaries is what lets this
+        session be compared with any other one: without it, a shift in the rig
+        between sessions is indistinguishable from a real difference in the
+        panel.
+        """
+        return [
+            Patch(
+                uid=nxt(),
+                phase="control",
+                source="ink",
+                label=f"ctl_ink_{INK_NAMES[i]}_{tag}",
+                ink_index=i,
+                is_control=True,
+            )
+            for i in range(len(INK_NAMES))
+        ]
+
+    out: list[Patch] = ink_block("open")
+    for i, p in enumerate(ordered):
+        if i % control_every == 0:
+            out.extend(neutral_block())
+        out.append(p)
+    out.extend(neutral_block())
+    out.extend(ink_block("close"))
     return out
 
 

@@ -53,12 +53,15 @@ INK_NAMES = ("black", "white", "yellow", "red", "blue", "green")
 def patch_raster(patch: dict, display) -> np.ndarray:
     """Palette-index raster for one patch.
 
-    Two sources deliberately kept apart: `bayer` is the pipeline-free reference
-    with exactly-known coverage, `pipeline` is what the renderer really produces
-    for a requested colour. Only dither() runs — no tonal chain, which on a flat
-    field would be destroyed by autocontrast.
+    Three sources deliberately kept apart: `ink` is a solid primary (the anchors
+    the whole area-coverage model is expressed in), `bayer` is the pipeline-free
+    reference with exactly-known coverage, and `pipeline` is what the renderer
+    really produces for a requested colour. Only dither() runs — no tonal chain,
+    which on a flat field would be destroyed by autocontrast.
     """
     h, w = display.panel_h, display.panel_w
+    if patch["source"] == "ink":
+        return np.full((h, w), int(patch["ink_index"]), dtype=np.uint8)
     if patch["source"] == "bayer":
         return fullscreen_bayer_raster(w, h, int(patch["bayer_k"]))
     if patch["source"] == "pipeline":
@@ -196,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
                     "label": patch["label"],
                     "source": patch["source"],
                     "bayer_k": patch.get("bayer_k"),
+                    "ink_index": patch.get("ink_index"),
                     "rgb": patch.get("rgb"),
                     "config_name": patch.get("config_name"),
                     "config": patch.get("config"),
