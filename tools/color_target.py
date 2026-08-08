@@ -245,6 +245,22 @@ def build_index_raster(
     return idx
 
 
+def fullscreen_bayer_raster(panel_w: int, panel_h: int, k64: int) -> np.ndarray:
+    """A whole-panel Bayer field with EXACTLY *k64* of every 64 cells black.
+
+    BAYER_8 holds each value 0..63 exactly once, so thresholding at k64 selects
+    precisely k64 cells — the coverage is exact by construction, not rounded.
+    That is what makes these patches a trustworthy reference: any difference
+    between nominal and measured coverage is the panel, never the pattern.
+    """
+    if not 0 <= k64 <= 64:
+        raise ValueError(f"k64 must be 0..64, got {k64}")
+    tile = np.where(BAYER_8 < k64, BLACK_IDX, WHITE_IDX).astype(np.uint8)
+    reps_y = -(-panel_h // 8)  # ceil, then crop: panels need not be 8-multiples
+    reps_x = -(-panel_w // 8)
+    return np.tile(tile, (reps_y, reps_x))[:panel_h, :panel_w]
+
+
 def fullscreen_ramp_raster(panel_w: int, panel_h: int, eighths: int) -> np.ndarray:
     """A whole-panel Bayer field at exactly *eighths*/8 black coverage.
 
@@ -258,11 +274,7 @@ def fullscreen_ramp_raster(panel_w: int, panel_h: int, eighths: int) -> np.ndarr
     corresponding grid patch are the identical pattern at the identical
     coverage — the two routes stay comparable.
     """
-    threshold = round((eighths / 8.0) * 64)
-    tile = np.where(BAYER_8 < threshold, BLACK_IDX, WHITE_IDX).astype(np.uint8)
-    reps_y = -(-panel_h // 8)  # ceil, then crop: panels need not be 8-multiples
-    reps_x = -(-panel_w // 8)
-    return np.tile(tile, (reps_y, reps_x))[:panel_h, :panel_w]
+    return fullscreen_bayer_raster(panel_w, panel_h, round((eighths / 8.0) * 64))
 
 
 def fullscreen_sequence(display) -> list[tuple[str, str, float | None, np.ndarray]]:
