@@ -24,7 +24,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "python"))
 
 from _dump_bigme_f7 import enter_brom
-from hokku.common.xr872.slot0 import flash_slot0
+from hokku.common.xr872.slots import flash_slot
 
 
 def main() -> int:
@@ -45,9 +45,9 @@ def main() -> int:
     print(f"BROM ready on {port}. Running safe slot-0 write...")
 
     try:
-        # flash_slot0 exits(1) via die() on any safety-check failure, leaving
+        # flash_slot exits(1) via die() on any safety-check failure, leaving
         # slot 1 (OEM) bootable — no brick.
-        flash_slot0(f, img, reboot=args.reboot)
+        flash_slot(f, img, slot=0, reboot=args.reboot)
     finally:
         f.close()
     print("\nDONE. Long-press to cold-boot into slot 0, then watch UART.")

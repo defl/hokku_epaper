@@ -1,19 +1,30 @@
 #!/usr/bin/env python3
-"""Flash an A/B candidate into SLOT 0 by catching the BROM window on a power-cycle.
+"""Flash an A/B candidate into a slot by catching the BROM window on a power-cycle.
 
-Same SAFE slot-0 write as flash_candidate_slot0.py (bootloader + slot 1 preserved,
-cfg flip is the last write), but a different way IN: instead of the `upgrade` console
-command (which needs custom firmware already running), this keeps a tight 0x55
-mask-BROM sync blast running across CH340 re-enumerations. You LONG-PRESS the device
-power button to power-cycle it; the BROM window opens in the ~1 s re-enumeration
-blackout and this catches its tail. Retry the long-press until it lands.
+Same SAFE write as the `upgrade`-entry flasher (bootloader + the other slot
+preserved, cfg flip is the last write), but a different way IN: instead of the
+`upgrade` console command (which needs custom firmware already running AND a live
+console window), this keeps a tight 0x55 mask-BROM sync blast running across CH340
+re-enumerations. You LONG-PRESS the device power button to power-cycle it; the BROM
+window opens in the ~1 s re-enumeration blackout and this catches its tail. Retry
+the long-press until it lands.
 
-Use this when no custom firmware boots (e.g. slot 0 holds a broken candidate and
-slot 1 holds the OEM, which does not answer `upgrade`). If the catch never lands,
-the device simply boots the OEM again — no brick (slot 1 is always intact).
+Two situations this is the right tool for:
+
+  * **Bootstrap** (`--slot 0 --allow-active-slot`) — no custom firmware boots (e.g.
+    slot 0 holds a broken candidate and slot 1 holds the OEM, which does not answer
+    `upgrade`).
+  * **Update** (`--slot 1`) — the unit runs Hokku firmware from slot 0 and we want
+    the new image in the inactive slot without going near the network. This needs
+    no console window, so it is immune to the few-second console lifetime and to
+    the firmware's "OTA busy" refresh lock.
+
+`flash_slot` refuses to write the slot the bootloader would actually launch unless
+`--allow-active-slot` is given, so a wrong `--slot` aborts before the first erase.
+If the catch never lands, the device simply boots what it booted before — no brick.
 
 Usage:
-  python tools/flash_candidate_slot0_catch.py <image.img> [--port COM7]
+  python -m hokku.common.xr872.catch <image.img> [--port COM7] [--slot 0|1]
   -> then LONG-PRESS the power button, repeatedly (~every 8 s) until it syncs.
   Ctrl-C to abort.
 """
@@ -26,7 +37,7 @@ import time
 import serial
 
 from hokku.common.xr872.flasher import SYNC_BYTE, SYNC_OK, XR872Flasher
-from hokku.common.xr872.slot0 import flash_slot0
+from hokku.common.xr872.slots import flash_slot
 
 
 def ts() -> str:
@@ -69,11 +80,23 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("image")
     ap.add_argument("--port", default="COM7")
+    ap.add_argument(
+        "--slot",
+        type=int,
+        default=0,
+        choices=(0, 1),
+        help="target slot; refuses the currently-active slot unless --allow-active-slot",
+    )
+    ap.add_argument(
+        "--allow-active-slot",
+        action="store_true",
+        help="permit overwriting the active slot (bootstrap over a stock/OEM image only)",
+    )
     ap.add_argument("--reboot", action="store_true", help="sys_reboot after flashing")
     args = ap.parse_args()
 
     img = open(args.image, "rb").read()
-    print(f"catch-flash SLOT 0 <- {args.image} ({len(img)} B) on {args.port}")
+    print(f"catch-flash SLOT {args.slot} <- {args.image} ({len(img)} B) on {args.port}")
     print(">>> LONG-PRESS the device power button now, and repeat every ~8 s until it syncs. <<<")
     print("    (Ctrl-C to abort)\n")
 
@@ -98,10 +121,17 @@ def main() -> int:
                     if not f.sync(attempts=30, timeout_per=0.1):
                         print("  command sync failed after trigger — keep long-pressing")
                         continue
-                    # Hand the synced handle to the validated safe slot-0 writer.
-                    # flash_slot0 calls sys.exit(1) via die() on any safety failure,
-                    # which leaves slot 1 (OEM) bootable — no brick.
-                    flash_slot0(f, img, reboot=args.reboot)
+                    # Hand the synced handle to the validated safe slot writer.
+                    # flash_slot calls sys.exit(1) via die() on any safety failure
+                    # — including targeting the active slot — which leaves the
+                    # other slot bootable. No brick.
+                    flash_slot(
+                        f,
+                        img,
+                        slot=args.slot,
+                        reboot=args.reboot,
+                        allow_active_slot=args.allow_active_slot,
+                    )
                     print(f"\n[{ts()}] DONE. Power-cycle / watch UART to see it boot.")
                     return 0
             finally:
