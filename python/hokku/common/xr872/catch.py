@@ -4,10 +4,19 @@
 Same SAFE write as the `upgrade`-entry flasher (bootloader + the other slot
 preserved, cfg flip is the last write), but a different way IN: instead of the
 `upgrade` console command (which needs custom firmware already running AND a live
-console window), this keeps a tight 0x55 mask-BROM sync blast running across CH340
-re-enumerations. You LONG-PRESS the device power button to power-cycle it; the BROM
-window opens in the ~1 s re-enumeration blackout and this catches its tail. Retry
-the long-press until it lands.
+console window), this keeps a tight 0x55 mask-BROM sync blast running on an already-
+open CH340 port.
+
+**The trigger is UNPLUG USB -> REPLUG USB -> SHORT-PRESS power. Not a long-press.**
+The replug brings the CH340 port up *first*, so this loop already holds the port open
+and hammers straight through the BROM sync window. A long-press instead drops the
+CH340 for ~1.1 s and the window closes before the port can re-open — so it never
+lands, no matter how many times it is repeated.
+
+Diagnosing a catch that never lands: this loop prints "waiting for port..." only when
+the port actually drops. If the log shows ONLY "hammering 0x55" lines, the cable is
+not being physically unplugged. That absence is the tell — it is not a timing problem
+and repeating the press will not help.
 
 Two situations this is the right tool for:
 
@@ -25,7 +34,7 @@ If the catch never lands, the device simply boots what it booted before — no b
 
 Usage:
   python -m hokku.common.xr872.catch <image.img> [--port COM7] [--slot 0|1]
-  -> then LONG-PRESS the power button, repeatedly (~every 8 s) until it syncs.
+  -> then UNPLUG USB, REPLUG USB, and SHORT-PRESS power; repeat until it syncs.
   Ctrl-C to abort.
 """
 
@@ -97,7 +106,7 @@ def main() -> int:
 
     img = open(args.image, "rb").read()
     print(f"catch-flash SLOT {args.slot} <- {args.image} ({len(img)} B) on {args.port}")
-    print(">>> LONG-PRESS the device power button now, and repeat every ~8 s until it syncs. <<<")
+    print(">>> UNPLUG USB -> REPLUG USB -> SHORT-PRESS power. Repeat until it syncs. <<<")
     print("    (Ctrl-C to abort)\n")
 
     last_status = 0.0
@@ -107,19 +116,21 @@ def main() -> int:
                 ser = open_stable(args.port)
             except (serial.SerialException, OSError):
                 if time.monotonic() - last_status > 3:
-                    print(f"[{ts()}] waiting for port... LONG-PRESS the button")
+                    print(f"[{ts()}] waiting for port... replug USB, then short-press")
                     last_status = time.monotonic()
                 continue
 
             try:
                 if time.monotonic() - last_status > 3:
-                    print(f"[{ts()}] hammering 0x55 — keep long-pressing")
+                    print(
+                        f'[{ts()}] hammering 0x55 — if you never see "waiting for port", the cable is not being unplugged'
+                    )
                     last_status = time.monotonic()
                 if hammer_sync(ser, duration=2.0):
                     print(f"\n[{ts()}] *** BROM SYNC — establishing command channel ***")
                     f = XR872Flasher(ser=ser, verbose=False)
                     if not f.sync(attempts=30, timeout_per=0.1):
-                        print("  command sync failed after trigger — keep long-pressing")
+                        print("  command sync failed after trigger — retry the replug+press")
                         continue
                     # Hand the synced handle to the validated safe slot writer.
                     # flash_slot calls sys.exit(1) via die() on any safety failure

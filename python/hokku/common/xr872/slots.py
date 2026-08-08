@@ -11,8 +11,9 @@ repo flashing rules you MUST write the slot the device is NOT currently running
 from, so a bad image falls back to a known-good one. `slot=0` is the bootstrap
 case (a stock unit running the OEM image from slot 1); `slot=1` is the update case
 (a unit already running Hokku firmware from slot 0). Passing the running slot
-overwrites the only known-good image — this module cannot detect that on its own,
-because in BROM the device is not running anything.
+overwrites the only known-good image, so `flash_slot` reads the A/B cfg up front
+and refuses unless `allow_active_slot=True`. The device is not executing in BROM,
+but the cfg still records which slot it *would* launch — so this is knowable.
 
 Safety (see the A/B rollback design notes):
   * Asserts the live bootloader header: AWIH, bl_size==0x8000, ota_addr==0x180000,
@@ -28,8 +29,11 @@ Safety (see the A/B rollback design notes):
 The image itself is slot-agnostic: firmware/bigme_f7/main.c derives its XIP bias as
 0x13040 + boot_seq * 0x179000 at runtime, so the same bytes boot from either slot.
 
-Usage:
-  python tools/flash_candidate_slot0.py <image.img> [--port COM7] [--slot 0|1] [--reboot]
+Usage (both drive this module; they differ only in how they enter BROM):
+  python tools/f7_flash_slot.py <image.img> [--slot 0|1] [--reboot]
+      -> `upgrade` console entry. Preferred: no replug, no OTA lock.
+  python -m hokku.common.xr872.catch <image.img> [--port COM7] [--slot 0|1]
+      -> 0x55 mask-BROM catch. Needs unplug -> replug -> short-press.
 """
 
 import argparse
@@ -73,6 +77,15 @@ def build_fdcm(seq: int = 0) -> bytes:
 
 
 def parse_cfg(sector: bytes):
+    """Decode an fdcm OTA cfg sector -> (seq, verified), or None if unreadable.
+
+    Pass the WHOLE sector (OTA_SIZE bytes). fdcm appends a new 4-byte entry per
+    rewrite rather than rewriting in place, so a device that has been flashed or
+    OTA'd many times carries hundreds of used entries and the live one sits far
+    past the first 512 bytes. A short read silently truncates the entry we need.
+    """
+    if len(sector) < 8:
+        return None
     idc, bm, ds = struct.unpack_from("<IHH", sector, 0)
     if idc != FDCM_ID or ds != 4:
         return None
@@ -87,7 +100,11 @@ def parse_cfg(sector: bytes):
                 v >>= 1
                 bit += 1
             break
+    if bit == 0:
+        return None  # no used entry
     off = 8 + bm + 4 * (bit - 1)
+    if off + 4 > len(sector):
+        return None  # truncated read — caller passed less than the full sector
     raw_seq, raw_st = struct.unpack_from("<HH", sector, off)
     seq = {0x5555: 0, 0xAAAA: 1}.get(raw_seq)  # decoded index or None
     verified = raw_st == RAW_STATE_VERIFIED
@@ -131,7 +148,7 @@ def flash_slot(f, img, slot=0, reboot=False, allow_active_slot=False):
         die("BROM sync but GetFlashId failed")
 
     # --- A/B pre-flight: which slot would the bootloader launch right now? ---
-    cfg_before = f.read_sector(OTA_ADDR, 512)
+    cfg_before = f.read_sector(OTA_ADDR, OTA_SIZE)
     active = parse_cfg(cfg_before) if cfg_before else None
     active_seq = active[0] if active else None
     print(f"  A/B cfg says active slot = {active_seq}; target slot = {slot}")
@@ -204,7 +221,7 @@ def flash_slot(f, img, slot=0, reboot=False, allow_active_slot=False):
         die("cfg sector erase failed")
     if not f.write_sector(OTA_ADDR, build_fdcm(slot)):
         die("cfg write failed")
-    cfg_sec = f.read_sector(OTA_ADDR, 512)
+    cfg_sec = f.read_sector(OTA_ADDR, OTA_SIZE)
     parsed = parse_cfg(cfg_sec) if cfg_sec else None
     print(
         f"[5] verify cfg readback -> (seq={parsed[0] if parsed else None}, verified={parsed[1] if parsed else None})"

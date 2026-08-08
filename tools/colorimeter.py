@@ -34,7 +34,9 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -156,23 +158,45 @@ class SpotreadInstrument(Instrument):
     a per-reading invocation is far easier to reason about and to recover from.
     The cost is the instrument re-initialising each time, which is seconds.
 
-    ``extra_args`` exists because the exact flags depend on the Argyll build and
-    the instrument. Reflective spot mode is spotread's default (``-e`` selects
-    emissive), so the common case needs nothing; ``-y`` and illuminant options
-    can be added here once the meter is in hand.
+    Flags below are verified against a real ColorMunki Photo with ArgyllCMS
+    3.5.0, not guessed:
+
+      ``-O``  do ONE calibration-or-measurement and exit. This is the whole
+              reason the driven path works: spotread's interactive loop reads
+              the **console** directly, not stdin, so piped keystrokes never
+              reach it. -O sidesteps the loop entirely.
+      ``-N``  skip auto-calibration. The instrument keeps its calibration
+              between invocations, so calibrate once up front and every
+              subsequent read starts immediately.
+      ``-i D65``  compute XYZ under D65 rather than spotread's D50 default.
+              This is what lets us skip chromatic adaptation altogether —
+              bradford_adapt() stays available but is not in the path.
+              (Note spotread still *prints* "D50 Lab" without -w; that label
+              is ignored, parse_xyz takes the XYZ.)
+
+    **No trigger is needed.** Once the instrument has been calibrated once,
+    ``-O`` measures immediately and exits — verified on hardware with two
+    back-to-back reads agreeing to 0.03 dE. The operator only has to place the
+    meter on a patch; the software does the rest. (The interactive prompt does
+    accept "instrument switch or any other key", but -O never reaches it.)
+
+    Because timing is ours, a caller can cheaply average several reads per
+    patch — at that repeatability it is nearly free accuracy.
     """
 
     name = "spotread"
+
+    DEFAULT_ARGS = ("-O", "-N", "-i", "D65")
 
     def __init__(
         self,
         exe: str = "spotread",
         extra_args: list[str] | None = None,
-        illuminant: str = "d50",
+        illuminant: str = "d65",
         timeout_s: float = 120.0,
     ):
         self.exe = exe
-        self.extra_args = list(extra_args or [])
+        self.extra_args = list(extra_args) if extra_args is not None else list(self.DEFAULT_ARGS)
         self.illuminant = illuminant
         self.timeout_s = timeout_s
 
@@ -186,15 +210,36 @@ class SpotreadInstrument(Instrument):
             )
 
     def read(self, label: str) -> Reading | None:
-        cmd = [self.exe, *self.extra_args]
-        try:
-            # spotread takes a reading per newline on stdin and exits on 'q'.
-            proc = subprocess.run(
-                cmd, input="\nq\n", capture_output=True, text=True, timeout=self.timeout_s
-            )
-        except subprocess.TimeoutExpired:
-            print(f"    ! {self.exe} timed out after {self.timeout_s:.0f}s")
-            return None
+        # Log to a file rather than scraping stdout: with a logfile argument
+        # spotread writes a clean tab-separated "reading X Y Z L* a* b*" row,
+        # which is far more robust than parsing prose. Verified on hardware.
+        with tempfile.TemporaryDirectory() as td:
+            logfile = Path(td) / "reading.txt"
+            cmd = [self.exe, *self.extra_args, str(logfile)]
+            try:
+                # -O measures once and exits on its own — no trigger needed once
+                # the instrument has been calibrated. stdin is closed here only
+                # because -O never reaches the interactive prompt.
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout_s)
+            except subprocess.TimeoutExpired:
+                print(f"    ! {self.exe} timed out after {self.timeout_s:.0f}s")
+                return None
+
+            if logfile.exists():
+                for line in logfile.read_text(encoding="utf-8", errors="replace").splitlines():
+                    parts = line.split()
+                    # "1  X Y Z L* a* b*" — skip the header row.
+                    if len(parts) >= 4 and parts[0].isdigit():
+                        try:
+                            return Reading(
+                                xyz_d65=np.array([float(v) for v in parts[1:4]]),
+                                raw=np.array([float(v) for v in parts[1:4]]),
+                                source=self.name,
+                            )
+                        except ValueError:
+                            pass
+
+        # Fall back to stdout scraping if the logfile route produced nothing.
         out = (proc.stdout or "") + "\n" + (proc.stderr or "")
         for line in out.splitlines():
             if "XYZ" in line.upper():
