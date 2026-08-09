@@ -220,6 +220,10 @@ def build_patches(
         phases.extend(_campaign2_phases(nxt, gamut_steps=gamut_steps, n_skin=n_skin, seed=seed))
         return _interleave(phases, nxt, rng, control_every)
 
+    if campaign == 3:
+        phases.extend(_merged_phases(nxt, gamut_steps=gamut_steps, n_skin=n_skin, seed=seed))
+        return _interleave(phases, nxt, rng, control_every)
+
     # Phase 0 — the six solid inks, the model's primaries. Repeated and shuffled
     # through the campaign so a drifting primary shows up as spread between its
     # own repeats rather than silently biasing every fitted coverage.
@@ -328,6 +332,150 @@ def build_patches(
 # black-coverage curve is the wrong model when five inks are in play; the fit has
 # to be multi-ink, which needs the per-LUT ink histograms this phase collects.
 LUT_GAIN_LUTS = ("bw", "hue_aware", "oklab_hue_aware", "cam16ucs_hue_aware")
+
+
+def _merged_phases(nxt, *, gamut_steps: int, n_skin: int, seed: int) -> list[list[Patch]]:
+    """Everything worth measuring, de-duplicated, in descending order of value.
+
+    Splitting this across two campaigns only makes sense when the first is
+    already measured. Starting from scratch it is strictly worse: the coarse 5x5x5
+    gamut is superseded by the dense one, and a second campaign pays for its own
+    ink anchors and drift controls a second time.
+
+    Phases run in the order listed, and the runner is resumable, so this also
+    front-loads the answers: the tone curve, the per-LUT gain and the skin work
+    all land before the 9x9x9 gamut sweep — which is the one phase that can be
+    abandoned part-way without invalidating anything else.
+    """
+    phases: list[list[Patch]] = []
+    levels = gray_ramp_rgb(13)
+
+    # 1. Primaries — the basis everything else is expressed in.
+    phases.append(
+        [
+            Patch(
+                uid=nxt(),
+                phase="inks",
+                source="ink",
+                label=f"ink {INK_NAMES[i]} r{rep + 1}",
+                ink_index=i,
+            )
+            for rep in range(INK_REPEATS)
+            for i in range(len(INK_NAMES))
+        ]
+    )
+
+    # 2. Fine tone response — exact known coverage, no pipeline in the loop.
+    phases.append(
+        [
+            Patch(uid=nxt(), phase="tone_fine", source="bayer", label=f"bayer {k}/64", bayer_k=k)
+            for k in range(65)
+        ]
+    )
+
+    # 3. Per-LUT gain on the SHIPPING algorithm. Highest value: general and faces
+    #    both run hue_aware, whose gain campaign 1 never measured.
+    p_lut: list[Patch] = []
+    for lut in LUT_GAIN_LUTS:
+        cfg = DitherConfig("atkinson", lut, True, 30.0, 12.0)
+        p_lut += [
+            Patch(
+                uid=nxt(),
+                phase="lut_gain",
+                source="pipeline",
+                label=f"atkinson_serp {lut} gray{rgb[0]}",
+                rgb=rgb,
+                config_name=f"atkinson_serp_{lut}",
+                config=asdict(cfg),
+            )
+            for rgb in levels
+        ]
+    phases.append(p_lut)
+
+    # 4. Pattern dependence: ordered vs diffused, and scan order.
+    p_algo: list[Patch] = [
+        Patch(
+            uid=nxt(),
+            phase="algo_gain",
+            source="bayer",
+            label=f"bayer {k * 4}/64",
+            bayer_k=k * 4,
+        )
+        for k in range(1, 14)
+    ]
+    for algo in ED_ALGORITHMS:
+        for serp in (False, True):
+            cfg = DitherConfig(algo, "bw", serp, 30.0, 12.0)
+            p_algo += [
+                Patch(
+                    uid=nxt(),
+                    phase="algo_gain",
+                    source="pipeline",
+                    label=f"{algo}{'_serp' if serp else ''} gray{rgb[0]}",
+                    rgb=rgb,
+                    config_name=f"{algo}{'_serp' if serp else ''}_bw",
+                    config=asdict(cfg),
+                )
+                for rgb in levels
+            ]
+    phases.append(p_algo)
+
+    # 5. Is the LUT effect separable from the diffusion kernel?
+    cfg_fs = DitherConfig("floyd_steinberg", "hue_aware", True, 30.0, 12.0)
+    phases.append(
+        [
+            Patch(
+                uid=nxt(),
+                phase="lut_algo_cross",
+                source="pipeline",
+                label=f"fs_serp hue_aware gray{rgb[0]}",
+                rgb=rgb,
+                config_name="fs_serp_hue_aware",
+                config=asdict(cfg_fs),
+            )
+            for rgb in levels
+        ]
+    )
+
+    # 6. Skin — both sample sets, drawn from different seeds so they are distinct
+    #    colours rather than a repeat of the same 60.
+    skin_rgbs = skin_locus_rgb(60, seed) + skin_locus_rgb(n_skin, seed + 1)
+    seen: set[tuple[int, int, int]] = set()
+    skin_unique = [r for r in skin_rgbs if not (r in seen or seen.add(r))]
+    phases.append(
+        [
+            Patch(
+                uid=nxt(),
+                phase="skin",
+                source="pipeline",
+                label=f"skin {rgb} {cname}",
+                rgb=rgb,
+                config_name=cname,
+                config=asdict(ccfg),
+            )
+            for rgb in skin_unique
+            for cname, ccfg in COLOUR_CONFIGS
+        ]
+    )
+
+    # 7. Dense gamut LAST: the longest phase, and the only one that can be cut
+    #    short without invalidating anything measured before it.
+    name, cfg = GAMUT_CONFIG
+    phases.append(
+        [
+            Patch(
+                uid=nxt(),
+                phase="gamut_dense",
+                source="pipeline",
+                label=f"gamut {rgb}",
+                rgb=rgb,
+                config_name=name,
+                config=asdict(cfg),
+            )
+            for rgb in gamut_cube_rgb(gamut_steps)
+        ]
+    )
+    return phases
 
 
 def _campaign2_phases(nxt, *, gamut_steps: int, n_skin: int, seed: int) -> list[list[Patch]]:
@@ -508,8 +656,8 @@ def main(argv: list[str] | None = None) -> int:
         "--campaign",
         type=int,
         default=1,
-        choices=(1, 2),
-        help="2 = the follow-up: per-LUT gain, dense gamut, more skin",
+        choices=(1, 2, 3),
+        help="1 = original, 2 = follow-up only, 3 = MERGED union (use this from scratch)",
     )
     ap.add_argument("--gamut-steps", type=int, default=5, help="NxNxN RGB cube")
     ap.add_argument("--skin", type=int, default=60, help="distinct skin colours")

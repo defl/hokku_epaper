@@ -165,7 +165,9 @@ def next_session(path: Path) -> int:
     return hi + 1
 
 
-def measure_session_anchors(s, display, instrument, session: int, repeats: int, settle_s: float):
+def measure_session_anchors(
+    s, display, instrument, session: int, repeats: int, settle_s: float, emit
+) -> int:
     """Re-measure the six primaries at the START of every session.
 
     The instrument is recalibrated between sessions, and a calibration is not a
@@ -177,8 +179,12 @@ def measure_session_anchors(s, display, instrument, session: int, repeats: int, 
 
     These carry their own uids (``s003_anchor_red``) so resume never skips them:
     a new session must always produce a fresh set.
+
+    Each anchor is emitted the moment it completes rather than batched at the
+    end: six anchors is ~6 minutes, and a calibration expiry or crash inside that
+    window must not discard the ones already measured.
     """
-    out = []
+    n = 0
     h, w = display.panel_h, display.panel_w
     for i, name in enumerate(INK_NAMES):
         idx = np.full((h, w), i, dtype=np.uint8)
@@ -197,7 +203,7 @@ def measure_session_anchors(s, display, instrument, session: int, repeats: int, 
         }
         if not upload_with_retry(s, data, f"anchor {name}", attempts=6, gap_s=8.0):
             rec["error"] = "upload"
-            out.append(rec)
+            emit(rec)
             continue
         time.sleep(settle_s)
         raws, specs = [], []
@@ -220,8 +226,9 @@ def measure_session_anchors(s, display, instrument, session: int, repeats: int, 
         if specs:
             rec["spectrum_pct"] = [[float(v) for v in sp] for sp in specs]
             rec["median_spectrum_pct"] = [float(v) for v in np.median(np.vstack(specs), axis=0)]
-        out.append(rec)
-    return out
+        emit(rec)
+        n += 1
+    return n
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -342,10 +349,9 @@ def main(argv: list[str] | None = None) -> int:
             if not args.dry_run and not args.no_anchors:
                 print(f"\n=== session {session}: re-measuring the six primaries ===", flush=True)
                 assert instrument is not None
-                for rec in measure_session_anchors(
-                    s, display, instrument, session, args.repeats, args.settle_s
-                ):
-                    emit(rec)
+                measure_session_anchors(
+                    s, display, instrument, session, args.repeats, args.settle_s, emit
+                )
             for n, patch in enumerate(todo, 1):
                 idx = patch_raster(patch, display)
                 data = display.indices_to_panel_bytes(idx)
