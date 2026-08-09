@@ -688,7 +688,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\n{n_ok} ok, {n_fail} failed, {dt / 3600:.2f} h elapsed")
     if battery_first is not None and battery_last is not None:
         delta = battery_last - battery_first
-        trend = "charging/held" if delta >= -20 else "DRAINING"
+        # This ADC is noisy: a 2.4-minute dry run reported -40 mV, which is not a
+        # physical discharge. Every sample so far sits inside a ~+/-40 mV band, so
+        # anything smaller than that is not a trend, and calling it one sent me
+        # chasing a power problem that did not exist.
+        trend = (
+            "held (within ADC noise)"
+            if delta >= -80
+            else f"DRAINING over {(time.monotonic() - t_start) / 3600:.1f} h"
+        )
         print(f"battery {battery_first} -> {battery_last} mV ({delta:+d}) — {trend}")
         if battery_last <= args.battery_warn_mv:
             print("*** CHARGE THE SCREEN before the next cycle ***")
