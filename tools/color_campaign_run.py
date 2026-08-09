@@ -152,7 +152,14 @@ def median_xyz(raws: list[np.ndarray]) -> list[float] | None:
 
 
 def done_uids(path: Path) -> set[str]:
-    """uids already recorded, so a resumed run does not repeat work."""
+    """uids that actually HAVE a measurement, so a resume does not repeat work.
+
+    Deliberately keyed on having data rather than on having been attempted. Every
+    failure mode seen here is transient — an upload glitch, an expired calibration
+    — so a patch that failed should come back around on the next run. Counting the
+    attempt would leave a permanent hole in the dataset with nothing to indicate
+    why that colour is missing.
+    """
     if not path.exists():
         return set()
     seen: set[str] = set()
@@ -164,8 +171,13 @@ def done_uids(path: Path) -> set[str]:
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue  # a torn final line from a hard kill is not fatal
+        # A dry run displays patches but measures nothing. Its rows must NOT count
+        # as done, or a rehearsal would permanently mask real patches from every
+        # later run — the data would simply be missing, with nothing to show why.
+        if rec.get("dry_run"):
+            continue
         uid = rec.get("uid")
-        if uid:
+        if uid and "xyz_d65_pct" in rec:
             seen.add(uid)
     return seen
 
@@ -560,6 +572,7 @@ def main(argv: list[str] | None = None) -> int:
                     n_fail += 1
                 else:
                     if args.dry_run:
+                        rec["dry_run"] = True  # see done_uids: must not mask a real patch
                         n_ok += 1
                     else:
                         time.sleep(args.settle_s)
