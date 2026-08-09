@@ -1,5 +1,26 @@
 # What the measurements say, and what to do about it
 
+> **RETRACTED (LUT sections below).** Every LUT comparison in this document was
+> measured with `hue_cutoff_deg=30, neutral_chroma=12`. Production ships
+> `95, 8` (`presets.py`), and those two numbers ARE the hue-aware gate. At the
+> shipped values `hue_aware` is bit-identical to `euclidean` on skin colours, and
+> the large blue shift reported below does not occur: production measures −5.61
+> db* (general) and −4.77 (faces), not −9.46.
+>
+> Re-run at the correct parameters, `oklab` does give the least blue skin
+> (−1.15 vs −5.61) — vindicating the original human observation that "all but
+> oklab make lips blue". But shown side by side on the panel, the human verdict
+> was that **production looks better**: oklab reads "too light, overlighted",
+> and skin looks "more human" with the shipped config.
+>
+> That matches whole-image ΔE (17.16 shipped vs 18.27 oklab) and contradicts the
+> blue-shift metric this document optimises. **The ΔE column predicted
+> preference; the blue-shift column did not.** No LUT change is recommended.
+>
+> What survives untouched: the ink primaries, gamut, contrast, black-ink
+> non-neutrality, the dot-gain curve and the Yule-Nielsen model — none of which
+> involve the hue gate.
+
 Working notes from characterising the Bigme F7 panel with an X-Rite ColorMunki
 Photo (ArgyllCMS `spotread`, reflective 45°/0°). Raw readings live alongside this
 file; the tools are `tools/color_*.py`.
