@@ -28,6 +28,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -167,6 +168,36 @@ def done_uids(path: Path) -> set[str]:
         if uid:
             seen.add(uid)
     return seen
+
+
+def measured_by_raster(path: Path) -> dict[str, dict]:
+    """Map raster hash -> an already-measured record with that exact stimulus.
+
+    The 9x9x9 gamut cube collapses hard on a device this gamut-limited: 729 input
+    colours produce only ~313 distinct rasters, so 416 of them are byte-identical
+    to one already scheduled. Identical panel bytes mean an identical stimulus, so
+    re-measuring them buys nothing but 5.4 h of panel time.
+
+    Dedup happens HERE rather than in the spec on purpose. Patch uids are assigned
+    positionally and the interleaved controls are numbered after the phases, so
+    shrinking a phase would silently renumber controls and remap already-measured
+    uids onto different stimuli. Keying on the raster hash leaves every uid alone.
+    """
+    out: dict[str, dict] = {}
+    if not path.exists():
+        return out
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        h = rec.get("raster_sha1")
+        if h and "xyz_d65_pct" in rec and not rec.get("duplicate_of"):
+            out.setdefault(h, rec)
+    return out
 
 
 def next_session(path: Path) -> int:
@@ -310,6 +341,10 @@ def main(argv: list[str] | None = None) -> int:
     # Anchors at BOTH ends bracket a single calibration, which is how we find out
     # whether Argyll's 1 h dark-cal timeout protects anything real. Disable once
     # that question is settled to buy back ~6 min per cycle.
+    # Deduplicate byte-identical stimuli (see measured_by_raster). Sampling a few
+    # anyway keeps the assumption under test instead of merely assumed.
+    ap.add_argument("--no-dedup", dest="dedup", action="store_false")
+    ap.add_argument("--dedup-sample-rate", type=float, default=0.03)
     ap.add_argument("--no-closing-anchors", dest="closing_anchors", action="store_false")
     ap.add_argument(
         "--no-anchors",
@@ -324,6 +359,9 @@ def main(argv: list[str] | None = None) -> int:
     patches = spec["patches"]
 
     session = next_session(args.out)
+    seen_rasters = measured_by_raster(args.out)
+    # Seeded per session so a resumed run is reproducible rather than re-rolling.
+    rng = random.Random(session)  # noqa: S311 — sampling, not secrecy
     already = done_uids(args.out)
     todo = [p for p in patches if p["uid"] not in already]
     if args.limit:
@@ -380,7 +418,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     t_start = time.monotonic()
-    n_ok = n_fail = 0
+    n_ok = n_fail = n_dedup = 0
     consecutive_fail = 0
     stop_for_battery: int | None = None
     calibration_expired = False
@@ -499,6 +537,24 @@ def main(argv: list[str] | None = None) -> int:
                     "t_unix": time.time(),
                 }
 
+                # Byte-identical stimulus already measured? Then measuring it again
+                # can only reproduce it, so inherit the result and move on. A small
+                # random fraction IS re-measured, because "identical raster implies
+                # identical reading" is an assumption worth continuously testing
+                # rather than trusting blindly.
+                twin = seen_rasters.get(rec["raster_sha1"]) if args.dedup else None
+                sample_it = twin is not None and rng.random() < args.dedup_sample_rate
+                if twin is not None and not sample_it:
+                    rec["duplicate_of"] = twin["uid"]
+                    rec["xyz_d65_pct"] = twin["xyz_d65_pct"]
+                    if twin.get("median_spectrum_pct"):
+                        rec["median_spectrum_pct"] = twin["median_spectrum_pct"]
+                        rec["wavelengths_nm"] = twin.get("wavelengths_nm")
+                    n_dedup += 1
+                    print(f"    = identical raster to {twin['uid']} — inherited", flush=True)
+                    emit(rec)
+                    continue
+
                 if not upload_with_retry(s, data, patch["label"], attempts=6, gap_s=8.0):
                     rec["error"] = "upload"
                     n_fail += 1
@@ -552,6 +608,7 @@ def main(argv: list[str] | None = None) -> int:
                             # measured and normalised at analysis time, when the
                             # brightest patch in the set is known.
                             rec["xyz_d65_pct"] = med
+                            seen_rasters.setdefault(rec["raster_sha1"], rec)
                             n_ok += 1
                         else:
                             rec["error"] = "no_readings"
