@@ -197,7 +197,14 @@ def gamut_cube_rgb(steps: int) -> list[tuple[int, int, int]]:
 # ── phases ────────────────────────────────────────────────────────────────────
 
 
-def build_patches(*, seed: int, gamut_steps: int, n_skin: int, control_every: int) -> list[Patch]:
+def build_patches(
+    *,
+    seed: int,
+    gamut_steps: int,
+    n_skin: int,
+    control_every: int,
+    campaign: int = 1,
+) -> list[Patch]:
     # Reproducibility, not secrecy: the seed must regenerate the identical campaign.
     rng = random.Random(seed)  # noqa: S311
     counter = 0
@@ -208,6 +215,10 @@ def build_patches(*, seed: int, gamut_steps: int, n_skin: int, control_every: in
         return _uid(counter)
 
     phases: list[list[Patch]] = []
+
+    if campaign == 2:
+        phases.extend(_campaign2_phases(nxt, gamut_steps=gamut_steps, n_skin=n_skin, seed=seed))
+        return _interleave(phases, nxt, rng, control_every)
 
     # Phase 0 — the six solid inks, the model's primaries. Repeated and shuffled
     # through the campaign so a drifting primary shows up as spread between its
@@ -299,15 +310,146 @@ def build_patches(*, seed: int, gamut_steps: int, n_skin: int, control_every: in
     ]
     phases.append(p4)
 
-    # Shuffle WITHIN each phase so slow drift cannot alias onto a factor.
+    return _interleave(phases, nxt, rng, control_every)
+
+
+# Campaign 1's algo_gain held the LUT at "bw" on the assumption that a neutral
+# grey lands on black and white ink whatever the colour space. That is FALSE, and
+# measurably so: at grey 119 with atkinson+serpentine,
+#
+#   bw                  black .447  white .553
+#   hue_aware           black .260  white .486  red .088  green .166
+#   oklab_hue_aware     black .216  white .466  red .053  green .265
+#   cam16ucs_hue_aware  black .022  white .416  red .174  blue .066  green .322
+#
+# The hue-aware LUTs deliberately build neutrals out of chromatic ink — up to 56%
+# of the panel. So campaign 1's gain curves describe the `bw` preset only, while
+# `general` and `faces` ship `hue_aware`, whose gain is unmeasured. Worse, a single
+# black-coverage curve is the wrong model when five inks are in play; the fit has
+# to be multi-ink, which needs the per-LUT ink histograms this phase collects.
+LUT_GAIN_LUTS = ("bw", "hue_aware", "oklab_hue_aware", "cam16ucs_hue_aware")
+
+
+def _campaign2_phases(nxt, *, gamut_steps: int, n_skin: int, seed: int) -> list[list[Patch]]:
+    """Phases for the follow-up campaign.
+
+    Two jobs campaign 1 could not do: measure gain for the LUTs actually shipped,
+    and sample the gamut densely enough to invert into a real 3-D correction.
+    """
+    phases: list[list[Patch]] = []
+    levels = gray_ramp_rgb(13)
+
+    # LUT x gain. Algorithm pinned to atkinson+serpentine — the production choice —
+    # so the LUT is the only thing varying. Bayer at matched coverage stays in as
+    # the pipeline-free reference.
+    p_lut: list[Patch] = [
+        Patch(
+            uid=nxt(),
+            phase="lut_gain",
+            source="bayer",
+            label=f"bayer {k * 4}/64",
+            bayer_k=k * 4,
+        )
+        for k in range(1, 14)
+    ]
+    for lut in LUT_GAIN_LUTS:
+        cfg = DitherConfig("atkinson", lut, True, 30.0, 12.0)
+        p_lut += [
+            Patch(
+                uid=nxt(),
+                phase="lut_gain",
+                source="pipeline",
+                label=f"atkinson_serp {lut} gray{rgb[0]}",
+                rgb=rgb,
+                config_name=f"atkinson_serp_{lut}",
+                config=asdict(cfg),
+            )
+            for rgb in levels
+        ]
+    phases.append(p_lut)
+
+    # Does the LUT effect depend on the diffusion kernel, or is it separable?
+    # One cross-check arm rather than a full factorial.
+    cfg_fs = DitherConfig("floyd_steinberg", "hue_aware", True, 30.0, 12.0)
+    phases.append(
+        [
+            Patch(
+                uid=nxt(),
+                phase="lut_algo_cross",
+                source="pipeline",
+                label=f"fs_serp hue_aware gray{rgb[0]}",
+                rgb=rgb,
+                config_name="fs_serp_hue_aware",
+                config=asdict(cfg_fs),
+            )
+            for rgb in levels
+        ]
+    )
+
+    # Dense gamut for a real 3-D inversion. Campaign 1's 5x5x5 is too coarse to
+    # invert on a device this non-linear.
+    name, cfg = GAMUT_CONFIG
+    phases.append(
+        [
+            Patch(
+                uid=nxt(),
+                phase="gamut_dense",
+                source="pipeline",
+                label=f"gamut {rgb}",
+                rgb=rgb,
+                config_name=name,
+                config=asdict(cfg),
+            )
+            for rgb in gamut_cube_rgb(gamut_steps)
+        ]
+    )
+
+    # More skin, offset seed so these are NEW colours rather than a repeat set.
+    phases.append(
+        [
+            Patch(
+                uid=nxt(),
+                phase="skin_dense",
+                source="pipeline",
+                label=f"skin {rgb} {cname}",
+                rgb=rgb,
+                config_name=cname,
+                config=asdict(ccfg),
+            )
+            for rgb in skin_locus_rgb(n_skin, seed + 1)
+            for cname, ccfg in COLOUR_CONFIGS
+        ]
+    )
+
+    # Own primaries: a campaign without its own anchors cannot be tied to another.
+    phases.append(
+        [
+            Patch(
+                uid=nxt(),
+                phase="inks",
+                source="ink",
+                label=f"ink {INK_NAMES[i]} r{rep + 1}",
+                ink_index=i,
+            )
+            for rep in range(INK_REPEATS)
+            for i in range(len(INK_NAMES))
+        ]
+    )
+    return phases
+
+
+def _interleave(phases, nxt, rng, control_every: int) -> list[Patch]:
+    """Shuffle within each phase, then thread the drift controls through.
+
+    Shared by every campaign: the controls ARE the drift measurement, and a
+    campaign that skipped them could not be compared against any other session.
+    """
     ordered: list[Patch] = []
     for group in phases:
+        # Shuffle WITHIN each phase so slow drift cannot alias onto a factor.
         rng.shuffle(group)
         ordered.extend(group)
 
-    # Interleave controls. These are the drift measurement: re-reading a fixed
-    # set at intervals is what tells us whether a difference between two patches
-    # measured hours apart is real or is the rig moving.
     controls = [
         ("ctl_white", 0),
         ("ctl_black", 64),
@@ -362,6 +504,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, default=Path("build/colorcal/campaign_spec.json"))
     ap.add_argument("--model", default="bigme_f7", choices=sorted(DISPLAY_REGISTRY))
     ap.add_argument("--seed", type=int, default=20260808)
+    ap.add_argument(
+        "--campaign",
+        type=int,
+        default=1,
+        choices=(1, 2),
+        help="2 = the follow-up: per-LUT gain, dense gamut, more skin",
+    )
     ap.add_argument("--gamut-steps", type=int, default=5, help="NxNxN RGB cube")
     ap.add_argument("--skin", type=int, default=60, help="distinct skin colours")
     ap.add_argument("--control-every", type=int, default=25)
@@ -373,6 +522,7 @@ def main(argv: list[str] | None = None) -> int:
         gamut_steps=args.gamut_steps,
         n_skin=args.skin,
         control_every=args.control_every,
+        campaign=args.campaign,
     )
 
     counts: dict[str, int] = {}
