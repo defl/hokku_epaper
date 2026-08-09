@@ -65,10 +65,29 @@ oklab on blue shift. The apparent exception (greys \|Δhue\|: 90 vs 65) is not
 meaningful — at near-zero chroma the hue *angle* is numerically unstable, so
 greys ΔE and Δchroma are the columns that count.
 
-**Recommendation: try `cam16ucs` for `general` and `faces`, with `oklab` as the
-fallback if blue shift specifically matters most. Validate on real glass before
-shipping** — this is model-based screening with the tonal chain switched off, and
-it scores colour, not texture.
+### And it is better on whole images, not only faces
+
+A global LUT change needs a global check. Whole-image mean ΔE over the 12 readable
+test images:
+
+| | hue_aware (now) | oklab | cam16ucs | euclidean |
+|---|---:|---:|---:|---:|
+| mean over 12 images | 19.34 | 18.95 | **17.37** | 17.31 |
+
+`cam16ucs` beats production on **11 of 12** images (the exception is the Wikipedia
+logo, by 0.08). The gains are not confined to faces — the RGB corner gradient
+improves 40.22 → 33.84 and the Albi panorama 20.69 → 16.55.
+
+This is also what disqualifies **oklab** as a global default, which the skin
+metric alone would have chosen: despite the best blue shift, it is *worse* than
+production on the Dürer hare, Berlin Wall, Fitz Roy, the B&W forest road, the
+grayscale bar and the Wikipedia logo. It fixes skin by spending accuracy
+everywhere else.
+
+**Recommendation: `cam16ucs` for `general` and `faces`.** It gives nearly all of
+oklab's blue-shift improvement and is better overall on almost every test image.
+**Validate on real glass before shipping** — this is model-based screening with
+the tonal chain switched off, and it scores colour, not texture.
 
 ## What did NOT turn out to matter: the palette anchors
 
