@@ -50,6 +50,22 @@ class Display(ABC):
     palette_measured_rgb: NDArray
     """Shape (N, 3) float32 — measured RGB of each ink colour on-panel."""
 
+    drc_anchor_l: tuple[float, float] | None = None
+    """(black L\\*, white L\\*) the dynamic-range compressor should target, or None.
+
+    This is the panel's *reachable* lightness range, and it is deliberately
+    separate from ``palette_measured_rgb``. The palette drives ink SELECTION,
+    where being a few ΔE out barely matters because the gamut dominates. The DRC
+    instead decides what range the whole image is squeezed into, and being wrong
+    there clips everything past the end — measured at 50 % of one test portrait
+    collapsing into flat black.
+
+    ``None`` derives the range from rows 0 and 1 of ``palette_measured_rgb``,
+    which is right whenever that table reflects the real panel. Set it explicitly
+    when the panel has been measured and the palette has not been re-derived from
+    those measurements.
+    """
+
     palette_preview_rgb: NDArray
     """Shape (N, 3) uint8 — punchy RGB used for browser preview rendering."""
 
