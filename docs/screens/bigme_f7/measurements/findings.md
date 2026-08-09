@@ -84,10 +84,49 @@ production on the Dürer hare, Berlin Wall, Fitz Roy, the B&W forest road, the
 grayscale bar and the Wikipedia logo. It fixes skin by spending accuracy
 everywhere else.
 
-**Recommendation: `cam16ucs` for `general` and `faces`.** It gives nearly all of
-oklab's blue-shift improvement and is better overall on almost every test image.
-**Validate on real glass before shipping** — this is model-based screening with
-the tonal chain switched off, and it scores colour, not texture.
+### Measured greys overturn cam16ucs — the answer is `euclidean`
+
+The LUT recommendation above rested on the model. Measuring what a requested
+*neutral grey* actually becomes changed it. Mid-range, production algorithm:
+
+| config | grey cast | | config | grey cast |
+|---|---:|---|---|---:|
+| **euclidean** | **3.56** | | cam16ucs | 5.55 |
+| hue_aware | 3.64 | | bw | 6.36 |
+| oklab_hue_aware | 4.91 | | **oklab** | **9.12** |
+| cam16ucs_hue_aware | 5.26 | | | |
+
+Two things fall out. Plain **cam16ucs costs grey neutrality** (5.55 vs 3.64), so
+it was buying skin at the price of neutrals. And plain **oklab is catastrophic on
+greys** — 9.12, worse than black-and-white-only, landing at a\* −8.0 because it
+recruits the most chromatic ink of any option. Greys go green. That is the LUT the
+skin metric alone would have picked.
+
+`bw` having the *worst* cast of the simple options, and it being blue (b\* −5.17),
+is the black ink's own violet bias showing through undiluted — which is exactly
+what the hue-aware machinery exists to cancel, and why it wins on greys while
+losing badly on skin.
+
+The ranking is identical using only freshly-measured patches (23 of 39 were
+inherited from byte-identical rasters), so the dedup did not manufacture it.
+
+**Recommendation: `euclidean` for `general` and `faces`.**
+
+| metric | hue_aware (now) | cam16ucs | euclidean |
+|---|---:|---:|---:|
+| grey cast (measured) | 3.64 | 5.55 | **3.56** |
+| whole-image ΔE, 12 photos | 19.34 | 17.37 | **17.31** |
+| skin ΔE | 15.17 | 12.39 | **12.38** |
+| skin \|Δhue\| | 46.77 | 36.33 | **32.11** |
+| skin blue shift | −9.46 | **−2.73** | −4.03 |
+
+Best or tied-best on four of five, and its one loss is still less than half of
+production's blue shift. Notably it is also the *simplest* option — plain CIELAB
+nearest-neighbour, no hue machinery and no perceptual colour space. Every more
+elaborate alternative measured worse.
+
+**Validate on real glass before shipping** — the non-grey evidence is still
+model-based, with the tonal chain switched off, and it scores colour, not texture.
 
 ## What did NOT turn out to matter: the palette anchors
 

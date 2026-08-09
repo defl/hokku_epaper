@@ -338,7 +338,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--transient-retries", type=int, default=2)
     # A cycle started on a nearly-expired calibration is a wasted cycle: one was
     # lost starting with ~3 minutes left. Refuse rather than discover it later.
-    ap.add_argument("--max-calibration-age-min", type=float, default=15.0)
+    # Minimum usable window: below this there is not enough calibration left to
+    # measure anything worth the panel time, anchors included.
+    ap.add_argument("--min-usable-min", type=float, default=12.0)
     ap.add_argument("--ignore-calibration-age", action="store_true")
     # This unit discharges even on USB (measured -80 mV/h), so a long campaign
     # walks the battery down. Warn well before it matters, and stop cleanly rather
@@ -394,12 +396,17 @@ def main(argv: list[str] | None = None) -> int:
                 "(or pass --ignore-calibration-age if the calibration is known fresh)."
             )
             return 1
-        if age > args.max_calibration_age_min * 60:
+        # Gate on time REMAINING, not on age. Age was the wrong test: it refused a
+        # perfectly good 39-minute window just because 21 minutes had already been
+        # spent on a short run. What makes a cycle not worth starting is having too
+        # little left to measure anything useful, which is what this asks.
+        remaining = NOMINAL_LIFETIME_S - age
+        needed = args.min_usable_min * 60
+        if remaining < needed:
             print(
-                f"ABORT: the calibration is {age / 60:.0f} min old and lasts about "
-                f"{NOMINAL_LIFETIME_S // 60} min.\n"
-                "  Starting now would waste most of the cycle. Recalibrate with\n"
-                "  tools/f7_calibrate.py, then start immediately."
+                f"ABORT: only {remaining / 60:.0f} min of dark calibration left "
+                f"(need at least {args.min_usable_min:.0f}).\n"
+                "  Recalibrate with tools/f7_calibrate.py, then start immediately."
             )
             return 1
         print(
