@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -96,6 +97,21 @@ def read_battery_mv(s) -> int | None:
     return None
 
 
+def read_firmware(s) -> str | None:
+    """Firmware version + config the device reports, for the session header.
+
+    Worth recording because the `frame` upload path and the panel waveform both
+    live in firmware: a session measured on a different build is not
+    automatically comparable, and without this that would be invisible later.
+    """
+    try:
+        txt = _console_send(s, "cfg show", settle=1.0).decode("utf-8", "replace")
+    except (serial.SerialException, OSError):
+        return None
+    bits = [ln.strip() for ln in txt.splitlines() if ln.strip().startswith("cfg:")]
+    return " | ".join(bits) if bits else None
+
+
 def median_xyz(raws: list[np.ndarray]) -> list[float] | None:
     """Per-channel median. Median, not mean: one bad reading should not move it.
 
@@ -118,10 +134,94 @@ def done_uids(path: Path) -> set[str]:
         if not line:
             continue
         try:
-            seen.add(json.loads(line)["uid"])
-        except (json.JSONDecodeError, KeyError):
+            rec = json.loads(line)
+        except json.JSONDecodeError:
             continue  # a torn final line from a hard kill is not fatal
+        uid = rec.get("uid")
+        if uid:
+            seen.add(uid)
     return seen
+
+
+def next_session(path: Path) -> int:
+    """Session number for this run: one past the highest already recorded.
+
+    A "session" is one calibration's worth of measuring. The number is derived
+    from the file rather than held anywhere, so the whole workflow stays
+    idempotent — re-running after a crash continues the numbering correctly with
+    no state to get out of sync.
+    """
+    if not path.exists():
+        return 1
+    hi = 0
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            hi = max(hi, int(json.loads(line).get("session") or 0))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return hi + 1
+
+
+def measure_session_anchors(s, display, instrument, session: int, repeats: int, settle_s: float):
+    """Re-measure the six primaries at the START of every session.
+
+    The instrument is recalibrated between sessions, and a calibration is not a
+    perfect restoration of the previous one. Without a per-session anchor there
+    is no way to tell a real difference between two patches measured in
+    different sessions from a shift in the rig — and on a campaign that spans
+    days across a dozen calibrations, that ambiguity would contaminate
+    everything.
+
+    These carry their own uids (``s003_anchor_red``) so resume never skips them:
+    a new session must always produce a fresh set.
+    """
+    out = []
+    h, w = display.panel_h, display.panel_w
+    for i, name in enumerate(INK_NAMES):
+        idx = np.full((h, w), i, dtype=np.uint8)
+        data = display.indices_to_panel_bytes(idx)
+        print(f"  anchor {i + 1}/{len(INK_NAMES)}: {name}", flush=True)
+        rec: dict = {
+            "uid": f"s{session:03d}_anchor_{name}",
+            "session": session,
+            "phase": "session_anchor",
+            "label": f"anchor {name}",
+            "source": "ink",
+            "ink_index": i,
+            "ink_fraction": {n: (1.0 if n == name else 0.0) for n in INK_NAMES},
+            "raster_sha1": hashlib.sha1(data, usedforsecurity=False).hexdigest()[:16],
+            "t_unix": time.time(),
+        }
+        if not upload_with_retry(s, data, f"anchor {name}", attempts=6, gap_s=8.0):
+            rec["error"] = "upload"
+            out.append(rec)
+            continue
+        time.sleep(settle_s)
+        raws, specs = [], []
+        for r in range(repeats):
+            reading = instrument.read(f"anchor {name} #{r + 1}")
+            if reading is None:
+                continue
+            raws.append(reading.raw)
+            if reading.spectrum is not None and reading.wavelengths is not None:
+                specs.append(reading.spectrum)
+                rec.setdefault("wavelengths_nm", [float(v) for v in reading.wavelengths])
+            print(f"    raw XYZ = {reading.raw}")
+        rec["raw"] = [[float(v) for v in x] for x in raws]
+        med = median_xyz(raws)
+        rec["median_raw"] = med
+        if med is not None:
+            rec["xyz_d65_pct"] = med
+        else:
+            rec["error"] = "no_readings"
+        if specs:
+            rec["spectrum_pct"] = [[float(v) for v in sp] for sp in specs]
+            rec["median_spectrum_pct"] = [float(v) for v in np.median(np.vstack(specs), axis=0)]
+        out.append(rec)
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -151,6 +251,11 @@ def main(argv: list[str] | None = None) -> int:
     # how much it is used, and ArgyllCMS offers no way to extend it.
     ap.add_argument("--calibration-warn-min", type=float, default=45.0)
     ap.add_argument("--calibration-expect-min", type=float, default=58.0)
+    ap.add_argument(
+        "--no-anchors",
+        action="store_true",
+        help="skip the per-session primary re-measurement (not recommended)",
+    )
     ap.add_argument("--dry-run", action="store_true", help="display only, no readings")
     args = ap.parse_args(argv)
 
@@ -158,11 +263,14 @@ def main(argv: list[str] | None = None) -> int:
     display = DISPLAY_REGISTRY[spec["model"]]
     patches = spec["patches"]
 
+    session = next_session(args.out)
     already = done_uids(args.out)
     todo = [p for p in patches if p["uid"] not in already]
     if args.limit:
         todo = todo[: args.limit]
-    print(f"spec {args.spec}: {len(patches)} patches, {len(already)} already done")
+    print(
+        f"session {session} | spec {args.spec}: {len(patches)} patches, {len(already)} already done"
+    )
     print(f"this run: {len(todo)} patches, ~{len(todo) * 56 / 3600:.2f} h")
     if not todo:
         print("nothing to do")
@@ -200,6 +308,44 @@ def main(argv: list[str] | None = None) -> int:
     battery_first = battery_last = None
     try:
         with args.out.open("a", encoding="utf-8") as fh:
+
+            def emit(rec: dict) -> None:
+                fh.write(json.dumps(rec) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())  # survive a hard kill, not just a clean exit
+
+            # Session header: everything needed to interpret this session's rows
+            # without consulting anything outside the file.
+            emit(
+                {
+                    "record": "session_start",
+                    "session": session,
+                    "t_unix": time.time(),
+                    "spec": str(args.spec),
+                    "spec_sha256": hashlib.sha256(
+                        json.dumps(spec["patches"], sort_keys=True).encode()
+                    ).hexdigest()[:16],
+                    "model": spec["model"],
+                    "instrument": args.instrument,
+                    "instrument_args": list(getattr(instrument, "extra_args", [])),
+                    "repeats": args.repeats,
+                    "settle_s": args.settle_s,
+                    "firmware": read_firmware(s),
+                    "battery_mv_start": read_battery_mv(s),
+                }
+            )
+
+            # Re-measure the primaries FIRST, every session. The instrument was
+            # recalibrated since the last one, and a recalibration is not a
+            # perfect restoration — without this the difference between two
+            # sessions is unattributable.
+            if not args.dry_run and not args.no_anchors:
+                print(f"\n=== session {session}: re-measuring the six primaries ===", flush=True)
+                assert instrument is not None
+                for rec in measure_session_anchors(
+                    s, display, instrument, session, args.repeats, args.settle_s
+                ):
+                    emit(rec)
             for n, patch in enumerate(todo, 1):
                 idx = patch_raster(patch, display)
                 data = display.indices_to_panel_bytes(idx)
@@ -226,6 +372,7 @@ def main(argv: list[str] | None = None) -> int:
 
                 rec: dict = {
                     "uid": patch["uid"],
+                    "session": session,
                     "phase": patch["phase"],
                     "label": patch["label"],
                     "source": patch["source"],
@@ -236,6 +383,9 @@ def main(argv: list[str] | None = None) -> int:
                     "config": patch.get("config"),
                     "is_control": patch.get("is_control", False),
                     "ink_fraction": inks,
+                    # Hash of the exact bytes sent to the panel: proves later that
+                    # a re-derived raster is the same stimulus that was measured.
+                    "raster_sha1": hashlib.sha1(data, usedforsecurity=False).hexdigest()[:16],
                     "t_unix": time.time(),
                 }
 
@@ -248,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
                     else:
                         time.sleep(args.settle_s)
                         assert instrument is not None
-                        raws = []
+                        raws, specs = [], []
                         for r in range(args.repeats):
                             reading = instrument.read(f"{patch['label']} #{r + 1}")
                             if reading is None:
@@ -260,7 +410,21 @@ def main(argv: list[str] | None = None) -> int:
                                     break
                                 continue
                             raws.append(reading.raw)
+                            if reading.spectrum is not None and reading.wavelengths is not None:
+                                specs.append(reading.spectrum)
+                                rec.setdefault(
+                                    "wavelengths_nm", [float(v) for v in reading.wavelengths]
+                                )
                             print(f"    raw XYZ = {reading.raw}")
+                        if specs:
+                            # The reflectance curve is the irreducible measurement.
+                            # XYZ is one projection of it; keeping the spectrum is
+                            # what allows any illuminant or observer to be applied
+                            # later without returning to the hardware.
+                            rec["spectrum_pct"] = [[float(v) for v in sp] for sp in specs]
+                            rec["median_spectrum_pct"] = [
+                                float(v) for v in np.median(np.vstack(specs), axis=0)
+                            ]
                         rec["raw"] = [[float(v) for v in x] for x in raws]
                         med = median_xyz(raws)
                         rec["median_raw"] = med
@@ -292,9 +456,7 @@ def main(argv: list[str] | None = None) -> int:
                         if mv <= args.battery_stop_mv:
                             stop_for_battery = mv
 
-                fh.write(json.dumps(rec) + "\n")
-                fh.flush()
-                os.fsync(fh.fileno())  # survive a hard kill, not just a clean exit
+                emit(rec)
 
                 if calibration_expired:
                     stopped_early = True

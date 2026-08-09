@@ -31,6 +31,7 @@ emit D50.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import shutil
 import subprocess
@@ -108,6 +109,13 @@ class Reading:
     xyz_d65: np.ndarray  # adapted, Y = 1.0 for a perfect diffuser
     raw: np.ndarray  # exactly what the instrument said
     source: str  # "spotread" | "manual"
+    # Full reflectance curve, when the instrument gives one. This is the only
+    # part of a measurement that CANNOT be reconstructed later: XYZ is a
+    # projection of it through one observer and one illuminant, so a session
+    # recorded without spectra can never answer "how does this look under
+    # tungsten?" without going back to the hardware.
+    spectrum: np.ndarray | None = None  # reflectance %, one per wavelength
+    wavelengths: np.ndarray | None = None  # nm, parallel to spectrum
 
 
 class Instrument:
@@ -186,7 +194,10 @@ class SpotreadInstrument(Instrument):
 
     name = "spotread"
 
-    DEFAULT_ARGS = ("-O", "-N", "-i", "D65")
+    #   ``-s``  print the spectrum with each reading. With a logfile this appends
+    #           the full 380-730 nm reflectance curve (36 bands) to the same row,
+    #           so it costs nothing per reading and needs no second file.
+    DEFAULT_ARGS = ("-O", "-N", "-s", "-i", "D65")
 
     # Set when a read fails, so a caller can tell "this instrument needs the dial
     # rotated" apart from "one reading glitched". They need opposite responses:
@@ -255,18 +266,39 @@ class SpotreadInstrument(Instrument):
                 pass
 
             if logfile.exists():
+                # Row layout with -s:
+                #   header  "Reading X Y Z L* a* b* 380.000 390.000 ... 730.000"
+                #   data    "1      X Y Z L* a* b* <36 reflectance values>"
+                # Wavelengths come from the header rather than being assumed, so a
+                # different instrument or band count parses correctly instead of
+                # being silently mislabelled.
+                waves: np.ndarray | None = None
                 for line in logfile.read_text(encoding="utf-8", errors="replace").splitlines():
                     parts = line.split()
-                    # "1  X Y Z L* a* b*" — skip the header row.
+                    if not parts:
+                        continue
+                    if parts[0].lower().startswith("reading") and len(parts) > 7:
+                        with contextlib.suppress(ValueError):
+                            waves = np.array([float(v) for v in parts[7:]])
+                        continue
                     if len(parts) >= 4 and parts[0].isdigit():
                         try:
-                            return Reading(
-                                xyz_d65=np.array([float(v) for v in parts[1:4]]),
-                                raw=np.array([float(v) for v in parts[1:4]]),
-                                source=self.name,
-                            )
+                            xyz = np.array([float(v) for v in parts[1:4]])
                         except ValueError:
-                            pass
+                            continue
+                        spec = None
+                        if len(parts) > 7:
+                            with contextlib.suppress(ValueError):
+                                spec = np.array([float(v) for v in parts[7:]])
+                        if spec is not None and waves is not None and len(spec) != len(waves):
+                            spec = None  # mismatched: do not guess an alignment
+                        return Reading(
+                            xyz_d65=xyz.copy(),
+                            raw=xyz,
+                            source=self.name,
+                            spectrum=spec,
+                            wavelengths=waves if spec is not None else None,
+                        )
 
             # Read the console text BEFORE the temp dir is removed; the fallback
             # below needs it and the directory does not outlive this block.
