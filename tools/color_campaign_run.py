@@ -43,7 +43,7 @@ except ImportError:
 from color_measure_f7 import catch_console, upload_with_retry
 from color_target import fullscreen_bayer_raster
 from colorimeter import make_instrument
-from f7_calibrate import NOMINAL_LIFETIME_S, calibration_age_s
+from f7_calibrate import NOMINAL_LIFETIME_S, SAFETY_MARGIN_S, calibration_age_s
 from hokku.screens.bigme_f7.bootstrap import _console_send
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import DitherConfig
@@ -408,15 +408,26 @@ def main(argv: list[str] | None = None) -> int:
                 inks = ink_histogram(idx)
 
                 elapsed = time.monotonic() - t_start
-                # The ColorMunki's reflective calibration expires on a timer, not
-                # on use: measured at ~58 min of CONTINUOUS reading. Warn before it
-                # lands so the dial rotation can be planned rather than discovered.
-                if not warned_cal and elapsed > args.calibration_warn_min * 60:
+                # ArgyllCMS invalidates the DARK calibration at exactly DCALTOUT
+                # (1 h) on elapsed time alone — see f7_calibrate for the source
+                # quote. Because the deadline is known rather than guessed, stop on
+                # our own terms just before it instead of letting reads fail into
+                # it and lose patches to errors that cannot succeed.
+                cal_left = None if age is None else NOMINAL_LIFETIME_S - (age + elapsed)
+                if cal_left is not None and cal_left <= SAFETY_MARGIN_S:
+                    stopped_early = True
+                    print(
+                        f"\n*** {cal_left / 60:.0f} min of dark calibration left — "
+                        "stopping cleanly before it expires. ***\n"
+                        "  Recalibrate with tools/f7_calibrate.py, then start again.",
+                        flush=True,
+                    )
+                    break
+                if not warned_cal and cal_left is not None and cal_left < 12 * 60:
                     warned_cal = True
                     print(
-                        f"\n*** HEADS UP: {elapsed / 60:.0f} min since calibration. "
-                        f"It expires around {args.calibration_expect_min:.0f} min, so this "
-                        "cycle will stop soon and need the dial rotated. ***",
+                        f"\n*** HEADS UP: {cal_left / 60:.0f} min of dark calibration "
+                        "left; this cycle will end cleanly then. ***",
                         flush=True,
                     )
                 eta = (elapsed / max(n - 1, 1)) * (len(todo) - n + 1) if n > 1 else 0.0

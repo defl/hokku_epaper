@@ -25,8 +25,22 @@ import time
 from pathlib import Path
 
 STAMP = Path.home() / ".cache" / "ArgyllCMS" / "hokku_last_calibration.json"
-# Measured on this instrument: valid at 57 min, expired by 62 min.
+# NOT a guess and not a physical property of the instrument: ArgyllCMS's ColorMunki
+# driver hardcodes it. From spectro/munki_imp.c:
+#
+#   #define DCALTOUT (1 * 60 * 60)   /* [1 Hrs] Dark Calibration timeout in seconds */
+#   #define WCALTOUT (24 * 60 * 60)  /* [24 Hrs] White Calibration timeout in seconds */
+#
+#   if ((curtime - cs->ddate) > DCALTOUT) { ... dark_valid = 0; }
+#
+# So it is the DARK calibration that expires, on elapsed time alone — no drift or
+# temperature is measured — and the white tile calibration is good for 24 h. The
+# source carries no comment justifying the hour; it is a conservative policy
+# constant. Matches observation exactly: valid at 57 min, expired by 62 min.
 NOMINAL_LIFETIME_S = 60 * 60
+# Stop this far before the deadline so a cycle ends cleanly instead of crashing
+# into the expiry and burning patches on reads that cannot succeed.
+SAFETY_MARGIN_S = 5 * 60
 
 
 def stamp_path() -> Path:
