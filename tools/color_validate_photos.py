@@ -121,6 +121,11 @@ def main(argv: list[str] | None = None) -> int:
         help="portraits by default — the artifact under test is about faces",
     )
     ap.add_argument("--luts", nargs="*", default=["hue_aware", "oklab", "cam16ucs", "euclidean"])
+    ap.add_argument(
+        "--whole-image",
+        action="store_true",
+        help="score every image overall, not just skin — the LUT change is global",
+    )
     args = ap.parse_args(argv)
 
     records = load_records(args.data)
@@ -133,6 +138,49 @@ def main(argv: list[str] | None = None) -> int:
     prim_mat = np.array([prim[k]["xyz"] for k in INK_NAMES])
     display = DISPLAY_REGISTRY["bigme_f7"]
     print(f"model n = {n:.2f}; panel {display.panel_w}x{display.panel_h}")
+
+    if args.whole_image:
+        # Recommending a global LUT change off a skin metric is only half an
+        # argument; this asks what it does to everything else. Whole-image dE is
+        # gamut-dominated and so moves little by construction, which is the point:
+        # the question is whether the change makes anything clearly WORSE.
+        exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".heif", ".jxl"}
+        files = sorted(p for p in args.images.iterdir() if p.suffix.lower() in exts)
+        print(f"\nwhole-image mean dE over {len(files)} test images (radius 6)")
+        print(f"  {'image':44s} " + "  ".join(f"{lut[:11]:>11s}" for lut in args.luts))
+        totals = dict.fromkeys(args.luts, 0.0)
+        counted = 0
+        for path in files:
+            try:
+                img = Image.open(path).convert("RGB")
+            except Image.DecompressionBombError:
+                # The test set deliberately includes a 100 MP image; the server
+                # gates these at ingest rather than decoding them. Skipping keeps
+                # that policy visible here instead of quietly raising the limit.
+                print(f"  {path.name[:44]:44s} (skipped: over PIL's decode limit)")
+                continue
+            except (OSError, ValueError) as exc:
+                print(f"  {path.name[:44]:44s} (unreadable: {type(exc).__name__})")
+                continue
+            img = img.resize((display.panel_w, display.panel_h), Image.Resampling.LANCZOS)
+            src = np.array(img, dtype=np.uint8)
+            src_lab = lab_img(srgb_img_to_xyz(src))
+            cells = []
+            for lut in args.luts:
+                cfg = DitherConfig("atkinson", lut, True, 30.0, 12.0)
+                idx = dither(src.copy(), cfg, display)
+                pred = lab_img(predict_image(idx, prim_mat, n, 6))
+                de = float(np.mean(np.linalg.norm(pred - src_lab, axis=-1)))
+                totals[lut] += de
+                cells.append(f"{de:11.2f}")
+            counted += 1
+            print(f"  {path.name[:44]:44s} " + "  ".join(cells))
+        if counted:
+            print(
+                f"  {'MEAN':44s} "
+                + "  ".join(f"{totals[lut] / counted:11.2f}" for lut in args.luts)
+            )
+        return 0
 
     for name in args.only:
         path = args.images / name
