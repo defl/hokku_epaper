@@ -105,8 +105,16 @@ class Patch:
     meta: dict = field(default_factory=dict)
 
 
-def _uid(n: int) -> str:
-    return f"p{n:05d}"
+def _uid(n: int, prefix: str = "p") -> str:
+    """Patch id. The prefix keeps separate specs from colliding.
+
+    uids are positional, and the interleaved controls are numbered after all the
+    phases, so ADDING patches to an existing spec renumbers every control and
+    silently remaps already-measured uids onto different stimuli. A supplementary
+    spec therefore gets its own prefix and its own numbering, and both can be run
+    against the same results file without either disturbing the other.
+    """
+    return f"{prefix}{n:05d}"
 
 
 # ── colour sets ───────────────────────────────────────────────────────────────
@@ -204,6 +212,7 @@ def build_patches(
     n_skin: int,
     control_every: int,
     campaign: int = 1,
+    uid_prefix: str = "p",
 ) -> list[Patch]:
     # Reproducibility, not secrecy: the seed must regenerate the identical campaign.
     rng = random.Random(seed)  # noqa: S311
@@ -212,12 +221,16 @@ def build_patches(
     def nxt() -> str:
         nonlocal counter
         counter += 1
-        return _uid(counter)
+        return _uid(counter, uid_prefix)
 
     phases: list[list[Patch]] = []
 
     if campaign == 2:
         phases.extend(_campaign2_phases(nxt, gamut_steps=gamut_steps, n_skin=n_skin, seed=seed))
+        return _interleave(phases, nxt, rng, control_every)
+
+    if campaign == 4:
+        phases.append(_plain_lut_grey_phase(nxt))
         return _interleave(phases, nxt, rng, control_every)
 
     if campaign == 3:
@@ -332,6 +345,46 @@ def build_patches(
 # black-coverage curve is the wrong model when five inks are in play; the fit has
 # to be multi-ink, which needs the per-LUT ink histograms this phase collects.
 LUT_GAIN_LUTS = ("bw", "hue_aware", "oklab_hue_aware", "cam16ucs_hue_aware")
+
+
+# The LUTs the recommendation actually rests on, and which lut_gain never measured.
+PLAIN_LUTS = ("oklab", "cam16ucs", "euclidean")
+
+
+def _plain_lut_grey_phase(nxt) -> list[Patch]:
+    """Neutral greys through the PLAIN (non-hue-aware) LUTs.
+
+    lut_gain measured bw plus the three hue_aware variants, because it was designed
+    before the evidence pointed at the hue_aware modifier itself. So the LUT now
+    being recommended — plain cam16ucs — has no measured grey data at all, and the
+    case for it rests on the model.
+
+    That matters because the measured greys showed something the model did not
+    predict: `bw` (black and white ink only) has the WORST neutral cast, blue, from
+    the black ink's own violet bias, and the hue-aware LUTs REDUCE it by spending
+    chromatic ink to cancel it. If a plain LUT leaves greys as blue as bw does,
+    that is a real cost against its skin benefit and it should be known before any
+    default changes.
+
+    39 patches, about half an hour.
+    """
+    levels = gray_ramp_rgb(13)
+    out: list[Patch] = []
+    for lut in PLAIN_LUTS:
+        cfg = DitherConfig("atkinson", lut, True, 30.0, 12.0)
+        out += [
+            Patch(
+                uid=nxt(),
+                phase="plain_lut_grey",
+                source="pipeline",
+                label=f"atkinson_serp {lut} gray{rgb[0]}",
+                rgb=rgb,
+                config_name=f"atkinson_serp_{lut}",
+                config=asdict(cfg),
+            )
+            for rgb in levels
+        ]
+    return out
 
 
 def _merged_phases(nxt, *, gamut_steps: int, n_skin: int, seed: int) -> list[list[Patch]]:
@@ -653,11 +706,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model", default="bigme_f7", choices=sorted(DISPLAY_REGISTRY))
     ap.add_argument("--seed", type=int, default=20260808)
     ap.add_argument(
+        "--uid-prefix",
+        default="p",
+        help="distinct prefix for a supplementary spec, so uids cannot collide",
+    )
+    ap.add_argument(
         "--campaign",
         type=int,
         default=1,
-        choices=(1, 2, 3),
-        help="1 = original, 2 = follow-up only, 3 = MERGED union (use this from scratch)",
+        choices=(1, 2, 3, 4),
+        help="1 = original, 2 = follow-up, 3 = MERGED union, 4 = plain-LUT grey supplement",
     )
     ap.add_argument("--gamut-steps", type=int, default=5, help="NxNxN RGB cube")
     ap.add_argument("--skin", type=int, default=60, help="distinct skin colours")
@@ -671,6 +729,7 @@ def main(argv: list[str] | None = None) -> int:
         n_skin=args.skin,
         control_every=args.control_every,
         campaign=args.campaign,
+        uid_prefix=args.uid_prefix,
     )
 
     counts: dict[str, int] = {}
