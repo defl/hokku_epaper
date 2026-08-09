@@ -51,6 +51,11 @@ from hokku.webserver.dither_streaming import dither
 
 INK_NAMES = ("black", "white", "yellow", "red", "blue", "green")
 
+# Wall-clock cost of one six-ink anchor block (upload + refresh + reads each).
+# Reserved at the end of a session so the closing bracket fits before the dark
+# calibration expires.
+ANCHOR_BLOCK_S = 6 * 55
+
 
 def patch_raster(patch: dict, display) -> np.ndarray:
     """Palette-index raster for one patch.
@@ -187,9 +192,24 @@ def next_session(path: Path) -> int:
 
 
 def measure_session_anchors(
-    s, display, instrument, session: int, repeats: int, settle_s: float, emit
+    s, display, instrument, session: int, repeats: int, settle_s: float, emit, tag: str = "open"
 ) -> int:
-    """Re-measure the six primaries at the START of every session.
+    """Re-measure the primaries at the start (and end) of every session.
+
+    Running this at BOTH ends is what turns the campaign into its own drift
+    experiment. ArgyllCMS invalidates the dark calibration after exactly one hour
+    on elapsed time alone, measuring nothing — so whether that hour is protecting
+    anything is an open question, and an expensive one at a dial rotation apiece.
+    Anchors at open and close bracket a single calibration: if a stale dark cal
+    biases readings, the same six inks measured ~50 minutes apart on that one
+    calibration must differ. If they agree to the noise floor, the timeout is
+    over-conservative and the evidence is ours rather than assumed.
+
+    The original plan was to fake the calibration date in Argyll's cache file and
+    measure for hours on a deliberately stale one. That file is checksummed over
+    its serialised fields, and forging it convincingly was not worth the risk of a
+    subtly corrupt calibration. This gets the same answer from data we collect
+    anyway.
 
     The instrument is recalibrated between sessions, and a calibration is not a
     perfect restoration of the previous one. Without a per-session anchor there
@@ -210,12 +230,13 @@ def measure_session_anchors(
     for i, name in enumerate(INK_NAMES):
         idx = np.full((h, w), i, dtype=np.uint8)
         data = display.indices_to_panel_bytes(idx)
-        print(f"  anchor {i + 1}/{len(INK_NAMES)}: {name}", flush=True)
+        print(f"  anchor[{tag}] {i + 1}/{len(INK_NAMES)}: {name}", flush=True)
         rec: dict = {
-            "uid": f"s{session:03d}_anchor_{name}",
+            "uid": f"s{session:03d}_anchor_{tag}_{name}",
             "session": session,
             "phase": "session_anchor",
-            "label": f"anchor {name}",
+            "anchor_tag": tag,
+            "label": f"anchor {tag} {name}",
             "source": "ink",
             "ink_index": i,
             "ink_fraction": {n: (1.0 if n == name else 0.0) for n in INK_NAMES},
@@ -286,6 +307,10 @@ def main(argv: list[str] | None = None) -> int:
     # how much it is used, and ArgyllCMS offers no way to extend it.
     ap.add_argument("--calibration-warn-min", type=float, default=45.0)
     ap.add_argument("--calibration-expect-min", type=float, default=58.0)
+    # Anchors at BOTH ends bracket a single calibration, which is how we find out
+    # whether Argyll's 1 h dark-cal timeout protects anything real. Disable once
+    # that question is settled to buy back ~6 min per cycle.
+    ap.add_argument("--no-closing-anchors", dest="closing_anchors", action="store_false")
     ap.add_argument(
         "--no-anchors",
         action="store_true",
@@ -400,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"\n=== session {session}: re-measuring the six primaries ===", flush=True)
                 assert instrument is not None
                 measure_session_anchors(
-                    s, display, instrument, session, args.repeats, args.settle_s, emit
+                    s, display, instrument, session, args.repeats, args.settle_s, emit, "open"
                 )
             for n, patch in enumerate(todo, 1):
                 idx = patch_raster(patch, display)
@@ -414,11 +439,29 @@ def main(argv: list[str] | None = None) -> int:
                 # our own terms just before it instead of letting reads fail into
                 # it and lose patches to errors that cannot succeed.
                 cal_left = None if age is None else NOMINAL_LIFETIME_S - (age + elapsed)
-                if cal_left is not None and cal_left <= SAFETY_MARGIN_S:
+                # Leave room for the closing anchor block as well as the margin, so
+                # the session ends with a measured bracket rather than being cut off.
+                closing = ANCHOR_BLOCK_S if (args.closing_anchors and not args.no_anchors) else 0
+                if cal_left is not None and cal_left <= SAFETY_MARGIN_S + closing:
                     stopped_early = True
+                    if closing and not args.dry_run and instrument is not None:
+                        print(
+                            f"\n=== session {session}: closing anchors "
+                            "(brackets this calibration for drift) ===",
+                            flush=True,
+                        )
+                        measure_session_anchors(
+                            s,
+                            display,
+                            instrument,
+                            session,
+                            args.repeats,
+                            args.settle_s,
+                            emit,
+                            "close",
+                        )
                     print(
-                        f"\n*** {cal_left / 60:.0f} min of dark calibration left — "
-                        "stopping cleanly before it expires. ***\n"
+                        "\n*** dark calibration nearly expired — stopped cleanly. ***\n"
                         "  Recalibrate with tools/f7_calibrate.py, then start again.",
                         flush=True,
                     )
