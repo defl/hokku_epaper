@@ -43,6 +43,7 @@ except ImportError:
 from color_measure_f7 import catch_console, upload_with_retry
 from color_target import fullscreen_bayer_raster
 from colorimeter import make_instrument
+from f7_calibrate import NOMINAL_LIFETIME_S, calibration_age_s
 from hokku.screens.bigme_f7.bootstrap import _console_send
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import DitherConfig
@@ -271,6 +272,10 @@ def main(argv: list[str] | None = None) -> int:
     # Transient USB failures from this instrument are self-clearing; retrying is
     # seconds, while treating one as fatal costs the rest of the cycle.
     ap.add_argument("--transient-retries", type=int, default=2)
+    # A cycle started on a nearly-expired calibration is a wasted cycle: one was
+    # lost starting with ~3 minutes left. Refuse rather than discover it later.
+    ap.add_argument("--max-calibration-age-min", type=float, default=15.0)
+    ap.add_argument("--ignore-calibration-age", action="store_true")
     # This unit discharges even on USB (measured -80 mV/h), so a long campaign
     # walks the battery down. Warn well before it matters, and stop cleanly rather
     # than let it die mid-refresh: a half-written panel plus an unmeasured patch is
@@ -305,6 +310,27 @@ def main(argv: list[str] | None = None) -> int:
     if not todo:
         print("nothing to do")
         return 0
+
+    age = calibration_age_s()
+    if not args.dry_run and not args.ignore_calibration_age:
+        if age is None:
+            print(
+                "No calibration timestamp found. Run tools/f7_calibrate.py first\n"
+                "(or pass --ignore-calibration-age if the calibration is known fresh)."
+            )
+            return 1
+        if age > args.max_calibration_age_min * 60:
+            print(
+                f"ABORT: the calibration is {age / 60:.0f} min old and lasts about "
+                f"{NOMINAL_LIFETIME_S // 60} min.\n"
+                "  Starting now would waste most of the cycle. Recalibrate with\n"
+                "  tools/f7_calibrate.py, then start immediately."
+            )
+            return 1
+        print(
+            f"calibration age {age / 60:.1f} min — "
+            f"~{(NOMINAL_LIFETIME_S - age) / 60:.0f} min of cycle expected"
+        )
 
     instrument = None
     if not args.dry_run:
