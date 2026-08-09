@@ -338,9 +338,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--transient-retries", type=int, default=2)
     # A cycle started on a nearly-expired calibration is a wasted cycle: one was
     # lost starting with ~3 minutes left. Refuse rather than discover it later.
-    # Minimum usable window: below this there is not enough calibration left to
-    # measure anything worth the panel time, anchors included.
-    ap.add_argument("--min-usable-min", type=float, default=12.0)
+    # Minimum PATCH time a cycle must be able to do, on top of anchor/margin
+    # overhead. Not the total window — see the guard, which adds the overhead.
+    ap.add_argument("--min-usable-min", type=float, default=15.0)
     ap.add_argument("--ignore-calibration-age", action="store_true")
     # This unit discharges even on USB (measured -80 mV/h), so a long campaign
     # walks the battery down. Warn well before it matters, and stop cleanly rather
@@ -401,7 +401,15 @@ def main(argv: list[str] | None = None) -> int:
         # spent on a short run. What makes a cycle not worth starting is having too
         # little left to measure anything useful, which is what this asks.
         remaining = NOMINAL_LIFETIME_S - age
-        needed = args.min_usable_min * 60
+        # The anchor blocks are overhead, not patches. A 20-minute window sounds
+        # workable until you subtract two six-ink blocks (~11 min) and the safety
+        # margin, leaving 4 minutes of actual measuring — that really happened and
+        # yielded 6 spec patches for a dial rotation. Require enough left to cover
+        # the overhead AND do a useful amount of work.
+        overhead = SAFETY_MARGIN_S
+        if not args.no_anchors:
+            overhead += ANCHOR_BLOCK_S * (2 if args.closing_anchors else 1)
+        needed = overhead + args.min_usable_min * 60
         if remaining < needed:
             print(
                 f"ABORT: only {remaining / 60:.0f} min of dark calibration left "
