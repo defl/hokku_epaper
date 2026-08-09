@@ -97,6 +97,26 @@ def read_battery_mv(s) -> int | None:
     return None
 
 
+def read_with_retry(instrument, label: str, retries: int):
+    """One reading, retrying transient instrument failures.
+
+    Intermittent 'Communications failure' / 'Instrument initialisation failed'
+    from the ColorMunki is well documented and self-clearing — measured here at
+    ~2 per 114 reads, with the next read succeeding. Retrying costs a couple of
+    seconds; not retrying costs the patch, and previously killed the whole run.
+    """
+    for attempt in range(retries + 1):
+        reading = instrument.read(label)
+        if reading is not None:
+            return reading
+        if getattr(instrument, "last_error", None) != "transient":
+            return None  # a real failure — let the caller classify it
+        if attempt < retries:
+            print(f"    (transient instrument error, retry {attempt + 1}/{retries})", flush=True)
+            time.sleep(2.0)
+    return None
+
+
 def read_firmware(s) -> str | None:
     """Firmware version + config the device reports, for the session header.
 
@@ -208,7 +228,7 @@ def measure_session_anchors(
         time.sleep(settle_s)
         raws, specs = [], []
         for r in range(repeats):
-            reading = instrument.read(f"anchor {name} #{r + 1}")
+            reading = read_with_retry(instrument, f"anchor {name} #{r + 1}", 2)
             if reading is None:
                 continue
             raws.append(reading.raw)
@@ -248,6 +268,9 @@ def main(argv: list[str] | None = None) -> int:
     # for hours, recording nothing — the expensive failure mode, because the panel
     # time is spent either way. Stop early and keep what was measured.
     ap.add_argument("--max-consecutive-failures", type=int, default=3)
+    # Transient USB failures from this instrument are self-clearing; retrying is
+    # seconds, while treating one as fatal costs the rest of the cycle.
+    ap.add_argument("--transient-retries", type=int, default=2)
     # This unit discharges even on USB (measured -80 mV/h), so a long campaign
     # walks the battery down. Warn well before it matters, and stop cleanly rather
     # than let it die mid-refresh: a half-written panel plus an unmeasured patch is
@@ -310,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     consecutive_fail = 0
     stop_for_battery: int | None = None
     calibration_expired = False
+    cal_signals = 0
     warned_cal = False
     stopped_early = False
     battery_first = battery_last = None
@@ -406,15 +430,23 @@ def main(argv: list[str] | None = None) -> int:
                         assert instrument is not None
                         raws, specs = [], []
                         for r in range(args.repeats):
-                            reading = instrument.read(f"{patch['label']} #{r + 1}")
+                            reading = read_with_retry(
+                                instrument, f"{patch['label']} #{r + 1}", args.transient_retries
+                            )
                             if reading is None:
                                 print(f"    ! no reading #{r + 1}")
                                 if getattr(instrument, "last_error", None) == "calibration":
-                                    # Nothing to retry: every later read fails the
-                                    # same way until a human rotates the dial.
-                                    calibration_expired = True
-                                    break
+                                    # Require the signal TWICE before stopping the
+                                    # run. A single one has already proven to be a
+                                    # transient glitch wearing a calibration
+                                    # message, and stopping on it cost half a
+                                    # cycle every time.
+                                    cal_signals += 1
+                                    if cal_signals >= 2:
+                                        calibration_expired = True
+                                        break
                                 continue
+                            cal_signals = 0
                             raws.append(reading.raw)
                             if reading.spectrum is not None and reading.wavelengths is not None:
                                 specs.append(reading.spectrum)

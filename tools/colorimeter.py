@@ -313,11 +313,36 @@ class SpotreadInstrument(Instrument):
                 raw = parse_xyz(line)
                 if raw is not None:
                     return Reading(xyz_d65=raw.copy(), raw=raw, source=self.name)
-        # Classify the failure. "needs a calibration" / "Calibration failed" means
-        # the ~1 h expiry has hit and every subsequent read will fail the same way
-        # until a human rotates the dial — there is nothing to retry.
+        # Classify the failure — and be SPECIFIC. Matching the bare word
+        # "calibration" anywhere in the output is wrong: when a one-shot read
+        # fails, spotread falls back to its interactive loop and prints a banner
+        # containing "'k' to do a calibration". That made every transient USB
+        # glitch indistinguishable from an expired calibration, and a caller that
+        # stops on the latter would kill a healthy run on a single hiccup.
         lowered = out.lower()
-        self.last_error = "calibration" if "calibration" in lowered else "unknown"
+        if any(
+            p in lowered
+            for p in (
+                "needs a calibration",
+                "calibration failed",
+                "set instrument sensor to calibration position",
+                "got abort or error from calibration",
+            )
+        ):
+            self.last_error = "calibration"
+        elif any(
+            p in lowered
+            for p in (
+                "communication problem",
+                "communications failure",
+                "instrument initialisation failed",
+            )
+        ):
+            # Retryable. Measured at ~2 failures per 114 reads with the next read
+            # succeeding; a known ColorMunki/Argyll USB flakiness, not a fault.
+            self.last_error = "transient"
+        else:
+            self.last_error = "unknown"
         print(f"    ! no XYZ in {self.exe} output; last lines:")
         for line in out.strip().splitlines()[-4:]:
             print(f"      | {line}")
