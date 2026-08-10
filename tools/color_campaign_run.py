@@ -569,7 +569,14 @@ def main(argv: list[str] | None = None) -> int:
                 # random fraction IS re-measured, because "identical raster implies
                 # identical reading" is an assumption worth continuously testing
                 # rather than trusting blindly.
-                twin = seen_rasters.get(rec["raster_sha1"]) if args.dedup else None
+                # NEVER dedup a control. Controls are deliberately the same
+                # stimulus over and over — that is the whole point, since drift is
+                # only visible by re-measuring something unchanged. Inheriting
+                # them looks like a free saving and is actually the measurement
+                # being skipped: 77 drift samples were lost this way before this
+                # check existed.
+                may_dedup = args.dedup and not patch.get("is_control")
+                twin = seen_rasters.get(rec["raster_sha1"]) if may_dedup else None
                 sample_it = twin is not None and rng.random() < args.dedup_sample_rate
                 if twin is not None and not sample_it:
                     rec["duplicate_of"] = twin["uid"]
@@ -636,7 +643,11 @@ def main(argv: list[str] | None = None) -> int:
                             # measured and normalised at analysis time, when the
                             # brightest patch in the set is known.
                             rec["xyz_d65_pct"] = med
-                            seen_rasters.setdefault(rec["raster_sha1"], rec)
+                            if not patch.get("is_control"):
+                                # Controls are re-measured every time, so they
+                                # must not seed the index either — otherwise a
+                                # later ordinary patch would inherit from one.
+                                seen_rasters.setdefault(rec["raster_sha1"], rec)
                             n_ok += 1
                         else:
                             rec["error"] = "no_readings"
