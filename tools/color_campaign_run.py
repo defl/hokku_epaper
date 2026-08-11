@@ -380,10 +380,16 @@ def main(argv: list[str] | None = None) -> int:
     todo = [p for p in patches if p["uid"] not in already]
     if args.limit:
         todo = todo[: args.limit]
+    # Report progress against the SPEC. `already` also holds the per-session
+    # anchors, which are extra measurements outside the spec, so printing it
+    # produced the nonsense "1436 patches, 1438 already done".
     print(
-        f"session {session} | spec {args.spec}: {len(patches)} patches, {len(already)} already done"
+        f"session {session} | spec {args.spec}: {len(patches)} patches, "
+        f"{len(patches) - len(todo)} done, {len(todo)} to go"
     )
-    print(f"this run: {len(todo)} patches, ~{len(todo) * 56 / 3600:.2f} h")
+    # 47 s/patch is the measured throughput; 56 was the original estimate and
+    # overstated every ETA by ~20 %.
+    print(f"this run: {len(todo)} patches, ~{len(todo) * 47 / 3600:.2f} h if none inherit")
     if not todo:
         print("nothing to do")
         return 0
