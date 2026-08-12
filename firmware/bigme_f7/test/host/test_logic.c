@@ -76,6 +76,7 @@
 #include "../../../common/all/firmware_url.c"  /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/backoff.c"       /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/frame_state.c"   /* SoC-agnostic (shared with ESP32) */
+#include "../../../common/all/frame_proto.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/logbuf.c"        /* SoC-agnostic (shared with ESP32) */
 /* Shared XR872 code (firmware/common/xr872) — included before main.c so its
  * (now non-static) symbols are defined when main.c references them. */
@@ -151,6 +152,13 @@ static void reset_all_mocks(void)
     _mock_fdcm_open_fail = 1;
     _mock_fdcm_read_size = 0;
     _mock_fdcm_write_call_count = 0;
+
+    _mock_uart_avail = 0;
+    _mock_uart_delivered = 0;
+    _mock_uart_polls = 0;
+    _mock_console_disable_called = 0;
+    _mock_console_enable_called = 0;
+    _mock_console_written_len = 0;
 
     _mock_ota_init_called = 0;
     _mock_ota_get_image_called = 0;
@@ -657,6 +665,57 @@ static void test_net_cb_network_down_does_not_crash(void)
     CHECK(1, "net_cb: NETWORK_DOWN handled without crashing");
 }
 
+/* ── hokku_frame_receive: the console handover ────────────────────────────
+ *
+ * The frame upload borrows the UART from the console for the length of a
+ * transfer. The property worth pinning is that the borrow is always balanced:
+ * every path out of hokku_frame_receive() must re-enable the console. If one
+ * does not, the device is left with no console — and on real hardware that
+ * means no way back in short of a USB replug, during a routine that exists to
+ * be run repeatedly during colour measurement. */
+
+static void test_frame_receive_acks_every_chunk(void)
+{
+    uint32_t expect_chunks = (EPD_IMAGE_BYTES + FRAME_PROTO_CHUNK_BYTES - 1)
+                             / FRAME_PROTO_CHUNK_BYTES;
+
+    reset_all_mocks();
+    OS_MutexCreate(&g_ota_lock);
+    _mock_uart_avail = EPD_IMAGE_BYTES;
+
+    CHECK(hokku_frame_receive() == 0, "frame: complete transfer succeeds");
+    CHECK(_mock_uart_delivered == EPD_IMAGE_BYTES, "frame: consumes the whole image");
+    CHECK(_mock_console_written_len == expect_chunks,
+          "frame: one ACK per chunk");
+    CHECK(_mock_console_written[0] == FRAME_PROTO_ACK, "frame: ACK byte is 'K'");
+    CHECK(_mock_console_disable_called == 1 && _mock_console_enable_called == 1,
+          "frame: console handover is balanced on success");
+}
+
+static void test_frame_receive_restores_console_when_host_dies(void)
+{
+    reset_all_mocks();
+    OS_MutexCreate(&g_ota_lock);
+    _mock_uart_avail = FRAME_PROTO_CHUNK_BYTES + 10; /* one chunk, then silence */
+
+    CHECK(hokku_frame_receive() != 0, "frame: truncated transfer reports failure");
+    CHECK(_mock_console_enable_called == 1,
+          "frame: console restored even when the host vanishes mid-transfer");
+    CHECK(_mock_console_disable_called == 1, "frame: console disabled exactly once");
+}
+
+static void test_frame_receive_refuses_while_ota_lock_held(void)
+{
+    reset_all_mocks();
+    memset(&g_ota_lock, 0, sizeof(g_ota_lock)); /* invalid: never created */
+    _mock_uart_avail = EPD_IMAGE_BYTES;
+
+    CHECK(hokku_frame_receive() != 0, "frame: refused when the OTA lock is unavailable");
+    CHECK(_mock_console_disable_called == 0,
+          "frame: console untouched when the transfer never starts");
+    CHECK(_mock_uart_polls == 0, "frame: UART untouched when the transfer never starts");
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
  *  Entry point
  * ═══════════════════════════════════════════════════════════════════════ */
@@ -719,6 +778,10 @@ int main(void)
     test_net_cb_wlan_connected_bad_static_ip_leaves_dhcp();
     test_net_cb_network_up_starts_refresh_thread_once();
     test_net_cb_network_down_does_not_crash();
+
+    test_frame_receive_acks_every_chunk();
+    test_frame_receive_restores_console_when_host_dies();
+    test_frame_receive_refuses_while_ota_lock_held();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

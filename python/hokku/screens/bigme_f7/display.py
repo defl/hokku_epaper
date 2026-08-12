@@ -60,6 +60,22 @@ class BigmeF7Display(Display):
         dtype=np.float32,
     )
 
+    # Measured on this glass with an X-Rite ColorMunki Photo (ArgyllCMS spotread,
+    # reflective 45/0, D65), averaged over 11 readings of each solid ink:
+    # black L* 10.21, white L* 68.02 — a contrast ratio of 31.9:1.
+    #
+    # The full campaign later put 42 readings on each ink across 20 sessions and
+    # landed on L* 10.18 / 67.96 (33.0:1). Left unchanged: the difference is
+    # 0.03 and 0.06 L*, an order of magnitude inside the 0.35 dE noise floor, so
+    # editing these would be churn that reads like a real change in git blame.
+    #
+    # The palette table above is NOT the source for this. It came from a
+    # third-party dataset and puts white at L* 79.26, which is 11 L* beyond
+    # anything this panel can actually show. Deriving the DRC range from it
+    # compresses images into a range wider than the display, clipping both ends.
+    # See docs/screens/bigme_f7/measurements/findings.md.
+    drc_anchor_l = (10.21, 68.02)
+
     palette_preview_rgb = np.array(
         [
             [0, 0, 0],  # black

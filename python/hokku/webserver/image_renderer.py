@@ -33,9 +33,11 @@ from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.bounding_box import BoundingBox
 from hokku.webserver.dither_abc import AbstractDither
 from hokku.webserver.dither_streaming import (
-    # PALETTE_LAB / PALETTE_OKLAB are the Huessen reference DRC L*-anchors
-    # (black/white lightness).  Bigme F7 ink is not yet photographically
-    # measured, so its DRC reuses these reference anchors until calibrated.
+    # Huessen reference DRC anchors. Now only a LAST-RESORT default inside the
+    # DRC helpers: the renderer supplies the target panel's own range via
+    # _drc_anchors(). Reusing these for another screen compressed images into a
+    # range that screen could not show — on the F7, L* 0.55..79.86 against a real
+    # 10.21..68.02, clipping both ends.
     PALETTE_LAB,
     PALETTE_OKLAB,
     adaptive_saturate,
@@ -430,6 +432,29 @@ class ImageRenderer(AbstractImageRenderer):
         )
         return np.clip(srgb * f32(255), f32(0), f32(255))
 
+    def _drc_anchors(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """(CIELAB, OKLAB) lightness ranges the DRC should compress into.
+
+        Prefers ``display.drc_anchor_l`` when the panel has been measured, since
+        a palette table carried over from a vendor or another model can be a long
+        way from the real black and white points. Falls back to deriving the range
+        from the display's own palette, which is still correct-by-construction for
+        the screen being rendered — unlike the module-level reference constant
+        this replaced.
+        """
+        explicit = getattr(self._display, "drc_anchor_l", None)
+        if explicit is not None:
+            lo_l, hi_l = float(explicit[0]), float(explicit[1])
+            greys = np.stack([np.arange(256, dtype=np.float32)] * 3, axis=-1)
+            ls = rgb_to_lab(greys)[:, 0]
+            rows = np.stack([greys[int(np.argmin(np.abs(ls - v)))] for v in (lo_l, hi_l)])
+            ok = rgb_to_oklab(rows)
+            return (lo_l, hi_l), (float(ok[0, 0]), float(ok[1, 0]))
+        pal = np.asarray(self._display.palette_measured_rgb, dtype=np.float32)[:2]
+        lab_l = rgb_to_lab(pal)
+        ok_l = rgb_to_oklab(pal)
+        return (float(lab_l[0, 0]), float(lab_l[1, 0])), (float(ok_l[0, 0]), float(ok_l[1, 0]))
+
     @staticmethod
     def compress_dynamic_range(
         img_array,
@@ -442,6 +467,8 @@ class ImageRenderer(AbstractImageRenderer):
         vivid_chroma_high_oklab: float = 0.075,
         drc_l_space: DrcSpace = "cielab",
         drc_chroma_space: DrcSpace = "cielab",
+        anchor_lab_l: tuple[float, float] | None = None,
+        anchor_oklab_l: tuple[float, float] | None = None,
     ) -> NDArray[np.float32]:
         """Map source range into the panel's reachable L\\* range.
 
@@ -462,9 +489,9 @@ class ImageRenderer(AbstractImageRenderer):
 
         # Stage 1: L compression in the requested space.
         if drc_l_space == "cielab":
-            rgb = ImageRenderer._drc_cielab_l(rgb)
+            rgb = ImageRenderer._drc_cielab_l(rgb, anchor_lab_l)
         else:
-            rgb = ImageRenderer._drc_oklab_l(rgb)
+            rgb = ImageRenderer._drc_oklab_l(rgb, anchor_oklab_l)
 
         # Stage 2: chroma scaling in the requested space.
         if drc_chroma_space == "cielab":
@@ -484,13 +511,22 @@ class ImageRenderer(AbstractImageRenderer):
         )
 
     @staticmethod
-    def _drc_cielab_l(rgb: NDArray[np.float32]) -> NDArray[np.float32]:
-        """Map source L* into the panel's CIELAB L* range + tanh soft shoulder."""
+    def _drc_cielab_l(
+        rgb: NDArray[np.float32], anchor_l: tuple[float, float] | None = None
+    ) -> NDArray[np.float32]:
+        """Map source L* into the panel's CIELAB L* range + tanh soft shoulder.
+
+        ``anchor_l`` is the target range. It must describe the panel being
+        rendered for: the module-level PALETTE_LAB is the Huessen reference, and
+        using it for another screen compresses into a range that screen cannot
+        show, clipping both ends.
+        """
         f32 = np.float32
         lab = rgb_to_lab(rgb, dtype=f32)
         L = lab[..., 0]
-        black_L = f32(PALETTE_LAB[0, 0])
-        white_L = f32(PALETTE_LAB[1, 0])
+        lo, hi = anchor_l if anchor_l is not None else (PALETTE_LAB[0, 0], PALETTE_LAB[1, 0])
+        black_L = f32(lo)
+        white_L = f32(hi)
         ratio = f32((float(white_L) - float(black_L)) / 100.0)
         np.multiply(L, ratio, out=L)
         np.add(L, black_L, out=L)
@@ -503,7 +539,9 @@ class ImageRenderer(AbstractImageRenderer):
         return ImageRenderer._lab_to_rgb(lab)
 
     @staticmethod
-    def _drc_oklab_l(rgb: NDArray[np.float32]) -> NDArray[np.float32]:
+    def _drc_oklab_l(
+        rgb: NDArray[np.float32], anchor_l: tuple[float, float] | None = None
+    ) -> NDArray[np.float32]:
         """Map source L into the panel's OKLAB L range + tanh soft shoulder.
 
         Panel anchors come from PALETTE_OKLAB (black L ≈ 0.085, white ≈ 0.825).
@@ -514,8 +552,9 @@ class ImageRenderer(AbstractImageRenderer):
         f32 = np.float32
         oklab = rgb_to_oklab(rgb, dtype=f32)
         L = oklab[..., 0]
-        black_L = f32(PALETTE_OKLAB[0, 0])
-        white_L = f32(PALETTE_OKLAB[1, 0])
+        lo, hi = anchor_l if anchor_l is not None else (PALETTE_OKLAB[0, 0], PALETTE_OKLAB[1, 0])
+        black_L = f32(lo)
+        white_L = f32(hi)
         # Source L is in [0, 1] in OKLAB — scale to [black_L, white_L].
         ratio = white_L - black_L
         np.multiply(L, ratio, out=L)
@@ -623,6 +662,14 @@ class ImageRenderer(AbstractImageRenderer):
             crop_anchor_bboxes_norm=crop_anchor_bboxes_norm,
         )
 
+        # The DRC squeezes the image into the panel's reachable lightness range,
+        # so that range must come from THIS panel. It used to read the module
+        # PALETTE_LAB, which is the Huessen reference regardless of target: on the
+        # F7 that meant compressing into L* 0.55..79.86 when the panel spans
+        # 10.21..68.02, clipping both ends — 50 % of one test portrait collapsed
+        # into flat black.
+        drc_anchor_lab, drc_anchor_oklab = self._drc_anchors()
+
         sat_space = cfg.adaptive_saturate_space
         sat_max = cfg.saturate_max_enhance
         sat_lo_cielab = cfg.saturate_low_chroma_thresh
@@ -648,6 +695,8 @@ class ImageRenderer(AbstractImageRenderer):
                 vivid_chroma_high_oklab=cfg.vivid_chroma_high_oklab,
                 drc_l_space=cfg.drc_l_space,
                 drc_chroma_space=cfg.drc_chroma_space,
+                anchor_lab_l=drc_anchor_lab,
+                anchor_oklab_l=drc_anchor_oklab,
             )
             if noise_std > 0.0:
                 noise = np.random.normal(0.0, noise_std, f32.shape).astype(np.float32)
