@@ -3,6 +3,15 @@
 Instrument readings taken off real glass. Raw data lives here so a later analysis
 can be re-run without repeating a physical session.
 
+Two datasets, in the order they were taken:
+
+- **[`data/`](data/)** — the full campaign. 1700 readings with spectra over 20
+  sessions, covering 1434 planned patches across eight phases (tone, LUTs,
+  algorithms, skin, dense gamut). This is the one to analyse.
+- **`f7_panel_2026-08-08.json`** — the first absolute-colorimetry run, described
+  below. Superseded in coverage, but it is what the dot-gain and contrast numbers
+  in this file were derived from, so it stays.
+
 ## `f7_panel_2026-08-08.json`
 
 First absolute-colorimetry run on the F7. X-Rite ColorMunki Photo (s/n 2017853)
