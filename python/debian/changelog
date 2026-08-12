@@ -1,3 +1,67 @@
+hokku-server (4.0.1~dev.15-1) unstable; urgency=medium
+
+  * The preset dropdown now follows the catalog's own order (shipped defaults
+    first) rather than whatever order the JSON encoder produced, which was
+    alphabetical.
+  * The three shipped pipeline defaults are now named presets ("General
+    (default)", "Black & white (default)", "Faces (default)") and lead the
+    dropdown. A fresh install previously displayed "Custom (your edits)" for all
+    three, because the UI names the selected entry by matching against the
+    preset catalog and the defaults were deliberately kept out of it — so
+    nothing ever matched, and untouched settings looked edited.
+  * Per-picture conversion overrides. Any image's details view can now pin its
+    own dither pipeline and/or its own letterbox-fill limit, independently of
+    the library-wide settings, and "Compare presets" renders several candidates
+    for that one picture side by side to choose from. The comparison sweeps the
+    palette LUT as well as the presets, because all three built-in presets share
+    one LUT — so a picture that converts to the wrong colours cannot be fixed by
+    picking a different preset. Setting an override re-converts only that
+    picture. Overrides survive Clear Cache & Re-convert and a re-upload of the
+    same filename.
+  * The dither editor is now one component mounted four times rather than three
+    hand-written copies plus a new one; the copies had already drifted (the B&W
+    panel was missing the face keep-out overlay).
+  * ImageConfig is parsed strictly everywhere: every field required, enum values
+    checked, unknown keys rejected. Config-shape changes move to the AppConfig
+    migration chain (v10), which completes older stored blobs once. Previously a
+    misspelled knob was silently ignored on every load and an invalid lut_name
+    was only caught inside a render worker, as a failed conversion.
+  * Fixes a hot-reload race that let a retiring image manager write its stale
+    snapshot over the live one's database. It cost only recomputable fields
+    before; it would have cost the new per-picture settings.
+  * Fixes dither previews ignoring the crop-to-fill setting: the preview always
+    letterboxed while its face-box overlay was computed for a cropped canvas.
+    Previews are also now bounded in concurrency.
+  * Declares waitress in requirements.txt — recreating the venv as documented
+    produced an environment where the server could not start.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 02 Aug 2026 12:00:00 -0500
+
+hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
+
+  * Per-pipeline dither defaults are now measured rather than chosen. General
+    and B&W move to Atkinson; general gains OKLAB adaptive-saturation and OKLAB
+    dynamic-range compression; B&W gains OKLAB DRC; faces turn both chroma
+    boosters off. Each is the best-scoring combination of algorithm x LUT x
+    saturation space x DRC space x adaptive-vivid x serpentine over the test
+    corpus for that pipeline. Existing installs keep their stored settings —
+    this changes defaults only. See docs/dither_search.md.
+  * Adds tools/dither_search.py (the search harness) and two freely-licensed
+    lipstick portraits to images/test/, without which the artifact that
+    motivated this could not be measured on photographs at all.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 01 Aug 2026 22:30:00 -0500
+
+hokku-server (4.0.0~beta2-1) unstable; urgency=medium
+
+  * Release v4.0.0-beta2. Second beta of the 4.0 appliance line: fixes the
+    reboot hang, restores USB flashing on the appliance, and stops the three
+    image pipelines collapsing into one. Adds deep-sleep drift calibration and
+    the GitHub firmware library. Bundled firmware: huessen_epf1301 1.2.21,
+    seeedstudio_e1004 1.2.5, bigme_f7 1.2.10.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 01 Aug 2026 20:15:00 +0000
+
 hokku-server (4.0.1~dev.24-1) unstable; urgency=medium
 
   * No server code changes. Firmware lint fix: reduce the scope of 'ppm' in

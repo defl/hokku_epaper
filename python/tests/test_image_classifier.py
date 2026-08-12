@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hokku.webserver.app_config import AppConfig
+from hokku.webserver.bounding_box import BoundingBox
 from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
@@ -202,3 +203,90 @@ def test_screen_config_slug_differs_by_dispatch_outcome(tmp_path):
         clahe_keepout_bboxes=dec_default.clahe_keepout_bboxes,
     )
     assert sc_bw.cache_slug() != sc_default.cache_slug()
+
+
+def test_bw_dispatch_yields_no_keepout_even_with_faces(tmp_path):
+    """A B&W photo gets no CLAHE keep-out, faces or not.
+
+    B&W outranks face in the dispatch order, and that branch returns an empty
+    bbox tuple — so keep-out only ever runs for pictures routed to the face
+    pipeline. The web UI relies on this: it offers the keep-out preview overlay
+    on the face editor only, because on the others it would advertise a stage
+    that cannot happen.
+    """
+    cfg = _config(tmp_path, bw=True, face=True)
+    clf = ImageClassifier(cfg)
+
+    with patch(
+        "hokku.webserver.image_classifier.OpenCVYuNetFaceDetector"
+    ) as detector:  # a face is present...
+        detector.return_value.detect.return_value = [BoundingBox(x=0.1, y=0.1, w=0.2, h=0.2)]
+        dec = clf.decision_for(_BW_IMAGE, _sha1(_BW_IMAGE))
+
+    assert dec.image_config == cfg.image_config_bw  # ...but B&W wins
+    assert not dec.clahe_keepout_bboxes
+    assert not dec.face_crop_bboxes
+
+
+def test_default_dispatch_also_yields_no_keepout(tmp_path):
+    """Same for the default pipeline: only the face branch carries bboxes."""
+    cfg = _config(tmp_path, bw=True, face=True)
+    clf = ImageClassifier(cfg)
+
+    with patch("hokku.webserver.image_classifier.OpenCVYuNetFaceDetector") as detector:
+        detector.return_value.detect.return_value = []  # no faces in this one
+        dec = clf.decision_for(_COLOUR_LANDSCAPE, _sha1(_COLOUR_LANDSCAPE))
+
+    assert dec.image_config == cfg.image_config_default
+    assert not dec.clahe_keepout_bboxes
+
+
+# ── detect=False (read-only callers) ─────────────────────────────────────────
+
+
+def test_detect_false_never_builds_the_face_detector(tmp_path):
+    """A read-only lookup must not load the ~57 MB YuNet graph.
+
+    It would run inside a request thread — the server has only a handful — to
+    produce a result nobody is waiting on.
+    """
+    cfg = _config(tmp_path, face=True)
+    clf = ImageClassifier(cfg)
+
+    with patch(
+        "hokku.webserver.image_classifier.OpenCVYuNetFaceDetector",
+        side_effect=AssertionError("detector must not be constructed"),
+    ):
+        dec = clf.decision_for(_COLOUR_LANDSCAPE, _sha1(_COLOUR_LANDSCAPE), detect=False)
+
+    assert dec.image_config == cfg.image_config_default
+    assert not dec.clahe_keepout_bboxes
+
+
+def test_detect_false_uses_cached_observations(tmp_path):
+    """Once observed, a read-only lookup gives the same answer as a full one."""
+    cfg = _config(tmp_path, bw=True)
+    clf = ImageClassifier(cfg)
+    sha = _sha1(_BW_IMAGE)
+
+    warm = clf.decision_for(_BW_IMAGE, sha)  # populates the cache
+    assert warm.image_config == cfg.image_config_bw
+
+    with patch.object(
+        ImageClassifier,
+        "_check_grayscale",
+        side_effect=AssertionError("must not re-detect"),
+    ):
+        cold = clf.decision_for(_BW_IMAGE, sha, detect=False)
+
+    assert cold.image_config == cfg.image_config_bw
+
+
+def test_detect_false_does_not_persist_anything(tmp_path):
+    """Skipping detection must not write an empty observation to the cache file."""
+    cfg = _config(tmp_path, bw=True)
+    clf = ImageClassifier(cfg)
+
+    clf.decision_for(_COLOUR_LANDSCAPE, _sha1(_COLOUR_LANDSCAPE), detect=False)
+
+    assert not (Path(cfg.cache_dir) / "image_classifier.json").exists()

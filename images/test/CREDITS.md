@@ -153,6 +153,51 @@ ShareAlike obligations of the source license where applicable.
 - **Description:** Tux, the Linux mascot penguin, as a glossy SVG (625×750 px,
   21 KB). Included as an SVG format test fixture.
 
+## Brunette_red_lipstick.jpg
+
+- **Category:** portrait / **saturated warm colour against neutrals** — the
+  warm-tone blue-ink artifact (see [`docs/dither_search.md`](../../docs/dither_search.md))
+- **Source:** https://commons.wikimedia.org/wiki/File:Brunette_red_lipstick.jpg
+- **Author:** THOR (Flickr user `49503154413@N01`)
+- **License:** Creative Commons Attribution 2.0 Generic (CC BY 2.0)
+  — https://creativecommons.org/licenses/by/2.0/
+- **Description:** "Portrait of a brunette with red lipstick: Beauty of Youth."
+  Photographed 2009-04-08. 1414 × 2136 px.
+- **Why this image:** the corpus had no saturated red lips at all — its most
+  likely portrait carried 0.13 % of pixels above C\* 38 and none above C\* 50,
+  so the artifact could not be measured. This one carries saturated lips **and**
+  large neutral areas (grey backdrop, dark hair, black clothing), which is the
+  combination needed to price the trade-off: the CAM16-UCS/OKLAB LUTs reduce
+  blue in warm tones but leak more colour into neutrals, and no previous test
+  signal could see both effects at once.
+- **Personality rights:** Commons file page carries the generic personality-rights
+  warning, no explicit consent statement. Reuse here is strictly internal
+  testing of the image-processing pipeline — not publication, endorsement, or
+  commercial use.
+
+## Applying_red_lipstick_model_Eve_Casini.jpg
+
+- **Category:** portrait close-up / **extreme warm high-chroma** — stress case
+  for the same artifact
+- **Source:** https://commons.wikimedia.org/wiki/File:Applying_red_lipstick_-_model_Eve_Casini.jpg
+- **Author:** Stephencdickson
+- **License:** Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
+  — https://creativecommons.org/licenses/by-sa/4.0/
+- **Description:** "Applying red lipstick — model Eve Casini." Photographed
+  2017-07-09 (Canon EOS 450D). 2056 × 3088 px.
+- **Why this image:** deep saturated red lipstick being applied, filling the
+  frame with warm-lit skin — 58.7 % of pixels above C\* 38 and a peak warm
+  chroma of 76, versus 0.13 % / 0 for the best existing portrait. The extreme
+  end of the range; pairs with `Brunette_red_lipstick.jpg` as the moderate,
+  neutral-rich case.
+- **Personality rights:** no explicit consent statement on the Commons file
+  page; the file describes a named model in a posed makeup shoot. Reuse here is
+  strictly internal pipeline testing — not publication, endorsement, or
+  commercial use.
+- **Note:** file renamed from the Commons original (`Applying red lipstick -
+  model Eve Casini.jpg`) to drop spaces and the standalone hyphen; contents
+  unmodified.
+
 ## Wayuu_woman_with_sad_face_in_the_market_buying.jpg
 
 - **Category:** person in busy background

@@ -22,6 +22,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, replace
 from pathlib import Path
+from typing import Any
 
 import defusedxml.ElementTree as ET
 import zstd
@@ -31,6 +32,7 @@ from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.filesystem import atomic_write_json
 from hokku.webserver.image_classifier import ImageClassifier, ImageClassifierDecision
+from hokku.webserver.image_config import ImageConfig
 from hokku.webserver.image_record import (
     ConversionProgress,
     ConvertStatus,
@@ -52,6 +54,10 @@ logger = logging.getLogger(__name__)
 
 _DB_FILENAME = "image_manager.json"
 _DB_VERSION = 4  # bump whenever ImageRecord schema changes; v3 auto-migrates (see _load_db)
+
+# Distinguishes "argument not supplied" from an explicit None, which callers use
+# to clear an override.
+_UNSET: Any = object()
 # Reference model that is always rendered and used for previews / lifecycle
 # bookkeeping.  Screens self-report others via set_known_models().
 _PRIMARY_MODEL = "huessen_epf1301"
@@ -105,6 +111,18 @@ class AbstractImageManager(ABC):
         self._progress = ConversionProgress(current_name=None, done=0, total=0)
         self._batch_failed: int = 0
 
+        # Overrides rescued from a DB that failed its version check, keyed by
+        # image name. Drained by _register_new() as each file is rediscovered.
+        # Populated by _load_db(), so it has to exist before that runs.
+        self._salvaged_overrides: dict[str, tuple[ImageConfig | None, float | None]] = {}
+
+        # Set by shutdown(); silences every later _save_db(). AppState.reload()
+        # builds the replacement manager (which loads the DB) *before* shutting
+        # this one down, and a multi-threaded manager's in-flight render
+        # callbacks keep firing after that, so without this flag a retiring
+        # manager writes its stale snapshot over the live one's file.
+        self._closed = False
+
         # Names of images currently being rendered. Protected by _db_lock.
         self._inflight: set[str] = set()
 
@@ -150,9 +168,33 @@ class AbstractImageManager(ABC):
     # ── lifecycle ────────────────────────────────────────────────
 
     def shutdown(self) -> None:
-        """Flush DB to disk. Override in subclasses to also tear down workers."""
+        """Flush the DB, then stop the workers and freeze further writes.
+
+        For real teardown — process exit and tests. A hot-reload wants
+        ``retire()`` instead.
+        """
         with self._db_lock:
             self._save_db()
+        self.retire()
+
+    def retire(self) -> None:
+        """Stop the workers and freeze writes, *without* flushing the DB.
+
+        Used when a replacement manager has already been built: it read the DB
+        file in its constructor, so writing our snapshot over it would revert
+        whatever it loaded. Nothing is lost by skipping the flush — every
+        mutation persists itself as it happens, so the file is already current.
+
+        Freezing comes first so that render callbacks still landing from the
+        workers we are about to stop cannot write either.
+        """
+        with self._db_lock:
+            self._closed = True
+        self._stop_workers()
+
+    @abstractmethod
+    def _stop_workers(self) -> None:
+        """Tear down any render workers, so no further callbacks are dispatched."""
 
     def wait_for_idle(self, timeout: float = 120.0) -> None:
         """Block until all in-flight renders have completed.
@@ -260,7 +302,7 @@ class AbstractImageManager(ABC):
             if rec_now is None:
                 continue
             try:
-                decisions[rec.name] = self._classifier.decision_for(src_path, rec_now.original_sha1)
+                decisions[rec.name] = self._decision_for_record(src_path, rec_now)
             except Exception as e:
                 logger.warning("Classification failed for %r: %s", rec.name, e)
         # Phase 3: dispatch renders with the pre-computed ImageClassifierDecisions.
@@ -307,6 +349,80 @@ class AbstractImageManager(ABC):
                 pass
             del self._records[name]
             self._save_db()
+
+    def set_overrides(
+        self,
+        name: str,
+        *,
+        image_config: ImageConfig | object | None = _UNSET,
+        crop_to_fill_threshold: float | object | None = _UNSET,
+    ) -> bool:
+        """Set or clear this picture's per-picture overrides. Queues a re-render.
+
+        Each argument is three-valued: left out means "leave as it is", None
+        means "back to automatic", and a value means "use this". That is what
+        lets the two be edited independently from one request.
+
+        Returns True if anything changed. A no-op request is not treated as an
+        error, but it does not queue a pointless re-render either.
+
+        Raises:
+            FileNotFoundError: if *name* is not registered.
+        """
+        with self._db_lock:
+            rec = self._records.get(name)
+            if rec is None:
+                raise FileNotFoundError(f"Image {name!r} is not registered.")
+            if rec.image_width is None:
+                # PIL couldn't open this; it will never render, so pinning a
+                # pipeline to it would only produce a failed conversion.
+                return False
+
+            new_cfg = rec.image_config if image_config is _UNSET else image_config
+            new_crop = (
+                rec.crop_to_fill_threshold
+                if crop_to_fill_threshold is _UNSET
+                else crop_to_fill_threshold
+            )
+            if new_cfg == rec.image_config and new_crop == rec.crop_to_fill_threshold:
+                return False
+
+            logger.info(
+                "Override for %r: pipeline=%s crop=%s",
+                name,
+                "custom" if new_cfg is not None else "automatic",
+                new_crop if new_crop is not None else "automatic",
+            )
+            # Marking pending is what actually queues the work:
+            # _reconcile_with_disk()'s slug comparison only looks at records that
+            # are already "ok", so it is the backstop here, not the trigger.
+            #
+            # Clearing slugs matters just as much. It makes
+            # panel_bytes_for_model_orientation() return None, so a screen that
+            # polls mid-re-render gets the usual "try again shortly" 503 instead
+            # of one more copy of the image the user just changed.
+            self._records[name] = replace(
+                rec,
+                image_config=new_cfg,  # type: ignore[arg-type]  # _UNSET resolved above
+                crop_to_fill_threshold=new_crop,  # type: ignore[arg-type]
+                convert_status=ConvertStatus.PENDING,
+                convert_error=None,
+                slugs={},
+            )
+            self._save_db()
+            return True
+
+    def effective_decision(self, name: str) -> ImageClassifierDecision | None:
+        """What *name* renders with right now, overrides included.
+
+        Read-only and cheap: cached observations only, no detection. Returns
+        None if the image is not registered.
+        """
+        with self._db_lock:
+            rec = self._records.get(name)
+        if rec is None:
+            return None
+        return self._decision_for_record(self._upload_dir / name, rec, detect=False)
 
     def retry(self, name: str) -> None:
         """Mark a failed image as pending so the next sync() retries conversion.
@@ -663,6 +779,58 @@ class AbstractImageManager(ABC):
     def _thumb_path(self, rec: ImageRecord) -> Path:
         return self._images_dir / f"{rec.name_hash}{_THUMB_SUFFIX}"
 
+    def _decision_for_record(
+        self, src_path: Path, rec: ImageRecord, *, detect: bool = True
+    ) -> ImageClassifierDecision:
+        """The classifier's decision for *rec*, with its per-picture overrides applied.
+
+        Every path that needs a decision goes through here, so the invalidation
+        check in _reconcile_with_disk() and the render dispatch in _submit_one()
+        cannot disagree about what a picture should look like — which is what
+        makes an override re-render exactly one image and nothing else.
+
+        The classifier still runs when an override is set. An override replaces
+        the *choice* of pipeline, not the observations: face and B&W detection
+        results are what the CLAHE keep-out and face-aware crop are built from,
+        and /api/status reports them. Overriding on top of the finished decision
+        rather than in place of it keeps them by construction.
+
+        ``detect=False`` answers from cached observations only — for read-only
+        callers that must not pay for (or block on) a first-time detection.
+        """
+        decision = self._classifier.decision_for(src_path, rec.original_sha1, detect=detect)
+        changes = {}
+        if rec.image_config is not None:
+            changes["image_config"] = rec.image_config
+        if rec.crop_to_fill_threshold is not None:
+            changes["crop_to_fill_threshold"] = rec.crop_to_fill_threshold
+        return replace(decision, **changes) if changes else decision
+
+    def _salvage_overrides(self, data: dict) -> None:
+        """Rescue the user-authored fields from a DB we are about to discard.
+
+        Wiping on a version mismatch is the right call for everything derived —
+        slugs, status, timings, dimensions all come back from the source files.
+        The two override fields do not: nothing can reconstruct a dither someone
+        tuned by hand. They are picked out here and handed back to
+        _register_new() as each file is rediscovered on disk, so an override for
+        a picture that has since been deleted is correctly forgotten.
+
+        This is dead code until _DB_VERSION next moves. It exists so that when
+        it does, the bump is a re-render and not a loss of the user's work.
+        """
+        for name, rec_dict in (data.get("images") or {}).items():
+            if not isinstance(rec_dict, dict):
+                continue
+            overrides = ImageRecord._overrides_from_dict(rec_dict)
+            if any(v is not None for v in overrides):
+                self._salvaged_overrides[name] = overrides
+        if self._salvaged_overrides:
+            logger.info(
+                "Salvaged per-picture overrides for %d image(s) across the DB wipe",
+                len(self._salvaged_overrides),
+            )
+
     def _load_db(self) -> None:
         if not self._db_path.exists():
             return
@@ -682,6 +850,7 @@ class AbstractImageManager(ABC):
                 db_version,
                 _DB_VERSION,
             )
+            self._salvage_overrides(data)
             return
         for name, rec_dict in data.get("images", {}).items():
             try:
@@ -690,6 +859,11 @@ class AbstractImageManager(ABC):
                 logger.warning("Skipping malformed db entry %r: %s", name, e)
 
     def _save_db(self) -> None:
+        if self._closed:
+            # A retired manager's in-flight render callbacks still land here.
+            # Its successor already owns the file; writing would revert it.
+            logger.debug("Ignoring _save_db() on a shut-down manager")
+            return
         payload = {
             "version": _DB_VERSION,
             "images": {n: r.to_dict() for n, r in self._records.items()},
@@ -699,6 +873,9 @@ class AbstractImageManager(ABC):
     def _register_new(self, name: str, src_path: Path) -> None:
         st = src_path.stat()
         w, h, dim_err = self._try_read_image_dims(src_path)
+        # pop, not get: an override survives only the file it belongs to. One
+        # left over for a picture no longer on disk is simply dropped.
+        image_config, crop_to_fill_threshold = self._salvaged_overrides.pop(name, (None, None))
         self._records[name] = ImageRecord(
             name=name,
             name_hash=self._hash_name(name),
@@ -710,6 +887,8 @@ class AbstractImageManager(ABC):
             convert_error=dim_err,
             image_width=w,
             image_height=h,
+            image_config=image_config,
+            crop_to_fill_threshold=crop_to_fill_threshold,
         )
 
     def _reconcile_with_disk(self) -> None:
@@ -772,7 +951,7 @@ class AbstractImageManager(ABC):
                     continue
 
             if existing.convert_status == "ok":
-                decision = self._classifier.decision_for(src_path, existing.original_sha1)
+                decision = self._decision_for_record(src_path, existing)
                 # Compare against the LANDSCAPE slug specifically — it's the
                 # lifecycle-primary orientation, and PORTRAIT shares the same
                 # decision so its slug changes in lockstep.
@@ -788,6 +967,17 @@ class AbstractImageManager(ABC):
                         slugs={},
                     )
                     logger.info("ScreenImageConfig slug changed for %r: re-converting", name)
+
+        # Every file on disk has now been offered its salvaged override, so
+        # whatever is left belonged to a picture that is gone. Dropping it here
+        # keeps "delete the file, lose the override" true: uploading the same
+        # name again later must not resurrect the old one.
+        if self._salvaged_overrides:
+            logger.info(
+                "Discarding %d salvaged override(s) with no matching file",
+                len(self._salvaged_overrides),
+            )
+            self._salvaged_overrides.clear()
 
         self._save_db()
 
@@ -930,8 +1120,8 @@ class AbstractImageManager(ABC):
             if decision is None:
                 # Fallback: classification failed or was skipped; compute now.
                 with self._db_lock:
-                    original_sha1 = self._records[name].original_sha1
-                decision = self._classifier.decision_for(src_path, original_sha1)
+                    rec_now = self._records[name]
+                decision = self._decision_for_record(src_path, rec_now)
 
             # _inflight was already populated by sync() under the lock, so no need
             # to add here.  The assert is a safety net during development.

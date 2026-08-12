@@ -5,16 +5,18 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 
-from hokku.webserver.app_config import _CURRENT_VERSION, AppConfig, _migrate
+from hokku.webserver.app_config import _CURRENT_VERSION, _MIGRATIONS, AppConfig, _migrate
 from hokku.webserver.presets import (
     DEFAULT_BW_IMAGE_CONFIG,
     DEFAULT_FACE_IMAGE_CONFIG,
     DEFAULT_IMAGE_CONFIG,
     PRESET_IMAGE_CONFIGS,
+    PRESET_META,
 )
 
 
@@ -55,6 +57,67 @@ def test_dropdown_presets_unchanged_by_pipeline_defaults():
     """The face tuning must not leak into the general-purpose Atkinson preset."""
     assert DEFAULT_FACE_IMAGE_CONFIG != PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
     assert PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].clahe_clip_limit == 1.75
+
+
+# ── the shipped defaults are named presets ───────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("preset_key", "default_config"),
+    [
+        ("default_general", DEFAULT_IMAGE_CONFIG),
+        ("default_bw", DEFAULT_BW_IMAGE_CONFIG),
+        ("default_face", DEFAULT_FACE_IMAGE_CONFIG),
+    ],
+)
+def test_shipped_default_is_a_named_preset(preset_key: str, default_config):
+    """Each pipeline default has to BE a catalog entry, not merely resemble one."""
+    assert PRESET_IMAGE_CONFIGS[preset_key] is default_config
+
+
+@pytest.mark.parametrize(
+    ("preset_key", "field"),
+    [
+        ("default_general", "image_config_default"),
+        ("default_bw", "image_config_bw"),
+        ("default_face", "image_config_face"),
+    ],
+)
+def test_stock_config_serialises_identically_to_its_preset(preset_key: str, field: str):
+    """A fresh install must show a preset name, not "Custom (your edits)".
+
+    The web UI decides which preset is selected by comparing JSON.stringify() of
+    the config against JSON.stringify() of each catalog entry, so equality is not
+    enough — the serialisation has to match byte for byte, key order included.
+    Both sides come from asdict() on the same dataclass, which is what makes
+    that safe; this test is what stops it quietly ceasing to be true.
+    """
+    stock = json.dumps(asdict(getattr(AppConfig(), field)))
+    preset = json.dumps(asdict(PRESET_IMAGE_CONFIGS[preset_key]))
+    assert stock == preset
+
+
+def test_every_preset_has_a_label_and_description():
+    """A catalog entry with no metadata shows its raw key in the dropdown."""
+    assert set(PRESET_META) == set(PRESET_IMAGE_CONFIGS)
+    for key, meta in PRESET_META.items():
+        assert meta.get("label"), f"{key} has no label"
+        assert meta.get("description"), f"{key} has no description"
+
+
+def test_presets_are_all_distinct():
+    """Two entries rendering identically would make the dropdown ambiguous.
+
+    selectPresetMatching() returns the first match, so a duplicate would be
+    unreachable and the UI would flip between two names for one config.
+    """
+    slugs = {key: cfg.cache_slug() for key, cfg in PRESET_IMAGE_CONFIGS.items()}
+    assert len(set(slugs.values())) == len(slugs), slugs
+
+
+def test_defaults_are_listed_before_the_alternatives():
+    """Insertion order is dropdown order; the shipped choices come first."""
+    assert list(PRESET_IMAGE_CONFIGS)[:3] == ["default_general", "default_bw", "default_face"]
 
 
 def test_cache_slug_invariant_to_port():
@@ -141,8 +204,15 @@ def test_image_configs_roundtrip(tmp_path: Path):
     assert loaded.classifier_bw_detect_enabled is True
 
 
-def test_image_field_with_partial_blob_falls_back_to_default(tmp_path: Path):
-    """A corrupt image_config_default blob (partial dither) falls back to the default preset."""
+def test_partial_image_blob_at_the_current_version_is_rejected(tmp_path: Path):
+    """A config claiming to be current must actually be current.
+
+    It used to be merged onto the pipeline default on every load, which meant a
+    half-written blob looked fine forever and a misspelled knob was ignored
+    silently. Bringing an old config up to date is the migration chain's job
+    now, so anything still incomplete at the current version is a real fault
+    and is reported.
+    """
     p = tmp_path / "c.json"
     p.write_text(
         json.dumps(
@@ -152,8 +222,61 @@ def test_image_field_with_partial_blob_falls_back_to_default(tmp_path: Path):
             }
         )
     )
+    with pytest.raises(SystemExit):
+        AppConfig.load(p)
+
+
+def test_absent_image_blob_takes_the_pipeline_default(tmp_path: Path):
+    """Absent is not the same as wrong: an unconfigured pipeline is fine.
+
+    Every other field behaves this way, and a hand-edited config that simply
+    omits a section must not stop the server from booting.
+    """
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"version": _CURRENT_VERSION, "port": 8080}))
+
     cfg = AppConfig.load(p)
-    assert cfg.image_config_default == PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
+
+    assert cfg.image_config_default == DEFAULT_IMAGE_CONFIG
+    assert cfg.image_config_bw == DEFAULT_BW_IMAGE_CONFIG
+    assert cfg.image_config_face == DEFAULT_FACE_IMAGE_CONFIG
+
+
+def test_config_from_a_newer_version_is_refused(tmp_path: Path):
+    """There is no downgrade path, so say so plainly.
+
+    Without this the strict parser would reject a field it has never heard of
+    and report a confusing validation error instead of the actual problem.
+    """
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"version": _CURRENT_VERSION + 1}))
+    with pytest.raises(SystemExit):
+        AppConfig.load(p)
+
+
+def test_migration_completes_a_sparse_image_blob(tmp_path: Path):
+    """The upgrade path an older config actually takes.
+
+    v9 stored blobs that could be missing fields; v10 fills them in once so the
+    parser can be strict from then on.
+    """
+    p = tmp_path / "c.json"
+    p.write_text(
+        json.dumps(
+            {
+                "version": 9,
+                "image_config_default": {"prepare_gamma": 0.55},
+            }
+        )
+    )
+
+    cfg = AppConfig.load(p)
+
+    assert cfg.image_config_default.prepare_gamma == pytest.approx(0.55)  # kept
+    assert (
+        cfg.image_config_default.clahe_keepout_feather
+        == DEFAULT_IMAGE_CONFIG.clahe_keepout_feather  # filled
+    )
 
 
 def test_v1_migrates_to_current():
@@ -223,6 +346,11 @@ def test_old_config_gets_default_server_threads(tmp_path: Path):
     p = tmp_path / "config.json"
     p.write_text(json.dumps({"version": _CURRENT_VERSION, "port": 8080}))
     assert AppConfig.load(p).server_threads == AppConfig().server_threads
+
+
+def test_every_version_below_current_has_a_migration():
+    """A gap in the chain would raise KeyError mid-upgrade."""
+    assert set(_MIGRATIONS) == set(range(1, _CURRENT_VERSION))
 
 
 def test_cache_slug_invariant_to_server_threads():

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -31,7 +31,7 @@ from hokku.webserver.dither_abc import (
     PrepStripe,
     UInt8Array,
 )
-from hokku.webserver.dither_config import DitherConfig
+from hokku.webserver.dither_config import DitherConfig, LutName
 
 if TYPE_CHECKING:
     from hokku.screens.display import Display
@@ -795,17 +795,9 @@ _run_streaming = StreamingDither._diffuse  # backward-compat alias
 def _validate(cfg: DitherConfig) -> None:
     if cfg.algorithm not in _KERNEL_FOR and cfg.algorithm != "noop":
         raise ValueError(f"Unknown algorithm: {cfg.algorithm!r}")
-    if cfg.lut_name not in (
-        "euclidean",
-        "euclidean_weighted",
-        "hue_aware",
-        "hue_aware_weighted",
-        "bw",
-        "oklab",
-        "oklab_hue_aware",
-        "cam16ucs",
-        "cam16ucs_hue_aware",
-    ):
+    # Read the accepted names off the Literal rather than repeating them: a LUT
+    # added to LutName but forgotten here used to be rejected at render time.
+    if cfg.lut_name not in get_args(LutName):
         raise ValueError(f"Unknown lut_name: {cfg.lut_name!r}")
 
 

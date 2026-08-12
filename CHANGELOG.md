@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 4.0.0 beta 2
+
+The second beta of the 4.0 appliance line. Beta 1 shipped an appliance that
+could freeze instead of rebooting, could not flash a frame over USB, and
+quietly collapsed its three image pipelines into one — all three are fixed
+here. Frames also learn to correct their own sleep-timer drift, and firmware
+can now be downloaded and pinned per screen model from GitHub.
 
 ### Added
 
@@ -14,8 +20,8 @@
   average per device so a freshly flashed frame starts from a good estimate
   instead of learning from scratch. Screens are now tracked by a stable
   internal id with their MAC address as a secondary key, so calibration
-  survives both renaming a screen and reflashing it. Firmware 1.2.20
-  (Hokku/Huessen), 1.2.4 (Seeed), 1.2.10 (Bigme F7).
+  survives both renaming a screen and reflashing it. Firmware 1.2.21
+  (Hokku/Huessen), 1.2.5 (Seeed), 1.2.10 (Bigme F7).
 - **Firmware library — download newer firmware from GitHub and pin it per model.**
   The Admin tab has a new *Firmware library* panel. The server still ships bundled
   firmware and works fully offline, but you can now press *Check GitHub for

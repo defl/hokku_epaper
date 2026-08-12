@@ -22,7 +22,11 @@ One thing, and it was a bug rather than a preference:
   clipped — on one test portrait, half the image collapsed into flat black. Fixed
   by `drc_anchor_l` on the display spec ([`display.py`](../../../../python/hokku/screens/bigme_f7/display.py)),
   with the renderer falling back to the old behaviour when a screen has not been
-  measured. Confirmed better on glass, side by side.
+  measured. Confirmed better on glass, side by side. The anchors are applied in
+  both the CIELAB and OKLAB compressors, which matters more than it did when the
+  fix was written: `main` has since moved the general and black-and-white
+  pipelines' DRC into OKLAB, so a fix to only one space would now be silently
+  inactive on most photos.
 
 Nothing else is recommended. In particular **no dither LUT change**, which is not
 where this work expected to land — see [The LUT question](#the-lut-question).
@@ -159,7 +163,7 @@ What a *requested neutral* actually becomes, over every true-neutral patch:
 | config | n | cast (chroma) | a\* | b\* |
 |---|---:|---:|---:|---:|
 | **atkinson_serp_euclidean** | 13 | **6.26** | +0.47 | −3.65 |
-| atkinson_serp_hue_aware *(≈ production)* | 13 | 6.31 | +0.52 | −3.84 |
+| atkinson_serp_hue_aware *(production's LUT + algorithm)* | 13 | 6.31 | +0.52 | −3.84 |
 | atkinson_serp_oklab_hue_aware | 13 | 6.87 | −1.11 | −2.46 |
 | atkinson_serp_cam16ucs_hue_aware | 13 | 7.56 | −0.98 | −1.92 |
 | atkinson_serp_cam16ucs | 13 | 7.79 | −1.08 | −1.69 |

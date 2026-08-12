@@ -765,7 +765,29 @@
   .admin-body.open { display: block; }
 
   /* Per-image details modal */
-  .img-detail-modal { max-width: 460px; }
+  /* The modal base has no height cap at all, so the advanced dither editor
+     inside it would run off the bottom of the viewport with no way to reach
+     the Apply button. Cap it and let it scroll. */
+  .img-detail-modal { max-width: 460px; max-height: 88vh; overflow-y: auto; }
+  /* Two classes, so this beats .modal's max-width without !important. */
+  .img-detail-modal.wide { max-width: 900px; }
+  .img-detail-override {
+    margin-top: 16px; padding-top: 14px;
+    border-top: 1px solid var(--bamboo-soft);
+  }
+  .imgcfg-compare-grid {
+    display: grid; gap: 10px; margin-top: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+  .imgcfg-compare-tile {
+    margin: 0; cursor: pointer; border: 2px solid transparent;
+    border-radius: 6px; overflow: hidden; background: var(--bamboo-soft);
+  }
+  .imgcfg-compare-tile:hover { border-color: var(--bamboo); }
+  .imgcfg-compare-tile img { width: 100%; display: block; min-height: 60px; }
+  .imgcfg-compare-tile figcaption {
+    font-size: 0.78em; padding: 4px 6px; text-align: center; color: var(--stone);
+  }
   .detail-thumb-wrap {
     position: relative; width: 100%; max-height: 220px;
     background: var(--bamboo-soft); border-radius: 8px;
@@ -1061,49 +1083,10 @@
   <div class="section-card">
 
     <p class="config-section-label">Image rendering pipeline</p>
-    <div class="config-row" style="position: relative;">
-      <label>Default dither preset:</label>
-      <span class="ctrl-tip" id="dither-preset-wrap">
-        <select id="dither-preset"></select>
-      </span>
-      <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset()"
-              title="Reset all dither knobs to the preset's default values">Reset to preset</button>
-      <button type="button" class="btn btn-secondary btn-small" id="dither-custom-btn"
-              onclick="toggleAdvancedPanel()"
-              title="Open the advanced pipeline editor and tune individual knobs">Custom…</button>
-      <div class="help-popover" id="dither-preset-popover" hidden></div>
-    </div>
-
-    <div class="dither-advanced" id="dither-advanced" hidden>
-      <div class="dither-advanced-header">
-        <h3>Advanced dithering pipeline</h3>
-        <button type="button" class="close-btn" onclick="toggleAdvancedPanel()"
-                aria-label="Close advanced pipeline">×</button>
-      </div>
-      <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Hover any knob label to see what it does and how the output changes.</p>
-      <div id="dither-advanced-panel"></div>
-      <div class="dither-preview-block">
-        <div class="config-row">
-          <label>Preview on:</label>
-          <select id="dither-preview-image"></select>
-          <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview()" id="dither-preview-btn">Preview</button>
-          <span class="info" id="dither-preview-status"></span>
-        </div>
-        <div id="dither-preview-face-controls" hidden style="margin-top: 8px; font-size: 0.9em;">
-          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-            <input type="checkbox" id="dither-preview-show-faces" onchange="updateDitherPreviewFaces()">
-            <span>Show face CLAHE keep-out zones</span>
-          </label>
-        </div>
-        <div id="dither-preview-result" class="dither-preview-result" hidden>
-          <div style="position: relative; display: inline-block;">
-            <img id="dither-preview-img" alt="Dither preview">
-            <canvas id="dither-preview-faces" style="position: absolute; inset: 0; display: none; border-radius: 4px;"></canvas>
-          </div>
-          <div class="dither-preview-mask" id="dither-preview-mask" hidden>Dithering…</div>
-        </div>
-      </div>
-    </div>
+    <!-- Filled by mountDitherEditor('default', …) at load. Every dither editor
+         in the app — these three pipelines and the per-picture one in the image
+         details modal — is the same generated markup and the same handlers. -->
+    <div id="default-editor-mount"></div>
 
     <div class="config-row">
       <label>Detect B&amp;W photos:</label>
@@ -1118,36 +1101,7 @@
         <h3>B&amp;W photo pipeline</h3>
       </div>
       <p class="dither-advanced-intro">Used for black-and-white photos — film scans, old family photos, monochrome art. The server detects these automatically and uses a separate pipeline that avoids the colour-boosting steps which would otherwise add an unwanted pink or yellow tint to the grays.</p>
-      <div class="config-row" style="position: relative;">
-        <label>Preset:</label>
-        <select id="bw-preset"></select>
-        <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset('bw')"
-                title="Reset all knobs to the preset's default values">Reset to preset</button>
-        <button type="button" class="btn btn-secondary btn-small" id="bw-custom-btn"
-                onclick="toggleAdvancedPanel('bw')"
-                title="Open the advanced pipeline editor">Custom…</button>
-      </div>
-      <div class="dither-advanced" id="bw-advanced" hidden>
-        <div class="dither-advanced-header">
-          <h3>Advanced B&amp;W pipeline</h3>
-          <button type="button" class="close-btn" onclick="toggleAdvancedPanel('bw')"
-                  aria-label="Close">×</button>
-        </div>
-        <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Hover any knob label to see what it does.</p>
-        <div id="bw-advanced-panel"></div>
-        <div class="dither-preview-block">
-          <div class="config-row">
-            <label>Preview on:</label>
-            <select id="bw-preview-image"></select>
-            <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview('bw')" id="bw-preview-btn">Preview</button>
-            <span class="info" id="bw-preview-status"></span>
-          </div>
-          <div id="bw-preview-result" class="dither-preview-result" hidden>
-            <img id="bw-preview-img" alt="Dither preview">
-            <div class="dither-preview-mask" id="bw-preview-mask" hidden>Dithering…</div>
-          </div>
-        </div>
-      </div>
+      <div id="bw-editor-mount"></div>
     </div>
 
     <div class="config-row">
@@ -1170,45 +1124,7 @@
           <span id="face-clahe-keepout-label">Yes</span>
         </label>
       </div>
-      <div class="config-row" style="position: relative;">
-        <label>Preset:</label>
-        <select id="face-preset"></select>
-        <button type="button" class="btn btn-secondary btn-small" onclick="resetToPreset('face')"
-                title="Reset all knobs to the preset's default values">Reset to preset</button>
-        <button type="button" class="btn btn-secondary btn-small" id="face-custom-btn"
-                onclick="toggleAdvancedPanel('face')"
-                title="Open the advanced pipeline editor">Custom…</button>
-      </div>
-      <div class="dither-advanced" id="face-advanced" hidden>
-        <div class="dither-advanced-header">
-          <h3>Advanced face pipeline</h3>
-          <button type="button" class="close-btn" onclick="toggleAdvancedPanel('face')"
-                  aria-label="Close">×</button>
-        </div>
-        <p class="dither-advanced-intro">The image processing pipeline runs top to bottom. Hover any knob label to see what it does.</p>
-        <div id="face-advanced-panel"></div>
-        <div class="dither-preview-block">
-          <div class="config-row">
-            <label>Preview on:</label>
-            <select id="face-preview-image"></select>
-            <button type="button" class="btn btn-primary btn-small" onclick="runDitherPreview('face')" id="face-preview-btn">Preview</button>
-            <span class="info" id="face-preview-status"></span>
-          </div>
-          <div id="face-preview-face-controls" hidden style="margin-top: 8px; font-size: 0.9em;">
-            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-              <input type="checkbox" id="face-preview-show-faces" onchange="updateDitherPreviewFaces('face')">
-              <span>Show face CLAHE keep-out zones</span>
-            </label>
-          </div>
-          <div id="face-preview-result" class="dither-preview-result" hidden>
-            <div style="position: relative; display: inline-block;">
-              <img id="face-preview-img" alt="Dither preview">
-              <canvas id="face-preview-faces" style="position: absolute; inset: 0; display: none; border-radius: 4px;"></canvas>
-            </div>
-            <div class="dither-preview-mask" id="face-preview-mask" hidden>Dithering…</div>
-          </div>
-        </div>
-      </div>
+      <div id="face-editor-mount"></div>
     </div>
 
     <div class="dither-advanced">
@@ -1361,6 +1277,30 @@
     </div>
     <table id="img-detail-table"></table>
     <div class="detail-actions" id="img-detail-actions"></div>
+
+    <!-- Per-picture conversion. Both halves are independent overrides on the
+         image's record: either can be set without the other, and "Use
+         automatic" clears just that one. -->
+    <div class="img-detail-override">
+      <p class="config-section-label">Conversion for this picture</p>
+      <p class="info" id="imgcfg-pipeline-note"></p>
+      <div id="imgcfg-editor-mount"></div>
+      <div class="config-row" style="margin-top:10px;">
+        <label>Letterbox fill limit:</label>
+        <input type="range" id="imgcfg-crop" min="0" max="100" step="1" value="0" disabled>
+        <span id="imgcfg-crop-val" class="info">automatic</span>
+        <button type="button" class="btn btn-secondary btn-small" id="imgcfg-crop-override-btn">Override</button>
+      </div>
+      <p class="info" id="imgcfg-crop-hint"></p>
+      <div class="detail-actions">
+        <button type="button" class="btn btn-primary btn-small" id="imgcfg-apply-btn" disabled>Apply to this picture</button>
+        <button type="button" class="btn btn-secondary btn-small" id="imgcfg-compare-btn">Compare presets</button>
+        <button type="button" class="btn btn-secondary btn-small" id="imgcfg-auto-btn" hidden>Use automatic</button>
+        <span class="info" id="imgcfg-apply-status"></span>
+      </div>
+      <div id="imgcfg-compare-grid" class="imgcfg-compare-grid" hidden></div>
+    </div>
+
     <div class="modal-actions" style="margin-top:14px;">
       <button class="btn btn-secondary" id="img-detail-close">Close</button>
     </div>
@@ -1632,18 +1572,21 @@ async function downloadFirmware(model, tag, btn) {
   }
 }
 
-// Dither config UI state. `ditherState` is the form's working copy; it's
-// initialised once by loadConfig() and never overwritten by status polling.
+// Each dither editor's working copy lives in `ditherStates`, keyed by panel id
+// (see DITHER_PANEL_IDS below). The Config-tab ones are initialised once by
+// loadConfig() and never overwritten by status polling; the per-picture one is
+// (re)initialised each time the image details modal opens.
 // `ditherPresets` is the catalog from /api/config so we don't have to mirror
 // the backend's preset definitions in JS.
-let ditherState = null;
 let ditherPresets = {};
+let ditherPresetOrder = [];   // catalog order; see /api/config dither_preset_order
 let configDefaults = null;
 let lastPanelData = {visual_w: {{visual_w}}, visual_h: {{visual_h}}};
 
-// Classifier secondary config states — full ImageConfig dicts for B&W / face.
-let bwDitherState = null;
-let faceDitherState = null;
+// Per-picture editor state, valid only while the image details modal is open.
+// null crop = this picture uses the global letterbox-fill setting.
+let imgcfgFilename = null;
+let imgcfgCropOverride = null;
 
 // Per-knob help text shown in hover popovers. Plain English, describes the
 // specific control the user is hovering — never another control's options.
@@ -1720,33 +1663,146 @@ function isAutoClearEnabled() {
   return document.getElementById('auto-clear-cache').checked;
 }
 
-// Map panelId ('default', 'bw', 'face') to the DOM id prefix and state vars.
+// Every dither editor in the app is an instance of the same component: the
+// three global pipelines in Config, and the per-picture one in the image
+// details modal. They are generated from one markup function and share every
+// handler, so a change to the editor lands in all of them at once.
+//
+// 'default' keeps the 'dither-' DOM prefix it has always had.
+const DITHER_PANEL_IDS = ['default', 'bw', 'face', 'imgcfg'];
+
 function _pfx(panelId) {
   return (!panelId || panelId === 'default') ? 'dither' : panelId;
 }
-function _getState(panelId) {
-  if (panelId === 'bw') return bwDitherState;
-  if (panelId === 'face') return faceDitherState;
-  return ditherState;
-}
-function _setState(panelId, v) {
-  if (panelId === 'bw') bwDitherState = v;
-  else if (panelId === 'face') faceDitherState = v;
-  else ditherState = v;
+
+// Working copy of each editor's ImageConfig, keyed by panel id.
+const ditherStates = {};
+function _getState(panelId) { return ditherStates[panelId || 'default']; }
+function _setState(panelId, v) { ditherStates[panelId || 'default'] = v; }
+
+// Which editors are actually on the page. The per-picture one only exists once
+// its modal has mounted it, and the Config ones only after loadConfig().
+function _mountedPanelIds() {
+  return DITHER_PANEL_IDS.filter(id => document.getElementById(_pfx(id) + '-preset'));
 }
 
-// Populate the preset dropdown(s). Called once after ditherPresets is loaded.
-// Populates all three panels so a single call covers everything.
-function populatePresetDropdown() {
-  ['default', 'bw', 'face'].forEach(panelId => {
+// The editor's markup. Built here rather than written out per instance so the
+// three Config pipelines and the per-picture editor cannot drift apart — they
+// used to be three hand-maintained copies, and had already diverged (the B&W
+// one silently lacked the face keep-out overlay the other two had).
+//
+// opts:
+//   presetLabel   text of the preset row's label
+//   title/intro   heading and blurb for the advanced panel
+//   pinnedImage   preview is fixed to one picture, so no "Preview on:" picker
+//   showFaceKeepout
+//                 offer the "show face keep-out zones" preview overlay. Only
+//                 for pipelines that can actually receive keep-out boxes — see
+//                 the mounts below.
+function ditherEditorMarkup(panelId, opts) {
+  const pfx = _pfx(panelId);
+  const previewRow = opts.pinnedImage
+    // Still a <select>, just hidden and pre-filled: runDitherPreview() reads
+    // the filename from it either way, so the pinned case needs no special path.
+    ? `<select id="${pfx}-preview-image" hidden></select>
+       <button type="button" class="btn btn-primary btn-small" id="${pfx}-preview-btn">Preview this picture</button>
+       <span class="info" id="${pfx}-preview-status"></span>`
+    : `<label>Preview on:</label>
+       <select id="${pfx}-preview-image"></select>
+       <button type="button" class="btn btn-primary btn-small" id="${pfx}-preview-btn">Preview</button>
+       <span class="info" id="${pfx}-preview-status"></span>`;
+
+  return `
+    <div class="config-row" style="position: relative;">
+      <label>${escapeHtml(opts.presetLabel || 'Preset:')}</label>
+      <span class="ctrl-tip" id="${pfx}-preset-wrap">
+        <select id="${pfx}-preset"></select>
+      </span>
+      <button type="button" class="btn btn-secondary btn-small" id="${pfx}-reset-btn"
+              title="Reset all knobs to the preset's default values">Reset to preset</button>
+      <button type="button" class="btn btn-secondary btn-small" id="${pfx}-custom-btn"
+              title="Open the advanced pipeline editor and tune individual knobs">Custom…</button>
+      <div class="help-popover" id="${pfx}-preset-popover" hidden></div>
+    </div>
+
+    <div class="dither-advanced" id="${pfx}-advanced" hidden>
+      <div class="dither-advanced-header">
+        <h3>${escapeHtml(opts.title || 'Advanced dithering pipeline')}</h3>
+        <button type="button" class="close-btn" id="${pfx}-advanced-close"
+                aria-label="Close advanced pipeline">×</button>
+      </div>
+      <p class="dither-advanced-intro">${escapeHtml(opts.intro || 'The image processing pipeline runs top to bottom. Hover any knob label to see what it does and how the output changes.')}</p>
+      <div id="${pfx}-advanced-panel"></div>
+      <div class="dither-preview-block">
+        <div class="config-row">${previewRow}</div>
+        ${opts.showFaceKeepout ? `
+        <div id="${pfx}-preview-face-controls" hidden style="margin-top: 8px; font-size: 0.9em;">
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="checkbox" id="${pfx}-preview-show-faces">
+            <span>Show face CLAHE keep-out zones</span>
+          </label>
+        </div>` : ''}
+        <div id="${pfx}-preview-result" class="dither-preview-result" hidden>
+          <div style="position: relative; display: inline-block;">
+            <img id="${pfx}-preview-img" alt="Dither preview">
+            ${opts.showFaceKeepout ? `<canvas id="${pfx}-preview-faces" style="position: absolute; inset: 0; display: none; border-radius: 4px;"></canvas>` : ''}
+          </div>
+          <div class="dither-preview-mask" id="${pfx}-preview-mask" hidden>Dithering…</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+// Render an editor into *mountEl* and wire it up. Safe to call again on the
+// same mount — the per-picture editor re-mounts every time its modal opens.
+function mountDitherEditor(panelId, mountEl, opts = {}) {
+  if (!mountEl) return;
+  const pfx = _pfx(panelId);
+  mountEl.innerHTML = ditherEditorMarkup(panelId, opts);
+
+  const on = (id, event, fn) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener(event, fn);
+  };
+  on(pfx + '-reset-btn', 'click', () => resetToPreset(panelId));
+  on(pfx + '-custom-btn', 'click', () => toggleAdvancedPanel(panelId));
+  on(pfx + '-advanced-close', 'click', () => toggleAdvancedPanel(panelId));
+  on(pfx + '-preview-btn', 'click', () => runDitherPreview(panelId));
+  on(pfx + '-preview-show-faces', 'change', () => updateDitherPreviewFaces(panelId));
+  if (opts.onCustomToggle) {
+    on(pfx + '-custom-btn', 'click', opts.onCustomToggle);
+    on(pfx + '-advanced-close', 'click', opts.onCustomToggle);
+  }
+  wirePresetPopover(panelId);
+}
+
+// Fill the preset dropdown of every mounted editor. Called after ditherPresets
+// is loaded, and again whenever an editor is mounted later (the per-picture one).
+function populatePresetDropdown(only) {
+  const ids = only ? [only] : _mountedPanelIds();
+  ids.forEach(panelId => {
     const pfx = _pfx(panelId);
     const sel = document.getElementById(pfx + '-preset');
     if (!sel) return;
     sel.innerHTML = '';
-    Object.entries(ditherPresets).forEach(([key, p]) => {
+    // The per-picture editor can hand a picture back to the classifier, which
+    // the global pipelines cannot — there is nothing above them to defer to.
+    if (panelId === 'imgcfg') {
+      const autoOpt = document.createElement('option');
+      autoOpt.value = '__auto__';
+      autoOpt.textContent = 'Automatic (let the server choose)';
+      sel.appendChild(autoOpt);
+    }
+    // Explicit order from the server: jsonify sorts object keys, so
+    // Object.keys(ditherPresets) would be alphabetical rather than the
+    // catalog's own order (shipped defaults first).
+    const order = ditherPresetOrder.length
+      ? ditherPresetOrder.filter(k => ditherPresets[k])
+      : Object.keys(ditherPresets);
+    order.forEach(key => {
       const opt = document.createElement('option');
       opt.value = key;
-      opt.textContent = p.label;
+      opt.textContent = ditherPresets[key].label;
       sel.appendChild(opt);
     });
     const customOpt = document.createElement('option');
@@ -1756,16 +1812,31 @@ function populatePresetDropdown() {
     // Capture panelId for the closure — don't let it be the loop variable.
     sel.onchange = ((pid) => () => {
       const v = sel.value;
+      if (v === '__auto__') {
+        onDitherPanelChanged(pid);
+        return;
+      }
       if (v !== '__custom__' && ditherPresets[v]) {
         sel.dataset.lastPreset = v;
         const {label, description, ...presetFields} = ditherPresets[v];
         _setState(pid, deepCopy(presetFields));
         renderDitherPanel(pid);
-        if (pid === 'default') updatePresetDescription();
-        if (isAutoClearEnabled()) scrubStaleCache();
+        updatePresetDescription(pid);
+        onDitherPanelChanged(pid);
+        // Only the saved pipelines invalidate cached renders. The per-picture
+        // editor is a draft until Apply, so it must not scrub anything.
+        if (pid !== 'imgcfg' && isAutoClearEnabled()) scrubStaleCache();
       }
     })(panelId);
   });
+}
+
+// Notify an editor's owner that its value changed. Only the per-picture editor
+// listens today, to enable its Apply button.
+const ditherPanelChangeHooks = {};
+function onDitherPanelChanged(panelId) {
+  const hook = ditherPanelChangeHooks[panelId || 'default'];
+  if (hook) hook();
 }
 
 // Pick the preset whose dither config matches state verbatim; fall back to
@@ -1775,6 +1846,9 @@ function selectPresetMatching(state, panelId) {
   const pfx = _pfx(panelId);
   const sel = document.getElementById(pfx + '-preset');
   if (!sel) return;
+  // NOTE: this comparison is key-order sensitive, which is fine because both
+  // sides originate from asdict(ImageConfig) and keep its field order. Do not
+  // rebuild either object key-by-key in JS.
   const stateJson = JSON.stringify(state);
   let matched = '__custom__';
   for (const [key, p] of Object.entries(ditherPresets)) {
@@ -1783,19 +1857,23 @@ function selectPresetMatching(state, panelId) {
   }
   sel.value = matched;
   if (matched !== '__custom__') sel.dataset.lastPreset = matched;
-  if (panelId === 'default') updatePresetDescription();
+  updatePresetDescription(panelId);
 }
 
-function updatePresetDescription() {
+function updatePresetDescription(panelId) {
   // Populate the (?) popover. Description text used to live as an inline
   // <span class="info">, but it bloated the row visually. Now hidden behind
   // a help button next to the preset selector.
-  const sel = document.getElementById('dither-preset');
-  const pop = document.getElementById('dither-preset-popover');
-  if (!pop) return;
+  const pfx = _pfx(panelId || 'default');
+  const sel = document.getElementById(pfx + '-preset');
+  const pop = document.getElementById(pfx + '-preset-popover');
+  if (!sel || !pop) return;
   const v = sel.value;
   let html;
-  if (v === '__custom__') {
+  if (v === '__auto__') {
+    html = '<p>The server picks a pipeline for this picture from its content — '
+         + 'black-and-white detection first, then face detection, then the default.</p>';
+  } else if (v === '__custom__') {
     html = '<p>Your edits have diverged from every built-in preset.</p>';
   } else if (ditherPresets[v]) {
     html = '<h3>' + escapeHtml(ditherPresets[v].label || v) + '</h3>'
@@ -1836,23 +1914,22 @@ function resetToPreset(panelId) {
     const {label, description, ...presetFields} = ditherPresets[key];
     _setState(panelId, deepCopy(presetFields));
     renderDitherPanel(panelId);
-    if (panelId === 'default') updatePresetDescription();
+    updatePresetDescription(panelId);
+    onDitherPanelChanged(panelId);
     showToast('Reset to preset: ' + ditherPresets[key].label);
   }
 }
 
 function resetPipelineToDefault() {
   if (!configDefaults) return;
-  ditherState     = JSON.parse(JSON.stringify(configDefaults.image_config_default || {}));
-  bwDitherState   = JSON.parse(JSON.stringify(configDefaults.image_config_bw   || {}));
-  faceDitherState = JSON.parse(JSON.stringify(configDefaults.image_config_face  || {}));
-  selectPresetMatching(ditherState,     'default');
-  selectPresetMatching(bwDitherState,   'bw');
-  selectPresetMatching(faceDitherState, 'face');
-  renderDitherPanel('default');
-  renderDitherPanel('bw');
-  renderDitherPanel('face');
-  updatePresetDescription();
+  // Config-tab pipelines only. 'imgcfg' is per-picture and is not part of the
+  // server config this button resets.
+  ['default', 'bw', 'face'].forEach(panelId => {
+    const key = panelId === 'default' ? 'image_config_default' : 'image_config_' + panelId;
+    _setState(panelId, deepCopy(configDefaults[key] || {}));
+    selectPresetMatching(_getState(panelId), panelId);
+    renderDitherPanel(panelId);
+  });
 
   const bwOn = !!configDefaults.classifier_bw_detect_enabled;
   document.getElementById('bw-detect-enabled').checked = bwOn;
@@ -1884,10 +1961,11 @@ function markCustom(panelId) {
   const pfx = _pfx(panelId);
   const sel = document.getElementById(pfx + '-preset');
   if (sel) sel.value = '__custom__';
-  if (panelId === 'default') updatePresetDescription();
+  updatePresetDescription(panelId);
+  onDitherPanelChanged(panelId);
 }
 
-// Build a single knob/row. panelId ('default'|'bw'|'face') selects which
+// Build a single knob/row. panelId ('default'|'bw'|'face'|'imgcfg') selects which
 // state dict to read from and which onchange target to write to.
 //   "check"  — single checkbox bound to state[path...]
 //   "num"    — number input bound to state[path...]
@@ -2100,47 +2178,76 @@ function wireHelpIcons(panelId) {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeHelpPopover();
-    closePresetPopover();
+    DITHER_PANEL_IDS.forEach(closePresetPopover);
   }
 });
 
 // Preset popover — shown on hover over the select, hidden on mouse-leave.
-function closePresetPopover() {
-  const pop = document.getElementById('dither-preset-popover');
+function closePresetPopover(panelId) {
+  const pop = document.getElementById(_pfx(panelId || 'default') + '-preset-popover');
   if (pop) pop.hidden = true;
 }
-document.addEventListener('DOMContentLoaded', () => {
-  const wrap = document.getElementById('dither-preset-wrap');
-  const pop  = document.getElementById('dither-preset-popover');
-  if (!wrap || !pop) return;
+
+// Hover-help for one editor's preset dropdown. Wired per instance by
+// mountDitherEditor rather than once at DOMContentLoaded, because the editors
+// are generated — at page load none of them exist yet.
+function wirePresetPopover(panelId) {
+  const pfx = _pfx(panelId);
+  const wrap = document.getElementById(pfx + '-preset-wrap');
+  const pop  = document.getElementById(pfx + '-preset-popover');
+  const sel  = document.getElementById(pfx + '-preset');
+  if (!wrap || !pop || !sel) return;
   let hideTimer;
-  function showPresetPopover() {
+  wrap.addEventListener('mouseenter', () => {
     clearTimeout(hideTimer);
-    updatePresetDescription();
+    updatePresetDescription(panelId);
     const r = wrap.getBoundingClientRect();
     pop.style.top  = (r.bottom + 6) + 'px';
     pop.style.left = Math.max(8, Math.min(window.innerWidth - 500, r.left)) + 'px';
     pop.hidden = false;
-  }
-  function scheduleHide() { hideTimer = setTimeout(() => { pop.hidden = true; }, 120); }
-  wrap.addEventListener('mouseenter', showPresetPopover);
-  wrap.addEventListener('mouseleave', scheduleHide);
+  });
+  wrap.addEventListener('mouseleave', () => {
+    hideTimer = setTimeout(() => { pop.hidden = true; }, 120);
+  });
   pop.addEventListener('mouseenter', () => clearTimeout(hideTimer));
   pop.addEventListener('mouseleave', () => { pop.hidden = true; });
-  // Also update content when the user changes the selected preset.
-  document.getElementById('dither-preset').addEventListener('change', () => {
-    if (!pop.hidden) updatePresetDescription();
+  sel.addEventListener('change', () => {
+    if (!pop.hidden) updatePresetDescription(panelId);
   });
   document.addEventListener('click', (e) => {
-    if (!pop.hidden && !pop.contains(e.target) && !wrap.contains(e.target)) closePresetPopover();
+    if (!pop.hidden && !pop.contains(e.target) && !wrap.contains(e.target)) {
+      closePresetPopover(panelId);
+    }
   });
-});
+}
 
 // ── Preview button ────────────────────────────────────────────────
+
+// Request body for one preview. Split out so the per-picture editor and the
+// compare grid can add their own crop threshold and tile size without
+// duplicating the shared parts.
+function ditherPreviewBody(panelId, filename, extra) {
+  const body = {
+    name: filename,
+    image: _getState(panelId),
+    clahe_keepout: document.getElementById('face-clahe-keepout-enabled').checked,
+    face_aware_crop: document.getElementById('face-aware-crop-enabled').checked,
+  };
+  // The per-picture editor previews the crop it is about to save, which may
+  // differ from the global one; the Config pipelines have no crop of their own
+  // and let the server fall back to the saved value.
+  if (panelId === 'imgcfg' && imgcfgCropOverride !== null) {
+    body.crop_to_fill_threshold = imgcfgCropOverride;
+  }
+  return Object.assign(body, extra || {});
+}
+
 function updatePreviewImageOptions(uploadList) {
   // The preview endpoint renders from the original file, not the cached
   // binary, so include all uploaded images regardless of dither status.
   const available = (uploadList || []).map(e => e.name);
+  // Skips the per-picture editor: its picker is hidden and pinned to one file,
+  // so rebuilding the option list would throw that pin away.
   ['default', 'bw', 'face'].forEach(panelId => {
     const sel = document.getElementById(_pfx(panelId) + '-preview-image');
     if (!sel) return;
@@ -2187,12 +2294,7 @@ async function runDitherPreview(panelId) {
     const resp = await fetch('/hokku/api/dither/preview', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        name: filename,
-        image: _getState(panelId),
-        clahe_keepout: document.getElementById('face-clahe-keepout-enabled').checked,
-        face_aware_crop: document.getElementById('face-aware-crop-enabled').checked,
-      }),
+      body: JSON.stringify(ditherPreviewBody(panelId, filename)),
     });
     if (!resp.ok) {
       let err = `HTTP ${resp.status}`;
@@ -2699,13 +2801,13 @@ async function saveConfig() {
       const v = parseInt(document.getElementById('memory-budget-mb').value, 10);
       return Number.isNaN(v) || v < 1 ? 0 : v;  // empty / invalid → 0 = auto
     })(),
-    image_config_default: ditherState,
+    image_config_default: _getState('default'),
     classifier_bw_detect_enabled: document.getElementById('bw-detect-enabled').checked,
-    image_config_bw: bwDitherState,
+    image_config_bw: _getState('bw'),
     classifier_face_detect_enabled: document.getElementById('face-detect-enabled').checked,
     classifier_face_detect_clahe_keepout: document.getElementById('face-clahe-keepout-enabled').checked,
     classifier_face_aware_crop_enabled: document.getElementById('face-aware-crop-enabled').checked,
-    image_config_face: faceDitherState,
+    image_config_face: _getState('face'),
   };
   try {
     const resp = await fetch('/hokku/api/config', {
@@ -3363,6 +3465,18 @@ async function deleteAllFailed(failed) {
 let lastUploadFiles = [];
 let lastServeData = {};
 
+// A small chip on the card saying which pipeline converted this picture. Only
+// shown when it isn't the plain default, so an ordinary library stays quiet.
+function pipelineChip(entry) {
+  const labels = {override: 'Custom', bw: 'B&W', face: 'Face'};
+  const text = labels[entry.pipeline];
+  if (!text) return '';
+  const title = entry.pipeline === 'override'
+    ? 'Converted with settings chosen for this picture'
+    : 'Converted with the ' + text + ' pipeline (detected automatically)';
+  return ` <span class="next-badge" title="${escapeHtml(title)}">${escapeHtml(text)}</span>`;
+}
+
 function renderImageGrid(uploadFiles, serveData, nextImages) {
   lastUploadFiles = uploadFiles;
   lastServeData   = serveData;
@@ -3398,7 +3512,7 @@ function renderImageGrid(uploadFiles, serveData, nextImages) {
       ${pendingBadge}
       ${thumbHtml}
       <div class="card-body">
-        <div class="filename">${escapeHtml(fname)}</div>
+        <div class="filename">${escapeHtml(fname)}${pipelineChip(entry)}</div>
         <div class="card-actions">
           ${rotationHtml}
           <button class="btn btn-secondary btn-small details-btn" data-name="">Details</button>
@@ -3512,9 +3626,12 @@ function showImageDetails(fname) {
     actions.innerHTML = '<span style="color:#92400e;font-size:0.85em">Dithered version not ready yet</span>';
   }
 
+  setupImageOverrideEditor(fname, entry);
+
   modal.classList.add('show');
   const close = () => {
     modal.classList.remove('show');
+    teardownImageOverrideEditor();
     closeBtn.removeEventListener('click', close);
     modal.removeEventListener('click', onBackdrop);
     document.removeEventListener('keydown', onKey);
@@ -3525,6 +3642,337 @@ function showImageDetails(fname) {
   closeBtn.addEventListener('click', close);
   modal.addEventListener('click', onBackdrop);
   document.addEventListener('keydown', onKey);
+}
+
+// ── Per-picture conversion override ───────────────────────────────
+//
+// The modal mounts a full dither editor — the same component and handlers the
+// three Config-tab pipelines use — plus its own letterbox-fill control. The two
+// are independent overrides on the image's record, so each has its own Apply
+// and its own "Use automatic".
+
+let imgcfgCompareAbort = null;   // cancels an in-flight compare grid
+let imgcfgCompareBusy = false;   // stops rapid re-clicks queueing more renders
+let imgcfgDirty = false;
+
+function setupImageOverrideEditor(fname, entry) {
+  imgcfgFilename = fname;
+  imgcfgCropOverride = null;
+  imgcfgDirty = false;
+
+  const mount = document.getElementById('imgcfg-editor-mount');
+  mountDitherEditor('imgcfg', mount, {
+    presetLabel: 'Dither:',
+    title: 'Advanced pipeline for this picture',
+    intro: 'These settings apply to this picture only. Everything else keeps using the pipelines from the Config tab.',
+    pinnedImage: true,
+    // On here because an override replaces the choice of pipeline, not the
+    // detection: a face-routed picture keeps its keep-out boxes even when you
+    // pin it to a different dither, so the overlay still means something. It
+    // hides itself when the picture has no detected faces.
+    showFaceKeepout: true,
+    // Widen the modal while the knobs are open — they do not fit in 460px.
+    onCustomToggle: () => {
+      const panel = document.getElementById('imgcfg-advanced');
+      document.querySelector('.img-detail-modal').classList.toggle('wide', panel && !panel.hidden);
+    },
+  });
+  populatePresetDropdown('imgcfg');
+  // Pin the (hidden) preview picker to this picture so runDitherPreview works
+  // through exactly the same path as the Config-tab editors.
+  const previewSel = document.getElementById('imgcfg-preview-image');
+  if (previewSel) previewSel.innerHTML = `<option value="${escapeHtml(fname)}" selected></option>`;
+
+  ditherPanelChangeHooks['imgcfg'] = () => markImageOverrideDirty();
+
+  document.getElementById('imgcfg-apply-btn').onclick = applyImageOverride;
+  document.getElementById('imgcfg-auto-btn').onclick = clearImageOverride;
+  document.getElementById('imgcfg-compare-btn').onclick = runImageCompareGrid;
+  document.getElementById('imgcfg-crop-override-btn').onclick = toggleImageCropOverride;
+  document.getElementById('imgcfg-crop').oninput = (e) => {
+    imgcfgCropOverride = (parseInt(e.target.value, 10) || 0) / 100;
+    document.getElementById('imgcfg-crop-val').textContent = e.target.value + '%';
+    markImageOverrideDirty();
+  };
+
+  renderImageOverrideCropHint(entry);
+  loadImageOverrideState(fname);
+}
+
+function teardownImageOverrideEditor() {
+  if (imgcfgCompareAbort) { imgcfgCompareAbort.abort(); imgcfgCompareAbort = null; }
+  imgcfgCompareBusy = false;
+  delete ditherPanelChangeHooks['imgcfg'];
+  imgcfgFilename = null;
+  const grid = document.getElementById('imgcfg-compare-grid');
+  if (grid) {
+    // Object URLs outlive the nodes that referenced them.
+    grid.querySelectorAll('img[data-url]').forEach(img => URL.revokeObjectURL(img.dataset.url));
+    grid.innerHTML = '';
+    grid.hidden = true;
+  }
+  const preview = document.getElementById('imgcfg-preview-img');
+  if (preview && preview.dataset.url) {
+    URL.revokeObjectURL(preview.dataset.url);
+    delete preview.dataset.url;
+  }
+  document.querySelector('.img-detail-modal').classList.remove('wide');
+}
+
+function markImageOverrideDirty() {
+  imgcfgDirty = true;
+  const btn = document.getElementById('imgcfg-apply-btn');
+  if (btn) btn.disabled = false;
+  const status = document.getElementById('imgcfg-apply-status');
+  if (status) status.textContent = '';
+}
+
+// Tell the user what fill percentage this picture would actually need, which
+// the details table already computes — here it becomes actionable.
+function renderImageOverrideCropHint(entry) {
+  const hint = document.getElementById('imgcfg-crop-hint');
+  if (!hint) return;
+  hint.textContent = '';
+  if (!entry || !entry.image_width || !entry.image_height) return;
+  const orient = entry.native_orientation || 'landscape';
+  const visW = orient === 'landscape' ? lastPanelData.visual_w : lastPanelData.visual_h;
+  const visH = orient === 'landscape' ? lastPanelData.visual_h : lastPanelData.visual_w;
+  const scaleFit   = Math.min(visW / entry.image_width, visH / entry.image_height);
+  const scaleCover = Math.max(visW / entry.image_width, visH / entry.image_height);
+  const zoom = scaleCover / scaleFit - 1.0;
+  if (zoom > 1e-9) {
+    hint.textContent = `Needs at least ${Math.ceil(zoom * 100)}% to fill the frame with no letterbox bars.`;
+  }
+}
+
+async function loadImageOverrideState(fname) {
+  const status = document.getElementById('imgcfg-apply-status');
+  try {
+    const resp = await fetch('/hokku/api/image/' + encodeURIComponent(fname) + '/config');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    if (imgcfgFilename !== fname) return;   // modal moved on while we waited
+
+    const overrides = data.overrides || {};
+    const effective = data.effective || {};
+    // Start the editor from what the picture looks like NOW, so tuning is a
+    // change to the real thing rather than to an arbitrary preset.
+    _setState('imgcfg', deepCopy(overrides.image_config || effective.image_config || {}));
+
+    const sel = document.getElementById('imgcfg-preset');
+    if (overrides.image_config) {
+      selectPresetMatching(_getState('imgcfg'), 'imgcfg');
+    } else if (sel) {
+      // No override: say "Automatic" rather than showing whichever preset the
+      // effective config happens to resemble.
+      sel.value = '__auto__';
+      updatePresetDescription('imgcfg');
+    }
+    renderDitherPanel('imgcfg');
+
+    imgcfgCropOverride = overrides.crop_to_fill_threshold ?? null;
+    syncImageCropControl(effective.crop_to_fill_threshold ?? 0);
+
+    document.getElementById('imgcfg-pipeline-note').textContent =
+      describePipeline(data.pipeline);
+    document.getElementById('imgcfg-auto-btn').hidden =
+      !overrides.image_config && overrides.crop_to_fill_threshold == null;
+
+    imgcfgDirty = false;
+    document.getElementById('imgcfg-apply-btn').disabled = true;
+  } catch (e) {
+    if (status) status.textContent = 'Could not load settings: ' + e.message;
+  }
+}
+
+function describePipeline(pipeline) {
+  switch (pipeline) {
+    case 'override': return 'Using settings you chose for this picture.';
+    case 'bw':       return 'Automatic: detected as black-and-white, using the B&W pipeline.';
+    case 'face':     return 'Automatic: faces detected, using the face pipeline.';
+    default:         return 'Automatic: using the default pipeline.';
+  }
+}
+
+function syncImageCropControl(effectiveValue) {
+  const slider = document.getElementById('imgcfg-crop');
+  const label  = document.getElementById('imgcfg-crop-val');
+  const btn    = document.getElementById('imgcfg-crop-override-btn');
+  const overridden = imgcfgCropOverride !== null;
+  const shown = overridden ? imgcfgCropOverride : effectiveValue;
+  slider.value = Math.round(shown * 100);
+  slider.disabled = !overridden;
+  label.textContent = overridden ? `${Math.round(shown * 100)}%`
+                                 : `automatic (${Math.round(shown * 100)}%)`;
+  btn.textContent = overridden ? 'Use automatic' : 'Override';
+  slider.dataset.effective = String(effectiveValue);
+}
+
+function toggleImageCropOverride() {
+  const slider = document.getElementById('imgcfg-crop');
+  const effective = parseFloat(slider.dataset.effective || '0');
+  imgcfgCropOverride = imgcfgCropOverride === null ? effective : null;
+  syncImageCropControl(effective);
+  markImageOverrideDirty();
+}
+
+async function applyImageOverride() {
+  const fname = imgcfgFilename;
+  if (!fname) return;
+  const status = document.getElementById('imgcfg-apply-status');
+  const btn = document.getElementById('imgcfg-apply-btn');
+  const usingAuto = document.getElementById('imgcfg-preset').value === '__auto__';
+
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    const resp = await fetch('/hokku/api/image/' + encodeURIComponent(fname) + '/config', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        image_config: usingAuto ? null : _getState('imgcfg'),
+        crop_to_fill_threshold: imgcfgCropOverride,
+      }),
+    });
+    const body = await resp.json();
+    if (!resp.ok) {
+      // The server reports every problem at once; show them all.
+      throw new Error((body.errors && body.errors.join('; ')) || body.error || `HTTP ${resp.status}`);
+    }
+    status.textContent = body.queued ? 'Saved — re-converting this picture…' : 'No change.';
+    imgcfgDirty = false;
+    await loadImageOverrideState(fname);
+    refreshStatus();
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+    btn.disabled = false;
+  }
+}
+
+async function clearImageOverride() {
+  const fname = imgcfgFilename;
+  if (!fname) return;
+  const status = document.getElementById('imgcfg-apply-status');
+  status.textContent = 'Clearing…';
+  try {
+    const resp = await fetch('/hokku/api/image/' + encodeURIComponent(fname) + '/config', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({image_config: null, crop_to_fill_threshold: null}),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    status.textContent = 'Back to automatic.';
+    await loadImageOverrideState(fname);
+    refreshStatus();
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+  }
+}
+
+// ── Compare presets ───────────────────────────────────────────────
+//
+// Renders a handful of candidates for THIS picture side by side. Trying each
+// setting by hand is the slow part of fixing an image that converts badly, and
+// the palette LUT — the axis that actually fixes a wrong-coloured print — is
+// buried in the advanced knobs where nobody finds it.
+
+function imageCompareCandidates() {
+  const current = deepCopy(_getState('imgcfg'));
+  const tiles = [{label: 'Current', config: current, crop: imgcfgCropOverride}];
+
+  Object.entries(ditherPresets).forEach(([key, p]) => {
+    const {label, description, ...fields} = p;
+    if (JSON.stringify(fields) === JSON.stringify(current)) return;  // already "Current"
+    tiles.push({label: label || key, config: fields, crop: imgcfgCropOverride});
+  });
+
+  // The LUT sweep is the point of the exercise: all the built-in presets share
+  // one palette LUT, so a picture that comes out the wrong colour cannot be
+  // fixed by picking a different preset.
+  [['oklab_hue_aware', 'OKLAB hue-aware'],
+   ['cam16ucs_hue_aware', 'CAM16-UCS hue-aware'],
+   ['euclidean_weighted', 'Weighted CIELAB']].forEach(([lut, label]) => {
+    if (current.dither && current.dither.lut_name === lut) return;
+    const cfg = deepCopy(current);
+    cfg.dither.lut_name = lut;
+    tiles.push({label, config: cfg, crop: imgcfgCropOverride});
+  });
+
+  // Only worth showing when the picture does not already fit the panel.
+  const slider = document.getElementById('imgcfg-crop');
+  const effectiveCrop = parseFloat(slider.dataset.effective || '0');
+  const hint = document.getElementById('imgcfg-crop-hint').textContent;
+  if (hint && effectiveCrop < 1.0) {
+    tiles.push({label: 'Current, cropped to fill', config: current, crop: 1.0});
+  }
+  return tiles;
+}
+
+async function runImageCompareGrid() {
+  if (imgcfgCompareBusy) return;   // a second click must not queue a second run
+  const fname = imgcfgFilename;
+  const grid = document.getElementById('imgcfg-compare-grid');
+  const status = document.getElementById('imgcfg-apply-status');
+  if (!fname || !grid) return;
+
+  const tiles = imageCompareCandidates();
+  grid.innerHTML = '';
+  grid.hidden = false;
+  imgcfgCompareBusy = true;
+  imgcfgCompareAbort = new AbortController();
+  const signal = imgcfgCompareAbort.signal;
+
+  tiles.forEach((t, i) => {
+    const fig = document.createElement('figure');
+    fig.className = 'imgcfg-compare-tile';
+    fig.innerHTML = `<img alt="${escapeHtml(t.label)}"><figcaption>${escapeHtml(t.label)}</figcaption>`;
+    fig.addEventListener('click', () => {
+      _setState('imgcfg', deepCopy(t.config));
+      if (t.crop !== undefined && t.crop !== null) {
+        imgcfgCropOverride = t.crop;
+        syncImageCropControl(parseFloat(document.getElementById('imgcfg-crop').dataset.effective || '0'));
+      }
+      selectPresetMatching(_getState('imgcfg'), 'imgcfg');
+      renderDitherPanel('imgcfg');
+      markImageOverrideDirty();
+      status.textContent = `Loaded “${t.label}” — Apply to keep it.`;
+    });
+    grid.appendChild(fig);
+    t.node = fig.querySelector('img');
+  });
+
+  try {
+    // Strictly sequential. Each preview decodes the full source image, and that
+    // decode — not the dither — is the expensive part; the server serialises it
+    // anyway, and firing them in parallel would just hold several decoded images
+    // at once and starve the screen-serving path on a small box.
+    for (let i = 0; i < tiles.length; i++) {
+      if (signal.aborted) return;
+      status.textContent = `Rendering ${i + 1}/${tiles.length}…`;
+      const body = ditherPreviewBody('imgcfg', fname, {max_side_px: 300});
+      body.image = tiles[i].config;
+      if (tiles[i].crop !== null && tiles[i].crop !== undefined) {
+        body.crop_to_fill_threshold = tiles[i].crop;
+      }
+      const resp = await fetch('/hokku/api/dither/preview', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const url = URL.createObjectURL(await resp.blob());
+      tiles[i].node.src = url;
+      tiles[i].node.dataset.url = url;   // revoked when the modal closes
+    }
+    status.textContent = 'Pick the one that looks right, then Apply.';
+  } catch (e) {
+    // Aborting the fetch does NOT stop the render already running on the
+    // server; the endpoint's own concurrency cap is what protects it.
+    if (e.name !== 'AbortError') status.textContent = 'Compare failed: ' + e.message;
+  } finally {
+    imgcfgCompareBusy = false;
+  }
 }
 
 // Split into two passes:
@@ -3599,20 +4047,37 @@ async function loadConfig() {
     document.getElementById('debug-active-banner').style.display = debugOn ? 'block' : 'none';
     document.getElementById('debug-secs').textContent = debugSecs;
 
-    // Dither presets + current state for all three panels.
+    // Dither presets + current state for the three Config-tab pipelines. The
+    // per-picture editor is mounted on demand by the image details modal.
     lastPanelData = data.panel || {visual_w: {{visual_w}}, visual_h: {{visual_h}}};
     configDefaults = data.config_defaults || null;
     ditherPresets = data.dither_presets || {};
-    ditherState     = JSON.parse(JSON.stringify(cfg.image_config_default || {}));
-    bwDitherState   = JSON.parse(JSON.stringify(cfg.image_config_bw   || {}));
-    faceDitherState = JSON.parse(JSON.stringify(cfg.image_config_face  || {}));
-    populatePresetDropdown();  // populates default + bw + face dropdowns
-    selectPresetMatching(ditherState,     'default');
-    selectPresetMatching(bwDitherState,   'bw');
-    selectPresetMatching(faceDitherState, 'face');
-    renderDitherPanel('default');
-    renderDitherPanel('bw');
-    renderDitherPanel('face');
+    ditherPresetOrder = data.dither_preset_order || [];
+    // showFaceKeepout is on for the face pipeline only. The classifier hands
+    // face bounding boxes to the *face* branch alone — the B&W and default
+    // branches both return an empty tuple — so CLAHE keep-out never runs for a
+    // picture routed to those pipelines, and offering the overlay there would
+    // advertise a stage that cannot happen.
+    mountDitherEditor('default', document.getElementById('default-editor-mount'), {
+      presetLabel: 'Default dither preset:',
+      title: 'Advanced dithering pipeline',
+    });
+    mountDitherEditor('bw', document.getElementById('bw-editor-mount'), {
+      title: 'Advanced B&W pipeline',
+      intro: 'The image processing pipeline runs top to bottom. Hover any knob label to see what it does.',
+    });
+    mountDitherEditor('face', document.getElementById('face-editor-mount'), {
+      title: 'Advanced face pipeline',
+      intro: 'The image processing pipeline runs top to bottom. Hover any knob label to see what it does.',
+      showFaceKeepout: true,
+    });
+    populatePresetDropdown();
+    ['default', 'bw', 'face'].forEach(panelId => {
+      const key = panelId === 'default' ? 'image_config_default' : 'image_config_' + panelId;
+      _setState(panelId, deepCopy(cfg[key] || {}));
+      selectPresetMatching(_getState(panelId), panelId);
+      renderDitherPanel(panelId);
+    });
 
     // Pre-fill flash form WiFi fields from remembered credentials.
     const s1 = document.getElementById('flash-ssid');
