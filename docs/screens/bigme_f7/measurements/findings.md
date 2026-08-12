@@ -1,229 +1,252 @@
 # What the measurements say, and what to do about it
 
-> **RETRACTED (LUT sections below).** Every LUT comparison in this document was
-> measured with `hue_cutoff_deg=30, neutral_chroma=12`. Production ships
-> `95, 8` (`presets.py`), and those two numbers ARE the hue-aware gate. At the
-> shipped values `hue_aware` is bit-identical to `euclidean` on skin colours, and
-> the large blue shift reported below does not occur: production measures −5.61
-> db* (general) and −4.77 (faces), not −9.46.
->
-> Re-run at the correct parameters, `oklab` does give the least blue skin
-> (−1.15 vs −5.61) — vindicating the original human observation that "all but
-> oklab make lips blue". But shown side by side on the panel, the human verdict
-> was that **production looks better**: oklab reads "too light, overlighted",
-> and skin looks "more human" with the shipped config.
->
-> That matches whole-image ΔE (17.16 shipped vs 18.27 oklab) and contradicts the
-> blue-shift metric this document optimises. **The ΔE column predicted
-> preference; the blue-shift column did not.** No LUT change is recommended.
->
-> What survives untouched: the ink primaries, gamut, contrast, black-ink
-> non-neutrality, the dot-gain curve and the Yule-Nielsen model — none of which
-> involve the hue gate.
+Final write-up of the Bigme F7 colour campaign: **1700 readings over 20 sessions**,
+X-Rite ColorMunki Photo via ArgyllCMS `spotread`, reflective 45°/0°, one unit, the
+meter clamped in a single position for the entire campaign.
 
-Working notes from characterising the Bigme F7 panel with an X-Rite ColorMunki
-Photo (ArgyllCMS `spotread`, reflective 45°/0°). Raw readings live alongside this
-file; the tools are `tools/color_*.py`.
+Every number below is regenerated from the committed dataset by
+`tools/color_findings.py`. Run it to check this document rather than trusting it —
+the numbers here were wrong once, in a way described at the end, precisely because
+they were written by hand from whatever subset existed on the day.
 
-## The headline: skin goes blue because of `hue_aware`
+Data and schema: [`data/`](data/). Tools: `tools/color_*.py`.
 
-The complaint that started this work was that faces render with a blue cast under
-every dither setting except oklab. That is now measured, and the cause is narrower
-than "the colour space".
+## What actually changed in the product
 
-Blue shift is how far warm skin moves along the blue-yellow axis (negative =
-bluer than it should be), predicted from the fitted model with everything except
-the LUT held fixed:
+One thing, and it was a bug rather than a preference:
 
-| LUT | blue shift | LUT | blue shift |
-|---|---:|---|---:|
-| oklab | −1.72 | cam16ucs_hue_aware | −9.11 |
-| cam16ucs | −2.73 | **hue_aware** *(production)* | **−9.46** |
-| euclidean_weighted | −3.92 | oklab_hue_aware | −10.09 |
-| euclidean | −4.03 | hue_aware_weighted | −10.19 |
+- **The dynamic-range compressor targeted a range the panel cannot show.** It
+  derived its lightness anchors from `palette_measured_rgb`, a third-party table
+  whose white sits at L\* 79.3. This glass tops out at **L\* 67.96**. The DRC was
+  compressing every image into a range 37 % wider than the display, so both ends
+  clipped — on one test portrait, half the image collapsed into flat black. Fixed
+  by `drc_anchor_l` on the display spec ([`display.py`](../../../../python/hokku/screens/bigme_f7/display.py)),
+  with the renderer falling back to the old behaviour when a screen has not been
+  measured. Confirmed better on glass, side by side.
 
-The pattern is the **`hue_aware` modifier**, not the space it is applied to:
+Nothing else is recommended. In particular **no dither LUT change**, which is not
+where this work expected to land — see [The LUT question](#the-lut-question).
 
-| base | plain | + hue_aware |
-|---|---:|---:|
-| euclidean | −4.03 | −9.46 |
-| oklab | −1.72 | −10.09 |
-| cam16ucs | −2.73 | −9.11 |
+## The panel
 
-Adding it multiplies the shift in every space. That is consistent with the known
-defect that its gate tests the *drifted* value's hue rather than the source
-pixel's, so warm tones misfire and recruit blue ink.
+| ink | reads | L\* | a\* | b\* | Y % | spread ΔE |
+|---|---:|---:|---:|---:|---:|---:|
+| black | 42 | 10.18 | +10.75 | −10.56 | 1.15 | 0.269 |
+| white | 42 | 67.96 | −3.81 | −2.20 | 37.91 | 0.289 |
+| yellow | 41 | 66.96 | −13.66 | +73.09 | 36.58 | 0.247 |
+| red | 41 | 25.17 | +40.00 | +29.36 | 4.47 | 0.429 |
+| blue | 40 | 33.08 | +6.60 | −41.58 | 7.57 | 0.393 |
+| green | 40 | 34.00 | −24.96 | +7.72 | 8.01 | 0.510 |
 
-### Confirmed on photographs, where it is worse
+**Contrast is 33.0 : 1** — white Y 37.91 %, black Y 1.15 %. That is the physical
+ceiling; no amount of rendering produces a brighter white or a deeper black than
+the ink.
 
-Swatch results have misled in this project before, so this was re-run on
-portraits, predicting perceived colour by locally averaging ink coverage (the eye
-integrates dots) and applying the model per position. Δb\* on skin pixels:
+**Gamut is 46 % of sRGB, 26 % of the visible locus** (xy hull area 0.05165).
 
-| portrait | skin px | hue_aware | oklab | cam16ucs | euclidean |
-|---|---:|---:|---:|---:|---:|
-| Robert De Niro | 33.5 % | **−16.38** | +1.56 | +0.69 | −0.33 |
-| Anna Unterberger | 15.6 % | **−19.53** | −8.26 | −8.50 | −9.72 |
-| Wayuu woman | 30.2 % | **−7.05** | −0.91 | −1.09 | −2.01 |
+> Both figures previously published here — 55 % of sRGB and 18.5 % of the visible
+> locus — were wrong, and provably so without remeasuring anything: the two
+> references differ by a fixed ratio, so 55 % of sRGB *is* 32 % of the locus and
+> the pair could never both be right. They were computed at different times from
+> different subsets. `color_findings.py` now derives both from one hull area.
 
-Same ordering on all three, at every blur radius, and **stronger** than the
-swatch estimate of −9.46.
+**Black ink is not neutral** — a\* +10.75, b\* −10.56, chroma 15.1, a violet-blue.
+A grey dithered from black and white therefore drifts off-neutral as it darkens,
+and this is the origin of most of the grey-cast behaviour further down.
 
-### What it costs elsewhere
+**Chromaticity flatters this panel.** The saturated inks are also the dark ones:
 
-Changing the LUT moves every image, so:
+| ink | Y % where its chromaticity lives |
+|---|---:|
+| red | 4.47 |
+| blue | 7.57 |
+| green | 8.01 |
+| yellow | 36.58 |
 
-| metric | hue_aware (now) | oklab | cam16ucs |
+Against a 37.91 % white, red is reachable only at a twelfth of paper luminance.
+The usable *volume* is far smaller than the xy outline suggests, which is why
+gamut mapping is a design decision and not something measurement settles.
+
+## How much of any of this is real
+
+The campaign re-measured all six solid inks at the start and end of every session.
+Those brackets are the error bars.
+
+| ink | brackets | mean ΔE to that ink's mean | worst |
 |---|---:|---:|---:|
-| skin ΔE | 15.17 | 14.67 | **12.39** |
-| skin \|Δhue\| | 46.77 | 57.27 | **36.33** |
-| skin blue shift | −9.46 | **−1.72** | −2.73 |
-| greys ΔE | 12.25 | 14.65 | **11.74** |
-| gamut ΔE | 50.34 | 47.62 | **45.27** |
+| black | 35 | 0.290 | 0.686 |
+| white | 35 | 0.267 | 0.651 |
+| yellow | 34 | 0.245 | 0.681 |
+| red | 34 | 0.412 | 1.188 |
+| blue | 34 | 0.374 | 0.832 |
+| green | 34 | 0.501 | 1.096 |
 
-**`cam16ucs` is better or equal on every stable metric** while nearly matching
-oklab on blue shift. The apparent exception (greys \|Δhue\|: 90 vs 65) is not
-meaningful — at near-zero chroma the hue *angle* is numerically unstable, so
-greys ΔE and Δchroma are the columns that count.
+**Noise floor: mean 0.348 ΔE, p95 0.785.** Within a session, open-to-close drift
+is 0.458 ΔE mean over 90 pairs. It is non-directional and uncorrelated with
+elapsed time, which is what identifies it as panel refresh repeatability rather
+than instrument drift — the instrument was recalibrated every session and the
+brackets do not step at session boundaries.
 
-### And it is better on whole images, not only faces
+**Any conclusion in this document resting on a difference below ~0.4 ΔE is inside
+the noise.** Several candidate improvements died on exactly this.
 
-A global LUT change needs a global check. Whole-image mean ΔE over the 12 readable
-test images:
+### Dedup is sound
 
-| | hue_aware (now) | oklab | cam16ucs | euclidean |
-|---|---:|---:|---:|---:|
-| mean over 12 images | 19.34 | 18.95 | **17.37** | 17.31 |
+Many planned patches dither to a byte-identical raster; those inherited an earlier
+reading instead of being re-displayed (~54 % of the dense gamut phase). Where the
+same raster was nonetheless measured independently more than once — **4705 such
+pairs** — the readings agree to **mean 0.497 ΔE, median 0.421**. That is the noise
+floor, so inheritance costs nothing measurable.
 
-`cam16ucs` beats production on **11 of 12** images (the exception is the Wikipedia
-logo, by 0.08). The gains are not confined to faces — the RGB corner gradient
-improves 40.22 → 33.84 and the Albi panorama 20.69 → 16.55.
+Control patches are excluded from inheritance in both directions. A control that
+silently reused an old reading would report zero drift by construction.
 
-This is also what disqualifies **oklab** as a global default, which the skin
-metric alone would have chosen: despite the best blue shift, it is *worse* than
-production on the Dürer hare, Berlin Wall, Fitz Roy, the B&W forest road, the
-grayscale bar and the Wikipedia logo. It fixes skin by spending accuracy
-everywhere else.
+## Tone response: the pipeline's linearity assumption is false
 
-### Measured greys overturn cam16ucs — the answer is `euclidean`
+The dither assumes inks mix linearly by area. Measured across 64 levels of
+black-on-white:
 
-The LUT recommendation above rested on the model. Measuring what a requested
-*neutral grey* actually becomes changed it. Mid-range, production algorithm:
+| nominal | measured Y % | linear Y % | effective coverage | dot gain | ΔL\* |
+|---:|---:|---:|---:|---:|---:|
+| 0.125 | 30.4 | 33.2 | 0.202 | +0.077 | 2.3 |
+| 0.250 | 24.0 | 28.6 | 0.377 | +0.127 | 4.4 |
+| 0.375 | 17.6 | 24.1 | 0.551 | +0.176 | 7.2 |
+| **0.500** | **11.7** | **19.5** | **0.713** | **+0.213** | **10.6** |
+| 0.625 | 9.3 | 14.9 | 0.778 | +0.153 | 9.0 |
+| 0.750 | 6.3 | 10.3 | 0.861 | +0.111 | 8.4 |
+| 0.875 | 3.7 | 5.7 | 0.931 | +0.056 | 6.2 |
 
-| config | grey cast | | config | grey cast |
-|---|---:|---|---|---:|
-| **euclidean** | **3.56** | | cam16ucs | 5.55 |
-| hue_aware | 3.64 | | bw | 6.36 |
-| oklab_hue_aware | 4.91 | | **oklab** | **9.12** |
-| cam16ucs_hue_aware | 5.26 | | | |
+A 50 % dither prints like **71 %** coverage — ΔL\* 10.6, far above any
+just-noticeable threshold. The curve is the classic dot-gain arch, peaking
+mid-tone and closing at both ends, so no gain or exposure shift corrects it.
 
-Two things fall out. Plain **cam16ucs costs grey neutrality** (5.55 vs 3.64), so
-it was buying skin at the price of neutrals. And plain **oklab is catastrophic on
-greys** — 9.12, worse than black-and-white-only, landing at a\* −8.0 because it
-recruits the most chromatic ink of any option. Greys go green. That is the LUT the
-skin metric alone would have picked.
-
-`bw` having the *worst* cast of the simple options, and it being blue (b\* −5.17),
-is the black ink's own violet bias showing through undiluted — which is exactly
-what the hue-aware machinery exists to cancel, and why it wins on greys while
-losing badly on skin.
-
-The ranking is identical using only freshly-measured patches (23 of 39 were
-inherited from byte-identical rasters), so the dedup did not manufacture it.
-
-**Recommendation: `euclidean` for `general` and `faces`.**
-
-| metric | hue_aware (now) | cam16ucs | euclidean |
-|---|---:|---:|---:|
-| grey cast (measured) | 3.64 | 5.55 | **3.56** |
-| whole-image ΔE, 12 photos | 19.34 | 17.37 | **17.31** |
-| skin ΔE | 15.17 | 12.39 | **12.38** |
-| skin \|Δhue\| | 46.77 | 36.33 | **32.11** |
-| skin blue shift | −9.46 | **−2.73** | −4.03 |
-
-Best or tied-best on four of five, and its one loss is still less than half of
-production's blue shift. Notably it is also the *simplest* option — plain CIELAB
-nearest-neighbour, no hue machinery and no perceptual colour space. Every more
-elaborate alternative measured worse.
-
-**Validate on real glass before shipping** — the non-grey evidence is still
-model-based, with the tonal chain switched off, and it scores colour, not texture.
-
-## What did NOT turn out to matter: the palette anchors
-
-`palette_measured_rgb` came from a third-party table (`epdoptimize`), not this
-glass, and is wrong by mean ΔE 13 after white-normalising (worst: red, 24). It
-looked like the root cause, and it was recommended as the first fix.
-
-That was wrong. Substituting measured anchors changes almost nothing:
-
-| set | current | measured (white-normalised) |
-|---|---:|---:|
-| skin | 15.17 | 14.32 |
-| greys | 12.25 | 12.23 |
-| gamut | 50.34 | 50.48 |
-
-All inside the model's own ~2.5 ΔE residual, and the normalised anchors make
-greys clearly worse (\|Δhue\| 65 → 89). Absolute (un-normalised) anchors are worse
-everywhere — unsurprisingly, since they tell the quantiser its brightest ink is a
-mid grey.
-
-Why: aggregate error is dominated by **gamut limits** no anchor choice can move.
-The gamut set scores ΔE 50 whatever palette is used.
-
-## The panel itself
-
-| | |
-|---|---|
-| paper white | Y 37.7 %, L\* 67.8 |
-| black | Y 1.18 % |
-| contrast | 31.9 : 1 |
-| gamut area | 55 % of sRGB, 18.5 % of the visible locus |
-| repeat-to-repeat noise | 0.1–0.4 ΔE |
-
-Black ink is **not neutral** — a\* +10.8, b\* −10.6, a violet-blue — so a grey
-dithered from black and white drifts steadily off-neutral as it darkens.
-
-Chromaticity flatters the panel: red reaches its chromaticity only at Y 4.5 % and
-blue at Y 7.6 %, against a 37.7 % white. The usable *volume* is far smaller than
-the xy outline suggests, which is why gamut mapping is a design decision rather
-than something measurement settles.
+**This does not mean the pipeline needs a dot-gain correction.** Error diffusion
+is a closed loop: it measures its own accumulated error against the palette and
+compensates as it goes, so end-to-end the rendered mid-tones already land close.
+The arch is a property of *open-loop coverage*, and it matters for the model
+below, not for the shipped renderer. Applying an inverse-transfer LUT on top of
+error diffusion would double-correct.
 
 ## The model
 
-Yule-Nielsen fitted to every patch (each carries its exact ink histogram, since we
-generate the rasters):
+Yule-Nielsen fitted to every patch, each carrying its exact ink histogram (we
+generate the rasters, so coverage is known rather than estimated):
 
 ```
-n = 1.62        mean ΔE76 2.49   (linear-mixing baseline 5.23)
-                -> removes 52 % of the error
+n = 1.51        mean ΔE76 1.72   over 975 mixed patches
+                linear-mixing baseline 5.74  ->  removes 70 % of the error
 ```
 
-Per config, `n` independently reproduces the ordered-vs-diffused split found
-earlier by a different route:
+Per config, `n` reproduces the ordered-versus-diffused split found earlier by a
+different route — ordered dithers clump ink and print heavier:
 
-| config | n | config | n |
-|---|---:|---|---:|
-| bayer (ordered) | 1.90 | atkinson | 1.61 |
-| stucki_serp | 1.74 | fs_cam16ucs_hue_aware | 1.47 |
-| floyd_steinberg | 1.69 | atkinson_hue_aware | 1.45 |
+| config | n | ΔE | patches |
+|---|---:|---:|---:|
+| atkinson_serp_bw | 1.63 | 2.68 | 12 |
+| fs_cam16ucs_hue_aware | 1.47 | 2.15 | 97 |
+| atkinson_hue_aware | 1.47 | 2.23 | 577 |
+| atkinson_oklab_hue_aware | 1.46 | 2.44 | 72 |
 
-A 2.49 ΔE residual against a 0.3 ΔE noise floor says the model is still missing
-something — most likely that `n` varies with coverage rather than being constant
-across the arch. Spectral fitting (spectra are now recorded) and per-config `n`
-are the next refinements.
+A 1.72 ΔE residual against a 0.35 ΔE noise floor means the model is still missing
+something real — most likely that `n` varies with coverage rather than being
+constant across the arch. Spectral fitting (spectra are recorded for every
+reading) and coverage-dependent `n` are the obvious next refinements.
+
+## Grey neutrality by LUT
+
+What a *requested neutral* actually becomes, over every true-neutral patch:
+
+| config | n | cast (chroma) | a\* | b\* |
+|---|---:|---:|---:|---:|
+| **atkinson_serp_euclidean** | 13 | **6.26** | +0.47 | −3.65 |
+| atkinson_serp_hue_aware *(≈ production)* | 13 | 6.31 | +0.52 | −3.84 |
+| atkinson_serp_oklab_hue_aware | 13 | 6.87 | −1.11 | −2.46 |
+| atkinson_serp_cam16ucs_hue_aware | 13 | 7.56 | −0.98 | −1.92 |
+| atkinson_serp_cam16ucs | 13 | 7.79 | −1.08 | −1.69 |
+| *bw variants* | 13 ea | 8.11 – 8.41 | +0.9…+1.5 | −6.4…−6.7 |
+| **atkinson_serp_oklab** | 13 | **10.11** | −3.94 | −0.42 |
+
+Three things fall out.
+
+**`euclidean` and production are tied** — 6.26 versus 6.31, a difference of 0.05
+against a 0.35 noise floor. There is no grey argument for switching.
+
+**Plain `oklab` is the worst option measured**, at 10.11 — worse than
+black-and-white-only. It lands at a\* −3.94: greys go green, because it recruits
+the most chromatic ink available. This is the LUT that the skin-tone metric alone
+would have selected.
+
+**The `bw` variants are strongly blue** (b\* ≈ −6.5), which is the black ink's own
+violet bias showing through undiluted. That is exactly what the hue-aware
+machinery exists to cancel.
+
+## The LUT question
+
+The work started from a real complaint: faces looked blue under every setting
+except oklab. A long chain of measurement appeared to confirm it, identify
+`hue_aware` as the cause, and recommend a replacement — three times, converging on
+three different answers. **All three were wrong, for one reason.**
+
+Every LUT comparison was run at `hue_cutoff_deg=30, neutral_chroma=12`. Production
+ships **`95, 8`** ([`presets.py`](../../../../python/hokku/webserver/presets.py)),
+and those two numbers *are* the hue-aware gate. At the shipped values `hue_aware`
+is **bit-identical to `euclidean` on skin colours**. The entire effect being
+characterised, and every fix proposed for it, belonged to a configuration that has
+never shipped.
+
+Re-run correctly, the blue shift on skin is −5.61 (general) and −4.77 (faces), not
+the −9.46 originally reported. `oklab` does give the least blue skin (−1.15),
+vindicating the original human observation. But shown side by side on the glass,
+the verdict was that **production looks better**: oklab reads "too light,
+overlighted", and skin looks "more human" with the shipped config. That matches
+whole-image ΔE (**17.16** production versus **18.27** oklab) and contradicts the
+blue-shift metric the earlier analysis was optimising.
+
+**The ΔE column predicted human preference; the blue-shift column did not.**
+
+Four candidate improvements were put on glass over this campaign. Three —
+`cam16ucs`, `euclidean`, `oklab` — were rejected on sight by a human. The one that
+survived was the DRC bug. The pattern is worth keeping: *preference* arguments
+lost every time, and the *correctness* argument won.
+
+### What was never in doubt
+
+The palette anchors, gamut, contrast, black-ink non-neutrality, dot-gain curve and
+Yule-Nielsen fit involve no hue gate and were unaffected by the error above.
+
+Separately, replacing `palette_measured_rgb` with measured anchors — which looked
+like the obvious first fix — changes almost nothing (skin ΔE 15.17 → 14.32, greys
+12.25 → 12.23, gamut 50.34 → 50.48), all inside the model's own residual.
+Aggregate error is dominated by **gamut limits no anchor choice can move**.
 
 ## Rig notes that cost real time
 
 - **The dark calibration expires after exactly one hour.** Not physics — a
-  hardcoded constant, `DCALTOUT` in ArgyllCMS `spectro/munki_imp.c`, compared
-  against elapsed time with nothing measured. The *white* calibration lasts 24 h,
-  so the dial rotation is not about the tile.
-- Passing a reading proves the calibration is valid *now*, not that any life
-  remains. Starting a cycle on a nearly-expired calibration wastes the cycle;
-  `tools/f7_calibrate.py` records the time and the runner refuses a stale one.
-- Intermittent `Communications failure` from the ColorMunki is normal (~2 per 114
-  reads) and self-clearing. Do not treat one as fatal.
+  hardcoded `DCALTOUT` in ArgyllCMS `spectro/munki_imp.c`, compared against
+  elapsed time with nothing measured. The *white* calibration lasts 24 h, so the
+  dial rotation is not about the tile. This sets the whole campaign's rhythm:
+  ~55 usable minutes per human-attended cycle.
+- Passing a reading proves a calibration is valid *now*, not that any life
+  remains. `tools/f7_calibrate.py` records the time; the runner refuses to start a
+  cycle it cannot finish.
+- **`Communications failure` right after a successful calibration is a wedged USB
+  endpoint, not a dial problem.** Re-seating the dial does not fix it; unplugging
+  and replugging the instrument does. Diagnosed the slow way.
+- Intermittent `Communications failure` mid-run is normal (~2 per 114 reads) and
+  self-clearing. Do not treat one as fatal — but do not classify it as calibration
+  expiry either, since spotread's own banner contains the word "calibration" and
+  matching on it halved every cycle for a while.
 - The 6 mm aperture spans only ~3.8 Bayer periods at this pixel pitch, which
-  sounds marginal, but simulating all 64 sub-tile phases bounds the sampling bias
-  at ~0.004 coverage — an order of magnitude below the effects being measured.
+  sounds marginal; simulating all 64 sub-tile phases bounds the sampling bias at
+  ~0.004 coverage, an order of magnitude below the effects being measured.
+
+## What this dataset is now for
+
+Coverage is complete: 1434 of 1436 planned patches (the 2 uncollected are drift
+controls, dropped deliberately). Every reading carries its full 380–730 nm
+spectrum.
+
+The dense gamut phase — 729 patches spanning the reachable volume — was collected
+to support a **3-D correction LUT**, mapping requested sRGB to the coverage that
+actually produces it. That build has not been started. It is entirely offline: no
+panel, no meter, no calibration window.
