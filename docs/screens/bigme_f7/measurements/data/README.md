@@ -121,3 +121,29 @@ differs only in `firmware`, only on those 20 rows.
 
 See [`../findings.md`](../findings.md) for what was concluded, including what was
 concluded wrongly and retracted.
+
+## Room-light and human-verdict data
+
+Added 2026-08-11. These are not part of the campaign proper but live here for the
+same reason: neither can be regenerated.
+
+| file | what it is |
+|---|---|
+| `ambient.jsonl` | measured room-light SPD, one JSON object per reading session |
+| `ab_verdicts.jsonl` | one line per blind A/B trial — the human verdict |
+| `ab_plan.json` | the trial list, including the side assignment held back during judging |
+
+`ambient.jsonl` is what makes the campaign's spectra usable for a real room:
+reflectance is a property of the ink, but an *appearance* needs an illuminant, and
+D65 is a standard rather than anywhere anyone sits. Each record carries the median
+of several reads plus the full 380–730 nm SPD.
+
+**A reading is only valid for the dimmer setting it was taken at.** The measured
+lamp is dim-to-warm, so its correlated colour temperature moves with brightness by
+design; the `note` field records the setting and is not optional in practice.
+
+`ab_verdicts.jsonl` is irreplaceable in a different way — it is an hour of one
+person's judgement, and re-running it produces a different sample rather than the
+same one. `winner` is resolved at write time so the verdicts stand alone if the
+plan is ever lost. See [`../ab_session_2026-08-11.md`](../ab_session_2026-08-11.md)
+for conditions, validity checks and what the session concluded.
