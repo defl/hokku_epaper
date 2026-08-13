@@ -8,6 +8,7 @@ set(HOKKU_COMMON_ALL "${CMAKE_CURRENT_LIST_DIR}/../../common/all")
 
 idf_component_register(
     SRCS "main.c"
+         "console.c"
          "${HOKKU_COMMON}/config.c"
          "${HOKKU_COMMON}/text_render.c"
          "${HOKKU_COMMON}/state.c"
@@ -19,6 +20,7 @@ idf_component_register(
          "${HOKKU_COMMON}/ota.c"
          "${HOKKU_COMMON_ALL}/firmware_url.c"
          "${HOKKU_COMMON_ALL}/frame_state.c"
+         "${HOKKU_COMMON_ALL}/frame_proto.c"
          "${HOKKU_COMMON_ALL}/json_util.c"
          "${HOKKU_COMMON_ALL}/logbuf.c"
          "${HOKKU_COMMON_ALL}/backoff.c"

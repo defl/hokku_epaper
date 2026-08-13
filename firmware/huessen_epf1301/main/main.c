@@ -172,6 +172,8 @@ static spi_device_handle_t spi_handle;
 #include "firmware_url.h"   /* firmware endpoint derivation (SoC-agnostic) */
 #include "backoff.h"        /* shared exponential-retry-backoff policy (SoC-agnostic) */
 #include "json_util.h"      /* json_escape (SoC-agnostic) */
+#include "frame_proto.h"    /* serial frame-upload protocol (SoC-agnostic) */
+#include "console.h"        /* USB Serial/JTAG console + `frame` dispatch */
 
 /* Display a text message on the e-ink screen.
  * Buffer layout is identical to an image: first 480K = panel 1 (600 wide),
@@ -794,6 +796,110 @@ static void split_and_display(const uint8_t *img)
 {
     epaper_display_dual(img, img + PANEL_SIZE);
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  `frame` — receive an exact panel buffer over USB and display it
+ *
+ * Colour measurement needs a known raster on the glass with nothing between the
+ * host and the ink: no render pipeline, no dithering decided on-device, no
+ * server. The protocol is in firmware/common/all/frame_proto.h and is shared
+ * byte-for-byte with the Bigme F7, so one host tool drives both.
+ *
+ * Two board-specific notes:
+ *
+ * The whole 960 KB lands in PSRAM before any of it reaches the panel. The F7
+ * streams straight to its controller because it has no room to do otherwise;
+ * here there is 8 MB of PSRAM, and buffering is strictly better — the CRC can be
+ * checked BEFORE the panel is touched, so a corrupted transfer displays nothing
+ * at all rather than leaving a half-written picture on the glass.
+ *
+ * Logging is silenced for the duration. ESP_LOG shares this exact peripheral
+ * with the protocol, so one stray log line lands in the middle of the host's
+ * payload and desynchronises the stream. The suppression is restored on every
+ * path out, including the failures.
+ * ═══════════════════════════════════════════════════════════════════ */
+/* Kept across calls: a measurement run is hundreds of frames, and re-allocating
+ * 960 KB each time invites PSRAM fragmentation.
+ *
+ * FILE scope, deliberately, and it must stay that way. The host tests compile
+ * this file with `static` #defined away, which turns a function-local `static`
+ * into an ordinary uninitialised local — so the `if (!buf)` guard below would
+ * read indeterminate stack, usually skip the allocation, and write 960 KB
+ * through a garbage pointer. At file scope the variable still has static storage
+ * duration and is zero-initialised with or without the keyword. */
+static uint8_t *g_frame_buf;
+
+int hokku_frame_receive(void)
+{
+    char line[64];
+    uint32_t received = 0;
+    uint32_t crc = 0;
+    uint32_t chunks;
+    uint32_t i;
+    int ok = 1;
+
+    if (hokku_console_busy()) {
+        hokku_console_printf_line("ERR frame already in progress");
+        return -1;
+    }
+
+    if (!g_frame_buf) {
+        g_frame_buf = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
+        if (!g_frame_buf) {
+            hokku_console_printf_line("ERR no PSRAM for frame buffer");
+            return -1;
+        }
+    }
+
+    hokku_console_frame_begin();
+    snprintf(line, sizeof(line), "%s %u %u", FRAME_PROTO_READY,
+             (unsigned)TOTAL_IMAGE_SIZE, (unsigned)FRAME_PROTO_CHUNK_BYTES);
+    hokku_console_printf_line(line);
+
+    /* From here the wire carries raw payload. Do not log, and do not return
+     * early — every exit below goes through the restore at the bottom. */
+    log_level_apply(false);
+    esp_log_level_set("*", ESP_LOG_NONE);
+
+    chunks = frame_proto_chunk_count(TOTAL_IMAGE_SIZE, FRAME_PROTO_CHUNK_BYTES);
+    for (i = 0; i < chunks; i++) {
+        uint32_t want = frame_proto_chunk_size(TOTAL_IMAGE_SIZE,
+                                               FRAME_PROTO_CHUNK_BYTES, i);
+        int n = hokku_console_read(g_frame_buf + received, want,
+                                   FRAME_PROTO_RX_TIMEOUT_MS);
+        if (n != (int)want) {
+            ok = 0;                 /* timeout or short read: host gone */
+            break;
+        }
+        crc = frame_proto_crc32(crc, g_frame_buf + received, want);
+        received += want;
+
+        /* Per-chunk ACK is the flow control; the host sends the next chunk
+         * only after seeing it. */
+        const uint8_t ack = FRAME_PROTO_ACK;
+        hokku_console_write(&ack, 1);
+    }
+
+    esp_log_level_set("*", ESP_LOG_INFO);
+    log_level_apply(true);
+
+    if (!ok) {
+        hokku_console_frame_end();
+        snprintf(line, sizeof(line), "ERR short read at %u/%u",
+                 (unsigned)received, (unsigned)TOTAL_IMAGE_SIZE);
+        hokku_console_printf_line(line);
+        return -1;                  /* panel untouched — nothing was displayed */
+    }
+
+    snprintf(line, sizeof(line), "%s %u", FRAME_PROTO_DONE, (unsigned)crc);
+    hokku_console_printf_line(line);
+
+    split_and_display(g_frame_buf);   /* ~30 s: power up, write, refresh, power down */
+
+    hokku_console_printf_line(FRAME_PROTO_REFRESHED);
+    hokku_console_frame_end();
+    return 0;
+}
 static int read_battery_mv(void)
 {
     adc_oneshot_unit_handle_t handle;
@@ -1252,6 +1358,10 @@ static void regime_usb_awake(int64_t boot_time_us)
     log_level_apply(true);
     ESP_LOGI(TAG, "Entering USB_AWAKE regime");
 
+    /* Only here: a console reader is useful exactly when a host is plugged in,
+     * and on battery it would be a wakeup source that buys nothing. */
+    hokku_console_start();
+
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
 
@@ -1261,6 +1371,15 @@ static void regime_usb_awake(int64_t boot_time_us)
             /* regime_battery_idle terminates in deep sleep; never returns */
             return;
         }
+
+        /* A frame upload owns the device until it finishes. Both branches below
+         * call esp_restart(), which partway through a 960 KB transfer would drop
+         * the host mid-stream and reboot into a half-painted panel — during a run
+         * whose entire purpose is knowing what is on the glass. The checks are
+         * skipped, not queued: a refresh that came due during a measurement is
+         * exactly the repaint we do not want, and the next poll re-evaluates. */
+        if (hokku_console_busy())
+            continue;
 
         if (button1_pressed_debounced()) {
             trigger_restart(ACTION_REFRESH, LAST_SLEEP_MODE_BUTTON_USB);

@@ -28,6 +28,7 @@
 #include "mocks/driver/gpio.h"
 #include "mocks/driver/spi_master.h"
 #include "mocks/driver/rtc_io.h"
+#include "mocks/driver/usb_serial_jtag.h"
 #include "mocks/esp_adc/adc_oneshot.h"
 #include "mocks/esp_adc/adc_cali.h"
 #include "mocks/esp_adc/adc_cali_scheme.h"
@@ -64,6 +65,8 @@
 #include "../../../common/all/sleep_cal.c"    /* oscillator-drift calibration       */
 #include "../../../common/all/json_util.c"    /* json_escape                        */
 #include "../../../common/all/logbuf.c"       /* log buffer primitive (two-tier log)*/
+#include "../../../common/all/frame_proto.c"   /* serial frame-upload protocol       */
+#include "../../main/console.c"                  /* USB Serial/JTAG console + dispatch   */
 #include "../../main/main.c"                     /* all firmware logic                   */
 
 /* ── Minimal test framework ──────────────────────────────────────────── */
@@ -339,8 +342,124 @@ static void test_logger_ring_lifecycle(void)
     CHECK(n == 0 && s_log_ring_used == 0, "logger: reset clears the ring after upload");
 }
 
+/* ── `frame` upload over the USB Serial/JTAG console ──────────────────────
+ *
+ * Two properties matter more than the happy path.
+ *
+ * The console "busy" flag gates the USB_AWAKE regime's restarts. A frame that
+ * sets it without clearing it leaves a device that can never refresh or reboot
+ * on schedule again, which on a wall-mounted screen looks like a dead unit.
+ *
+ * And a transfer that fails must leave the glass ALONE. This board buffers the
+ * whole 960 KB in PSRAM precisely so the CRC can be checked before the panel is
+ * touched; a half-written picture during colour measurement is worse than no
+ * picture, because it is measurable and wrong rather than obviously absent. */
+
+static void frame_test_reset(void)
+{
+    _mock_usb_avail = 0;
+    _mock_usb_delivered = 0;
+    _mock_usb_reads = 0;
+    _mock_usb_tx_len = 0;
+    _mock_usb_tx_dropped = 0;
+    _mock_usb_install_result = ESP_OK;
+    _mock_usb_install_calls = 0;
+    s_busy = false;
+    _mock_gpio[PIN_EPAPER_BUSY] = 1;   /* controller idle, so waits return at once */
+}
+
+/* Did the device write this control line? The capture is raw bytes, not a C
+ * string, so search rather than strstr. */
+static int wire_contains(const char *needle)
+{
+    size_t n = strlen(needle);
+    uint32_t i;
+
+    if (n > _mock_usb_tx_len)
+        return 0;
+    for (i = 0; i + n <= _mock_usb_tx_len; i++) {
+        if (memcmp(_mock_usb_tx + i, needle, n) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static uint32_t wire_count_byte(uint8_t b)
+{
+    uint32_t i, c = 0;
+    for (i = 0; i < _mock_usb_tx_len; i++)
+        if (_mock_usb_tx[i] == b)
+            c++;
+    return c;
+}
+
+static void test_frame_rejects_when_already_busy(void)
+{
+    frame_test_reset();
+    s_busy = true;                      /* a transfer is already in flight */
+    _mock_usb_avail = TOTAL_IMAGE_SIZE;
+
+    CHECK(hokku_frame_receive() != 0, "frame: refused while another is in progress");
+    CHECK(_mock_usb_reads == 0, "frame: does not touch the wire when refused");
+    CHECK(!wire_contains(FRAME_PROTO_READY), "frame: no READY when refused");
+}
+
+static void test_frame_leaves_panel_untouched_when_host_dies(void)
+{
+    frame_test_reset();
+    _mock_usb_avail = FRAME_PROTO_CHUNK_BYTES + 7;   /* one chunk, then silence */
+
+    CHECK(hokku_frame_receive() != 0, "frame: truncated transfer reports failure");
+    CHECK(!wire_contains(FRAME_PROTO_DONE), "frame: no DONE on a short read");
+    CHECK(!wire_contains(FRAME_PROTO_REFRESHED),
+          "frame: panel untouched when the host vanishes mid-transfer");
+    CHECK(!hokku_console_busy(), "frame: busy flag released on the failure path");
+}
+
+static void test_frame_complete_transfer_acks_and_refreshes(void)
+{
+    uint32_t chunks = frame_proto_chunk_count(TOTAL_IMAGE_SIZE, FRAME_PROTO_CHUNK_BYTES);
+
+    frame_test_reset();
+    _mock_usb_avail = TOTAL_IMAGE_SIZE;
+
+    CHECK(hokku_frame_receive() == 0, "frame: complete transfer succeeds");
+    CHECK(_mock_usb_delivered == TOTAL_IMAGE_SIZE, "frame: consumes the whole image");
+    CHECK(wire_count_byte(FRAME_PROTO_ACK) >= chunks, "frame: one ACK per chunk");
+    CHECK(wire_contains(FRAME_PROTO_READY), "frame: announced READY");
+    CHECK(wire_contains(FRAME_PROTO_DONE), "frame: reported DONE with a CRC");
+    CHECK(wire_contains(FRAME_PROTO_REFRESHED), "frame: reported REFRESHED");
+    CHECK(!hokku_console_busy(), "frame: busy flag released on the success path");
+}
+
+static void test_console_ping_identifies_the_board(void)
+{
+    char line[] = "ping";
+
+    frame_test_reset();
+    handle_line(line);
+    CHECK(wire_contains("PONG"), "console: ping answers PONG");
+    CHECK(wire_contains("huessen_epf1301"), "console: ping names the model");
+}
+
+static void test_console_rejects_unknown_command(void)
+{
+    char line[] = "framez";
+
+    frame_test_reset();
+    handle_line(line);
+    CHECK(wire_contains("ERR"), "console: unknown command rejected");
+    CHECK(_mock_usb_reads == 0, "console: unknown command starts no transfer");
+}
+
 int main(void)
 {
+    /* Unbuffered: when a test crashes the harness rather than failing a CHECK,
+     * a block-buffered stdout discards every PASS line printed so far and the
+     * run looks like it produced nothing at all. The last line printed is the
+     * cheapest possible pointer at where it died. */
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     /* All mock GPIO pins start at 0 (LOW). Set defaults appropriate for the
      * firmware's expected hardware idle state. */
     memset(_mock_gpio, 0, sizeof(_mock_gpio));
@@ -377,6 +496,13 @@ int main(void)
 
     /* Logger (single RTC ring) */
     test_logger_ring_lifecycle();
+
+    /* Serial `frame` upload */
+    test_frame_rejects_when_already_busy();
+    test_frame_leaves_panel_untouched_when_host_dies();
+    test_frame_complete_transfer_acks_and_refreshes();
+    test_console_ping_identifies_the_board();
+    test_console_rejects_unknown_command();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

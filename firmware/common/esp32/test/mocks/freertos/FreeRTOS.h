@@ -36,6 +36,9 @@ typedef uint32_t TickType_t;
 #define pdMS_TO_TICKS(ms) ((TickType_t)(ms))
 #define pdTRUE  ((BaseType_t)1)
 #define pdFALSE ((BaseType_t)0)
+/* xTaskCreate's documented success value; the same as pdTRUE in real FreeRTOS. */
+#define pdPASS  pdTRUE
+#define pdFAIL  pdFALSE
 #define portMAX_DELAY ((TickType_t)0xFFFFFFFFU)
 #define BIT0 (1u << 0)
 #define BIT1 (1u << 1)
