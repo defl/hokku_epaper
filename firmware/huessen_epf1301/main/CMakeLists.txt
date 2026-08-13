@@ -21,6 +21,7 @@ idf_component_register(
          "${HOKKU_COMMON_ALL}/firmware_url.c"
          "${HOKKU_COMMON_ALL}/frame_state.c"
          "${HOKKU_COMMON_ALL}/frame_proto.c"
+         "${HOKKU_COMMON_ALL}/interactive.c"
          "${HOKKU_COMMON_ALL}/json_util.c"
          "${HOKKU_COMMON_ALL}/logbuf.c"
          "${HOKKU_COMMON_ALL}/backoff.c"

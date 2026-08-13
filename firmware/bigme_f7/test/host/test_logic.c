@@ -77,6 +77,7 @@
 #include "../../../common/all/backoff.c"       /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/frame_state.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/frame_proto.c"   /* SoC-agnostic (shared with ESP32) */
+#include "../../../common/all/interactive.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/logbuf.c"        /* SoC-agnostic (shared with ESP32) */
 /* Shared XR872 code (firmware/common/xr872) — included before main.c so its
  * (now non-static) symbols are defined when main.c references them. */
@@ -242,6 +243,46 @@ static void test_should_sleep_auto_stays_awake_on_usb(void)
     hokku_config_get()->power_mode = HOKKU_PWR_AUTO;
     _mock_gpio[GPIO_PORT_A][GPIO_PIN_20] = GPIO_PIN_LOW; /* PA20 LOW = USB present */
     CHECK(!hokku_should_sleep(), "should_sleep: AUTO stays awake on USB");
+}
+
+/* USB-interactive mode outranks the configured power mode, because it is an
+ * instruction about right now rather than a standing preference. Hibernating
+ * closes the console, which is precisely what the host asked us not to do. */
+static void test_should_sleep_interactive_overrides_pwr_sleep(void)
+{
+    reset_all_mocks();
+    hokku_config_get()->power_mode = HOKKU_PWR_SLEEP;
+    _mock_gpio[GPIO_PORT_A][GPIO_PIN_20] = GPIO_PIN_LOW; /* USB present */
+    hokku_interactive_set(true);
+    CHECK(!hokku_should_sleep(),
+          "should_sleep: interactive beats PWR_SLEEP while on USB");
+    hokku_interactive_set(false);
+}
+
+/* The safety rule, at the point where it actually protects something: the mode
+ * is set and the cable is pulled. If interactive still suppressed sleep here the
+ * screen would sit awake on battery until it was flat. */
+static void test_should_sleep_interactive_inert_on_battery(void)
+{
+    reset_all_mocks();
+    hokku_config_get()->power_mode = HOKKU_PWR_SLEEP;
+    _mock_gpio[GPIO_PORT_A][GPIO_PIN_20] = GPIO_PIN_HIGH; /* no USB */
+    hokku_interactive_set(true);
+    CHECK(hokku_should_sleep(),
+          "should_sleep: interactive is inert on battery — sleeps as configured");
+    hokku_interactive_set(false);
+}
+
+/* And it must not leak: clearing the mode restores the configured behaviour
+ * exactly, or a campaign would leave the screen permanently awake. */
+static void test_should_sleep_interactive_cleared_restores_config(void)
+{
+    reset_all_mocks();
+    hokku_config_get()->power_mode = HOKKU_PWR_SLEEP;
+    _mock_gpio[GPIO_PORT_A][GPIO_PIN_20] = GPIO_PIN_LOW; /* USB present */
+    hokku_interactive_set(true);
+    hokku_interactive_set(false);
+    CHECK(hokku_should_sleep(), "should_sleep: config honoured again once cleared");
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -731,6 +772,9 @@ int main(void)
     test_should_sleep_pwr_awake_always_false();
     test_should_sleep_auto_sleeps_on_battery();
     test_should_sleep_auto_stays_awake_on_usb();
+    test_should_sleep_interactive_overrides_pwr_sleep();
+    test_should_sleep_interactive_inert_on_battery();
+    test_should_sleep_interactive_cleared_restores_config();
 
     test_read_header_uint_parses_value();
     test_read_header_uint_absent_returns_zero();

@@ -48,6 +48,7 @@
 #include "backoff.h"
 #include "logbuf.h"
 #include "frame_proto.h"
+#include "interactive.h"
 
 /* SoC-shared XR872 code (firmware/common/xr872 — usable by any XR872/XR872AT
  * screen): activity log, software clock, HTTP-header helpers, hibernation. */
@@ -64,7 +65,7 @@
 #define HOKKU_SERVER_URL        "http://192.168.6.111:8080/hokku/screen/"
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.11"
+#define FIRMWARE_VERSION        "1.2.12"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -544,6 +545,17 @@ static int do_refresh(void)
 /* True when the device should deep-sleep (vs stay awake) between refreshes. */
 static int hokku_should_sleep(void)
 {
+    /* A host driving this screen over USB needs the console to still be there
+     * next time it looks. Hibernating closes it, so interactive mode outranks
+     * the configured power mode — including an explicit `power sleep`, which is
+     * a standing preference rather than an instruction about right now.
+     *
+     * Gated on USB inside hokku_interactive_engaged(): if the cable is pulled
+     * while the mode is set, this falls straight back to the configured
+     * behaviour instead of sitting awake until the battery is flat. */
+    if (hokku_interactive_engaged(led_usb_present()))
+        return 0;
+
     switch (hokku_config_get()->power_mode) {
     case HOKKU_PWR_SLEEP: return 1;
     case HOKKU_PWR_AWAKE: return 0;
@@ -569,6 +581,18 @@ static void refresh_thread_fn(void *arg)
     unsigned refresh_failures = 0;
 
     while (1) {
+        /* USB-interactive mode: a host owns the screen, so do not fetch and do
+         * not repaint. Checked before taking the lock — do_refresh() holds it for
+         * the length of a network round trip, and a `frame` upload waiting behind
+         * that would stall for seconds with the host already mid-protocol.
+         *
+         * Polled rather than event-driven because the thread has to keep
+         * re-testing anyway: the mode is plain RAM and the USB cable can move. */
+        if (hokku_interactive_engaged(led_usb_present())) {
+            OS_MSleep(500);
+            continue;
+        }
+
         /* Hold the OTA/flash lock across the whole refresh (which may itself run
          * an OTA on X-Firmware-Update) so a console `ota` can't run concurrently. */
         OS_MutexLock(&g_ota_lock, OS_WAIT_FOREVER);

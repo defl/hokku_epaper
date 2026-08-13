@@ -66,6 +66,7 @@
 #include "../../../common/all/json_util.c"    /* json_escape                        */
 #include "../../../common/all/logbuf.c"       /* log buffer primitive (two-tier log)*/
 #include "../../../common/all/frame_proto.c"   /* serial frame-upload protocol       */
+#include "../../../common/all/interactive.c"   /* USB-interactive mode policy        */
 #include "../../main/console.c"                  /* USB Serial/JTAG console + dispatch   */
 #include "../../main/main.c"                     /* all firmware logic                   */
 
@@ -442,6 +443,52 @@ static void test_console_ping_identifies_the_board(void)
     CHECK(wire_contains("huessen_epf1301"), "console: ping names the model");
 }
 
+static void test_console_interactive_round_trip(void)
+{
+    char on[] = "interactive on";
+    char off[] = "interactive off";
+
+    frame_test_reset();
+    hokku_interactive_set(false);
+
+    handle_line(on);
+    CHECK(hokku_interactive_requested(), "console: `interactive on` sets the mode");
+    CHECK(wire_contains("INTERACTIVE on"), "console: echoes the new state back");
+
+    /* The host has to be able to re-read it, because a crash reboot clears the
+     * mode silently and a host that assumed it still held the screen would be
+     * racing the refresh loop again without knowing. */
+    _mock_usb_tx_len = 0;
+    char ping[] = "ping";
+    handle_line(ping);
+    CHECK(wire_contains("interactive=on"), "console: ping reports the mode is on");
+
+    _mock_usb_tx_len = 0;
+    handle_line(off);
+    CHECK(!hokku_interactive_requested(), "console: `interactive off` clears the mode");
+    CHECK(wire_contains("INTERACTIVE off"), "console: echoes the cleared state");
+
+    _mock_usb_tx_len = 0;
+    handle_line(ping);
+    CHECK(wire_contains("interactive=off"), "console: ping reports the mode is off");
+}
+
+static void test_console_interactive_gates_on_usb(void)
+{
+    char on[] = "interactive on";
+
+    frame_test_reset();
+    hokku_interactive_set(false);
+    handle_line(on);
+
+    /* Requesting the mode is not the same as holding the screen. On battery the
+     * request stands but must be inert, or an unplugged screen would never sleep
+     * again. */
+    CHECK(hokku_interactive_engaged(true), "console: engaged while USB is present");
+    CHECK(!hokku_interactive_engaged(false), "console: inert once USB goes away");
+    hokku_interactive_set(false);
+}
+
 static void test_console_rejects_unknown_command(void)
 {
     char line[] = "framez";
@@ -502,6 +549,8 @@ int main(void)
     test_frame_leaves_panel_untouched_when_host_dies();
     test_frame_complete_transfer_acks_and_refreshes();
     test_console_ping_identifies_the_board();
+    test_console_interactive_round_trip();
+    test_console_interactive_gates_on_usb();
     test_console_rejects_unknown_command();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);

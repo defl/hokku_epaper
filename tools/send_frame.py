@@ -103,7 +103,35 @@ def _read_line(s: serial.Serial, timeout_s: float) -> str:
     return ""
 
 
-def open_device(port: str, model: str, timeout_s: float = 600.0) -> serial.Serial | None:
+def assert_interactive(s: serial.Serial, model: str) -> None:
+    """Tell the device a host owns it now, so it stops scheduling refreshes and
+    stops hibernating between uploads (firmware/common/all/interactive.h).
+
+    Without this, host-driven work over the console is a race: the device's
+    normal job is to wake on a schedule, fetch a picture and go back to sleep,
+    and every one of those steps takes the console away — the F7's closes when
+    it hibernates, the ESP32 boards reboot for each refresh and drop the USB
+    device entirely. Polling harder only makes the race less likely, never
+    absent, which is not good enough for a run of hundreds of consecutive
+    uploads.
+
+    Best-effort: an older firmware without the command just gets an ERR line
+    back, which is silently fine — it behaves exactly as it did before this
+    existed, still racy, but not worse off for the attempt.
+    """
+    s.reset_input_buffer()
+    s.write(b"interactive on\r\n")
+    s.flush()
+    line = _read_line(s, timeout_s=2.0)
+    if "engaged" in line.lower() or line.upper().startswith("INTERACTIVE ON"):
+        print(f"    {model}: interactive mode engaged")
+    elif line:
+        print(f"    {model}: interactive request got {line!r} — old firmware? proceeding anyway")
+
+
+def open_device(
+    port: str, model: str, timeout_s: float = 600.0, interactive: bool = True
+) -> serial.Serial | None:
     """Open the device's console, by whatever means that board needs.
 
     The two families differ in a way that matters here. The Bigme F7's console
@@ -116,11 +144,20 @@ def open_device(port: str, model: str, timeout_s: float = 600.0) -> serial.Seria
     and that the firmware is new enough to have one, before a caller commits to
     pushing a megabyte at a device that may not be able to receive it. Without it
     the failure surfaces as a silent timeout partway through an upload.
+
+    ``interactive`` asserts USB-interactive mode as part of the handshake — the
+    point at which the caller has a live console and is about to start relying
+    on it staying that way. Pass False only for one-off pokes (a single `ping`,
+    bring-up) where letting the device go back to its own schedule afterwards is
+    fine or even wanted.
     """
     if model == "bigme_f7":
         from color_measure_f7 import catch_console  # noqa: PLC0415 — avoids a cycle
 
-        return catch_console(port, timeout_s)
+        s = catch_console(port, timeout_s)
+        if s is not None and interactive:
+            assert_interactive(s, model)
+        return s
 
     # Poll, and reopen each round. These boards enumerate their console over
     # native USB, so a reboot makes the port itself disappear and come back —
@@ -146,6 +183,8 @@ def open_device(port: str, model: str, timeout_s: float = 600.0) -> serial.Seria
             line = _read_line(s, timeout_s=1.0)
             if line.startswith("PONG"):
                 print(f"    console: {line}")
+                if interactive:
+                    assert_interactive(s, model)
                 return s
         s.close()
         if not announced:
@@ -272,6 +311,12 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--target", action="store_true", help="the calibration target")
     g.add_argument("--bin", type=Path, help="send a raw panel .bin as-is")
     ap.add_argument("--repeat", type=int, default=1, help="repeat the whole sequence N times")
+    ap.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="do not assert USB-interactive mode — the device stays on its own "
+        "refresh schedule, which is racy for anything but a single one-off frame",
+    )
     args = ap.parse_args(argv)
 
     display = DISPLAY_REGISTRY[args.model]
@@ -301,7 +346,12 @@ def main(argv: list[str] | None = None) -> int:
     # ago" is not evidence it is answering now. Without this the symptom is
     # "device never sent READY", which reads like a firmware-too-old problem and
     # is actually a timing one.
-    s = open_device(args.port, args.model, timeout_s=args.console_timeout)
+    s = open_device(
+        args.port,
+        args.model,
+        timeout_s=args.console_timeout,
+        interactive=not args.no_interactive,
+    )
     if s is None:
         return 1
     # Do not toggle DTR/RTS, which can reset the board on some USB-serial bridges.

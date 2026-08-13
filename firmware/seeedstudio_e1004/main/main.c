@@ -13,6 +13,19 @@
  * docs/screens/seeedstudio_e1004/hardware_guesses.md — so there is no
  * USB-awake regime like huessen's): boot -> validate RTC state -> load config ->
  * if a refresh is due (or first boot / button wake): WiFi -> fetch (or OTA) ->
+ *
+ * NO USB-INTERACTIVE MODE (see firmware/common/all/interactive.h) YET. That
+ * feature lets a host driving `frame` over USB stop the device from hibernating
+ * between uploads. huessen's version bolts a console onto an existing USB_AWAKE
+ * regime loop; this board has no such loop to hook into — every wake does
+ * exactly one refresh then calls schedule_and_sleep() -> deep sleep, full stop.
+ * Adding it here means app_main conditionally diverting into a new awake loop
+ * instead of sleeping, which (with no USB-detect GPIO to gate on) means running
+ * a console reader concurrently with the refresh and checking it before the
+ * sleep call — a different shape of change, not a port of huessen's. Its serial
+ * line is also log output only today (see SERIAL CONSOLE below), not a command
+ * console. Tracked as follow-up; not started. Until then this board cannot run
+ * the colour-calibration campaign — huessen_epf1301 and bigme_f7 can.
  * display -> schedule -> deep sleep until the next refresh, waking early on a
  * button press (GPIO3/4/5). Deep sleep resets the chip, so each wake re-runs
  * app_main.

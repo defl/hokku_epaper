@@ -174,6 +174,7 @@ static spi_device_handle_t spi_handle;
 #include "json_util.h"      /* json_escape (SoC-agnostic) */
 #include "frame_proto.h"    /* serial frame-upload protocol (SoC-agnostic) */
 #include "console.h"        /* USB Serial/JTAG console + `frame` dispatch */
+#include "interactive.h"    /* USB-interactive mode (SoC-agnostic policy) */
 
 /* Display a text message on the e-ink screen.
  * Buffer layout is identical to an image: first 480K = panel 1 (600 wide),
@@ -1372,13 +1373,22 @@ static void regime_usb_awake(int64_t boot_time_us)
             return;
         }
 
-        /* A frame upload owns the device until it finishes. Both branches below
+        /* Two reasons to leave the device alone, both ending in the same skip.
+         *
+         * A frame upload owns the device until it finishes: both branches below
          * call esp_restart(), which partway through a 960 KB transfer would drop
-         * the host mid-stream and reboot into a half-painted panel — during a run
-         * whose entire purpose is knowing what is on the glass. The checks are
-         * skipped, not queued: a refresh that came due during a measurement is
-         * exactly the repaint we do not want, and the next poll re-evaluates. */
-        if (hokku_console_busy())
+         * the host mid-stream and reboot into a half-painted panel.
+         *
+         * USB-interactive mode is the standing version of the same request — a
+         * host is driving this screen and does not want it deciding to repaint or
+         * reboot between uploads. Without it the console is a race: a refresh
+         * falling due mid-run takes the USB device away entirely, and a host can
+         * only poll and hope to land between reboots.
+         *
+         * Skipped, not queued. A refresh that came due during a measurement is
+         * precisely the repaint we do not want; the next poll re-evaluates, and
+         * whatever was due is simply due again once the host is finished. */
+        if (hokku_console_busy() || hokku_interactive_engaged(usb_host_present()))
             continue;
 
         if (button1_pressed_debounced()) {

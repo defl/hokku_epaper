@@ -9,6 +9,7 @@
 #include "freertos/task.h"
 
 #include "frame_proto.h"
+#include "interactive.h"
 
 /* Not `TAG`: the host tests compile main.c and this file into ONE translation
  * unit with `static` #defined away, so a second file-scope `TAG` would be a
@@ -90,14 +91,27 @@ static void handle_line(char *line)
         hokku_frame_receive();
         return;
     }
+    bool on = (strcmp(line, "interactive on") == 0);
+    if (on || strcmp(line, "interactive off") == 0) {
+        hokku_interactive_set(on);
+        /* Echo the state back rather than just acknowledging: a host that
+         * re-asserts the mode before every upload (the right thing to do, since
+         * a crash reboot clears it silently) can then verify in one round trip. */
+        hokku_console_printf_line(on ? "INTERACTIVE on" : "INTERACTIVE off");
+        return;
+    }
     if (strcmp(line, "ping") == 0) {
         /* Lets the host prove it has a live console before committing to a
-         * 960 KB upload, and prove which firmware it is talking to. */
-        hokku_console_printf_line("PONG hokku huessen_epf1301");
+         * 960 KB upload, prove which firmware it is talking to, and see whether
+         * interactive mode survived — a reset clears it, and a reset is exactly
+         * what a host would otherwise not notice. */
+        hokku_console_printf_line(hokku_interactive_requested()
+                                      ? "PONG hokku huessen_epf1301 interactive=on"
+                                      : "PONG hokku huessen_epf1301 interactive=off");
         return;
     }
     if (strcmp(line, "help") == 0) {
-        hokku_console_printf_line("commands: frame ping help");
+        hokku_console_printf_line("commands: frame ping help interactive on|off");
         return;
     }
     hokku_console_printf_line("ERR unknown command");
@@ -110,7 +124,7 @@ static void console_task(void *arg)
     bool overflowed = false;
 
     (void)arg;
-    ESP_LOGI(CONSOLE_TAG, "console ready on USB Serial/JTAG (frame ping help)");
+    ESP_LOGI(CONSOLE_TAG, "console ready on USB Serial/JTAG (frame ping help interactive)");
 
     for (;;) {
         uint8_t ch;

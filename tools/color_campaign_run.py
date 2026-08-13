@@ -41,7 +41,7 @@ try:
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
-from color_measure_f7 import catch_console, upload_with_retry
+from color_measure_f7 import upload_with_retry
 from color_target import fullscreen_bayer_raster
 from colorimeter import make_instrument
 from f7_calibrate import NOMINAL_LIFETIME_S, SAFETY_MARGIN_S, calibration_age_s
@@ -49,6 +49,7 @@ from hokku.screens.bigme_f7.bootstrap import _console_send
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import DitherConfig
 from hokku.webserver.dither_streaming import dither
+from send_frame import open_device
 
 INK_NAMES = ("black", "white", "yellow", "red", "blue", "green")
 
@@ -445,7 +446,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print("preflight OK", flush=True)
 
-    s = catch_console(args.port, args.console_timeout)
+    # Asserts USB-interactive mode as part of the handshake (interactive=True,
+    # the default). This is exactly the race the mode exists to close: hundreds
+    # of consecutive uploads over hours, where a device left on its own schedule
+    # can hibernate or reboot between any two of them and take the console with
+    # it. Best-effort against older firmware — see send_frame.assert_interactive.
+    s = open_device(args.port, spec["model"], timeout_s=args.console_timeout)
     if s is None:
         print("ABORT: console never answered. Long-press the power button and re-run.")
         return 1
