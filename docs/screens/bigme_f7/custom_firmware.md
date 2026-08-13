@@ -80,7 +80,7 @@ OTA. The version is reported in `X-Firmware-Version` and the frame-state `fw`.
   the device shows them. For bring-up and colour measurement, where the picture
   on the glass has to be known precisely (see [`../../color_calibration.md`](../../color_calibration.md)).
   Wire exchange is in [`firmware/common/all/frame_proto.h`](../../../firmware/common/all/frame_proto.h);
-  drive it with `tools/f7_send_frame.py`. Takes the same OTA/refresh mutex as
+  drive it with `tools/send_frame.py`. Takes the same OTA/refresh mutex as
   `ota`, so it refuses rather than racing a refresh.
 
   The device holds no patterns and no list — the host decides what to display

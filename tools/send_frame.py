@@ -13,16 +13,19 @@ glass on demand, with no dithering, no tonal chain, no WiFi and no server
 config in the loop. See ``docs/color_calibration.md``.
 
 Protocol is ``firmware/common/all/frame_proto.h``; the device side is
-``hokku_frame_receive()`` in ``firmware/bigme_f7/main.c``.
+``hokku_frame_receive()``, implemented per board in ``firmware/*/main.c``.
+The device announces its own frame size in the READY line, so this tool
+needs no per-model knowledge of geometry — pass ``--model`` only so the
+right dither palette and packing are used to BUILD the frame.
 
 Usage:
     # Cycle every ink, then the calibration target (the colour-cycle demo)
-    python tools/f7_send_frame.py --port COM9 --cycle
+    python tools/send_frame.py --port COM9 --cycle
 
     # Send one specific frame
-    python tools/f7_send_frame.py --port COM9 --solid red
-    python tools/f7_send_frame.py --port COM9 --target
-    python tools/f7_send_frame.py --port COM9 --bin build/colorcal/colorcal_bigme_f7.bin
+    python tools/send_frame.py --port COM9 --solid red
+    python tools/send_frame.py --port COM9 --target
+    python tools/send_frame.py --port COM9 --bin build/colorcal/colorcal_bigme_f7.bin
 """
 
 from __future__ import annotations
@@ -55,6 +58,10 @@ READY = "READY"
 DONE = "DONE"
 REFRESHED = "REFRESHED"
 
+# Only the CH340-bridged Bigme F7 actually honours this: on the ESP32-S3 the
+# console is native USB Serial/JTAG (a CDC device), where the baud setting is
+# negotiated away and throughput is bounded by USB, not by this number.
+# pyserial still requires a value, so one is given.
 BAUD = 115200
 # The panel update itself is ~30 s; allow generous headroom before giving up.
 REFRESH_TIMEOUT_S = 90.0
@@ -94,6 +101,45 @@ def _read_line(s: serial.Serial, timeout_s: float) -> str:
             continue
         buf += b
     return ""
+
+
+def open_device(port: str, model: str, timeout_s: float = 600.0) -> serial.Serial | None:
+    """Open the device's console, by whatever means that board needs.
+
+    The two families differ in a way that matters here. The Bigme F7's console
+    lives only a few seconds per wake unless the unit is pinned awake, so it has
+    to be *caught* by polling — see ``color_measure_f7.catch_console``. The
+    ESP32-S3 boards hold a console for as long as USB is attached (it only runs
+    in the USB_AWAKE regime), so a plain open is enough.
+
+    For those, `ping` is the handshake: it proves a console is actually listening
+    and that the firmware is new enough to have one, before a caller commits to
+    pushing a megabyte at a device that may not be able to receive it. Without it
+    the failure surfaces as a silent timeout partway through an upload.
+    """
+    if model == "bigme_f7":
+        from color_measure_f7 import catch_console  # noqa: PLC0415 — avoids a cycle
+
+        return catch_console(port, timeout_s)
+
+    try:
+        s = serial.Serial(port, BAUD, timeout=0.3)
+    except (serial.SerialException, OSError) as exc:
+        print(f"    ! cannot open {port}: {exc}")
+        return None
+
+    s.reset_input_buffer()
+    s.write(b"ping\r\n")
+    s.flush()
+    end = time.monotonic() + 5.0
+    while time.monotonic() < end:
+        line = _read_line(s, timeout_s=1.0)
+        if line.startswith("PONG"):
+            print(f"    console: {line}")
+            return s
+    s.close()
+    print("    ! no PONG — is the device on USB and running firmware with a console?")
+    return None
 
 
 def send_frame(s: serial.Serial, data: bytes, label: str, verbose: bool = True) -> bool:

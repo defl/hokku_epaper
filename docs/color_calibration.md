@@ -95,7 +95,7 @@ white and black at the end of the sequence as a drift check.
 If the unit runs firmware with the `frame` command, skip the server entirely:
 
 ```powershell
-python tools\f7_send_frame.py --port COM9 --target
+python tools\send_frame.py --port COM9 --target
 ```
 
 This pushes the exact bytes down the console UART (~17 s at 115200) and refreshes

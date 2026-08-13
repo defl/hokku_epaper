@@ -87,7 +87,7 @@ class SerialTargetDisplay(TargetDisplay):
         # with no pyserial and no serial port at all.
         import serial  # noqa: PLC0415
 
-        from f7_send_frame import send_frame  # noqa: PLC0415
+        from send_frame import send_frame  # noqa: PLC0415
 
         print(f"  opening {self.port} @115200")
         s = serial.Serial(self.port, 115200, timeout=0.3)

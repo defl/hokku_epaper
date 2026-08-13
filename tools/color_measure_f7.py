@@ -38,9 +38,9 @@ except ImportError:
 
 from color_target import fullscreen_sequence
 from colorimeter import finalise, make_instrument
-from f7_send_frame import send_frame
 from hokku.screens.bigme_f7.bootstrap import _open_console
 from hokku.screens.registry import DISPLAY_REGISTRY
+from send_frame import send_frame
 
 
 def catch_console(port: str, deadline_s: float):
