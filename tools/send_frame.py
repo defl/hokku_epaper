@@ -122,23 +122,39 @@ def open_device(port: str, model: str, timeout_s: float = 600.0) -> serial.Seria
 
         return catch_console(port, timeout_s)
 
-    try:
-        s = serial.Serial(port, BAUD, timeout=0.3)
-    except (serial.SerialException, OSError) as exc:
-        print(f"    ! cannot open {port}: {exc}")
-        return None
+    # Poll, and reopen each round. These boards enumerate their console over
+    # native USB, so a reboot makes the port itself disappear and come back —
+    # holding a handle across one is useless. A scheduled refresh costs ~30 s of
+    # panel update plus the reboot, so the wait can legitimately be long.
+    deadline = time.monotonic() + timeout_s
+    announced = False
+    while time.monotonic() < deadline:
+        try:
+            s = serial.Serial(port, BAUD, timeout=0.3)
+        except (serial.SerialException, OSError):
+            if not announced:
+                print(f"    waiting for {port} (device rebooting?)...")
+                announced = True
+            time.sleep(1.0)
+            continue
 
-    s.reset_input_buffer()
-    s.write(b"ping\r\n")
-    s.flush()
-    end = time.monotonic() + 5.0
-    while time.monotonic() < end:
-        line = _read_line(s, timeout_s=1.0)
-        if line.startswith("PONG"):
-            print(f"    console: {line}")
-            return s
-    s.close()
-    print("    ! no PONG — is the device on USB and running firmware with a console?")
+        s.reset_input_buffer()
+        s.write(b"ping\r\n")
+        s.flush()
+        end = time.monotonic() + 3.0
+        while time.monotonic() < end:
+            line = _read_line(s, timeout_s=1.0)
+            if line.startswith("PONG"):
+                print(f"    console: {line}")
+                return s
+        s.close()
+        if not announced:
+            print("    no PONG yet — device may be mid-refresh; retrying...")
+            announced = True
+        time.sleep(1.5)
+
+    print("    ! console never answered. Is it on USB, and is the firmware new")
+    print("      enough to have one? (`frame` needs huessen >= 1.2.22)")
     return None
 
 
@@ -242,6 +258,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--port", default="COM9", help="serial port of the F7 console")
     ap.add_argument("--model", default="bigme_f7", choices=sorted(DISPLAY_REGISTRY))
+    ap.add_argument(
+        "--console-timeout",
+        type=float,
+        default=180.0,
+        help="seconds to wait for the console to answer. The default is generous "
+        "because an ESP32 board caught mid-refresh needs ~30 s of panel update "
+        "plus a reboot before its console exists again.",
+    )
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--cycle", action="store_true", help="every ink, then the calibration target")
     g.add_argument("--solid", help=f"one flat ink: {', '.join(INK_NAMES)}")
@@ -272,9 +296,15 @@ def main(argv: list[str] | None = None) -> int:
         frames = [(args.bin.name, data)]
 
     print(f"opening {args.port} @{BAUD}")
-    s = serial.Serial(args.port, BAUD, timeout=0.3)
-    # Match the console handshake used elsewhere: do not toggle DTR/RTS, which
-    # can reset the board on some USB-serial bridges.
+    # Handshake first. The ESP32 boards reboot for every scheduled refresh, and a
+    # reboot takes the console with it — so "the console answered five minutes
+    # ago" is not evidence it is answering now. Without this the symptom is
+    # "device never sent READY", which reads like a firmware-too-old problem and
+    # is actually a timing one.
+    s = open_device(args.port, args.model, timeout_s=args.console_timeout)
+    if s is None:
+        return 1
+    # Do not toggle DTR/RTS, which can reset the board on some USB-serial bridges.
     s.dtr = False
     s.rts = False
 
