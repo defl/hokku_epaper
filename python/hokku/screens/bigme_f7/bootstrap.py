@@ -192,10 +192,23 @@ PROVISION_BOOT_TIMEOUT_S = 150.0
 
 def _open_console(port, serial):
     """Open the F7 console; return the serial handle if the firmware answers, else None."""
+    # DTR/RTS set on an unopened Serial object, not after Serial(...) has already
+    # opened the port. Confirmed on the huessen board that the latter is too
+    # late — Windows' serial driver asserts the control lines as part of its own
+    # port-open sequence, before any Python attribute assignment runs, so a
+    # chip wired to reset on RTS (as esptool's own "hard reset" relies on) has
+    # already been reset by the time `s.dtr = False` executes. Not confirmed to
+    # cause a problem on THIS board specifically — applied here for correctness
+    # and consistency with tools/send_frame.py's open_device(), not because a
+    # fault was reproduced here.
+    s = serial.Serial()
+    s.port = port
+    s.baudrate = 115200
+    s.timeout = 0.3
+    s.dtr = False
+    s.rts = False
     try:
-        s = serial.Serial(port, 115200, timeout=0.3)
-        s.dtr = False
-        s.rts = False
+        s.open()
     except (serial.SerialException, OSError):
         return None
     try:

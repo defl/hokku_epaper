@@ -117,11 +117,80 @@ static void handle_line(char *line)
     hokku_console_printf_line("ERR unknown command");
 }
 
+/* Per-line assembly state, factored out of console_task() so a test can drive
+ * it byte-by-byte with an explicit, resettable struct instead of needing real
+ * concurrency to exercise console_task()'s own infinite loop. */
+typedef struct {
+    char   line[CONSOLE_LINE_MAX];
+    size_t len;
+    bool   overflowed;
+} console_line_state_t;
+
+/* Consumes one byte from the wire. This is the ENTIRE reason
+ * test_frame_via_console_task_stream exists: every other frame/console test in
+ * this file drives hokku_frame_receive() or handle_line() directly, which is
+ * exactly why the CRLF-framing bug below shipped past 50 passing assertions —
+ * none of them exercised how raw bytes get grouped into a line in the first
+ * place. */
+static void console_process_byte(console_line_state_t *st, uint8_t ch)
+{
+    if (ch == '\r' || ch == '\n') {
+        if (st->len == 0 && !st->overflowed)
+            return;                 /* bare newline, or the partner of CRLF */
+
+        /* Drain the OTHER half of the CRLF pair before dispatching, not
+         * after. The host sends "cmd\r\n" as one write(); `\r` alone
+         * triggers this branch, so on a normal line the paired `\n` is
+         * already in flight (microseconds away over USB) and NOT yet
+         * consumed. handle_line("frame") calls hokku_frame_receive(),
+         * which reads the image payload straight off this same driver
+         * queue — so without this, that stray `\n` becomes byte 0 of the
+         * "payload", shifting every subsequent byte by one. The transfer
+         * still completes (byte COUNT is unaffected — it just gains one
+         * spurious byte at the front and drops the true final byte), so
+         * this never trips a length check; it only shows up as a CRC that
+         * is wrong in a perfectly reproducible way. Bounded so a genuinely
+         * bare '\r' (no LF following) cannot hang the console. Confirmed on
+         * real hardware 2026-08-13: every byte of a 960000-byte transfer
+         * arrived, ACKed cleanly, and the CRC was wrong every single time —
+         * exactly what a one-byte, whole-transfer shift produces. */
+        {
+            uint8_t maybe_partner;
+            uint8_t want = (ch == '\r') ? '\n' : '\r';
+            int got = usb_serial_jtag_read_bytes(&maybe_partner, 1, pdMS_TO_TICKS(20));
+            if (got == 1 && maybe_partner != want) {
+                /* Not the CRLF partner — a real character. Feed it back into
+                 * the line the normal way rather than discarding it. */
+                if (st->len + 1 < sizeof(st->line))
+                    st->line[st->len++] = (char)maybe_partner;
+                else
+                    st->overflowed = true;
+            }
+        }
+
+        st->line[st->len] = '\0';
+        if (st->overflowed) {
+            /* Do not act on the tail of a line whose head was dropped —
+             * "…frame" would look exactly like "frame". */
+            hokku_console_printf_line("ERR line too long");
+        } else {
+            handle_line(st->line);
+        }
+        st->len = 0;
+        st->overflowed = false;
+        return;
+    }
+
+    if (st->len + 1 >= sizeof(st->line)) {
+        st->overflowed = true;
+        return;
+    }
+    st->line[st->len++] = (char)ch;
+}
+
 static void console_task(void *arg)
 {
-    char line[CONSOLE_LINE_MAX];
-    size_t len = 0;
-    bool overflowed = false;
+    console_line_state_t st = { .len = 0, .overflowed = false };
 
     (void)arg;
     ESP_LOGI(CONSOLE_TAG, "console ready on USB Serial/JTAG (frame ping help interactive)");
@@ -131,28 +200,7 @@ static void console_task(void *arg)
         int n = usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(CONSOLE_IDLE_MS));
         if (n <= 0)
             continue;
-
-        if (ch == '\r' || ch == '\n') {
-            if (len == 0 && !overflowed)
-                continue;               /* bare newline, or the partner of CRLF */
-            line[len] = '\0';
-            if (overflowed) {
-                /* Do not act on the tail of a line whose head was dropped —
-                 * "…frame" would look exactly like "frame". */
-                hokku_console_printf_line("ERR line too long");
-            } else {
-                handle_line(line);
-            }
-            len = 0;
-            overflowed = false;
-            continue;
-        }
-
-        if (len + 1 >= sizeof(line)) {
-            overflowed = true;
-            continue;
-        }
-        line[len++] = (char)ch;
+        console_process_byte(&st, ch);
     }
 }
 

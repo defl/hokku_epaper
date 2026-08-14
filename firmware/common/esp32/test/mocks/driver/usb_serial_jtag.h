@@ -31,6 +31,16 @@ static int      _mock_usb_reads;        /* read_bytes call count */
 static int      _mock_usb_install_calls;
 static esp_err_t _mock_usb_install_result;
 
+/* Literal bytes served BEFORE the synthetic sequential pattern kicks in — a
+ * real command line ("frame\r\n") ahead of image payload, so a test can drive
+ * a genuinely wire-realistic byte stream through the real byte-at-a-time
+ * reader instead of only through handle_line() (which every other test in this
+ * file uses, and which cannot see a bug in how bytes get grouped into lines in
+ * the first place — see console_process_byte in console.c). */
+static uint8_t  _mock_usb_prefix[64];
+static uint32_t _mock_usb_prefix_len;
+static uint32_t _mock_usb_prefix_pos;
+
 /* Everything the device wrote, so a test can assert on ACKs and control lines. */
 static uint8_t  _mock_usb_tx[4096];
 static uint32_t _mock_usb_tx_len;
@@ -53,6 +63,14 @@ static inline int usb_serial_jtag_read_bytes(void *buf, uint32_t len, TickType_t
     _mock_usb_reads++;
     if (len == 0)
         return 0;
+
+    if (_mock_usb_prefix_pos < _mock_usb_prefix_len) {
+        uint32_t avail = _mock_usb_prefix_len - _mock_usb_prefix_pos;
+        uint32_t p = len < avail ? len : avail;
+        memcpy(out, _mock_usb_prefix + _mock_usb_prefix_pos, p);
+        _mock_usb_prefix_pos += p;
+        return (int)p;      /* short reads are normal; caller loops */
+    }
 
     n = len < _mock_usb_avail ? len : _mock_usb_avail;
     for (i = 0; i < n; i++)

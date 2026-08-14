@@ -166,8 +166,26 @@ def open_device(
     deadline = time.monotonic() + timeout_s
     announced = False
     while time.monotonic() < deadline:
+        # pyserial asserts DTR/RTS by default, and RTS is wired to reset this
+        # chip (it is exactly how esptool's own "hard reset" works). Clearing
+        # them AFTER Serial(...) opens is too late — Windows' serial driver
+        # asserts the control lines as part of its own port-open sequence,
+        # before any Python attribute assignment runs, so the reset has already
+        # fired by the time `s.dtr = False` executes. They have to be set on an
+        # unopened Serial object and carried into open() itself. Discovered the
+        # hard way: left uncleared (or cleared too late), every retry in this
+        # loop reboots the device right as it is about to be pinged — a
+        # self-inflicted loop that can never succeed, and the "flapping"
+        # regime transitions this produced looked exactly like a hardware
+        # USB-detect fault instead of what it was.
+        s = serial.Serial()
+        s.port = port
+        s.baudrate = BAUD
+        s.timeout = 0.3
+        s.dtr = False
+        s.rts = False
         try:
-            s = serial.Serial(port, BAUD, timeout=0.3)
+            s.open()
         except (serial.SerialException, OSError):
             if not announced:
                 print(f"    waiting for {port} (device rebooting?)...")

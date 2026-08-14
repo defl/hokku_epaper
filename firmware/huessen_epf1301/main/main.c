@@ -892,7 +892,12 @@ int hokku_frame_receive(void)
         return -1;                  /* panel untouched — nothing was displayed */
     }
 
-    snprintf(line, sizeof(line), "%s %u", FRAME_PROTO_DONE, (unsigned)crc);
+    /* Hex, matching the F7's reference implementation and the host tool's
+     * parser (send_frame.py: int(line.split()[1], 16)). Printed as decimal
+     * here originally, silently accepted by ArgyllCMS-adjacent nothing — the
+     * mismatch only ever surfaces as a CRC "failure" against a perfectly good
+     * upload, on the very first real transfer this code ever received. */
+    snprintf(line, sizeof(line), "%s %08x", FRAME_PROTO_DONE, (unsigned)crc);
     hokku_console_printf_line(line);
 
     split_and_display(g_frame_buf);   /* ~30 s: power up, write, refresh, power down */
