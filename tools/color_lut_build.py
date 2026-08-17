@@ -126,27 +126,102 @@ def build_forward_grid(
     return cube, flat_lab.reshape(steps, steps, steps, 3)
 
 
-def invert_grid(grid_rgb: np.ndarray, grid_lab: np.ndarray, k: int) -> np.ndarray:
+def adapt_target_l(lab_ref: np.ndarray, black_l: float, white_l: float) -> np.ndarray:
+    """Remap a reference sRGB Lab's L* from the reference range (0..100, an
+    unreachable ideal — no e-paper panel is anywhere near that bright) onto
+    THIS panel's own reachable range, leaving a*/b* untouched.
+
+    This is the exact bug that made the first build of this LUT actively
+    harmful: without it, the KNN search below is asked to find the closest
+    achievable match to a target that's unreachable across almost the WHOLE
+    grey axis (a panel maxing out at L* 68 is nowhere near a target's L* 100
+    white), so it picks whatever combination happens to be nearest by raw Lab
+    distance — which turned out to be a strong cyan-green cast, confirmed on
+    real glass (pure white came back as (127,226,199) on the F7). Same linear
+    remap ImageRenderer._drc_cielab_l already uses, applied here to the
+    TARGET instead of the rendered image, so the two are on the same scale.
+    """
+    ratio = (white_l - black_l) / 100.0
+    out = lab_ref.copy()
+    out[..., 0] = lab_ref[..., 0] * ratio + black_l
+    return out
+
+
+#  Weight on the L* axis in the KNN distance metric, relative to a*/b* (weight
+#  1). Neither panel's black ink is neutral (F7's achieves L*10.18 but a*10.75
+#  b*-10.56 — real, ~15-unit chroma), so a target that asks for BOTH the right
+#  L* AND perfect neutrality at the same time is unreachable near the
+#  extremes. Unweighted, Euclidean-nearest picks a WASHED-OUT, lighter but
+#  more-neutral candidate over pure black ink — confirmed directly: for a
+#  black request, unweighted distance prefers rgb=(64,64,64) (achieved
+#  L*21.97, chroma 3.3) over rgb=(0,0,0) (achieved L*10.18, chroma 15.07),
+#  because 21.97 is "only" 11.8 L* off while pure black is 15 chroma units
+#  off — and that's the wrong trade: a dark background rendered lighter and
+#  greyer reads as visibly, badly wrong, while pure black ink's small
+#  real chroma is the panel's normal ink impurity, not a defect to fix. L
+#  weight 2.5 flips that preference back to the true black point (verified:
+#  weight 2.0 is already enough; 2.5 keeps a margin without flattening chroma
+#  correction elsewhere in the gamut, where multiple reachable candidates at
+#  similar L* genuinely differ in hue/chroma and correction should compare
+#  them on equal footing).
+L_WEIGHT = 2.5
+
+#  Penalty added to the KNN distance for how far a CANDIDATE's own RGB sits
+#  from the DOMAIN node's RGB (i.e. how far the correction proposes to move
+#  away from "no change"). Needed because ink selection has real plateaus:
+#  near white, e.g. RGB (0,223,191), (159,255,191) and (32,223,191) all
+#  achieve the IDENTICAL measured Lab (67.93,-4.11,-0.51) — once G/B are high
+#  enough the panel just picks white ink regardless of R. Those candidates
+#  are then perfect ties in Lab space despite being 100+ RGB units apart, and
+#  unweighted IDW blends them into a meaningless average RGB (that average
+#  then gets RE-quantized by the palette LUT at render time into something
+#  that resembles NONE of the actual candidates — confirmed: this produced a
+#  strong cyan-green cast for a pure white request).
+#
+#  0.02 was enough to fix the pure-white/black plateaus but left a real
+#  channel-imbalance hump in the upper-midtones (grey 160-224, where two
+#  genuinely different achieved-lightness clusters straddle the target and
+#  get blended) — 0.5 was swept empirically as the point where the grey-axis
+#  sanity gate (grey_axis_sanity) passes with a comfortable margin (worst
+#  channel spread 13.6 vs the 20.0 threshold, at steps=9) without flattening
+#  the correction into a near no-op the way pushing it much higher would.
+IDENTITY_WEIGHT = 0.5
+
+
+def invert_grid(
+    grid_rgb: np.ndarray, grid_lab: np.ndarray, k: int, anchor_l: tuple[float, float]
+) -> np.ndarray:
     """KNN inverse-distance-weighted inversion.
 
     Reuses the forward grid's own RGB set as both the simulated-outcome set
     AND the correction domain (one build pass serves both). For each domain
     node, treat its own RGB as a REQUEST, find the k forward-grid nodes whose
-    predicted Lab is closest to that request's naive sRGB Lab, and blend their
-    RGBs by inverse squared distance. This is deliberately not 1-nearest-
-    neighbour: a single nearest choice collapses many adjacent requests onto
-    one candidate RGB, producing flat plateaus that jump at cell boundaries —
-    visible as new dither banding once trilinear-interpolated at render time.
+    predicted Lab is closest to that request's Lab (adapted to this panel's
+    own reachable range, see adapt_target_l; L* weighted more than a*/b*, see
+    L_WEIGHT; ties broken toward RGB proximity, see IDENTITY_WEIGHT), and
+    blend their RGBs by inverse squared distance. This is deliberately not
+    1-nearest-neighbour: a single nearest choice collapses many adjacent
+    requests onto one candidate RGB, producing flat plateaus that jump at
+    cell boundaries — visible as new dither banding once trilinear-
+    interpolated at render time.
     """
     steps = grid_rgb.shape[0]
     flat_rgb = grid_rgb.reshape(-1, 3).astype(np.float32)
     flat_lab = grid_lab.reshape(-1, 3).astype(np.float32)
     n_nodes = flat_rgb.shape[0]
 
-    target_lab = np.array([lab(srgb8_to_xyz_pct(rgb)) for rgb in flat_rgb], dtype=np.float32)
+    black_l, white_l = anchor_l
+    target_lab = np.array(
+        [adapt_target_l(lab(srgb8_to_xyz_pct(rgb)), black_l, white_l) for rgb in flat_rgb],
+        dtype=np.float32,
+    )
 
     diff = target_lab[:, None, :] - flat_lab[None, :, :]
+    diff[..., 0] *= L_WEIGHT
     d2 = np.sum(diff * diff, axis=2)  # (n_nodes, n_nodes)
+
+    rgb_diff = flat_rgb[:, None, :] - flat_rgb[None, :, :]
+    d2 += IDENTITY_WEIGHT * np.sum(rgb_diff * rgb_diff, axis=2)
 
     k = min(k, n_nodes)
     nn_idx = np.argpartition(d2, k - 1, axis=1)[:, :k]
@@ -188,10 +263,36 @@ def smooth_grid(grid: np.ndarray, radius: int) -> np.ndarray:
     return out / count
 
 
-def validation_report(display, prim_mat, n, cfg, canvas_hw, corrected_lut) -> None:
+def grey_axis_sanity(corrected_lut: np.ndarray, anchor_l: tuple[float, float]) -> bool:
+    """Print what the correction does to a neutral grey ramp, and flag any
+    channel imbalance — the exact failure mode that made the first build of
+    this LUT actively harmful (pure white came back cyan-green). A NEUTRAL
+    request drifting far off-neutral is never correct: the panel's own ink
+    impurity is a few L*/a*/b* units, not tens.
+    """
+    black_l, white_l = anchor_l
+    print(f"\ngrey-axis check (panel range L* {black_l:.1f}..{white_l:.1f}):")
+    print(f"  {'grey':>5s}  {'corrected':>22s}  {'channel spread':>14s}")
+    worst_spread = 0.0
+    for grey in (0, 32, 64, 96, 128, 160, 192, 224, 255):
+        rgb_arr = np.array([grey, grey, grey], dtype=np.float32).reshape(1, 1, 3)
+        out = ImageRenderer.apply_correction_lut(rgb_arr, corrected_lut)[0, 0]
+        spread = float(out.max() - out.min())
+        worst_spread = max(worst_spread, spread)
+        print(f"  {grey:5d}  ({out[0]:6.1f},{out[1]:6.1f},{out[2]:6.1f})  {spread:14.1f}")
+    ok = worst_spread <= 20.0
+    verdict = "OK" if ok else "FAIL"
+    print(f"  worst channel spread: {worst_spread:.1f}  [{verdict}, threshold 20.0]")
+    return ok
+
+
+def validation_report(display, prim_mat, n, cfg, canvas_hw, corrected_lut, anchor_l) -> None:
     """Before/after dE and hue error on held-out point sets (not coincident
     with the build grid), applying the correction through the EXACT production
-    interpolation code (ImageRenderer.apply_correction_lut)."""
+    interpolation code (ImageRenderer.apply_correction_lut). want is adapted to
+    this panel's own reachable range — the same target the correction was
+    built against — not the (unreachable) reference sRGB range."""
+    black_l, white_l = anchor_l
     sets = {
         "skin (60)": skin_locus_rgb(60, 20260808),
         "greys (13)": gray_ramp_rgb(13),
@@ -204,7 +305,7 @@ def validation_report(display, prim_mat, n, cfg, canvas_hw, corrected_lut) -> No
     for label, colours in sets.items():
         before_de, after_de, before_dh, after_dh = [], [], [], []
         for rgb in colours:
-            want = lab(srgb8_to_xyz_pct(rgb))
+            want = adapt_target_l(lab(srgb8_to_xyz_pct(rgb)), black_l, white_l)
             before = predict_lab_on_glass(display, rgb, cfg, prim_mat, n, canvas_hw)
             rgb_arr = np.array(rgb, dtype=np.float32).reshape(1, 1, 3)
             corrected_rgb = ImageRenderer.apply_correction_lut(rgb_arr, corrected_lut)[0, 0]
@@ -278,6 +379,12 @@ def main(argv: list[str] | None = None) -> int:
     canvas_hw = tuple(args.canvas)
 
     display = DISPLAY_REGISTRY[args.model]
+    anchor_l = display.drc_anchor_l
+    if anchor_l is None:
+        print(
+            f"ABORT: {args.model} has no drc_anchor_l — the correction target has no reachable range to adapt to."
+        )
+        return 1
     records = load_records(data)
     prim = primaries(records)
     if any(k not in prim for k in INK_NAMES):
@@ -316,12 +423,21 @@ def main(argv: list[str] | None = None) -> int:
     grid_rgb, grid_lab = build_forward_grid(display, prim_mat, n, args.steps, canvas_hw)
 
     print(f"inverting (KNN={args.knn}, blur radius={args.blur_radius}, blend={args.blend})")
-    corrected = invert_grid(grid_rgb, grid_lab, args.knn)
+    corrected = invert_grid(grid_rgb, grid_lab, args.knn, anchor_l)
     corrected = smooth_grid(corrected, args.blur_radius)
     corrected = args.blend * corrected + (1.0 - args.blend) * grid_rgb.astype(np.float32)
     corrected = np.clip(corrected, 0.0, 255.0).astype(np.float32)
 
-    validation_report(display, prim_mat, n, DEFAULT_IMAGE_CONFIG.dither, canvas_hw, corrected)
+    if not grey_axis_sanity(corrected, anchor_l):
+        print(
+            "ABORT: a neutral request drifts far off-neutral after correction — "
+            "this is the exact failure mode that made an earlier build actively harmful on real glass."
+        )
+        return 1
+
+    validation_report(
+        display, prim_mat, n, DEFAULT_IMAGE_CONFIG.dither, canvas_hw, corrected, anchor_l
+    )
 
     if args.dry_run:
         print(f"\n--dry-run: not writing {out}")

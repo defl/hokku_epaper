@@ -7,6 +7,8 @@ Color depth: 6-color Spectra 6, nibble-packed (UC8179C controller).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -49,13 +51,17 @@ class HuessenEpf1301Display(Display):
     # See docs/screens/huessen_epf1301/measurements/findings.md.
     drc_anchor_l = (10.86, 66.94)
 
-    # DISABLED for now: the current correction_lut.npy has a real bug (its
-    # inversion target used the reference sRGB white/black, L* 0..100, instead
-    # of this panel's own reachable range) — confirmed on real glass as a
-    # severe cyan-green cast on backgrounds and near-white. Re-enable once
-    # tools/color_lut_build.py adapts its target to drc_anchor_l and the
-    # asset is rebuilt and re-validated.
-    correction_lut_path = None
+    # Built by tools/color_lut_build.py from the gamut_dense measurement phase.
+    # Corrects gamut/hue drift the palette-selection LUT doesn't account for
+    # (dot gain, ink impurity) — complements drc_anchor_l, which only corrects
+    # lightness. Rebuilt after a real bug found on glass (see git history):
+    # the inversion target now adapts to this panel's own reachable L* range
+    # (not the unreachable reference white/black), weights lightness over
+    # chroma when picking nearest neighbours, and breaks Lab-space ties
+    # toward RGB proximity to the request — a neutral grey ramp now stays
+    # within ~14 RGB units of neutral end to end (grey_axis_sanity gate in
+    # the build script). See docs/screens/huessen_epf1301/measurements/findings.md.
+    correction_lut_path = Path(__file__).parent / "correction_lut.npy"
 
     # Punchier RGB used only for browser previews (real ink is duller).
     palette_preview_rgb = np.array(
