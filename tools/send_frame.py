@@ -103,7 +103,7 @@ def _read_line(s: serial.Serial, timeout_s: float) -> str:
     return ""
 
 
-def assert_interactive(s: serial.Serial, model: str) -> None:
+def assert_interactive(s: serial.Serial, model: str, verbose: bool = True) -> bool:
     """Tell the device a host owns it now, so it stops scheduling refreshes and
     stops hibernating between uploads (firmware/common/all/interactive.h).
 
@@ -115,18 +115,38 @@ def assert_interactive(s: serial.Serial, model: str) -> None:
     absent, which is not good enough for a run of hundreds of consecutive
     uploads.
 
-    Best-effort: an older firmware without the command just gets an ERR line
-    back, which is silently fine — it behaves exactly as it did before this
-    existed, still racy, but not worse off for the attempt.
+    Returns True when the device confirmed it is now engaged, False otherwise
+    (old firmware, no reply, or the device answering something unexpected).
+    Callers doing a long unattended run should check this on every patch, not
+    just once at the start: the flag lives in plain RAM by design, so ANY
+    reset — for any reason, including ones nothing here caused — silently
+    clears it, and the very next thing the device does is resume its own
+    schedule. That happened for real during this feature's first live session:
+    the device reset for an unknown reason partway through, dropped straight
+    back to fetching from its configured server, and nothing about the
+    console's own behaviour (it still answered `ping` fine before and after)
+    would have revealed that on its own. A False here on a run that was
+    engaged a moment ago is exactly that signal.
+
+    Best-effort against an older firmware: it just gets an ERR line back,
+    which returns False but is otherwise silently fine — the caller behaves
+    exactly as it did before this existed, still racy, but not worse off.
     """
     s.reset_input_buffer()
     s.write(b"interactive on\r\n")
     s.flush()
     line = _read_line(s, timeout_s=2.0)
-    if "engaged" in line.lower() or line.upper().startswith("INTERACTIVE ON"):
-        print(f"    {model}: interactive mode engaged")
-    elif line:
-        print(f"    {model}: interactive request got {line!r} — old firmware? proceeding anyway")
+    ok = "engaged" in line.lower() or line.upper().startswith("INTERACTIVE ON")
+    if verbose:
+        if ok:
+            print(f"    {model}: interactive mode engaged")
+        elif line:
+            print(
+                f"    {model}: interactive request got {line!r} — old firmware? proceeding anyway"
+            )
+        else:
+            print(f"    {model}: interactive request got no reply")
+    return ok
 
 
 def open_device(

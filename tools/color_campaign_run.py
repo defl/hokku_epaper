@@ -49,7 +49,7 @@ from hokku.screens.bigme_f7.bootstrap import _console_send
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import DitherConfig
 from hokku.webserver.dither_streaming import dither
-from send_frame import open_device
+from send_frame import assert_interactive, open_device
 
 INK_NAMES = ("black", "white", "yellow", "red", "blue", "green")
 
@@ -236,7 +236,15 @@ def next_session(path: Path) -> int:
 
 
 def measure_session_anchors(
-    s, display, instrument, session: int, repeats: int, settle_s: float, emit, tag: str = "open"
+    s,
+    display,
+    model: str,
+    instrument,
+    session: int,
+    repeats: int,
+    settle_s: float,
+    emit,
+    tag: str = "open",
 ) -> int:
     """Re-measure the primaries at the start (and end) of every session.
 
@@ -287,6 +295,15 @@ def measure_session_anchors(
             "raster_sha1": hashlib.sha1(data, usedforsecurity=False).hexdigest()[:16],
             "t_unix": time.time(),
         }
+        # Re-assert before every upload, not just once at session start. The
+        # flag is plain RAM by design (any reset clears it), and a reset for
+        # ANY reason silently drops it — the very next thing the device does
+        # is resume its own refresh schedule, mid-campaign, with nothing in
+        # the console's own behaviour giving it away. Recorded on the row so a
+        # silent recurrence is visible in the data rather than invisible.
+        rec["interactive_confirmed"] = assert_interactive(s, model, verbose=False)
+        if not rec["interactive_confirmed"]:
+            print(f"    ! interactive re-assertion got no confirmation before anchor {name}")
         if not upload_with_retry(s, data, f"anchor {name}", attempts=6, gap_s=8.0):
             rec["error"] = "upload"
             emit(rec)
@@ -502,7 +519,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"\n=== session {session}: re-measuring the six primaries ===", flush=True)
                 assert instrument is not None
                 measure_session_anchors(
-                    s, display, instrument, session, args.repeats, args.settle_s, emit, "open"
+                    s,
+                    display,
+                    spec["model"],
+                    instrument,
+                    session,
+                    args.repeats,
+                    args.settle_s,
+                    emit,
+                    "open",
                 )
             for n, patch in enumerate(todo, 1):
                 idx = patch_raster(patch, display)
@@ -530,6 +555,7 @@ def main(argv: list[str] | None = None) -> int:
                         measure_session_anchors(
                             s,
                             display,
+                            spec["model"],
                             instrument,
                             session,
                             args.repeats,
@@ -600,6 +626,15 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"    = identical raster to {twin['uid']} — inherited", flush=True)
                     emit(rec)
                     continue
+
+                # Re-assert before every upload, not just once at session start —
+                # see the comment in measure_session_anchors for why a one-time
+                # assertion is not safe for an hours-long unattended run.
+                rec["interactive_confirmed"] = assert_interactive(s, spec["model"], verbose=False)
+                if not rec["interactive_confirmed"]:
+                    print(
+                        f"    ! interactive re-assertion got no confirmation before {patch['label']}"
+                    )
 
                 if not upload_with_retry(s, data, patch["label"], attempts=6, gap_s=8.0):
                     rec["error"] = "upload"
