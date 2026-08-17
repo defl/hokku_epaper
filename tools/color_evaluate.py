@@ -89,6 +89,37 @@ def measured_palette(prim: dict[str, dict], normalise_white: bool) -> np.ndarray
     return np.array([xyz_pct_to_srgb8(xyz[k]) for k in INK_NAMES], dtype=np.float32)
 
 
+def simulate_ink_fraction(
+    display, rgb, cfg: DitherConfig, canvas_hw: tuple[int, int]
+) -> np.ndarray:
+    """Dither a flat ``rgb`` canvas through the REAL production pipeline,
+    return the resulting exact ink-area fraction per ``INK_NAMES``.
+
+    Uses whatever ``display.palette_measured_rgb`` currently is — a caller
+    testing a candidate palette should set that (as ``evaluate()`` already does
+    around its own loop) before calling this.
+    """
+    h, w = canvas_hw
+    canvas = np.empty((h, w, 3), dtype=np.uint8)
+    canvas[:, :] = rgb
+    idx = dither(canvas, cfg, display)
+    return np.bincount(idx.ravel(), minlength=len(INK_NAMES)) / idx.size
+
+
+def predict_lab_on_glass(
+    display,
+    rgb,
+    cfg: DitherConfig,
+    prim_mat: np.ndarray,
+    n: float,
+    canvas_hw: tuple[int, int],
+) -> np.ndarray:
+    """Predict the on-glass colour for a requested RGB via the fitted
+    Yule-Nielsen model, from the real pipeline's exact ink fractions."""
+    frac = simulate_ink_fraction(display, rgb, cfg, canvas_hw)
+    return lab(yn_mix(frac, prim_mat, n))
+
+
 def evaluate(display, palette, colours, cfg, prim, n, canvas_hw) -> dict[str, np.ndarray]:
     """What the panel would really show vs what was asked for, broken out.
 
@@ -102,18 +133,13 @@ def evaluate(display, palette, colours, cfg, prim, n, canvas_hw) -> dict[str, np
     with the specific direction of the artifact — warm colours drifting toward
     blue — which is what the anchor change should influence if it helps at all.
     """
-    h, w = canvas_hw
     prim_mat = np.array([prim[k]["xyz"] for k in INK_NAMES])
     original = display.palette_measured_rgb
     de, dh, dc, dl, blue_shift = [], [], [], [], []
     try:
         display.palette_measured_rgb = palette
         for rgb in colours:
-            canvas = np.zeros((h, w, 3), dtype=np.uint8)
-            canvas[:, :] = rgb
-            idx = dither(canvas, cfg, display)
-            frac = np.bincount(idx.ravel(), minlength=len(INK_NAMES)) / idx.size
-            got = lab(yn_mix(frac, prim_mat, n))
+            got = predict_lab_on_glass(display, rgb, cfg, prim_mat, n, canvas_hw)
             want = lab(srgb8_to_xyz_pct(rgb))
             de.append(delta_e76(got, want))
             dl.append(got[0] - want[0])

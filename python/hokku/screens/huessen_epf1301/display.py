@@ -7,6 +7,8 @@ Color depth: 6-color Spectra 6, nibble-packed (UC8179C controller).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -48,6 +50,12 @@ class HuessenEpf1301Display(Display):
     # both ends, the same bug the F7 had before drc_anchor_l was added there.
     # See docs/screens/huessen_epf1301/measurements/findings.md.
     drc_anchor_l = (10.86, 66.94)
+
+    # Built by tools/color_lut_build.py from the gamut_dense measurement phase.
+    # Corrects gamut/hue drift the palette-selection LUT doesn't account for
+    # (dot gain, ink impurity) — complements drc_anchor_l, which only corrects
+    # lightness. See docs/screens/huessen_epf1301/measurements/findings.md.
+    correction_lut_path = Path(__file__).parent / "correction_lut.npy"
 
     # Punchier RGB used only for browser previews (real ink is duller).
     palette_preview_rgb = np.array(

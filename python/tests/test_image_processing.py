@@ -31,6 +31,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from hokku.screens.display import Display
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import DitherConfig
 from hokku.webserver.dither_streaming import PALETTE_LAB, adaptive_saturate, rgb_to_lab
@@ -249,6 +250,63 @@ def test_drc_adaptive_vivid_no_boost_for_neutral():
     assert np.allclose(out_vivid, out_plain, atol=2.0), (
         "adaptive_vivid should not change neutral grey"
     )
+
+
+# ── fast: apply_correction_lut ───────────────────────────────────────────────
+
+
+def _identity_lut(n: int = 5) -> np.ndarray:
+    """An (n,n,n,3) LUT that maps every grid node to its own coordinates."""
+    vals = np.linspace(0.0, 255.0, n, dtype=np.float32)
+    return np.stack(np.meshgrid(vals, vals, vals, indexing="ij"), axis=-1).astype(np.float32)
+
+
+def test_correction_lut_identity_is_a_noop():
+    """An identity LUT must leave arbitrary input unchanged (interpolating
+    between identity corners is still identity)."""
+    rng = np.random.default_rng(0)
+    stripe = rng.uniform(0.0, 255.0, size=(20, 30, 3)).astype(np.float32)
+    out = ImageRenderer.apply_correction_lut(stripe, _identity_lut())
+    assert np.allclose(out, stripe, atol=1e-3)
+
+
+def test_correction_lut_exact_grid_node_recovery():
+    """At exact grid-node coordinates, output must exactly equal that cell —
+    no interpolation blur at the nodes themselves."""
+    rng = np.random.default_rng(1)
+    n = 5
+    lut = rng.uniform(0.0, 255.0, size=(n, n, n, 3)).astype(np.float32)
+    vals = np.linspace(0.0, 255.0, n, dtype=np.float32)
+    corners = np.array([[0.0, 0.0, 0.0], [255.0, 255.0, 255.0], [vals[2], vals[2], vals[2]]])
+    stripe = corners.reshape(1, 3, 3).astype(np.float32)
+    out = ImageRenderer.apply_correction_lut(stripe, lut)
+    assert np.allclose(out[0, 0], lut[0, 0, 0])
+    assert np.allclose(out[0, 1], lut[-1, -1, -1])
+    assert np.allclose(out[0, 2], lut[2, 2, 2])
+
+
+def test_correction_lut_output_in_valid_rgb_range():
+    """Output stays within [0, 255] even for a LUT whose values push outward,
+    given inputs are clipped to the grid's own coordinate range first."""
+    rng = np.random.default_rng(2)
+    lut = rng.uniform(0.0, 255.0, size=(5, 5, 5, 3)).astype(np.float32)
+    stripe = rng.uniform(-50.0, 400.0, size=(10, 10, 3)).astype(np.float32)
+    out = ImageRenderer.apply_correction_lut(stripe, lut)
+    assert float(out.min()) >= 0.0
+    assert float(out.max()) <= 255.0
+
+
+def test_correction_lut_path_defaults_to_none():
+    """A new Display subclass that doesn't set correction_lut_path inherits
+    None from the base class, so ImageRenderer._correction_lut() returns None
+    and the pipeline stage is skipped entirely (see render_indices) — the same
+    None-safe contract drc_anchor_l already has.
+
+    Note: every currently-registered model now has a path, either set directly
+    (bigme_f7, huessen_epf1301) or inherited (seeedstudio_e1004 deliberately
+    subclasses HuessenEpf1301Display wholesale — see its own module docstring)
+    — this checks the base class's own default, not a live "unset" panel."""
+    assert Display.correction_lut_path is None
 
 
 # ── fast: _apply_prepare_enhancements ────────────────────────────────────────

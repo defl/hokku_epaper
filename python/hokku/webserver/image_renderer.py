@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import threading
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -56,6 +57,23 @@ from hokku.webserver.orientation import Orientation
 _REFERENCE_DISPLAY = DISPLAY_REGISTRY["huessen_epf1301"]
 _SCREEN_W = _REFERENCE_DISPLAY.panel_w
 _SCREEN_H = _REFERENCE_DISPLAY.panel_h
+
+
+@lru_cache(maxsize=8)
+def _cached_correction_lut(model_id: str) -> NDArray[np.float32] | None:
+    """(N,N,N,3) float32 RGB->RGB gamut-correction LUT for this panel, or None.
+
+    Keyed by model_id, same pattern as dither_streaming.py's palette-LUT
+    caches — the array itself never enters the cache key. Built offline by
+    tools/color_lut_build.py from the gamut_dense measurement phase; see
+    docs/screens/<model>/measurements/findings.md.
+    """
+    display = DISPLAY_REGISTRY[model_id]
+    path = getattr(display, "correction_lut_path", None)
+    if path is None:
+        return None
+    return np.load(path).astype(np.float32)
+
 
 IMAGE_EXTENSIONS = {
     ".jpg",
@@ -455,6 +473,40 @@ class ImageRenderer(AbstractImageRenderer):
         ok_l = rgb_to_oklab(pal)
         return (float(lab_l[0, 0]), float(lab_l[1, 0])), (float(ok_l[0, 0]), float(ok_l[1, 0]))
 
+    def _correction_lut(self) -> NDArray[np.float32] | None:
+        """Cached (N,N,N,3) RGB->RGB gamut-correction LUT for this panel, or
+        None if this panel has none built yet. See _cached_correction_lut."""
+        return _cached_correction_lut(self._display.model_id)
+
+    @staticmethod
+    def apply_correction_lut(
+        rgb: NDArray[np.float32], lut: NDArray[np.float32]
+    ) -> NDArray[np.float32]:
+        """Trilinear-interpolate a stripe-shaped float32 RGB array through an
+        (N,N,N,3) RGB->RGB correction LUT.
+
+        Hand-rolled (this package has no scipy dependency) — an 8-corner
+        weighted gather, vectorized over the whole input array at once, same
+        amortisation tier as compress_dynamic_range (runs once per stripe, not
+        per pixel).
+        """
+        n = lut.shape[0]
+        scale = 255.0 / (n - 1)
+        coords = np.clip(rgb, 0.0, 255.0) / scale
+        i0 = np.clip(np.floor(coords).astype(np.int32), 0, n - 2)
+        i1 = i0 + 1
+        frac = coords - i0
+        r0, g0, b0 = i0[..., 0], i0[..., 1], i0[..., 2]
+        r1, g1, b1 = i1[..., 0], i1[..., 1], i1[..., 2]
+        fr, fg, fb = frac[..., 0:1], frac[..., 1:2], frac[..., 2:3]
+        c00 = lut[r0, g0, b0] * (1 - fr) + lut[r1, g0, b0] * fr
+        c10 = lut[r0, g1, b0] * (1 - fr) + lut[r1, g1, b0] * fr
+        c01 = lut[r0, g0, b1] * (1 - fr) + lut[r1, g0, b1] * fr
+        c11 = lut[r0, g1, b1] * (1 - fr) + lut[r1, g1, b1] * fr
+        c0 = c00 * (1 - fg) + c10 * fg
+        c1 = c01 * (1 - fg) + c11 * fg
+        return (c0 * (1 - fb) + c1 * fb).astype(np.float32)
+
     @staticmethod
     def compress_dynamic_range(
         img_array,
@@ -669,6 +721,7 @@ class ImageRenderer(AbstractImageRenderer):
         # 10.21..68.02, clipping both ends — 50 % of one test portrait collapsed
         # into flat black.
         drc_anchor_lab, drc_anchor_oklab = self._drc_anchors()
+        correction_lut = self._correction_lut()
 
         sat_space = cfg.adaptive_saturate_space
         sat_max = cfg.saturate_max_enhance
@@ -698,6 +751,8 @@ class ImageRenderer(AbstractImageRenderer):
                 anchor_lab_l=drc_anchor_lab,
                 anchor_oklab_l=drc_anchor_oklab,
             )
+            if correction_lut is not None:
+                f32 = ImageRenderer.apply_correction_lut(f32, correction_lut)
             if noise_std > 0.0:
                 noise = np.random.normal(0.0, noise_std, f32.shape).astype(np.float32)
                 f32 = np.clip(f32 + noise, 0.0, 255.0)

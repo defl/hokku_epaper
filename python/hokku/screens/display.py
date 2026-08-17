@@ -10,6 +10,7 @@ a registry entry — nothing else changes.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
@@ -64,6 +65,20 @@ class Display(ABC):
     which is right whenever that table reflects the real panel. Set it explicitly
     when the panel has been measured and the palette has not been re-derived from
     those measurements.
+    """
+
+    correction_lut_path: Path | None = None
+    """Path to a checked-in 3-D RGB->RGB gamut-correction LUT (.npy, shape
+    (N, N, N, 3) float32), or None if this panel has none built yet.
+
+    Built by tools/color_lut_build.py from the gamut_dense measurement phase
+    (see docs/screens/<model>/measurements/findings.md). Maps a requested RGB
+    (already DRC-compressed, see ImageRenderer._prep_stripe) to a corrected RGB
+    that, fed through the shipped dither pipeline, more closely reproduces the
+    requested colour's Lab appearance on THIS glass — correcting for gamut/hue
+    drift the palette-selection LUT doesn't know about, complementing
+    drc_anchor_l (which corrects lightness only). None-safe: renders unchanged
+    when unset, same as drc_anchor_l.
     """
 
     palette_preview_rgb: NDArray

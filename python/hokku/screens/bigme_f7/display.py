@@ -29,6 +29,8 @@ Fine-tune against the physical F7 if desired.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -75,6 +77,12 @@ class BigmeF7Display(Display):
     # compresses images into a range wider than the display, clipping both ends.
     # See docs/screens/bigme_f7/measurements/findings.md.
     drc_anchor_l = (10.21, 68.02)
+
+    # Built by tools/color_lut_build.py from the gamut_dense measurement phase.
+    # Corrects gamut/hue drift the palette-selection LUT doesn't account for
+    # (dot gain, ink impurity) — complements drc_anchor_l, which only corrects
+    # lightness. See docs/screens/bigme_f7/measurements/findings.md.
+    correction_lut_path = Path(__file__).parent / "correction_lut.npy"
 
     palette_preview_rgb = np.array(
         [

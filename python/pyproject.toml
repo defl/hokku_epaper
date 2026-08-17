@@ -58,6 +58,8 @@ include = ["hokku*"]
     "static/**/*",
     "config/config.json.example",
 ]
+"hokku.screens.bigme_f7" = ["correction_lut.npy"]
+"hokku.screens.huessen_epf1301" = ["correction_lut.npy"]
 
 [tool.pytest.ini_options]
 addopts = ["-m", "not time_intensive and not serial", "-n", "8", "--dist=loadfile"]
