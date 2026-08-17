@@ -23,6 +23,8 @@ future firmware updates go [over the air](../../manual.md) from the web app.
 
 **Using it**
 - [Image quality](image_quality.md) — how this panel renders, measured
+- [Colour campaign](measurements/findings.md) — 1733 spectrophotometer readings
+  off real glass, head-to-head against the Bigme F7
 
 **Developing**
 - [Firmware source and build](../../../firmware/huessen_epf1301/README.md)

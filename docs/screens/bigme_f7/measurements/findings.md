@@ -254,3 +254,9 @@ The dense gamut phase — 729 patches spanning the reachable volume — was coll
 to support a **3-D correction LUT**, mapping requested sRGB to the coverage that
 actually produces it. That build has not been started. It is entirely offline: no
 panel, no meter, no calibration window.
+
+The same campaign has since been run on the
+[Huessen EPF1301](../../huessen_epf1301/measurements/findings.md) — same tools,
+same protocol, 1733 readings, directly comparable. Its tone response is
+meaningfully more linear than this panel's (roughly half the dot gain), while
+this panel is the more stable of the two on red and green.
