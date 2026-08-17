@@ -11,18 +11,19 @@ check this document rather than trusting it.
 
 Data and schema: [`data/`](data/). Tools: `tools/color_*.py`.
 
-## The one thing worth fixing, not yet fixed
+## The one thing worth fixing — now fixed
 
-**The same DRC bug the F7 had exists here too, unfixed.**
+**The same DRC bug the F7 had existed here too.**
 `palette_measured_rgb` implies white at **L\* 79.86** and black at **L\* 0.55**.
 This campaign measured the real panel at **white L\* 66.94, black L\* 10.86** —
 white 13 L\* too bright, black 10 L\* too dark, a reachable range roughly 20 L\*
 narrower than the table assumes. On the F7 this exact mismatch clipped both ends
 of the tone range, collapsing half a test portrait into flat black.
-`huessen_epf1301`'s `display.py` has no `drc_anchor_l` set (see
-[`display.py`](../../../../python/hokku/screens/bigme_f7/display.py) for the F7's
-fix and the mechanism). Not applied here — this campaign was measurement only,
-and fixing it is a separate, deliberate change. Flagged, not fixed.
+`huessen_epf1301`'s [`display.py`](../../../../python/hokku/screens/huessen_epf1301/display.py)
+now sets `drc_anchor_l = (10.86, 66.94)` from these measured values, the same
+mechanism the F7 uses (see that model's `display.py`). Not yet validated against
+real hardware — flagged for a post-fix spot check before the next colour
+campaign is trusted to reflect it.
 
 ## The panel
 

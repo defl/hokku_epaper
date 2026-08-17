@@ -38,6 +38,17 @@ class HuessenEpf1301Display(Display):
         dtype=np.float32,
     )
 
+    # Measured on this glass with an X-Rite ColorMunki Photo (ArgyllCMS spotread,
+    # reflective 45/0, D65): black L* 10.86, white L* 66.94 (29.4:1 contrast),
+    # from the full 1733-reading, 20-session campaign.
+    #
+    # palette_measured_rgb above is NOT the source for this — it implies white
+    # at L* 79.86 and black at L* 0.55, a range this glass cannot reach. Left
+    # unset, the DRC would derive its target range from that table and clip
+    # both ends, the same bug the F7 had before drc_anchor_l was added there.
+    # See docs/screens/huessen_epf1301/measurements/findings.md.
+    drc_anchor_l = (10.86, 66.94)
+
     # Punchier RGB used only for browser previews (real ink is duller).
     palette_preview_rgb = np.array(
         [
