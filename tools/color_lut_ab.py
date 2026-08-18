@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +37,7 @@ try:
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
+from color_campaign_spec import gamut_cube_rgb
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_streaming import StreamingDither
 from hokku.webserver.image_renderer import ImageRenderer, _cached_correction_lut
@@ -54,24 +56,52 @@ def to_panel(idx: np.ndarray, display) -> np.ndarray:
     return np.rot90(idx, k=3) if display.panel_rotated else idx
 
 
-def render_half(display, cfg, img: Image.Image, use_correction: bool, half_w: int) -> np.ndarray:
+def blended_lut(full_lut: np.ndarray, blend: float) -> np.ndarray:
+    """full_lut interpolated toward identity by `blend` (1.0 = full_lut
+    unchanged, 0.0 = pure identity/no-op) — the same formula
+    color_lut_build.py's own --blend applies at build time, but computed
+    in-memory against an ALREADY-BUILT asset so a strength sweep doesn't
+    require re-running the ~7 min/panel forward simulation. Only valid
+    against a LUT built at steps=17 with color_lut_build.py's default grid
+    (gamut_cube_rgb order), which is what every shipped asset uses.
+    """
+    steps = full_lut.shape[0]
+    identity = np.array(gamut_cube_rgb(steps), dtype=np.float32).reshape(steps, steps, steps, 3)
+    return (blend * full_lut + (1.0 - blend) * identity).astype(np.float32)
+
+
+def render_half(
+    display, cfg, img: Image.Image, use_correction: bool, half_w: int, blend: float = 1.0
+) -> np.ndarray:
     """Render the WHOLE photo into a half_w x visual_h canvas (VISIBLE
-    orientation), with the correction LUT temporarily enabled or disabled.
+    orientation), with the correction LUT temporarily enabled, disabled, or
+    dialed back to `blend` strength.
 
     See drc_anchor_ab.render_half for why canvas_w/canvas_h swap on a
     panel_rotated screen.
     """
     visual_h = display.visual_h
     canvas_w, canvas_h = (visual_h, half_w) if display.panel_rotated else (half_w, visual_h)
-    original = display.correction_lut_path
+    original_path = display.correction_lut_path
+    tmp_path = None
     try:
-        display.correction_lut_path = original if use_correction else None
+        if use_correction and blend != 1.0:
+            full = np.load(original_path)
+            tmp_path = (
+                Path(tempfile.gettempdir()) / f"hokku_ab_blend_{display.model_id}_{blend:.2f}.npy"
+            )
+            np.save(tmp_path, blended_lut(full, blend))
+            display.correction_lut_path = tmp_path
+        else:
+            display.correction_lut_path = original_path if use_correction else None
         _cached_correction_lut.cache_clear()
         renderer = ImageRenderer(dither=StreamingDither(display), display=display)
         idx = renderer.render_indices(img.copy(), cfg, Orientation.LANDSCAPE, canvas_w, canvas_h)
     finally:
-        display.correction_lut_path = original
+        display.correction_lut_path = original_path
         _cached_correction_lut.cache_clear()
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
     return to_visible(idx, display)
 
 
@@ -84,6 +114,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", required=True)
     ap.add_argument("--console-timeout", type=float, default=180.0)
     ap.add_argument("--divider", type=int, default=2, help="black separator width in px")
+    ap.add_argument(
+        "--blend",
+        type=float,
+        default=1.0,
+        help="strength of the RIGHT side's correction, 1.0 = full LUT, 0.0 = "
+        "identity (same as --blend having no effect vs LEFT). Interpolated "
+        "in-memory against the shipped asset, no rebuild needed.",
+    )
     ap.add_argument("--save", type=Path, help="write the composed preview as a PNG, no upload")
     ap.add_argument(
         "--bench-flip180",
@@ -99,14 +137,16 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"{args.model} has no correction_lut_path set — nothing to A/B")
 
     print("  LEFT  (uncorrected) no gamut-correction LUT")
-    print(f"  RIGHT (corrected)   correction_lut_path = {display.correction_lut_path}")
+    print(
+        f"  RIGHT (corrected)   correction_lut_path = {display.correction_lut_path}  blend={args.blend}"
+    )
 
     img = Image.open(args.image).convert("RGB")
     cfg = DEFAULT_IMAGE_CONFIG
     half = display.visual_w // 2
 
     left_vis = render_half(display, cfg, img, False, half)
-    right_vis = render_half(display, cfg, img, True, half)
+    right_vis = render_half(display, cfg, img, True, half, blend=args.blend)
     assert left_vis.shape == (display.visual_h, half), left_vis.shape
 
     # No pre-swap here — see drc_anchor_ab.py for the full account. An earlier
@@ -149,7 +189,9 @@ def main(argv: list[str] | None = None) -> int:
     if not ok:
         print("upload failed")
         return 1
-    print("\nOn the glass: LEFT = uncorrected, RIGHT = gamut-correction LUT applied.")
+    print(
+        f"\nOn the glass: LEFT = uncorrected, RIGHT = gamut-correction LUT at blend={args.blend}."
+    )
     return 0
 
 
