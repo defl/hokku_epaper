@@ -252,6 +252,79 @@ def test_drc_adaptive_vivid_no_boost_for_neutral():
     )
 
 
+# ── fast: DRC S-curve (_drc_cielab_l / _drc_oklab_l) ─────────────────────────
+
+
+def _rgb_for_l(target_l: float) -> int:
+    """The uint8 grey value whose CIELAB L* is closest to target_l.
+
+    rgb_to_lab is itself nonlinear (sRGB gamma + CIELAB's cube root), so
+    testing the DRC's L-compression slope requires controlling L*-space
+    input directly — evenly-spaced RGB grey values are NOT evenly spaced in
+    L*, and conflating the two produced a false failure on the first pass of
+    these tests (measured "slope" was really d(L_out)/d(RGB_in), not
+    d(L_out)/d(L_in), understating the true L*-space slope by ~2.5x).
+    """
+    vals = np.arange(256, dtype=np.float32)
+    greys = np.stack([vals, vals, vals], axis=-1)
+    ls = rgb_to_lab(greys.astype(np.float64))[:, 0]
+    return int(vals[np.argmin(np.abs(ls - target_l))])
+
+
+def _drc_l_out(black_l: float, white_l: float, l_in: float) -> float:
+    """Achieved CIELAB L* after DRC L-compression, for a source grey at L*=l_in."""
+    grey = np.full((1, 1, 3), float(_rgb_for_l(l_in)), dtype=np.float32)
+    drced = ImageRenderer._drc_cielab_l(grey, anchor_l=(black_l, white_l))
+    return float(rgb_to_lab(drced.astype(np.float64))[0, 0, 0])
+
+
+def test_drc_scurve_bounded_within_anchor_range():
+    """No source L*, from 0 to 100, may map outside [black_L, white_L] — the
+    whole point of a bounded S-curve over the old shoulder-only approach,
+    which only guarded the top end."""
+    black_l, white_l = 10.21, 68.02
+    outs = [_drc_l_out(black_l, white_l, l_in) for l_in in range(0, 101, 5)]
+    assert min(outs) >= black_l - 0.5, f"undershoot below black_L: {min(outs)}"
+    assert max(outs) <= white_l + 0.5, f"overshoot above white_L: {max(outs)}"
+
+
+def test_drc_scurve_endpoints_match_anchor():
+    """Pure black/white must still land (approximately) exactly on the anchors,
+    same contract the old linear map had."""
+    black_l, white_l = 10.21, 68.02
+    assert abs(_drc_l_out(black_l, white_l, 0) - black_l) < 1.0
+    assert abs(_drc_l_out(black_l, white_l, 100) - white_l) < 1.5  # rgb=255 rounding
+
+
+def test_drc_scurve_midtone_steeper_than_pure_linear():
+    """The whole reason for the S-curve: recover shadow/midtone contrast that
+    a pure linear map (ratio = span/100 throughout) doesn't have. Check the
+    curve's midtone slope, measured in L*-space, exceeds the linear-only rate."""
+    black_l, white_l = 10.21, 68.02
+    linear_ratio = (white_l - black_l) / 100.0
+    lo, hi = 45.0, 55.0  # straddles L*=50, the curve's midpoint
+    measured_slope = (_drc_l_out(black_l, white_l, hi) - _drc_l_out(black_l, white_l, lo)) / (
+        hi - lo
+    )
+    assert measured_slope > linear_ratio * 1.1, (
+        f"midtone slope {measured_slope:.3f} should clearly exceed the pure-linear "
+        f"rate {linear_ratio:.3f} — the S-curve isn't adding contrast"
+    )
+
+
+def test_drc_scurve_softer_than_linear_near_extremes():
+    """Near the very top and bottom, the S-curve should compress MORE gently
+    than a pure linear map would (that's the toe/shoulder softening) — i.e.
+    the local slope near the edges, in L*-space, is below the linear rate."""
+    black_l, white_l = 10.21, 68.02
+    linear_ratio = (white_l - black_l) / 100.0
+    edge_slope = (_drc_l_out(black_l, white_l, 10) - _drc_l_out(black_l, white_l, 0)) / 10
+    assert edge_slope < linear_ratio, (
+        f"near-black slope {edge_slope:.3f} should be gentler than the linear "
+        f"rate {linear_ratio:.3f} — the toe isn't softening"
+    )
+
+
 # ── fast: apply_correction_lut ───────────────────────────────────────────────
 
 

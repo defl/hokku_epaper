@@ -562,16 +562,66 @@ class ImageRenderer(AbstractImageRenderer):
             vivid_chroma_high=vivid_chroma_high_oklab,
         )
 
+    # Steepness of the logistic S-curve _scurve() applies to the normalized
+    # source lightness, for _drc_cielab_l/_drc_oklab_l. 0 = pure linear (no
+    # shadow/highlight softening at all).
+    #
+    # Exists because a linear-only map, sized to the panel's own measured
+    # range, was measurably flatter in shadows/midtones than the OLD (wrong,
+    # too-wide) range it replaced — confirmed on real glass: tie pattern and
+    # facial shadow detail were visibly crisper under the old, inaccurate
+    # range, at the cost of blown highlights (the old range assumed white
+    # brighter than the panel can show). A pure linear map can't have both —
+    # one slope end to end. An S-curve can: steeper through the middle
+    # (recovering the lost contrast) while tapering smoothly to zero slope
+    # at BOTH anchors, so neither end can ever overshoot the panel's real
+    # range the way the old wide-range bug did.
+    #
+    # A first attempt used a smoothstep blend (3t²-2t³), capped at 1.5x the
+    # linear slope at the midpoint (max ~5.4 L* peak difference from linear
+    # on the F7's anchor range) — confirmed on real glass to be imperceptible
+    # against the noise floor of a dithered 6-ink panel. The FULL old-range-
+    # vs-new-range gap that was clearly visible measured ~7.6 L* at its peak
+    # (computed the same way, see git history). A logistic sigmoid isn't
+    # capped like a fixed-degree polynomial is: k=8 reaches ~8.4 L* peak
+    # difference from linear, comfortably past the ~7.6 L* bar that was
+    # already confirmed visible — chosen for that reason, not yet re-
+    # validated on real glass at this specific value.
+    _DRC_SIGMOID_K = 8.0
+
+    @staticmethod
+    def _scurve(t: NDArray[np.float32], k: float) -> NDArray[np.float32]:
+        """Normalized logistic S-curve on [0, 1] -> [0, 1]. k=0 is identity;
+        higher k gives a steeper midpoint and softer toe/shoulder.
+
+        Hits (0, 0) and (1, 1) EXACTLY by construction — rescaled against the
+        raw sigmoid's own values at t=0 and t=1, not just asymptotically
+        close — so composing this with a linear anchor map can never
+        overshoot [black_L, white_L], at any k.
+        """
+        if k == 0.0:
+            return t
+        f32 = np.float32
+        kf = f32(k)
+        raw = f32(1.0) / (f32(1.0) + np.exp(-kf * (t - f32(0.5))))
+        raw0 = 1.0 / (1.0 + np.exp(kf * f32(0.5)))
+        raw1 = 1.0 / (1.0 + np.exp(-kf * f32(0.5)))
+        return ((raw - f32(raw0)) / f32(raw1 - raw0)).astype(f32)
+
     @staticmethod
     def _drc_cielab_l(
         rgb: NDArray[np.float32], anchor_l: tuple[float, float] | None = None
     ) -> NDArray[np.float32]:
-        """Map source L* into the panel's CIELAB L* range + tanh soft shoulder.
+        """Map source L* into the panel's CIELAB L* range via a bounded S-curve.
 
         ``anchor_l`` is the target range. It must describe the panel being
         rendered for: the module-level PALETTE_LAB is the Huessen reference, and
         using it for another screen compresses into a range that screen cannot
         show, clipping both ends.
+
+        The output is provably confined to [black_L, white_L]: _scurve() only
+        ever returns a value in [0, 1], so no separate clamp/shoulder step is
+        needed the way the old pure-linear map required one.
         """
         f32 = np.float32
         lab = rgb_to_lab(rgb, dtype=f32)
@@ -579,27 +629,23 @@ class ImageRenderer(AbstractImageRenderer):
         lo, hi = anchor_l if anchor_l is not None else (PALETTE_LAB[0, 0], PALETTE_LAB[1, 0])
         black_L = f32(lo)
         white_L = f32(hi)
-        ratio = f32((float(white_L) - float(black_L)) / 100.0)
-        np.multiply(L, ratio, out=L)
-        np.add(L, black_L, out=L)
-        threshold = black_L + f32(0.85) * (white_L - black_L)
-        headroom = white_L - threshold
-        above = L > threshold
-        if np.any(above):
-            delta = L[above] - threshold
-            L[above] = (threshold + headroom * np.tanh(delta / headroom)).astype(f32)
+        t = np.clip(L / f32(100.0), f32(0.0), f32(1.0)).astype(f32)
+        t_curved = ImageRenderer._scurve(t, ImageRenderer._DRC_SIGMOID_K)
+        lab[..., 0] = black_L + (white_L - black_L) * t_curved
         return ImageRenderer._lab_to_rgb(lab)
 
     @staticmethod
     def _drc_oklab_l(
         rgb: NDArray[np.float32], anchor_l: tuple[float, float] | None = None
     ) -> NDArray[np.float32]:
-        """Map source L into the panel's OKLAB L range + tanh soft shoulder.
+        """Map source L into the panel's OKLAB L range via a bounded S-curve.
 
         Panel anchors come from PALETTE_OKLAB (black L ≈ 0.085, white ≈ 0.825).
         OKLAB has noticeably better perceived-lightness prediction than CIELAB
-        (Bottosson 2020), so the soft shoulder follows perceived brightness
-        more faithfully near the panel-white limit.
+        (Bottosson 2020), so the curve follows perceived brightness more
+        faithfully near the panel's limits. See _drc_cielab_l for the S-curve
+        rationale and _DRC_SIGMOID_K for the steepness — identical shape
+        here, just on OKLAB's native [0, 1] L axis.
         """
         f32 = np.float32
         oklab = rgb_to_oklab(rgb, dtype=f32)
@@ -607,16 +653,9 @@ class ImageRenderer(AbstractImageRenderer):
         lo, hi = anchor_l if anchor_l is not None else (PALETTE_OKLAB[0, 0], PALETTE_OKLAB[1, 0])
         black_L = f32(lo)
         white_L = f32(hi)
-        # Source L is in [0, 1] in OKLAB — scale to [black_L, white_L].
-        ratio = white_L - black_L
-        np.multiply(L, ratio, out=L)
-        np.add(L, black_L, out=L)
-        threshold = black_L + f32(0.85) * (white_L - black_L)
-        headroom = white_L - threshold
-        above = L > threshold
-        if np.any(above):
-            delta = L[above] - threshold
-            L[above] = (threshold + headroom * np.tanh(delta / headroom)).astype(f32)
+        t = np.clip(L, f32(0.0), f32(1.0)).astype(f32)
+        t_curved = ImageRenderer._scurve(t, ImageRenderer._DRC_SIGMOID_K)
+        oklab[..., 0] = black_L + (white_L - black_L) * t_curved
         return oklab_to_rgb(oklab, dtype=f32)
 
     @staticmethod
