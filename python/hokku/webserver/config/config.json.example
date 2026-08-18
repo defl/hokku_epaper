@@ -50,7 +50,7 @@
   "image_config_default": {
     "adaptive_saturate_space": "oklab",
     "adaptive_vivid": true,
-    "clahe_clip_limit": 1.75,
+    "clahe_clip_limit": 0.0,
     "clahe_keepout_feather": 0.015,
     "color_enhance": 1.25,
     "dither": {
@@ -84,7 +84,7 @@
   "image_config_face": {
     "adaptive_saturate_space": "off",
     "adaptive_vivid": false,
-    "clahe_clip_limit": 1.25,
+    "clahe_clip_limit": 0.0,
     "clahe_keepout_feather": 0.015,
     "color_enhance": 1.25,
     "dither": {

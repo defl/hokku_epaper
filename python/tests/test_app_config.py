@@ -44,10 +44,10 @@ def test_pipeline_defaults_are_actually_different():
 
 
 def test_face_default_is_tuned_for_skin():
-    """Face pipeline: gentler local contrast, stronger/wider unsharp than default."""
+    """Face pipeline: local contrast no more aggressive than default, stronger/wider unsharp."""
     cfg = AppConfig()
     face, default = cfg.image_config_face, cfg.image_config_default
-    assert face.clahe_clip_limit < default.clahe_clip_limit
+    assert face.clahe_clip_limit <= default.clahe_clip_limit
     assert face.prepare_usm_amount > default.prepare_usm_amount
     assert face.prepare_usm_radius > default.prepare_usm_radius
     assert face.dither.algorithm == "atkinson"
@@ -56,7 +56,7 @@ def test_face_default_is_tuned_for_skin():
 def test_dropdown_presets_unchanged_by_pipeline_defaults():
     """The face tuning must not leak into the general-purpose Atkinson preset."""
     assert DEFAULT_FACE_IMAGE_CONFIG != PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
-    assert PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].clahe_clip_limit == 1.75
+    assert PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].clahe_clip_limit == 0.0
 
 
 # ── the shipped defaults are named presets ───────────────────────────────────

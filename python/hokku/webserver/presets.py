@@ -41,7 +41,16 @@ def _hue_aware(algorithm: AlgorithmName, serpentine: bool = False) -> ImageConfi
         drc_l_space="cielab",
         drc_chroma_space="cielab",
         prepare_midtone=1.02,
-        clahe_clip_limit=1.75,
+        # Was 1.75. Real-glass A/B (both panels, portrait) found CLAHE actively
+        # fighting the rest of the tonal chain: it equalises LOCAL contrast per
+        # 8x8 tile, which on a smooth region (background, skin, an unbroken
+        # gradient) renormalises away much of the global contrast the earlier
+        # Contrast(1.1) stage had just added — confirmed by tracing L* through
+        # every pre-DRC stage on a flat gradient wedge (build/tools/clahe_ab.py,
+        # tools/drc_scurve_ab.py). With CLAHE on, the panel showed measurably
+        # weaker background/shadow contrast than with it off; judged clearly
+        # better off ("left is better by a lot").
+        clahe_clip_limit=0.0,
         clahe_keepout_feather=0.015,
         prepare_usm_radius=1.0,
         prepare_usm_amount=120,
@@ -73,13 +82,15 @@ def _face(algorithm: AlgorithmName = "atkinson", serpentine: bool = False) -> Im
 
     Skin is the least forgiving subject on a 6-colour panel: aggressive local
     contrast turns cheeks blotchy and a hard unsharp halo reads as a bad
-    print. So relative to the default pipeline this pulls CLAHE well down and
-    trades it for a slightly wider, stronger unsharp mask, which sharpens
-    features (eyes, hairline) without amplifying skin texture.
+    print. Skin is also exactly the kind of smooth, low-local-detail region
+    where CLAHE was found to fight the rest of the tonal chain (see
+    ``_hue_aware``'s ``clahe_clip_limit``) — so CLAHE is off here too, same as
+    default, traded for a slightly wider, stronger unsharp mask, which
+    sharpens features (eyes, hairline) without amplifying skin texture.
     """
     return replace(
         _hue_aware(algorithm, serpentine),
-        clahe_clip_limit=1.25,
+        clahe_clip_limit=0.0,
         prepare_usm_amount=130,
         prepare_usm_radius=1.2,
     )
@@ -245,7 +256,7 @@ PRESET_META: dict[str, dict[str, str]] = {
     },
     "default_face": {
         "label": "Faces (default)",
-        "description": "What the server ships with for photos containing faces. Local contrast is pulled well down and traded for a wider, stronger unsharp mask — aggressive CLAHE makes cheeks blotchy — and both chroma boosters are off, which measured a two-thirds cut in blue ink landing on saturated lips. Deliberately gentle, so it is a poor general-purpose choice.",
+        "description": "What the server ships with for photos containing faces. CLAHE is off (like the general default) and traded for a wider, stronger unsharp mask — local contrast on skin makes cheeks blotchy — and both chroma boosters are off, which measured a two-thirds cut in blue ink landing on saturated lips. Deliberately gentle, so it is a poor general-purpose choice.",
     },
     "floyd_steinberg_hue_aware": {
         "label": "Floyd-Steinberg (hue-aware)",
