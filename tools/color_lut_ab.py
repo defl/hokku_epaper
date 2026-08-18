@@ -109,15 +109,19 @@ def main(argv: list[str] | None = None) -> int:
     right_vis = render_half(display, cfg, img, True, half)
     assert left_vis.shape == (display.visual_h, half), left_vis.shape
 
-    # Same left/right-swap-before-flip reasoning as drc_anchor_ab.py: a 180°
-    # rotation of the whole composed canvas reverses column order, so without
-    # pre-swapping which variant fills which half, the printed labels would be
-    # backwards for a bench-flipped panel.
-    swap = args.bench_flip180
+    # No pre-swap here — see drc_anchor_ab.py for the full account. An earlier
+    # version of both files swapped which variant filled which half before
+    # the 180° flip, on the (wrong) assumption that the rotation would
+    # otherwise swap physical sides. Confirmed empirically on real glass with
+    # a solid red/green marker frame: the software np.rot90(k=2) below and
+    # the panel's own upside-down bench mount cancel completely on their
+    # own — content placed at PRE-rotation columns [0:half] lands on the
+    # physical LEFT. The swap was actively wrong, not just unnecessary; it
+    # mislabelled every Huessen correction-LUT A/B this tool ran.
     out_w = half * 2
     out_vis = np.empty((display.visual_h, out_w), dtype=np.uint8)
-    out_vis[:, :half] = right_vis if swap else left_vis
-    out_vis[:, half:out_w] = left_vis if swap else right_vis
+    out_vis[:, :half] = left_vis
+    out_vis[:, half:out_w] = right_vis
     if args.divider > 0:
         c = half - args.divider // 2
         out_vis[:, c : c + args.divider] = 0  # black ink

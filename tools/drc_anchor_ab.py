@@ -127,17 +127,21 @@ def main(argv: list[str] | None = None) -> int:
     right_vis = render_half(display, cfg, img, mapped_anchor, half)
     assert left_vis.shape == (display.visual_h, half), left_vis.shape
 
-    # A 180° rotation of the WHOLE composed canvas reverses column order, so it
-    # swaps which physical side (left/right) each half lands on along with
-    # flipping up/down. Pre-swapping which variant fills which half here, only
-    # when the flip is about to happen, keeps the printed LEFT/RIGHT labels
-    # truthful about what actually ends up on the glass instead of just being
-    # true for the un-flipped case.
-    swap = args.bench_flip180
+    # No pre-swap here. An EARLIER version of this file swapped which variant
+    # filled which half before the 180° flip, reasoning that the rotation
+    # reverses column order and would otherwise swap physical sides — that
+    # reasoning was wrong, and it silently mislabelled every Huessen A/B this
+    # tool ever ran with --bench-flip180 (confirmed empirically on real glass
+    # with a solid red/green marker frame: content placed at PRE-rotation
+    # columns [0:half] lands on the physical LEFT once both the software
+    # np.rot90(k=2) below AND the panel's own upside-down bench mount are in
+    # effect — the two 180°s cancel completely, on BOTH axes at once, not
+    # just vertically. No content swap is needed to compensate; only the
+    # np.rot90 itself is needed, and it alone is already correct).
     out_w = half * 2
     out_vis = np.empty((display.visual_h, out_w), dtype=np.uint8)
-    out_vis[:, :half] = right_vis if swap else left_vis
-    out_vis[:, half:out_w] = left_vis if swap else right_vis
+    out_vis[:, :half] = left_vis
+    out_vis[:, half:out_w] = right_vis
     if args.divider > 0:
         c = half - args.divider // 2
         out_vis[:, c : c + args.divider] = 0  # black ink
