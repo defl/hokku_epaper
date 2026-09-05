@@ -5,6 +5,10 @@ One DB file (``serve_scheduler.json``) carries all of:
 - ``last_served``: which image was served last (used for time-shown attribution)
 - ``screens``: per-screen telemetry (request count, battery, frame state)
 - ``next_for``: pre-computed next image per orientation (LANDSCAPE, PORTRAIT, NEUTRAL)
+
+Collection membership is metadata-only. The existing global serve statistics are
+shared by every collection, while cached next-image pointers are maintained per
+collection so changing a frame's selection does not disturb fair rotation.
 """
 
 from __future__ import annotations
@@ -17,6 +21,11 @@ import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
+from hokku.webserver.collection_store import (
+    ALL_COLLECTION_ID,
+    CollectionNotFoundError,
+    CollectionStore,
+)
 from hokku.webserver.filesystem import atomic_write_json
 from hokku.webserver.image_manager_abstract import AbstractImageManager
 from hokku.webserver.image_record import ConvertStatus, ImageRecord
@@ -129,8 +138,11 @@ class ScreenTelemetryEntry:
 class ServeScheduler:
     """Fair-rotation scheduler + screen telemetry collector."""
 
-    def __init__(self, manager: AbstractImageManager) -> None:
+    def __init__(
+        self, manager: AbstractImageManager, collection_store: CollectionStore | None = None
+    ) -> None:
         self._manager = manager
+        self._collections = collection_store or CollectionStore(manager.config.cache_dir)
         self._db_path = Path(manager.config.cache_dir) / _DB_FILENAME
         self._lock = threading.RLock()
         self._stats: dict[str, ServeStats] = {}  # keyed by IMAGE name (rotation)
@@ -154,6 +166,9 @@ class ServeScheduler:
         self._ota_attempts: dict[str, int] = {}
         self._last_served: tuple[str, float] | None = None
         self._next_for: dict[Orientation, str | None] = dict.fromkeys(Orientation, None)
+        self._next_for_by_collection: dict[str, dict[Orientation, str | None]] = {
+            ALL_COLLECTION_ID: self._next_for
+        }
         self._load()
         # Pre-determine the next image right now so the UI can show it
         # immediately without waiting for the first screen request.
@@ -162,11 +177,13 @@ class ServeScheduler:
             if ready:
                 ready_names = {r.name for r in ready}
                 self._reconcile(ready_names)
-                self._precompute_all_locked(ready)
+                self._precompute_all_locked(ready, ALL_COLLECTION_ID)
 
     # ── Rotation ─────────────────────────────────────────────────
 
-    def pick_next(self, orientation: Orientation) -> str | None:
+    def pick_next(
+        self, orientation: Orientation, collection_id: str = ALL_COLLECTION_ID
+    ) -> str | None:
         """Return the pre-determined next image for the given orientation filter.
 
         orientation=NEUTRAL means no filter — returns the global best next image.
@@ -176,24 +193,26 @@ class ServeScheduler:
         """
         with self._lock:
             ready = [r for r in self._manager.list() if r.convert_status == ConvertStatus.OK]
-            ready_names = {r.name for r in ready}
-            self._reconcile(ready_names)
+            self._reconcile({r.name for r in ready})
 
-            if not ready:
-                self._next_for = dict.fromkeys(Orientation, None)
+            slots = self._slots_locked(collection_id)
+            eligible = self._eligible_ready_locked(ready, collection_id)
+            if not eligible:
+                for o in Orientation:
+                    slots[o] = None
                 self._save()
                 return None
 
             # If the pre-computed choice for this orientation is still valid, honour it.
-            if self._next_for.get(orientation) in ready_names:
-                return self._next_for[orientation]
+            if slots.get(orientation) in {r.name for r in eligible}:
+                return slots[orientation]
 
-            # Pre-computed choice is stale or absent — recompute all orientations.
-            self._precompute_all_locked(ready)
+            # Pre-computed choice is stale or absent — recompute this collection.
+            self._precompute_all_locked(ready, collection_id)
             self._save()
-            return self._next_for.get(orientation)
+            return slots.get(orientation)
 
-    def mark_served(self, name: str) -> None:
+    def mark_served(self, name: str, collection_id: str = ALL_COLLECTION_ID) -> None:
         """Bump rotation pointer and stats. Attributes elapsed time to the
         previously-served image. Pre-computes the next image for all orientations
         so the UI reflects the upcoming choice immediately."""
@@ -213,7 +232,10 @@ class ServeScheduler:
             ready = [r for r in self._manager.list() if r.convert_status == ConvertStatus.OK]
             ready_names = {r.name for r in ready}
             self._reconcile(ready_names)
-            self._precompute_all_locked(ready)
+            # A served image may belong to several collections. Recompute every
+            # already-used collection so the UI and the next frame poll agree.
+            for cid in list(self._next_for_by_collection):
+                self._precompute_all_locked(ready, cid)
             self._save()
 
     # ── Stats retrieval ──────────────────────────────────────────
@@ -230,12 +252,14 @@ class ServeScheduler:
         with self._lock:
             return self._last_served
 
-    def peek_next(self, orientation: Orientation) -> str | None:
+    def peek_next(
+        self, orientation: Orientation, collection_id: str = ALL_COLLECTION_ID
+    ) -> str | None:
         """Return the pre-determined next image for the given orientation without consuming it."""
         with self._lock:
-            return self._next_for.get(orientation)
+            return self._slots_locked(collection_id).get(orientation)
 
-    def set_next(self, name: str) -> None:
+    def set_next(self, name: str, collection_id: str = ALL_COLLECTION_ID) -> None:
         """Force a specific image to be served next (overrides rotation order).
 
         Raises ValueError if the image is not currently ready to serve.
@@ -245,10 +269,15 @@ class ServeScheduler:
             ready = {r.name for r in self._manager.list() if r.convert_status == ConvertStatus.OK}
             if name not in ready:
                 raise ValueError(f"Image {name!r} is not ready to serve")
-            # Override all orientation slots to the forced image (it will be
-            # filtered by orientation at serve time if a filter is active).
+            slots = self._slots_locked(collection_id)
+            if collection_id != ALL_COLLECTION_ID and not self._collections.contains(
+                collection_id, name
+            ):
+                raise ValueError(f"Image {name!r} is not in collection {collection_id!r}")
+            # Override all orientation slots to the forced image. Orientation
+            # filtering still happens when a frame asks for a particular slot.
             for o in Orientation:
-                self._next_for[o] = name
+                slots[o] = name
             self._save()
 
     # ── Screen identity (sid keyed by name + MAC) ────────────────
@@ -452,6 +481,49 @@ class ServeScheduler:
             t = self._screens.get(sid) if sid else None
             return t.screen_model if t else None
 
+    @property
+    def collection_store(self) -> CollectionStore:
+        """The metadata store used by this scheduler and the web API."""
+        return self._collections
+
+    def screen_last_served(self, name: str) -> str | None:
+        """Return the image last acknowledged by a screen, if known."""
+        with self._lock:
+            sid = self._resolve_sid_locked(name, None)
+            entry = self._screens.get(sid) if sid else None
+            return entry.last_served if entry else None
+
+    def collection_has_eligible(
+        self, collection_id: str, orientation: Orientation = Orientation.NEUTRAL
+    ) -> bool:
+        """Whether a collection has a ready image eligible for *orientation*."""
+        with self._lock:
+            ready = [r for r in self._manager.list() if r.convert_status == ConvertStatus.OK]
+            return bool(self._eligible_ready_locked(ready, collection_id, orientation=orientation))
+
+    def invalidate_collection(self, collection_id: str) -> None:
+        """Discard cached next-image choices after membership changes."""
+        with self._lock:
+            if collection_id not in self._next_for_by_collection:
+                return
+            ready = [r for r in self._manager.list() if r.convert_status == ConvertStatus.OK]
+            self._precompute_all_locked(ready, collection_id)
+            self._save()
+
+    def reset_active_collection(self, collection_id: str) -> None:
+        """Move screens away from a collection that is being deleted."""
+        with self._lock:
+            self._next_for_by_collection.pop(collection_id, None)
+            changed = False
+            for sid, config in list(self._screen_configs.items()):
+                if config.active_collection_id == collection_id:
+                    self._screen_configs[sid] = replace(
+                        config, active_collection_id=ALL_COLLECTION_ID
+                    )
+                    changed = True
+            if changed:
+                self._save()
+
     # ── OTA: per-screen update request + migration errors ─────────
 
     def set_ota_pending(self, name: str, enabled: bool, reflash: bool = False) -> None:
@@ -601,20 +673,48 @@ class ServeScheduler:
     def _atomic_write_json(self, payload: dict) -> None:
         atomic_write_json(self._db_path, payload)
 
-    def _precompute_all_locked(self, ready: list[ImageRecord]) -> None:
+    def _slots_locked(self, collection_id: str) -> dict[Orientation, str | None]:
+        if collection_id == ALL_COLLECTION_ID:
+            return self._next_for
+        return self._next_for_by_collection.setdefault(
+            collection_id, dict.fromkeys(Orientation, None)
+        )
+
+    def _eligible_ready_locked(
+        self,
+        ready: list[ImageRecord],
+        collection_id: str,
+        *,
+        orientation: Orientation | None = None,
+    ) -> list[ImageRecord]:
+        if collection_id == ALL_COLLECTION_ID:
+            eligible = ready
+        else:
+            try:
+                members = self._collections.image_names(collection_id)
+            except CollectionNotFoundError:
+                logger.warning("Unknown active collection %r; serving All Photos", collection_id)
+                eligible = ready
+            else:
+                eligible = [r for r in ready if r.name in members]
+        if orientation is not None and orientation != Orientation.NEUTRAL:
+            eligible = [r for r in eligible if r.matches_orientation_filter(orientation)]
+        return eligible
+
+    def _precompute_all_locked(
+        self, ready: list[ImageRecord], collection_id: str = ALL_COLLECTION_ID
+    ) -> None:
         """Pre-compute the next image for every orientation value.
 
         NEUTRAL = unfiltered (best across all images).
         LANDSCAPE/PORTRAIT = best among images matching that orientation filter.
         Must be called under self._lock.
         """
+        slots = self._slots_locked(collection_id)
         for orientation in Orientation:
-            if orientation == Orientation.NEUTRAL:
-                eligible = ready
-            else:
-                eligible = [r for r in ready if r.matches_orientation_filter(orientation)]
+            eligible = self._eligible_ready_locked(ready, collection_id, orientation=orientation)
             if not eligible:
-                self._next_for[orientation] = None
+                slots[orientation] = None
             else:
                 # Pick the least-shown index, then break ties randomly rather
                 # than alphabetically — new uploads keep re-tying the least-shown
@@ -622,7 +722,7 @@ class ServeScheduler:
                 # replay the same prefix first every time.
                 min_idx = min(self._stats[r.name].show_index for r in eligible)
                 tied = [r.name for r in eligible if self._stats[r.name].show_index == min_idx]
-                self._next_for[orientation] = random.choice(tied)  # noqa: S311 — rotation fairness, not crypto
+                slots[orientation] = random.choice(tied)  # noqa: S311 — rotation fairness, not crypto
 
     def _reconcile(self, ready_names: set[str]) -> None:
         # Drop orphans.
@@ -707,6 +807,18 @@ class ServeScheduler:
             old_next = data.get("next_image")
             if isinstance(old_next, str):
                 self._next_for[Orientation.NEUTRAL] = old_next
+        scoped_next = data.get("next_for_by_collection")
+        if isinstance(scoped_next, dict):
+            for collection_id, slots_raw in scoped_next.items():
+                if not isinstance(collection_id, str) or collection_id == ALL_COLLECTION_ID:
+                    continue
+                if not isinstance(slots_raw, dict):
+                    continue
+                slots = dict.fromkeys(Orientation, None)
+                for orientation in Orientation:
+                    value = slots_raw.get(orientation.value)
+                    slots[orientation] = value if isinstance(value, str) else None
+                self._next_for_by_collection[collection_id] = slots
 
     def _rebuild_indexes_locked(self) -> None:
         """Rebuild name->sid and mac->sid from the loaded records, and set the
@@ -789,6 +901,11 @@ class ServeScheduler:
             "schema": 2,
             "sid_seq": self._sid_seq,
             "next_for": {o.value: self._next_for.get(o) for o in Orientation},
+            "next_for_by_collection": {
+                collection_id: {o.value: slots.get(o) for o in Orientation}
+                for collection_id, slots in self._next_for_by_collection.items()
+                if collection_id != ALL_COLLECTION_ID
+            },
             "last_served": (
                 {"name": self._last_served[0], "served_at": self._last_served[1]}
                 if self._last_served

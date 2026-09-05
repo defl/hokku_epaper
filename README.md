@@ -20,6 +20,7 @@ All three use **E Ink Spectra 6**, so one photo library feeds every frame — an
 - **Local-only** — your photos never leave your network. No cloud, no third-party servers, no telemetry. The web app itself makes no external requests — fonts and assets are self-hosted, so nothing is phoned home just by opening a browser tab. Your hardware and open source software means you're in full control.
 - **Drag-and-drop upload** — single files or dozens at a time, straight into the web app, with a live progress list. Works on phones too.
 - **Browse in a grid** — preview exactly what the frame will show before it shows it, original and converted version side by side. Delete anything you don't want with one click.
+- **Photo collections** — group photos into named collections such as Family, Travel or Favorites without copying files, then choose a collection independently for each frame.
 - **Click any photo** — see how it was processed and compare the original against what's going to the frame at full size.
 - **All the formats you actually have** — JPEG, PNG, HEIC/HEIF, AVIF, WebP, GIF, TIFF, BMP, JPEG XL. Anything from 90s scanned prints to modern iPhone, Android, and JPEG XL. Phone photos auto-rotate.
 - **Landscape or portrait** — flip a switch and everything re-converts to match how the frame is mounted.
@@ -38,6 +39,7 @@ All three use **E Ink Spectra 6**, so one photo library feeds every frame — an
 - **Flash frames from the web app** — if you're running the server on the same machine you use for setup (the appliance scenario), connect a frame via USB and use "Flash a screen" in the web app directly, without running any setup wizard separately. On the Pi Zero 2 W appliance the single USB port is dual-role, so **boot the appliance with nothing on the data port, then hot-plug the frame** (through a micro-USB→USB-A OTG adapter, with the Pi powered from its PWR port) — a frame attached at boot stops the appliance from starting. See [the appliance guide](docs/appliance.md#flashing-a-frame-from-the-appliance).
 - **Multiple frames, one server** — each frame gets a name and shows up in a dashboard with battery level, WiFi signal, and when it'll next update. Mix models, sizes and orientations against one library: a 13.3" frame in the hall and a 7.3" on a shelf, each served images converted for its own panel.
 - **Per-frame settings** — orientation, crop behaviour and firmware updates are set per screen, not globally.
+- **Per-frame collections** — each frame can rotate through its own collection while All Photos preserves the default behavior for existing installations.
 - **Knows which firmware each frame runs** — the dashboard shows every frame's firmware version and flags the ones that are behind.
 - **Fair rotation** — every photo gets its turn. Newly uploaded photos go to the front of the queue; after that, whichever image has been shown least goes next.
 - **Battery lasts months** — the frame uses almost no power between refreshes. The web app shows a battery level for each frame and flags it red when it's getting low.

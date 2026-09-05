@@ -1,3 +1,9 @@
+hokku-server (4.0.1~dev.17-1) unstable; urgency=medium
+
+  * Add metadata-backed photo collections and per-frame collection selection.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 05 Sep 2026 11:52:21 -0700
+
 hokku-server (4.0.1~dev.15-1) unstable; urgency=medium
 
   * The preset dropdown now follows the catalog's own order (shipped defaults
@@ -350,4 +356,3 @@ hokku-server (4.0.1~dev.21-1) unstable; urgency=medium
     Pi's RLIMIT_NPROC + thrashed RAM — a cold-cache re-JIT boot never settled.
 
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 25 Jul 2026 05:38:20 +0000
-

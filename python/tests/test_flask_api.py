@@ -236,6 +236,100 @@ def test_show_next_not_ready_returns_409(bare_client):
     assert resp.status_code == 409
 
 
+# ── /hokku/api/collections ───────────────────────────────────────────────────
+
+
+def test_collection_crud_and_image_membership(synced_client):
+    client, _, name = synced_client
+    created = client.post(
+        "/hokku/api/collections",
+        json={"name": "Family", "description": "People we love"},
+    )
+    assert created.status_code == 201
+    collection = created.get_json()
+    assert collection["name"] == "Family"
+    assert collection["image_count"] == 0
+    collection_id = collection["id"]
+
+    added = client.post(f"/hokku/api/collections/{collection_id}/images", json={"images": [name]})
+    assert added.status_code == 200
+    assert added.get_json()["images"] == [name]
+
+    listed = client.get("/hokku/api/collections").get_json()["collections"]
+    assert {entry["name"] for entry in listed} >= {"All Photos", "Family"}
+    family = next(entry for entry in listed if entry["id"] == collection_id)
+    assert family["image_count"] == 1
+
+    renamed = client.patch(f"/hokku/api/collections/{collection_id}", json={"name": "Favorites"})
+    assert renamed.status_code == 200
+    assert renamed.get_json()["name"] == "Favorites"
+
+    removed = client.delete(f"/hokku/api/collections/{collection_id}/images/{name}")
+    assert removed.status_code == 200
+    assert removed.get_json()["images"] == []
+
+    deleted = client.delete(f"/hokku/api/collections/{collection_id}")
+    assert deleted.status_code == 200
+    assert all(
+        entry["id"] != collection_id
+        for entry in client.get("/hokku/api/collections").get_json()["collections"]
+    )
+    # Collection deletion never deletes the source image.
+    assert client.get(f"/hokku/api/original/{name}").status_code == 200
+
+
+def test_all_photos_is_backward_compatible_and_image_status_has_memberships(synced_client):
+    client, _, name = synced_client
+    data = client.get("/hokku/api/status").get_json()
+    entry = next(item for item in data["upload_files"] if item["name"] == name)
+    assert "all" in entry["collection_ids"]
+    assert any(c["id"] == "all" and c["image_count"] == 1 for c in data["collections"])
+
+
+def test_screen_active_collection_persists_and_can_be_read(synced_client):
+    client, state, _ = synced_client
+    created = client.post("/hokku/api/collections", json={"name": "Family"}).get_json()
+    collection_id = created["id"]
+    set_resp = client.patch(
+        "/hokku/api/screens/hallway/collection", json={"collection_id": collection_id}
+    )
+    assert set_resp.status_code == 200
+    set_body = set_resp.get_json()
+    assert set_body["active_collection_id"] == collection_id
+    assert set_body["collection"]["id"] == collection_id
+    assert set_body["empty"] is True
+    get_resp = client.get("/hokku/api/screens/hallway/collection")
+    assert get_resp.status_code == 200
+    assert get_resp.get_json()["collection"]["id"] == collection_id
+    assert state.scheduler.get_screen_config("hallway").active_collection_id == collection_id
+
+
+def test_empty_active_collection_preserves_current_frame_image(synced_client):
+    client, state, name = synced_client
+    first = client.get(
+        "/hokku/screen/",
+        headers={"X-Screen-Name": "hallway", "X-Screen-Model": "huessen_epf1301"},
+    )
+    assert first.status_code == 200
+    before = state.scheduler.stats_for(name)
+    assert before is not None and before.total_show_count == 1
+
+    empty = client.post("/hokku/api/collections", json={"name": "Empty"}).get_json()
+    changed = client.patch(
+        "/hokku/api/screens/hallway/collection",
+        json={"collection_id": empty["id"]},
+    )
+    assert changed.status_code == 200
+    second = client.get(
+        "/hokku/screen/",
+        headers={"X-Screen-Name": "hallway", "X-Screen-Model": "huessen_epf1301"},
+    )
+    assert second.status_code == 200
+    assert second.data == first.data
+    after = state.scheduler.stats_for(name)
+    assert after is not None and after.total_show_count == 1
+
+
 # ── /hokku/api/status GET ─────────────────────────────────────────────────────
 
 

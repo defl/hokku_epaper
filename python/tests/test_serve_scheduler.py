@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from hokku.webserver.app_config import AppConfig
+from hokku.webserver.collection_store import ALL_COLLECTION_ID
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.screen_config import ScreenConfig
@@ -43,6 +44,64 @@ def test_pick_next_empty(app_config: AppConfig):
     mgr = SingleThreadedImageManager(app_config)
     sched = ServeScheduler(mgr)
     assert sched.pick_next(Orientation.NEUTRAL) is None
+
+
+def test_collections_filter_rotation_without_resetting_global_stats(
+    app_config: AppConfig, make_test_image
+):
+    _mgr, sched = _setup(app_config, make_test_image, ["family.jpg", "art.jpg", "travel.jpg"])
+    family = sched.collection_store.create("Family")
+    sched.collection_store.add_images(family.id, ["family.jpg"])
+    sched.invalidate_collection(family.id)
+
+    assert sched.pick_next(Orientation.NEUTRAL, family.id) == "family.jpg"
+    sched.mark_served("family.jpg", collection_id=family.id)
+    stats = sched.stats_for("family.jpg")
+    assert stats is not None
+    assert stats.total_show_count == 1
+    assert sched.pick_next(Orientation.NEUTRAL, family.id) == "family.jpg"
+    # All Photos still sees the other images and uses the same global stats.
+    assert sched.pick_next(Orientation.NEUTRAL, ALL_COLLECTION_ID) in {
+        "art.jpg",
+        "travel.jpg",
+    }
+
+
+def test_collection_fair_rotation_only_counts_members(app_config: AppConfig, make_test_image):
+    _mgr, sched = _setup(app_config, make_test_image, ["a.jpg", "b.jpg", "outside.jpg"])
+    collection = sched.collection_store.create("Pair")
+    sched.collection_store.add_images(collection.id, ["a.jpg", "b.jpg"])
+    counts = {"a.jpg": 0, "b.jpg": 0}
+    for _ in range(8):
+        name = sched.pick_next(Orientation.NEUTRAL, collection.id)
+        assert name in counts
+        counts[name] += 1
+        sched.mark_served(name, collection.id)
+    assert counts == {"a.jpg": 4, "b.jpg": 4}
+    stats = sched.stats_for("outside.jpg")
+    assert stats is not None
+    assert stats.total_show_count == 0
+
+
+def test_empty_collection_returns_no_candidate_for_route_fallback(
+    app_config: AppConfig, make_test_image
+):
+    _, sched = _setup(app_config, make_test_image, ["a.jpg"])
+    empty = sched.collection_store.create("Empty")
+    assert sched.pick_next(Orientation.NEUTRAL, empty.id) is None
+    assert not sched.collection_has_eligible(empty.id)
+
+
+def test_active_collection_persists_per_screen(app_config: AppConfig, make_test_image):
+    mgr, sched = _setup(app_config, make_test_image, ["a.jpg"])
+    collection = sched.collection_store.create("Family")
+    sched.record_screen_call("hallway", "1.2.3.4", 300, None, None, None)
+    sched.set_screen_config("hallway", ScreenConfig(active_collection_id=collection.id))
+    sched2 = ServeScheduler(mgr)
+    assert sched2.get_screen_config("hallway").active_collection_id == collection.id
+    assert sched2.collection_store.get(collection.id).name == "Family"
+    sched2.reset_active_collection(collection.id)
+    assert sched2.get_screen_config("hallway").active_collection_id == ALL_COLLECTION_ID
 
 
 def test_pick_next_single(app_config: AppConfig, make_test_image):
