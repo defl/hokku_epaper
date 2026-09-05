@@ -611,7 +611,15 @@
     border-bottom: 1px solid var(--bamboo-soft);
   }
   .collection-toolbar label { color: var(--stone); font-size: 0.9em; font-weight: 600; }
-  .collection-toolbar select { min-width: 170px; }
+  .collection-toolbar select {
+    min-width: 240px; min-height: 38px; padding: 6px 10px;
+    border: 1px solid var(--bamboo); border-radius: 6px;
+    font-size: 0.9em; background: var(--paper-card-solid);
+    color: var(--sumi); font-family: var(--font-sans);
+  }
+  .collection-toolbar select:focus {
+    outline: none; border-color: var(--indigo); background: #fff;
+  }
   .collection-warning {
     display: none; margin: 0 0 14px; padding: 9px 12px;
     color: var(--sumi); background: rgba(201, 150, 43, 0.11);
@@ -943,7 +951,7 @@
   <div class="collection-toolbar">
     <label for="collection-filter">Collection:</label>
     <select id="collection-filter" onchange="setCollectionFilter(this.value)">
-      <option value="all">All Photos</option>
+      <option value="all">All Photos (0)</option>
     </select>
     <button type="button" class="btn btn-secondary btn-small" onclick="toggleCollectionManager()">Manage collections</button>
   </div>
@@ -3598,7 +3606,9 @@ function collectionById(id) {
 }
 
 function collectionOptions(selectedId, includeAll = true) {
-  const all = includeAll ? '<option value="all"' + (selectedId === 'all' ? ' selected' : '') + '>All Photos</option>' : '';
+  const allCollection = collectionById('all');
+  const allCount = allCollection ? allCollection.image_count : 0;
+  const all = includeAll ? '<option value="all"' + (selectedId === 'all' ? ' selected' : '') + `>All Photos (${allCount})</option>` : '';
   const rest = (lastCollections || []).filter(c => c.id !== 'all').map(c =>
     `<option value="${escapeHtml(c.id)}"${c.id === selectedId ? ' selected' : ''}>${escapeHtml(c.name)} (${c.image_count})</option>`
   ).join('');
