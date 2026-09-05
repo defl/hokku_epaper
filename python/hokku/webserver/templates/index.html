@@ -945,6 +945,7 @@
   <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid var(--bamboo-soft);">
     <div class="stat">Images: <strong id="stat-pool-size">0</strong></div>
     <div class="stat">Last served: <strong id="stat-last-served">-</strong></div>
+    <div class="stat">Serving collection: <strong id="stat-serving-collection">No connected frame</strong></div>
     <div id="processing-indicator" class="processing-indicator idle">Idle</div>
   </div>
 
@@ -3598,8 +3599,26 @@ async function deleteAllFailed(failed) {
 let lastUploadFiles = [];
 let lastServeData = {};
 let lastCollections = [];
-let currentCollectionFilter = 'all';
+const COLLECTION_FILTER_STORAGE_KEY = 'hokku.collection-filter';
 let lastNextImages = {};
+
+function readStoredCollectionFilter() {
+  try {
+    return window.localStorage.getItem(COLLECTION_FILTER_STORAGE_KEY) || 'all';
+  } catch (_) {
+    return 'all';
+  }
+}
+
+function storeCollectionFilter(id) {
+  try {
+    window.localStorage.setItem(COLLECTION_FILTER_STORAGE_KEY, id);
+  } catch (_) {
+    // Private browsing and locked-down web views may reject localStorage.
+  }
+}
+
+let currentCollectionFilter = readStoredCollectionFilter();
 
 function collectionById(id) {
   return (lastCollections || []).find(c => c.id === id) || null;
@@ -3619,7 +3638,10 @@ function refreshCollectionControls() {
   const filter = document.getElementById('collection-filter');
   const bulk = document.getElementById('bulk-collection-select');
   if (filter) {
-    if (!collectionById(currentCollectionFilter)) currentCollectionFilter = 'all';
+    if (!collectionById(currentCollectionFilter)) {
+      currentCollectionFilter = 'all';
+      storeCollectionFilter(currentCollectionFilter);
+    }
     filter.innerHTML = collectionOptions(currentCollectionFilter, true);
     filter.value = currentCollectionFilter;
   }
@@ -3645,6 +3667,26 @@ function renderCollectionWarning() {
   const empty = collection && collection.id !== 'all' && collection.image_count === 0;
   warning.classList.toggle('show', Boolean(empty));
   warning.textContent = empty ? `${collection.name} is empty. The frame will keep its current image until this collection has an eligible photo.` : '';
+}
+
+function renderServingCollection(screens) {
+  const indicator = document.getElementById('stat-serving-collection');
+  if (!indicator) return;
+  const names = Object.values(screens || {})
+    .map(screen => collectionById(screen.active_collection_id || 'all'))
+    .filter(Boolean)
+    .map(collection => collection.name)
+    .filter((name, index, all) => all.indexOf(name) === index);
+  if (!names.length) {
+    indicator.textContent = 'No connected frame';
+    indicator.title = 'No frame has checked in yet.';
+  } else if (names.length === 1) {
+    indicator.textContent = names[0];
+    indicator.title = 'All connected frames are using this collection.';
+  } else {
+    indicator.textContent = 'Mixed';
+    indicator.title = `Connected frames are using: ${names.join(', ')}`;
+  }
 }
 
 function toggleCollectionManager(force) {
@@ -3703,6 +3745,7 @@ async function deleteCollection(id) {
 
 function setCollectionFilter(id) {
   currentCollectionFilter = id || 'all';
+  storeCollectionFilter(currentCollectionFilter);
   renderCollectionWarning();
   renderImageGrid(lastUploadFiles, lastServeData, lastNextImages);
 }
@@ -4507,12 +4550,13 @@ async function refreshStatus() {
       proc.textContent = 'Idle';
     }
 
-    // Screens
+    // Screens and collection state
     lastCollections = data.collections || [];
-    refreshCollectionControls();
     lastScreens = data.screens || {};
+    renderServingCollection(lastScreens);
+    refreshCollectionControls();
     lastBundledFirmwareVersions = data.bundled_firmware_versions || {};
-    renderScreens(data.screens, lastBundledFirmwareVersions);
+    renderScreens(lastScreens, lastBundledFirmwareVersions);
 
     // Memory budget: detected system memory + the derived decode budget / workers.
     const memInfoEl = document.getElementById('memory-budget-info');

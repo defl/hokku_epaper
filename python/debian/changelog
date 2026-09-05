@@ -1,3 +1,9 @@
+hokku-server (4.0.1~dev.20-1) unstable; urgency=medium
+
+  * Persist collection context and show the active serving collection in the UI.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 05 Sep 2026 13:55:00 -0700
+
 hokku-server (4.0.1~dev.17-1) unstable; urgency=medium
 
   * Add metadata-backed photo collections and per-frame collection selection.
