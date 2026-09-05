@@ -47,6 +47,11 @@ from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver import firmware_github
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState
+from hokku.webserver.collection_store import (
+    ALL_COLLECTION_ID,
+    CollectionImmutableError,
+    CollectionNotFoundError,
+)
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.firmware_library import FirmwareStore
 from hokku.webserver.image_abc import transform_bboxes_to_canvas_norm
@@ -274,6 +279,23 @@ def create_app(
         ``state.config`` fresh each request."""
         return FirmwareStore(Path(state.config.firmware_dir))
 
+    def _collection_payload(collection) -> dict:
+        records = state.manager.list()
+        if collection.id == ALL_COLLECTION_ID:
+            image_count = len(records)
+        else:
+            members = state.collections.image_names(collection.id)
+            image_count = sum(1 for record in records if record.name in members)
+        payload = collection.to_dict()
+        payload["image_count"] = image_count
+        return payload
+
+    def _collection_image_names(collection_id: str) -> list[str]:
+        names = {record.name for record in state.manager.list()}
+        if collection_id == ALL_COLLECTION_ID:
+            return sorted(names, key=str.casefold)
+        return sorted(state.collections.image_names(collection_id) & names, key=str.casefold)
+
     # ── Firmware-facing ────────────────────────────────────────
 
     @app.route("/hokku/screen/", strict_slashes=False, methods=["GET", "POST"])
@@ -344,8 +366,42 @@ def create_app(
                 screen_log = raw.decode("utf-8", errors="replace")
 
         cfg = scheduler.get_screen_config(screen_name)
+        collection_id = cfg.active_collection_id or ALL_COLLECTION_ID
+        try:
+            state.collections.get(collection_id)
+        except CollectionNotFoundError:
+            logger.warning(
+                "Unknown active collection %r for %s; serving All Photos",
+                collection_id,
+                screen_name,
+            )
+            collection_id = ALL_COLLECTION_ID
         pick_orientation = cfg.orientation if cfg.filter_by_orientation else Orientation.NEUTRAL
-        chosen = scheduler.pick_next(orientation=pick_orientation)
+        collection_empty = (
+            collection_id != ALL_COLLECTION_ID
+            and not scheduler.collection_has_eligible(collection_id, pick_orientation)
+        )
+        preserve_current = False
+        if collection_empty:
+            # A collection change must never make a frame blank. Prefer the
+            # image the frame already has; if it is unavailable, fall back to
+            # All Photos so a stale/deleted image cannot strand the device.
+            current = scheduler.screen_last_served(screen_name)
+            if (
+                current
+                and manager.panel_bytes_for_model_orientation(
+                    current, screen_model, cfg.orientation
+                )
+                is not None
+            ):
+                chosen = current
+                preserve_current = True
+            else:
+                chosen = scheduler.pick_next(
+                    orientation=pick_orientation, collection_id=ALL_COLLECTION_ID
+                )
+        else:
+            chosen = scheduler.pick_next(orientation=pick_orientation, collection_id=collection_id)
         sleep_seconds = calculate_sleep_seconds(config) if chosen else _busy_retry_seconds(config)
 
         if chosen is None:
@@ -396,7 +452,8 @@ def create_app(
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
             return _add_cal_seed(resp)
 
-        scheduler.mark_served(chosen)
+        if not preserve_current:
+            scheduler.mark_served(chosen, collection_id=collection_id)
         scheduler.record_screen_call(
             screen_name,
             screen_ip,
@@ -595,7 +652,17 @@ def create_app(
         if not files:
             logger.info("Upload rejected: no files in request")
             return jsonify({"error": "No files in upload"}), 400
+        raw_collection_id = request.form.get("collection_id")
+        collection_id = (
+            raw_collection_id if raw_collection_id not in (None, "", ALL_COLLECTION_ID) else None
+        )
+        if collection_id is not None:
+            try:
+                state.collections.get(collection_id)
+            except CollectionNotFoundError:
+                return jsonify({"error": f"collection {collection_id!r} not found"}), 404
         saved, skipped = [], []
+        collection_added = []
         for f in files:
             if not f or not f.filename:
                 continue
@@ -642,12 +709,33 @@ def create_app(
             try:
                 manager.add(name, data)
                 saved.append(name)
+                if collection_id is not None:
+                    state.collections.add_images(collection_id, [name])
+                    collection_added.append(name)
             except FileExistsError:
-                skipped.append({"name": name, "reason": "already exists; remove to replace"})
+                if collection_id is not None:
+                    state.collections.add_images(collection_id, [name])
+                    collection_added.append(name)
+                    skipped.append(
+                        {
+                            "name": name,
+                            "reason": "already exists; added to collection",
+                            "collection_added": True,
+                        }
+                    )
+                else:
+                    skipped.append({"name": name, "reason": "already exists; remove to replace"})
             except (OSError, ValueError) as e:
                 logger.error("Error adding %r: %s: %s", name, type(e).__name__, e)
                 skipped.append({"name": name, "reason": str(e)})
-        return jsonify({"saved": saved, "skipped": skipped})
+        return jsonify(
+            {
+                "saved": saved,
+                "skipped": skipped,
+                "collection_id": collection_id,
+                "collection_added": collection_added,
+            }
+        )
 
     @app.route("/hokku/api/image/<path:name>", methods=["DELETE"])
     def api_delete(name: str):
@@ -659,7 +747,202 @@ def create_app(
         except OSError as e:
             logger.error("Delete failed for %r: %s", name, e)
             return jsonify({"error": str(e)}), 500
+        state.collections.remove_image(name)
         return jsonify({"ok": True})
+
+    @app.route("/hokku/api/image/<path:name>/collections", methods=["GET", "PATCH"])
+    def api_image_collections(name: str):
+        known_names = {record.name for record in state.manager.list()}
+        if name not in known_names:
+            return jsonify({"error": f"image {name!r} not found"}), 404
+        if request.method == "GET":
+            return jsonify(
+                {"image": name, "collection_ids": sorted(state.collections.image_collections(name))}
+            )
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or set(body) != {"collection_ids"}:
+            return jsonify({"error": "collection_ids is required"}), 400
+        collection_ids = body["collection_ids"]
+        if not isinstance(collection_ids, list) or not all(
+            isinstance(collection_id, str) for collection_id in collection_ids
+        ):
+            return jsonify({"error": "collection_ids must be a list of strings"}), 400
+        before = state.collections.image_collections(name)
+        try:
+            after = state.collections.set_image_collections(name, collection_ids)
+        except CollectionNotFoundError as e:
+            return jsonify({"error": f"collection {e.args[0]!r} not found"}), 404
+        except (CollectionImmutableError, ValueError) as e:
+            return jsonify({"error": str(e)}), 409
+        for collection_id in before | after:
+            state.scheduler.invalidate_collection(collection_id)
+        return jsonify({"ok": True, "image": name, "collection_ids": sorted(after)})
+
+    # ── API: collections ────────────────────────────────────────
+
+    @app.route("/hokku/api/collections", methods=["GET"])
+    def api_collections_list():
+        return jsonify(
+            {
+                "collections": [
+                    _collection_payload(c) for c in state.collections.list(include_all=True)
+                ]
+            }
+        )
+
+    @app.route("/hokku/api/collections", methods=["POST"])
+    def api_collection_create():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "expected JSON object"}), 400
+        name = body.get("name")
+        if not isinstance(name, str):
+            return jsonify({"error": "name must be a string"}), 400
+        description = body.get("description", "")
+        if not isinstance(description, str):
+            return jsonify({"error": "description must be a string"}), 400
+        try:
+            collection = state.collections.create(name, description)
+        except (TypeError, ValueError) as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify(_collection_payload(collection)), 201
+
+    @app.route("/hokku/api/collections/<string:collection_id>", methods=["PATCH"])
+    def api_collection_update(collection_id: str):
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "expected JSON object"}), 400
+        unknown = body.keys() - {"name", "description"}
+        if unknown:
+            return jsonify({"error": f"unknown field(s): {', '.join(sorted(unknown))}"}), 400
+        if "name" in body and not isinstance(body["name"], str):
+            return jsonify({"error": "name must be a string"}), 400
+        if "description" in body and not isinstance(body["description"], str):
+            return jsonify({"error": "description must be a string"}), 400
+        try:
+            collection = state.collections.update(
+                collection_id,
+                name=body.get("name"),
+                description=body.get("description"),
+            )
+        except CollectionNotFoundError:
+            return jsonify({"error": f"collection {collection_id!r} not found"}), 404
+        except (CollectionImmutableError, ValueError) as e:
+            return jsonify({"error": str(e)}), 409
+        return jsonify(_collection_payload(collection))
+
+    @app.route("/hokku/api/collections/<string:collection_id>", methods=["DELETE"])
+    def api_collection_delete(collection_id: str):
+        try:
+            state.collections.delete(collection_id)
+        except CollectionNotFoundError:
+            return jsonify({"error": f"collection {collection_id!r} not found"}), 404
+        except CollectionImmutableError as e:
+            return jsonify({"error": str(e)}), 409
+        state.scheduler.reset_active_collection(collection_id)
+        return jsonify({"ok": True})
+
+    @app.route(
+        "/hokku/api/collections/<string:collection_id>/images", methods=["GET", "POST", "DELETE"]
+    )
+    def api_collection_images(collection_id: str):
+        try:
+            state.collections.get(collection_id)
+        except CollectionNotFoundError:
+            return jsonify({"error": f"collection {collection_id!r} not found"}), 404
+
+        if request.method == "GET":
+            names = _collection_image_names(collection_id)
+            return jsonify({"collection_id": collection_id, "images": names, "count": len(names)})
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "expected JSON object"}), 400
+        raw_names = body.get("images", body.get("names"))
+        if not isinstance(raw_names, list) or not all(isinstance(name, str) for name in raw_names):
+            return jsonify({"error": "images must be a list of image names"}), 400
+        known_names = {record.name for record in state.manager.list()}
+        unknown = sorted(set(raw_names) - known_names)
+        if unknown:
+            return jsonify({"error": "unknown image(s)", "images": unknown}), 404
+        try:
+            changed = (
+                state.collections.add_images(collection_id, raw_names)
+                if request.method == "POST"
+                else state.collections.remove_images(collection_id, raw_names)
+            )
+        except CollectionImmutableError as e:
+            return jsonify({"error": str(e)}), 409
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        state.scheduler.invalidate_collection(collection_id)
+        return jsonify(
+            {
+                "ok": True,
+                "changed": changed,
+                "collection_id": collection_id,
+                "images": _collection_image_names(collection_id),
+            }
+        )
+
+    @app.route(
+        "/hokku/api/collections/<string:collection_id>/images/<path:name>", methods=["DELETE"]
+    )
+    def api_collection_image_delete(collection_id: str, name: str):
+        try:
+            state.collections.get(collection_id)
+            state.collections.remove_images(collection_id, [name])
+        except CollectionNotFoundError:
+            return jsonify({"error": f"collection {collection_id!r} not found"}), 404
+        except (CollectionImmutableError, ValueError) as e:
+            return jsonify({"error": str(e)}), 409
+        state.scheduler.invalidate_collection(collection_id)
+        return jsonify(
+            {
+                "ok": True,
+                "collection_id": collection_id,
+                "images": _collection_image_names(collection_id),
+            }
+        )
+
+    @app.route("/hokku/api/images/collections", methods=["POST", "DELETE"])
+    def api_bulk_image_collections():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or set(body) != {"images", "collection_ids"}:
+            return jsonify({"error": "images and collection_ids are required"}), 400
+        image_names = body["images"]
+        collection_ids = body["collection_ids"]
+        if not isinstance(image_names, list) or not all(
+            isinstance(name, str) for name in image_names
+        ):
+            return jsonify({"error": "images must be a list of strings"}), 400
+        if not isinstance(collection_ids, list) or not all(
+            isinstance(collection_id, str) for collection_id in collection_ids
+        ):
+            return jsonify({"error": "collection_ids must be a list of strings"}), 400
+        known_names = {record.name for record in state.manager.list()}
+        unknown_images = sorted(set(image_names) - known_names)
+        if unknown_images:
+            return jsonify({"error": "unknown image(s)", "images": unknown_images}), 404
+        try:
+            for collection_id in collection_ids:
+                state.collections.get(collection_id)
+                if collection_id == ALL_COLLECTION_ID:
+                    raise CollectionImmutableError("All Photos membership is automatic")
+            changed = 0
+            for collection_id in collection_ids:
+                changed += (
+                    state.collections.add_images(collection_id, image_names)
+                    if request.method == "POST"
+                    else state.collections.remove_images(collection_id, image_names)
+                )
+        except CollectionNotFoundError as e:
+            return jsonify({"error": f"collection {e.args[0]!r} not found"}), 404
+        except (CollectionImmutableError, ValueError) as e:
+            return jsonify({"error": str(e)}), 409
+        for collection_id in collection_ids:
+            state.scheduler.invalidate_collection(collection_id)
+        return jsonify({"ok": True, "changed": changed})
 
     @app.route("/hokku/api/image/<path:name>/retry", methods=["POST"])
     def api_retry(name: str):
@@ -804,8 +1087,10 @@ def create_app(
 
     @app.route("/hokku/api/screens/<string:name>/config", methods=["PATCH"])
     def api_screen_config(name: str):
-        """Patch per-screen config (orientation and/or orientation filter)."""
-        body = request.get_json(silent=True) or {}
+        """Patch per-screen config (orientation, filter, URL, or collection)."""
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "expected JSON object"}), 400
         current = state.scheduler.get_screen_config(name)
         updates: dict = {}
 
@@ -831,10 +1116,82 @@ def create_app(
                 return jsonify({"error": "server_url_override must be a string"}), 400
             updates["server_url_override"] = val.strip()
 
+        if "active_collection_id" in body:
+            collection_id = body.get("active_collection_id")
+            if not isinstance(collection_id, str):
+                return jsonify({"error": "active_collection_id must be a string"}), 400
+            try:
+                state.collections.get(collection_id)
+            except CollectionNotFoundError:
+                return jsonify({"error": f"collection {collection_id!r} not found"}), 404
+            updates["active_collection_id"] = collection_id
+
         if updates:
             state.scheduler.set_screen_config(name, replace(current, **updates))
             state.manager.sync()
         return jsonify({"ok": True})
+
+    @app.route("/hokku/api/screens/<string:name>/collection", methods=["GET", "PATCH"])
+    def api_screen_collection(name: str):
+        """Read or set a frame's collection without involving its firmware.
+
+        ``refresh_now`` is accepted as an explicit false-only hint. Hokku's
+        battery-saving protocol has no server-side wake command; users can press
+        the frame button for an immediate refresh, while the new collection is
+        always used on the next scheduled poll.
+        """
+        config = state.scheduler.get_screen_config(name)
+        if request.method == "GET":
+            collection_id = config.active_collection_id or ALL_COLLECTION_ID
+            try:
+                collection = state.collections.get(collection_id)
+            except CollectionNotFoundError:
+                collection_id = ALL_COLLECTION_ID
+                collection = state.collections.get(collection_id)
+            return jsonify(
+                {
+                    "screen": name,
+                    "collection": _collection_payload(collection),
+                    "active_collection_id": collection_id,
+                }
+            )
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "expected JSON object"}), 400
+        collection_id = body.get("collection_id", body.get("active_collection_id"))
+        if not isinstance(collection_id, str):
+            return jsonify({"error": "collection_id must be a string"}), 400
+        if "refresh_now" in body and body["refresh_now"] is not False:
+            return jsonify(
+                {
+                    "error": "Hokku cannot wake a sleeping frame over the existing protocol",
+                    "hint": "The frame button triggers an immediate refresh; the new collection is used on the next scheduled refresh.",
+                }
+            ), 409
+        try:
+            state.collections.get(collection_id)
+        except CollectionNotFoundError:
+            return jsonify({"error": f"collection {collection_id!r} not found"}), 404
+        state.scheduler.set_screen_config(name, replace(config, active_collection_id=collection_id))
+        state.scheduler.invalidate_collection(collection_id)
+        peek_orientation = (
+            config.orientation if config.filter_by_orientation else Orientation.NEUTRAL
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "screen": name,
+                "collection": _collection_payload(state.collections.get(collection_id)),
+                "active_collection_id": collection_id,
+                "empty": (
+                    collection_id != ALL_COLLECTION_ID
+                    and not state.scheduler.collection_has_eligible(collection_id, peek_orientation)
+                ),
+                "refresh_requested": False,
+                "message": "Collection saved for the next scheduled refresh.",
+            }
+        )
 
     @app.route("/hokku/api/screens/<string:name>/update", methods=["POST"])
     def api_screen_update(name: str):
@@ -1018,6 +1375,7 @@ def create_app(
         _budget = compute_budget(state.config.memory_budget_mb)
 
         records = manager.list()
+        collections = state.collections.list()
         progress = manager.conversion_progress()
         last = scheduler.last_served()
         classifier = state.classifier
@@ -1051,6 +1409,11 @@ def create_app(
                 "has_image_config_override": r.image_config is not None,
                 "crop_to_fill_threshold": r.crop_to_fill_threshold,
                 "pipeline": _pipeline_label(r, obs),
+                "collection_ids": [
+                    collection.id
+                    for collection in collections
+                    if state.collections.contains(collection.id, r.name)
+                ],
             }
             upload_files.append(entry)
             if r.convert_status == ConvertStatus.FAILED:
@@ -1083,6 +1446,12 @@ def create_app(
                     t.last_seen_at + t.last_sleep_seconds
                 ).isoformat(timespec="seconds")
             scfg = scheduler.get_screen_config(sname)
+            active_collection_id = scfg.active_collection_id or ALL_COLLECTION_ID
+            try:
+                active_collection = state.collections.get(active_collection_id)
+            except CollectionNotFoundError:
+                active_collection_id = ALL_COLLECTION_ID
+                active_collection = state.collections.get(active_collection_id)
             peek_orientation = (
                 scfg.orientation if scfg.filter_by_orientation else Orientation.NEUTRAL
             )
@@ -1114,6 +1483,15 @@ def create_app(
                 "orientation": scfg.orientation,
                 "filter_by_orientation": scfg.filter_by_orientation,
                 "server_url_override": scfg.server_url_override,
+                "active_collection_id": active_collection_id,
+                "active_collection": _collection_payload(active_collection),
+                "active_collection_empty": (
+                    active_collection_id != ALL_COLLECTION_ID
+                    and not scheduler.collection_has_eligible(
+                        active_collection_id, peek_orientation
+                    )
+                ),
+                "next_image": scheduler.peek_next(peek_orientation, active_collection_id),
                 "last_log": t.last_log or None,
                 "last_log_at": (
                     datetime.fromtimestamp(t.last_log_at).isoformat(timespec="seconds")
@@ -1143,6 +1521,10 @@ def create_app(
                 "failed_files": failed_files,
                 "serve_data": serve_data,
                 "screens": screens_payload,
+                "collections": [
+                    _collection_payload(state.collections.get(ALL_COLLECTION_ID)),
+                    *[_collection_payload(c) for c in collections],
+                ],
                 "last_served": last[0] if last else None,
                 "converting": 1 if progress.current_name or progress.done < progress.total else 0,
                 "converting_name": progress.current_name,

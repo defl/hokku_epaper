@@ -53,6 +53,14 @@ Pictures using something other than the plain default show a small badge on thei
 
 **Queue control** — each thumbnail has a "Show next" button that immediately queues that photo to be shown on the frame at its next refresh. Use this when you want a specific photo on the wall without waiting for normal rotation. The server uses a fair rotation algorithm — each image gets equal screen time over the long run, with newly uploaded photos jumping to the front of the queue. The "Show next" button effectively sets an image's priority to maximum.
 
+**Collections** — use the collection filter above the grid to view *All Photos*
+or a named collection. Collections are metadata, so adding a photo to several
+collections never copies or moves the original. Open **Manage collections** to
+create, rename, or delete a collection; deleting one leaves its photos in the
+library. Select one or more thumbnails to add them to, or remove them from, a
+collection. Existing installations automatically start with *All Photos*, and
+that remains the default behavior.
+
 **Deleting** — the trash button on each thumbnail deletes the original and all cached conversions. The frame will never show that image again.
 
 ### 1.2 Screens
@@ -74,6 +82,14 @@ The Screens tab shows every frame that has ever connected to this server. Each e
 **Multiple frames** — every frame that connects is tracked independently. You can run as many frames as you like from a single server, and they don't have to be the same model: a 13.3" frame and a 7.3" Bigme F7 can run side by side off the same library, each served images converted for its own panel. Give each one a distinct name so you can tell them apart in the dashboard. All frames share the same refresh schedule and image pool.
 
 **Per-screen orientation** — each frame carries its own orientation, set in the Screens tab. A frame mounted in portrait can show portrait-rendered images while another in landscape shows landscape ones, both served from the same library. A brand-new frame defaults to landscape until you change it.
+
+**Active collection** — each frame can use a different collection. Choose it
+from the collection selector in the Screens table or in that frame's Config
+dialog. The choice is saved immediately and takes effect on the frame's next
+scheduled refresh; it does not wake a sleeping frame. Press the physical frame
+button if you want it to refresh immediately. If the selected collection has
+no eligible photos, Hokku keeps the current displayed image and shows a warning
+until the collection has a ready photo.
 
 **Firmware version** — each frame reports the firmware it's running, shown in the
 dashboard. If the server is carrying a newer build for that model, the frame is
@@ -196,4 +212,5 @@ The following docs cover specific subsystems in detail:
 - **[appliance.md](appliance.md)** — the SD-card image: write it, join its WiFi, fill in a form.
 - **[install.md](install.md)** — full installation reference: manual installation on any platform, configuration file format and loading order.
 - **[dithering.md](dithering.md)** — how images are converted to the six-colour palette, why the defaults are what they are, what each setting does, and how to tune for specific types of photo.
+- **Collections API** — collection CRUD uses `/hokku/api/collections`; membership uses `/hokku/api/collections/<id>/images`; per-frame selection uses `/hokku/api/screens/<screen>/collection`. These endpoints are local JSON APIs intended for the web app and future automation clients. `All Photos` has the stable ID `all` and cannot be renamed or deleted.
 - **Per-screen documentation** — [Hokku / Huessen 13.3"](screens/huessen_epf1301/README.md) · [Bigme F7](screens/bigme_f7/README.md) · [Seeed reTerminal E1004](screens/seeedstudio_e1004/README.md), each covering that model's hardware, firmware and quirks.

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from hokku.webserver import image_renderer
 from hokku.webserver.app_config import AppConfig
+from hokku.webserver.collection_store import CollectionStore
 from hokku.webserver.flashing import FlashJobManager
 from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.image_manager_abstract import AbstractImageManager
@@ -82,6 +83,9 @@ class AppState:
         self.classifier = classifier
         self.manager = manager
         self.scheduler = scheduler
+        # The scheduler owns the store so collection membership and rotation
+        # always read the same metadata snapshot. Expose it here for routes.
+        self.collections = scheduler.collection_store
         self.watcher = watcher
         self._zc = zc  # live Zeroconf instance (None if mDNS disabled)
         # Screen-flashing job manager. Independent of config, so it is created
@@ -116,7 +120,8 @@ class AppState:
         # may take a moment; we don't want to block route handlers for that.
         new_classifier = ImageClassifier(new_config)
         new_manager = build_manager(new_config, new_classifier)
-        new_scheduler = ServeScheduler(new_manager)
+        new_collections = CollectionStore(new_config.cache_dir)
+        new_scheduler = ServeScheduler(new_manager, new_collections)
 
         with self._lock:
             self.config = new_config
@@ -124,6 +129,7 @@ class AppState:
             old_manager = self.manager
             self.manager = new_manager
             self.scheduler = new_scheduler
+            self.collections = new_collections
 
         # Retire, don't shut down: new_manager has already read the image DB, so
         # a parting flush from the old one would revert it. retire() stops the

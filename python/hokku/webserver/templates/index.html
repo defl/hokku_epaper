@@ -604,6 +604,55 @@
     cursor: default; user-select: none;
   }
 
+  /* ── Collections ───────────────────────────────────────────── */
+  .collection-toolbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 0 14px; margin-bottom: 14px;
+    border-bottom: 1px solid var(--bamboo-soft);
+  }
+  .collection-toolbar label { color: var(--stone); font-size: 0.9em; font-weight: 600; }
+  .collection-toolbar select {
+    min-width: 240px; min-height: 38px; padding: 6px 10px;
+    border: 1px solid var(--bamboo); border-radius: 6px;
+    font-size: 0.9em; background: var(--paper-card-solid);
+    color: var(--sumi); font-family: var(--font-sans);
+  }
+  .collection-toolbar select:focus {
+    outline: none; border-color: var(--indigo); background: #fff;
+  }
+  .collection-warning {
+    display: none; margin: 0 0 14px; padding: 9px 12px;
+    color: var(--sumi); background: rgba(201, 150, 43, 0.11);
+    border: 1px solid var(--persimmon); border-radius: 6px; font-size: 0.88em;
+  }
+  .collection-warning.show { display: block; }
+  .collection-manager {
+    display: none; margin: 0 0 16px; padding: 14px 16px;
+    background: rgba(241, 232, 213, 0.52); border: 1px solid var(--bamboo);
+    border-radius: 8px;
+  }
+  .collection-manager.open { display: block; }
+  .collection-manager-header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
+  .collection-manager-header h3 { margin:0; }
+  .collection-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-top:1px solid var(--bamboo-soft); font-size:0.9em; }
+  .collection-row:first-child { border-top:none; }
+  .collection-row .collection-meta { color:var(--stone); font-size:0.86em; }
+  .collection-row .collection-actions { display:flex; gap:6px; flex-shrink:0; }
+  .bulk-image-actions { display:none; align-items:center; gap:8px; flex-wrap:wrap; padding:9px 0; margin-bottom:10px; border-bottom:1px solid var(--bamboo-soft); }
+  .bulk-image-actions.show { display:flex; }
+  .bulk-image-actions select { min-width: 170px; min-height: 72px; }
+  .image-select { position:absolute; top:10px; left:10px; z-index:4; width:22px; height:22px; accent-color:var(--indigo); }
+  .image-card.filtered-out { display:none; }
+  .image-collection-editor { margin: 14px 0 16px; padding: 12px 14px; border: 1px solid var(--bamboo); border-radius: 8px; background: rgba(241, 232, 213, 0.35); }
+  .image-collection-editor h4 { margin: 0 0 4px; font-family: var(--font-serif); color: var(--sumi); }
+  .image-collection-editor .info { margin: 0 0 10px; }
+  .collection-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+  .collection-check { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 6px 8px; border: 1px solid var(--bamboo-soft); border-radius: 6px; background: var(--paper-card-solid); cursor: pointer; }
+  .collection-check input { width: 20px; height: 20px; accent-color: var(--indigo); flex-shrink: 0; }
+  .image-collection-editor.is-saving { opacity: 0.6; }
+  .collection-check.is-saving { opacity: 0.55; pointer-events: none; }
+  .collection-membership-summary { margin: 0 0 10px; color: var(--stone); font-size: 0.86em; }
+
   /* ── Confirmation modal ───────────────────────────────────── */
   .modal-backdrop {
     position: fixed; inset: 0;
@@ -808,6 +857,22 @@
   .img-detail-modal td:first-child { color: var(--stone); width: 40%; font-weight: 500; }
   .img-detail-modal .detail-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
 
+  @media (max-width: 600px) {
+    .page { padding: 14px 12px; }
+    .collection-toolbar { align-items: stretch; }
+    .collection-toolbar label { width: 100%; }
+    .collection-toolbar select, .collection-toolbar button { width: 100%; min-height: 42px; }
+    .collection-manager .config-row { align-items: stretch; }
+    .collection-manager .config-row input, .collection-manager .config-row button { width: 100%; min-height: 42px; }
+    .collection-row { align-items: flex-start; }
+    .collection-row .collection-actions { flex-direction: column; }
+    .bulk-image-actions { align-items: stretch; }
+    .bulk-image-actions strong, .bulk-image-actions select, .bulk-image-actions button { width: 100%; min-height: 42px; }
+    .bulk-image-actions select { min-height: 96px; }
+    .img-detail-modal { width: calc(100vw - 24px); min-width: 0; padding: 18px; }
+    .collection-checks { grid-template-columns: 1fr; }
+  }
+
   .image-card .card-body { padding: 10px 12px; }
   .image-card .card-actions {
     display: flex; gap: 6px; align-items: center;
@@ -880,7 +945,36 @@
   <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid var(--bamboo-soft);">
     <div class="stat">Images: <strong id="stat-pool-size">0</strong></div>
     <div class="stat">Last served: <strong id="stat-last-served">-</strong></div>
+    <div class="stat">Serving collection: <strong id="stat-serving-collection">No connected frame</strong></div>
     <div id="processing-indicator" class="processing-indicator idle">Idle</div>
+  </div>
+
+  <div class="collection-toolbar">
+    <label for="collection-filter">Collection:</label>
+    <select id="collection-filter" onchange="setCollectionFilter(this.value)">
+      <option value="all">All Photos (0)</option>
+    </select>
+    <button type="button" class="btn btn-secondary btn-small" onclick="toggleCollectionManager()">Manage collections</button>
+  </div>
+  <div id="collection-empty-warning" class="collection-warning"></div>
+  <div id="collection-manager" class="collection-manager">
+    <div class="collection-manager-header">
+      <h3>Collections</h3>
+      <button type="button" class="btn btn-secondary btn-small" onclick="toggleCollectionManager(false)">Close</button>
+    </div>
+    <div class="config-row" style="margin:0 0 10px;">
+      <input type="text" id="new-collection-name" placeholder="New collection name" maxlength="120" style="flex:1;min-width:160px;">
+      <input type="text" id="new-collection-description" placeholder="Description (optional)" maxlength="500" style="flex:2;min-width:180px;">
+      <button type="button" class="btn btn-primary btn-small" onclick="createCollection()">Create</button>
+    </div>
+    <div id="collection-list"></div>
+  </div>
+  <div id="bulk-image-actions" class="bulk-image-actions">
+    <strong><span id="selected-image-count">0</span> selected</strong>
+    <select id="bulk-collection-select" multiple size="3" aria-label="Collections for selected photos"><option value="">Choose collection…</option></select>
+    <button type="button" class="btn btn-secondary btn-small" onclick="addSelectedToCollection()">Add to collection(s)</button>
+    <button type="button" class="btn btn-secondary btn-small" onclick="removeSelectedFromCollection()">Remove from collection(s)</button>
+    <button type="button" class="btn btn-secondary btn-small" onclick="clearImageSelection()">Clear</button>
   </div>
 
   <div class="upload-progress" id="upload-progress"></div>
@@ -1277,6 +1371,12 @@
     </div>
     <table id="img-detail-table"></table>
     <div class="detail-actions" id="img-detail-actions"></div>
+
+    <div class="image-collection-editor">
+      <h4>Collections</h4>
+      <p class="collection-membership-summary" id="img-detail-collection-summary"></p>
+      <div class="collection-checks" id="img-detail-collections"></div>
+    </div>
 
     <!-- Per-picture conversion. Both halves are independent overrides on the
          image's record: either can be set without the other, and "Use
@@ -3035,7 +3135,7 @@ function renderScreens(screens, bundledFirmwareVersions) {
     html += '</ul></div>';
   }
 
-  html += '<table class="screens-table"><tr><th>Name</th><th>Model</th><th>IP</th><th>Battery</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th></th></tr>';
+  html += '<table class="screens-table"><tr><th>Name</th><th>Collection</th><th>Model</th><th>IP</th><th>Battery</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th></th></tr>';
   names.forEach(name => {
     const s = screens[name];
     const late = overdueMinutes(s);
@@ -3057,8 +3157,12 @@ function renderScreens(screens, bundledFirmwareVersions) {
     const modelCell = s.screen_model
       ? `<span style="font-family:var(--font-mono);font-size:0.85em">${escapeHtml(s.screen_model)}</span>`
       : '<span style="color:var(--bamboo)">—</span>';
+    const collectionId = s.active_collection_id || 'all';
+    const collectionCell = `<select class="screen-collection-select" aria-label="Active collection for ${escapeHtml(name)}" onchange="setScreenCollection('${safeName}', this.value)">${collectionOptions(collectionId, true)}</select>` +
+      (s.active_collection_empty ? '<div class="collection-meta">Empty, keeping current image</div>' : '');
     html += `<tr${rowClass}>
       <td>${name}${nameBadges}</td>
+      <td>${collectionCell}</td>
       <td>${modelCell}</td>
       <td>${s.ip || '-'}</td>
       <td>${formatBattery(s)}</td>
@@ -3124,6 +3228,28 @@ async function setScreenFilterByOrientation(name, value) {
     if (lastScreens[name]) lastScreens[name].filter_by_orientation = value;
   } catch (e) {
     alert('Failed to set orientation filter: ' + e.message);
+    renderScreens(lastScreens, lastBundledFirmwareVersions);
+  }
+}
+
+async function setScreenCollection(name, value) {
+  try {
+    const r = await fetch(`/hokku/api/screens/${encodeURIComponent(name)}/collection`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({collection_id: value}),
+    });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+    if (lastScreens[name]) {
+      lastScreens[name].active_collection_id = value;
+      lastScreens[name].active_collection = body.collection;
+      lastScreens[name].active_collection_empty = body.empty === true;
+    }
+    showToast(`${name} will use ${body.collection.name} on its next refresh.`);
+    renderScreens(lastScreens, lastBundledFirmwareVersions);
+  } catch (e) {
+    alert('Failed to set collection: ' + e.message);
     renderScreens(lastScreens, lastBundledFirmwareVersions);
   }
 }
@@ -3228,6 +3354,7 @@ function showScreenConfig(name) {
   const orientLandscape = s.orientation === 'landscape' ? 'selected' : '';
   const orientPortrait  = s.orientation === 'portrait'  ? 'selected' : '';
   const filterChecked   = s.filter_by_orientation ? 'checked' : '';
+  const activeCollection = s.active_collection_id || 'all';
 
   let body = `<div class="config-row">
       <label>Orientation</label>
@@ -3239,7 +3366,14 @@ function showScreenConfig(name) {
     <div class="config-row">
       <label>Match orientation</label>
       <input type="checkbox" ${filterChecked} onchange="setScreenFilterByOrientation('${safeName}', this.checked)">
+    </div>
+    <div class="config-row">
+      <label>Active collection</label>
+      <select onchange="setScreenCollection('${safeName}', this.value)">${collectionOptions(activeCollection, true)}</select>
     </div>`;
+  if (s.active_collection_empty) {
+    body += `<div class="collection-warning show">${escapeHtml((s.active_collection && s.active_collection.name) || 'This collection')} is empty. The frame will keep its current image until an eligible photo is added.</div>`;
+  }
 
   const urlOverride = s.server_url_override || '';
   const thisServerUrl = document.getElementById('flash-url')?.value || '';
@@ -3464,6 +3598,194 @@ async function deleteAllFailed(failed) {
 // Keep the last upload+serve snapshot so Details can read it without a round-trip.
 let lastUploadFiles = [];
 let lastServeData = {};
+let lastCollections = [];
+const COLLECTION_FILTER_STORAGE_KEY = 'hokku.collection-filter';
+let lastNextImages = {};
+
+function readStoredCollectionFilter() {
+  try {
+    return window.localStorage.getItem(COLLECTION_FILTER_STORAGE_KEY) || 'all';
+  } catch (_) {
+    return 'all';
+  }
+}
+
+function storeCollectionFilter(id) {
+  try {
+    window.localStorage.setItem(COLLECTION_FILTER_STORAGE_KEY, id);
+  } catch (_) {
+    // Private browsing and locked-down web views may reject localStorage.
+  }
+}
+
+let currentCollectionFilter = readStoredCollectionFilter();
+
+function collectionById(id) {
+  return (lastCollections || []).find(c => c.id === id) || null;
+}
+
+function collectionOptions(selectedId, includeAll = true) {
+  const allCollection = collectionById('all');
+  const allCount = allCollection ? allCollection.image_count : 0;
+  const all = includeAll ? '<option value="all"' + (selectedId === 'all' ? ' selected' : '') + `>All Photos (${allCount})</option>` : '';
+  const rest = (lastCollections || []).filter(c => c.id !== 'all').map(c =>
+    `<option value="${escapeHtml(c.id)}"${c.id === selectedId ? ' selected' : ''}>${escapeHtml(c.name)} (${c.image_count})</option>`
+  ).join('');
+  return all + rest;
+}
+
+function refreshCollectionControls() {
+  const filter = document.getElementById('collection-filter');
+  const bulk = document.getElementById('bulk-collection-select');
+  if (filter) {
+    if (!collectionById(currentCollectionFilter)) {
+      currentCollectionFilter = 'all';
+      storeCollectionFilter(currentCollectionFilter);
+    }
+    filter.innerHTML = collectionOptions(currentCollectionFilter, true);
+    filter.value = currentCollectionFilter;
+  }
+  if (bulk) bulk.innerHTML = '<option value="">Choose collection…</option>' + collectionOptions('', false);
+  renderCollectionManager();
+  renderCollectionWarning();
+}
+
+function renderCollectionManager() {
+  const list = document.getElementById('collection-list');
+  if (!list) return;
+  list.innerHTML = (lastCollections || []).map(c => {
+    const actions = c.id === 'all' ? '<span class="collection-meta">Built in</span>' :
+      `<div class="collection-actions"><button type="button" class="btn btn-secondary btn-small" onclick="renameCollection('${escapeHtml(c.id)}')">Rename</button><button type="button" class="btn btn-secondary btn-small" style="color:var(--vermilion)" onclick="deleteCollection('${escapeHtml(c.id)}')">Delete</button></div>`;
+    return `<div class="collection-row"><div><strong>${escapeHtml(c.name)}</strong><div class="collection-meta">${c.image_count} image${c.image_count === 1 ? '' : 's'}${c.description ? ' · ' + escapeHtml(c.description) : ''}</div></div>${actions}</div>`;
+  }).join('');
+}
+
+function renderCollectionWarning() {
+  const warning = document.getElementById('collection-empty-warning');
+  if (!warning) return;
+  const collection = collectionById(currentCollectionFilter);
+  const empty = collection && collection.id !== 'all' && collection.image_count === 0;
+  warning.classList.toggle('show', Boolean(empty));
+  warning.textContent = empty ? `${collection.name} is empty. The frame will keep its current image until this collection has an eligible photo.` : '';
+}
+
+function renderServingCollection(screens) {
+  const indicator = document.getElementById('stat-serving-collection');
+  if (!indicator) return;
+  const names = Object.values(screens || {})
+    .map(screen => collectionById(screen.active_collection_id || 'all'))
+    .filter(Boolean)
+    .map(collection => collection.name)
+    .filter((name, index, all) => all.indexOf(name) === index);
+  if (!names.length) {
+    indicator.textContent = 'No connected frame';
+    indicator.title = 'No frame has checked in yet.';
+  } else if (names.length === 1) {
+    indicator.textContent = names[0];
+    indicator.title = 'All connected frames are using this collection.';
+  } else {
+    indicator.textContent = 'Mixed';
+    indicator.title = `Connected frames are using: ${names.join(', ')}`;
+  }
+}
+
+function toggleCollectionManager(force) {
+  const manager = document.getElementById('collection-manager');
+  if (!manager) return;
+  const open = force == null ? !manager.classList.contains('open') : Boolean(force);
+  manager.classList.toggle('open', open);
+}
+
+async function createCollection() {
+  const nameEl = document.getElementById('new-collection-name');
+  const descEl = document.getElementById('new-collection-description');
+  const name = nameEl.value.trim();
+  if (!name) { showToast('Enter a collection name first.'); return; }
+  try {
+    const r = await fetch('/hokku/api/collections', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name, description: descEl.value.trim()})});
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+    nameEl.value = ''; descEl.value = '';
+    showToast(`Created ${body.name}.`);
+    await refreshStatus();
+    toggleCollectionManager(true);
+  } catch (e) { showToast('Could not create collection: ' + e.message); }
+}
+
+async function renameCollection(id) {
+  const collection = collectionById(id);
+  if (!collection) return;
+  const name = window.prompt('New collection name', collection.name);
+  if (name == null || !name.trim()) return;
+  try {
+    const r = await fetch(`/hokku/api/collections/${encodeURIComponent(id)}`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name.trim()})});
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+    showToast(`Renamed to ${body.name}.`);
+    await refreshStatus();
+    toggleCollectionManager(true);
+  } catch (e) { showToast('Could not rename collection: ' + e.message); }
+}
+
+async function deleteCollection(id) {
+  const collection = collectionById(id);
+  if (!collection) return;
+  const ok = await showConfirm({title: 'Delete collection?', message: `Delete “${collection.name}”? The photos will stay in Hokku.`, okLabel: 'Delete'});
+  if (!ok) return;
+  try {
+    const r = await fetch(`/hokku/api/collections/${encodeURIComponent(id)}`, {method: 'DELETE'});
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+    if (currentCollectionFilter === id) currentCollectionFilter = 'all';
+    showToast('Collection deleted. Photos were kept.');
+    await refreshStatus();
+    toggleCollectionManager(true);
+  } catch (e) { showToast('Could not delete collection: ' + e.message); }
+}
+
+function setCollectionFilter(id) {
+  currentCollectionFilter = id || 'all';
+  storeCollectionFilter(currentCollectionFilter);
+  renderCollectionWarning();
+  renderImageGrid(lastUploadFiles, lastServeData, lastNextImages);
+}
+
+function selectedImageNames() {
+  return Array.from(document.querySelectorAll('.image-select:checked')).map(el => el.dataset.name);
+}
+
+function updateSelectionActions() {
+  const names = selectedImageNames();
+  const actions = document.getElementById('bulk-image-actions');
+  const count = document.getElementById('selected-image-count');
+  if (count) count.textContent = names.length;
+  if (actions) actions.classList.toggle('show', names.length > 0);
+}
+
+function clearImageSelection() {
+  document.querySelectorAll('.image-select:checked').forEach(el => { el.checked = false; });
+  updateSelectionActions();
+}
+
+async function changeSelectedCollection(method) {
+  const names = selectedImageNames();
+  const collectionIds = Array.from(document.getElementById('bulk-collection-select').selectedOptions)
+    .map(option => option.value)
+    .filter(Boolean);
+  if (!names.length || !collectionIds.length) { showToast('Select photos and one or more collections first.'); return; }
+  try {
+    const r = await fetch('/hokku/api/images/collections', {method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify({images: names, collection_ids: collectionIds})});
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+    clearImageSelection();
+    document.getElementById('bulk-collection-select').selectedIndex = -1;
+    showToast(method === 'POST' ? 'Photos added to collection(s).' : 'Photos removed from collection(s).');
+    await refreshStatus();
+  } catch (e) { showToast('Collection update failed: ' + e.message); }
+}
+
+function addSelectedToCollection() { return changeSelectedCollection('POST'); }
+function removeSelectedFromCollection() { return changeSelectedCollection('DELETE'); }
 
 // A small chip on the card saying which pipeline converted this picture. Only
 // shown when it isn't the plain default, so an ordinary library stays quiet.
@@ -3480,11 +3802,13 @@ function pipelineChip(entry) {
 function renderImageGrid(uploadFiles, serveData, nextImages) {
   lastUploadFiles = uploadFiles;
   lastServeData   = serveData;
+  lastNextImages  = nextImages || {};
   const grid = document.getElementById('image-grid');
   grid.innerHTML = '';
   uploadFiles.forEach(entry => {
     // Failed images are shown only in the "Failed conversions" list, not the grid.
     if (entry.status === 'failed') return;
+    if (currentCollectionFilter !== 'all' && !(entry.collection_ids || []).includes(currentCollectionFilter)) return;
     const fname    = entry.name;
     const dithered = entry.dithered;
     const imgs = nextImages || {};
@@ -3508,6 +3832,7 @@ function renderImageGrid(uploadFiles, serveData, nextImages) {
       ? nextLabels.map(l => `<span class="next-badge">${escapeHtml(l)}</span>`).join(' ')
       : '<button class="btn btn-secondary btn-small shownext-btn" data-name="">Show Next</button>';
     card.innerHTML = `
+      <input type="checkbox" class="image-select" data-name="" aria-label="Select ${escapeHtml(fname)}">
       <button class="delete-btn" data-name="" title="Delete this image">&#x1F5D1;</button>
       ${pendingBadge}
       ${thumbHtml}
@@ -3533,8 +3858,62 @@ function renderImageGrid(uploadFiles, serveData, nextImages) {
       snBtn.dataset.name = fname;
       snBtn.addEventListener('click', () => showNext(fname));
     }
+    const select = card.querySelector('.image-select');
+    select.dataset.name = fname;
+    select.addEventListener('change', updateSelectionActions);
     grid.appendChild(card);
   });
+  updateSelectionActions();
+}
+
+function renderImageCollectionEditor(fname, entry) {
+  const host = document.getElementById('img-detail-collections');
+  const summary = document.getElementById('img-detail-collection-summary');
+  if (!host || !summary) return;
+  const memberships = new Set(entry.collection_ids || []);
+  const collections = (lastCollections || []).filter(c => c.id !== 'all');
+  const names = collections.filter(c => memberships.has(c.id)).map(c => c.name);
+  summary.textContent = names.length ? `Member of: ${names.join(', ')}` : 'Not assigned to a collection.';
+  if (!collections.length) {
+    host.innerHTML = '<span class="info">Create a collection to organize this photo.</span>';
+    return;
+  }
+  host.innerHTML = collections.map(c => `
+    <label class="collection-check">
+      <input type="checkbox" data-collection-id="${escapeHtml(c.id)}"${memberships.has(c.id) ? ' checked' : ''}>
+      <span>${escapeHtml(c.name)}</span>
+    </label>`).join('');
+  host.querySelectorAll('input[type="checkbox"]').forEach(input => {
+    input.addEventListener('change', () => saveImageCollections(fname, host));
+  });
+}
+
+async function saveImageCollections(fname, host) {
+  const inputs = Array.from(host.querySelectorAll('input[type="checkbox"]'));
+  const collectionIds = inputs.filter(input => input.checked).map(input => input.dataset.collectionId);
+  host.classList.add('is-saving');
+  inputs.forEach(input => { input.disabled = true; });
+  try {
+    const resp = await fetch('/hokku/api/image/' + encodeURIComponent(fname) + '/collections', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({collection_ids: collectionIds}),
+    });
+    const body = await resp.json();
+    if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+    const entry = (lastUploadFiles || []).find(item => item.name === fname);
+    if (entry) entry.collection_ids = body.collection_ids || collectionIds;
+    await refreshStatus();
+    const updated = (lastUploadFiles || []).find(item => item.name === fname);
+    if (updated) renderImageCollectionEditor(fname, updated);
+    showToast('Collections updated.');
+  } catch (e) {
+    showToast('Could not update collections: ' + e.message);
+    const entry = (lastUploadFiles || []).find(item => item.name === fname);
+    if (entry) renderImageCollectionEditor(fname, entry);
+  } finally {
+    host.classList.remove('is-saving');
+  }
 }
 
 function showImageDetails(fname) {
@@ -3625,6 +4004,8 @@ function showImageDetails(fname) {
   } else {
     actions.innerHTML = '<span style="color:#92400e;font-size:0.85em">Dithered version not ready yet</span>';
   }
+
+  renderImageCollectionEditor(fname, entry);
 
   setupImageOverrideEditor(fname, entry);
 
@@ -4169,10 +4550,13 @@ async function refreshStatus() {
       proc.textContent = 'Idle';
     }
 
-    // Screens
+    // Screens and collection state
+    lastCollections = data.collections || [];
     lastScreens = data.screens || {};
+    renderServingCollection(lastScreens);
+    refreshCollectionControls();
     lastBundledFirmwareVersions = data.bundled_firmware_versions || {};
-    renderScreens(data.screens, lastBundledFirmwareVersions);
+    renderScreens(lastScreens, lastBundledFirmwareVersions);
 
     // Memory budget: detected system memory + the derived decode budget / workers.
     const memInfoEl = document.getElementById('memory-budget-info');
@@ -4299,6 +4683,8 @@ async function uploadOneFile(file, row, renderAll) {
   // not doom the batch.
   const form = new FormData();
   form.append('files', file);
+  const uploadCollectionId = currentCollectionFilter !== 'all' ? currentCollectionFilter : null;
+  if (uploadCollectionId) form.append('collection_id', uploadCollectionId);
   try {
     const resp = await fetch('/hokku/api/upload', {method: 'POST', body: form});
     if (!resp.ok) {
@@ -4313,8 +4699,14 @@ async function uploadOneFile(file, row, renderAll) {
       row.status = 'ok';
       row.message = saved === file.name ? 'Uploaded' : 'Uploaded as ' + saved;
     } else if (skipped) {
-      row.status = 'error';
-      row.message = skipped.reason;
+      if (skipped.collection_added) {
+        row.status = 'ok';
+        const collection = collectionById(uploadCollectionId);
+        row.message = `Already existed; added to ${collection ? collection.name : 'collection'}`;
+      } else {
+        row.status = 'error';
+        row.message = skipped.reason;
+      }
     } else {
       row.status = 'error';
       row.message = 'Failed';

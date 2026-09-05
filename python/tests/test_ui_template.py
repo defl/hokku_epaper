@@ -94,3 +94,9 @@ def test_no_references_to_the_retired_state_variables(rendered_ui: str):
     for name in ("bwDitherState", "faceDitherState"):
         assert name not in js
     assert "ditherStates" in js
+
+
+def test_collection_context_persists_and_serving_indicator_is_mounted(rendered_ui: str):
+    """The page exposes the frame-serving status alongside the image stats."""
+    assert 'id="stat-serving-collection"' in rendered_ui
+    assert "Serving collection:" in rendered_ui
