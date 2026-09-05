@@ -28,6 +28,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+from werkzeug.datastructures import MultiDict
 
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
@@ -92,11 +93,27 @@ def synced_client(app_config: AppConfig, tmp_path: Path):
     return app.test_client(), state, src.name
 
 
-def _upload_bytes(client, data: bytes, filename: str):
+def _upload_bytes(client, data: bytes, filename: str, collection_id: str | None = None):
     """POST multipart/form-data to /hokku/api/upload."""
+    form: dict[str, object] = {"file": (io.BytesIO(data), filename)}
+    if collection_id is not None:
+        form["collection_id"] = collection_id
     return client.post(
         "/hokku/api/upload",
-        data={"file": (io.BytesIO(data), filename)},
+        data=form,
+        content_type="multipart/form-data",
+    )
+
+
+def _upload_many(client, files: list[tuple[bytes, str]], collection_id: str | None = None):
+    form: MultiDict[str, object] = MultiDict(
+        [("files", (io.BytesIO(data), filename)) for data, filename in files]
+    )
+    if collection_id is not None:
+        form.add("collection_id", collection_id)
+    return client.post(
+        "/hokku/api/upload",
+        data=form,
         content_type="multipart/form-data",
     )
 
@@ -162,6 +179,76 @@ def test_upload_duplicate_is_skipped(bare_client):
     assert "already exists" in body2["skipped"][0]["reason"]
 
 
+def test_upload_to_all_photos_has_no_collection_membership(bare_client):
+    client, state = bare_client
+    img = _TEST_IMAGES_DIR / "grayscale_linear_bar_1200x300.png"
+
+    response = _upload_bytes(client, img.read_bytes(), img.name)
+
+    assert response.status_code == 200
+    entry = next(
+        item
+        for item in client.get("/hokku/api/status").get_json()["upload_files"]
+        if item["name"] == img.name
+    )
+    assert entry["collection_ids"] == []
+    assert state.collections.list() == []
+    assert state.collections.image_collections(img.name) == set()
+
+
+def test_upload_to_collection_assigns_membership(bare_client):
+    client, _ = bare_client
+    family = client.post("/hokku/api/collections", json={"name": "Family"}).get_json()
+    img = _TEST_IMAGES_DIR / "grayscale_linear_bar_1200x300.png"
+
+    response = _upload_bytes(client, img.read_bytes(), img.name, family["id"])
+
+    assert response.status_code == 200
+    entry = next(
+        item
+        for item in client.get("/hokku/api/status").get_json()["upload_files"]
+        if item["name"] == img.name
+    )
+    assert entry["collection_ids"] == [family["id"]]
+
+
+def test_multi_upload_to_collection_assigns_every_successful_image(bare_client):
+    client, _ = bare_client
+    family = client.post("/hokku/api/collections", json={"name": "Family"}).get_json()
+    files = [
+        (_TEST_IMAGES_DIR.joinpath("grayscale_linear_bar_1200x300.png").read_bytes(), "one.png"),
+        (_TEST_IMAGES_DIR.joinpath("grayscale_linear_bar_1200x300.png").read_bytes(), "two.png"),
+    ]
+
+    response = _upload_many(client, files, family["id"])
+
+    assert response.status_code == 200
+    assert set(response.get_json()["saved"]) == {"one.png", "two.png"}
+    entries = {
+        item["name"]: item for item in client.get("/hokku/api/status").get_json()["upload_files"]
+    }
+    assert entries["one.png"]["collection_ids"] == [family["id"]]
+    assert entries["two.png"]["collection_ids"] == [family["id"]]
+
+
+def test_duplicate_upload_to_collection_adds_existing_image_without_duplication(bare_client):
+    client, _ = bare_client
+    family = client.post("/hokku/api/collections", json={"name": "Family"}).get_json()
+    img = _TEST_IMAGES_DIR / "grayscale_linear_bar_1200x300.png"
+    _upload_bytes(client, img.read_bytes(), img.name)
+
+    response = _upload_bytes(client, img.read_bytes(), img.name, family["id"])
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["saved"] == []
+    assert body["collection_added"] == [img.name]
+    assert client.get(f"/hokku/api/collections/{family['id']}/images").get_json()["images"] == [
+        img.name
+    ]
+    assert len(client.get("/hokku/api/status").get_json()["upload_files"]) == 1
+
+
 def test_upload_bad_extension_is_skipped(bare_client):
     client, _ = bare_client
     resp = _upload_bytes(client, b"not an image", "photo.xyz")
@@ -182,6 +269,22 @@ def test_delete_existing_image(bare_client):
     resp = client.delete(f"/hokku/api/image/{img.name}")
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
+
+
+def test_deleting_image_removes_collection_memberships(bare_client):
+    client, _ = bare_client
+    img = _TEST_IMAGES_DIR / "grayscale_linear_bar_1200x300.png"
+    _upload_bytes(client, img.read_bytes(), img.name)
+    family = client.post("/hokku/api/collections", json={"name": "Family"}).get_json()
+    client.post(
+        f"/hokku/api/collections/{family['id']}/images",
+        json={"images": [img.name]},
+    )
+
+    response = client.delete(f"/hokku/api/image/{img.name}")
+
+    assert response.status_code == 200
+    assert client.get(f"/hokku/api/collections/{family['id']}/images").get_json()["images"] == []
 
 
 def test_delete_missing_image_returns_404(bare_client):
@@ -278,11 +381,74 @@ def test_collection_crud_and_image_membership(synced_client):
     assert client.get(f"/hokku/api/original/{name}").status_code == 200
 
 
+def test_image_collection_membership_can_be_read_and_replaced(synced_client):
+    client, _, name = synced_client
+    family = client.post("/hokku/api/collections", json={"name": "Family"}).get_json()
+    favorites = client.post("/hokku/api/collections", json={"name": "Favorites"}).get_json()
+
+    added = client.patch(
+        f"/hokku/api/image/{name}/collections",
+        json={"collection_ids": [family["id"], favorites["id"]]},
+    )
+    assert added.status_code == 200
+    assert set(added.get_json()["collection_ids"]) == {family["id"], favorites["id"]}
+
+    removed_family = client.patch(
+        f"/hokku/api/image/{name}/collections",
+        json={"collection_ids": [favorites["id"]]},
+    )
+    assert removed_family.status_code == 200
+    assert removed_family.get_json()["collection_ids"] == [favorites["id"]]
+    assert client.get(f"/hokku/api/collections/{family['id']}/images").get_json()["images"] == []
+    assert client.get(f"/hokku/api/collections/{favorites['id']}/images").get_json()["images"] == [
+        name
+    ]
+
+
+def test_bulk_collection_membership_add_and_remove(synced_client):
+    client, _, first_name = synced_client
+    second_name = "second.png"
+    source = _TEST_IMAGES_DIR / "grayscale_linear_bar_1200x300.png"
+    _upload_bytes(client, source.read_bytes(), second_name)
+    family = client.post("/hokku/api/collections", json={"name": "Family"}).get_json()
+    favorites = client.post("/hokku/api/collections", json={"name": "Favorites"}).get_json()
+
+    added = client.post(
+        "/hokku/api/images/collections",
+        json={
+            "images": [first_name, second_name],
+            "collection_ids": [family["id"], favorites["id"]],
+        },
+    )
+    assert added.status_code == 200
+    assert added.get_json()["changed"] == 4
+
+    removed = client.delete(
+        "/hokku/api/images/collections",
+        json={"images": [first_name, second_name], "collection_ids": [family["id"]]},
+    )
+    assert removed.status_code == 200
+    assert removed.get_json()["changed"] == 2
+    assert client.get(f"/hokku/api/collections/{favorites['id']}/images").get_json()["count"] == 2
+
+
+def test_upload_rejects_deleted_collection_id(bare_client):
+    client, _ = bare_client
+    family = client.post("/hokku/api/collections", json={"name": "Family"}).get_json()
+    client.delete(f"/hokku/api/collections/{family['id']}")
+    img = _TEST_IMAGES_DIR / "grayscale_linear_bar_1200x300.png"
+
+    response = _upload_bytes(client, img.read_bytes(), img.name, family["id"])
+
+    assert response.status_code == 404
+    assert client.get("/hokku/api/status").get_json()["upload_files"] == []
+
+
 def test_all_photos_is_backward_compatible_and_image_status_has_memberships(synced_client):
     client, _, name = synced_client
     data = client.get("/hokku/api/status").get_json()
     entry = next(item for item in data["upload_files"] if item["name"] == name)
-    assert "all" in entry["collection_ids"]
+    assert entry["collection_ids"] == []
     assert any(c["id"] == "all" and c["image_count"] == 1 for c in data["collections"])
 
 

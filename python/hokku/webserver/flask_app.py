@@ -652,7 +652,17 @@ def create_app(
         if not files:
             logger.info("Upload rejected: no files in request")
             return jsonify({"error": "No files in upload"}), 400
+        raw_collection_id = request.form.get("collection_id")
+        collection_id = (
+            raw_collection_id if raw_collection_id not in (None, "", ALL_COLLECTION_ID) else None
+        )
+        if collection_id is not None:
+            try:
+                state.collections.get(collection_id)
+            except CollectionNotFoundError:
+                return jsonify({"error": f"collection {collection_id!r} not found"}), 404
         saved, skipped = [], []
+        collection_added = []
         for f in files:
             if not f or not f.filename:
                 continue
@@ -699,12 +709,33 @@ def create_app(
             try:
                 manager.add(name, data)
                 saved.append(name)
+                if collection_id is not None:
+                    state.collections.add_images(collection_id, [name])
+                    collection_added.append(name)
             except FileExistsError:
-                skipped.append({"name": name, "reason": "already exists; remove to replace"})
+                if collection_id is not None:
+                    state.collections.add_images(collection_id, [name])
+                    collection_added.append(name)
+                    skipped.append(
+                        {
+                            "name": name,
+                            "reason": "already exists; added to collection",
+                            "collection_added": True,
+                        }
+                    )
+                else:
+                    skipped.append({"name": name, "reason": "already exists; remove to replace"})
             except (OSError, ValueError) as e:
                 logger.error("Error adding %r: %s: %s", name, type(e).__name__, e)
                 skipped.append({"name": name, "reason": str(e)})
-        return jsonify({"saved": saved, "skipped": skipped})
+        return jsonify(
+            {
+                "saved": saved,
+                "skipped": skipped,
+                "collection_id": collection_id,
+                "collection_added": collection_added,
+            }
+        )
 
     @app.route("/hokku/api/image/<path:name>", methods=["DELETE"])
     def api_delete(name: str):
@@ -719,11 +750,45 @@ def create_app(
         state.collections.remove_image(name)
         return jsonify({"ok": True})
 
+    @app.route("/hokku/api/image/<path:name>/collections", methods=["GET", "PATCH"])
+    def api_image_collections(name: str):
+        known_names = {record.name for record in state.manager.list()}
+        if name not in known_names:
+            return jsonify({"error": f"image {name!r} not found"}), 404
+        if request.method == "GET":
+            return jsonify(
+                {"image": name, "collection_ids": sorted(state.collections.image_collections(name))}
+            )
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or set(body) != {"collection_ids"}:
+            return jsonify({"error": "collection_ids is required"}), 400
+        collection_ids = body["collection_ids"]
+        if not isinstance(collection_ids, list) or not all(
+            isinstance(collection_id, str) for collection_id in collection_ids
+        ):
+            return jsonify({"error": "collection_ids must be a list of strings"}), 400
+        before = state.collections.image_collections(name)
+        try:
+            after = state.collections.set_image_collections(name, collection_ids)
+        except CollectionNotFoundError as e:
+            return jsonify({"error": f"collection {e.args[0]!r} not found"}), 404
+        except (CollectionImmutableError, ValueError) as e:
+            return jsonify({"error": str(e)}), 409
+        for collection_id in before | after:
+            state.scheduler.invalidate_collection(collection_id)
+        return jsonify({"ok": True, "image": name, "collection_ids": sorted(after)})
+
     # ── API: collections ────────────────────────────────────────
 
     @app.route("/hokku/api/collections", methods=["GET"])
     def api_collections_list():
-        return jsonify({"collections": [_collection_payload(c) for c in state.collections.list()]})
+        return jsonify(
+            {
+                "collections": [
+                    _collection_payload(c) for c in state.collections.list(include_all=True)
+                ]
+            }
+        )
 
     @app.route("/hokku/api/collections", methods=["POST"])
     def api_collection_create():
@@ -839,6 +904,45 @@ def create_app(
                 "images": _collection_image_names(collection_id),
             }
         )
+
+    @app.route("/hokku/api/images/collections", methods=["POST", "DELETE"])
+    def api_bulk_image_collections():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or set(body) != {"images", "collection_ids"}:
+            return jsonify({"error": "images and collection_ids are required"}), 400
+        image_names = body["images"]
+        collection_ids = body["collection_ids"]
+        if not isinstance(image_names, list) or not all(
+            isinstance(name, str) for name in image_names
+        ):
+            return jsonify({"error": "images must be a list of strings"}), 400
+        if not isinstance(collection_ids, list) or not all(
+            isinstance(collection_id, str) for collection_id in collection_ids
+        ):
+            return jsonify({"error": "collection_ids must be a list of strings"}), 400
+        known_names = {record.name for record in state.manager.list()}
+        unknown_images = sorted(set(image_names) - known_names)
+        if unknown_images:
+            return jsonify({"error": "unknown image(s)", "images": unknown_images}), 404
+        try:
+            for collection_id in collection_ids:
+                state.collections.get(collection_id)
+                if collection_id == ALL_COLLECTION_ID:
+                    raise CollectionImmutableError("All Photos membership is automatic")
+            changed = 0
+            for collection_id in collection_ids:
+                changed += (
+                    state.collections.add_images(collection_id, image_names)
+                    if request.method == "POST"
+                    else state.collections.remove_images(collection_id, image_names)
+                )
+        except CollectionNotFoundError as e:
+            return jsonify({"error": f"collection {e.args[0]!r} not found"}), 404
+        except (CollectionImmutableError, ValueError) as e:
+            return jsonify({"error": str(e)}), 409
+        for collection_id in collection_ids:
+            state.scheduler.invalidate_collection(collection_id)
+        return jsonify({"ok": True, "changed": changed})
 
     @app.route("/hokku/api/image/<path:name>/retry", methods=["POST"])
     def api_retry(name: str):
@@ -1417,7 +1521,10 @@ def create_app(
                 "failed_files": failed_files,
                 "serve_data": serve_data,
                 "screens": screens_payload,
-                "collections": [_collection_payload(c) for c in collections],
+                "collections": [
+                    _collection_payload(state.collections.get(ALL_COLLECTION_ID)),
+                    *[_collection_payload(c) for c in collections],
+                ],
                 "last_served": last[0] if last else None,
                 "converting": 1 if progress.current_name or progress.done < progress.total else 0,
                 "converting_name": progress.current_name,

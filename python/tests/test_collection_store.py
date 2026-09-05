@@ -15,13 +15,33 @@ from hokku.webserver.collection_store import (
 
 
 def test_existing_install_migrates_to_all_photos_without_membership_file(tmp_path: Path):
+    (tmp_path / "collections.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "collections": [
+                    {
+                        "id": "all",
+                        "name": "All Photos",
+                        "description": "",
+                        "created_at": 1,
+                        "updated_at": 1,
+                    }
+                ],
+                "memberships": {"all": ["old-family-photo.jpg"]},
+            }
+        )
+    )
     store = CollectionStore(tmp_path)
 
     all_photos = store.get(ALL_COLLECTION_ID)
     assert all_photos.name == "All Photos"
     assert store.contains(ALL_COLLECTION_ID, "old-family-photo.jpg")
     assert store.image_names(ALL_COLLECTION_ID) == set()
-    assert (tmp_path / "collections.json").exists()
+    persisted = json.loads((tmp_path / "collections.json").read_text())
+    assert persisted["version"] == 2
+    assert persisted["collections"] == []
+    assert persisted["memberships"] == {}
 
 
 def test_collection_crud_and_membership_persist(tmp_path: Path):
@@ -61,6 +81,21 @@ def test_same_image_can_belong_to_multiple_collections(tmp_path: Path):
     store.remove_images(family.id, ["shared.jpg"])
     assert not store.contains(family.id, "shared.jpg")
     assert store.contains(favorites.id, "shared.jpg")
+
+
+def test_image_membership_replacement_persists(tmp_path: Path):
+    store = CollectionStore(tmp_path)
+    family = store.create("Family")
+    favorites = store.create("Favorites")
+
+    assert store.set_image_collections("photo.jpg", [family.id, favorites.id]) == {
+        family.id,
+        favorites.id,
+    }
+    restored = CollectionStore(tmp_path)
+    assert restored.image_collections("photo.jpg") == {family.id, favorites.id}
+    assert restored.set_image_collections("photo.jpg", [favorites.id]) == {favorites.id}
+    assert restored.image_collections("photo.jpg") == {favorites.id}
 
 
 def test_deleting_all_photos_is_protected(tmp_path: Path):
@@ -109,4 +144,5 @@ def test_malformed_root_starts_with_all_photos(tmp_path: Path):
 
     store = CollectionStore(tmp_path)
 
-    assert [collection.id for collection in store.list()] == [ALL_COLLECTION_ID]
+    assert store.list() == []
+    assert store.get(ALL_COLLECTION_ID).name == "All Photos"

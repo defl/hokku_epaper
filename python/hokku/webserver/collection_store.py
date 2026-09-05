@@ -1,10 +1,9 @@
 """Persistent photo collection metadata.
 
-Collections are deliberately kept separate from the image cache.  A collection
+Collections are deliberately kept separate from the image cache. A collection
 contains image *names*, not copies of image files, so membership changes do not
-touch conversion artifacts or serve statistics.  ``all`` is a protected virtual
-collection: it represents every image in the library and is the backward-
-compatible default for existing installations.
+touch conversion artifacts or serve statistics. ``all`` is a protected virtual
+view of every image in the library, not a persisted collection or membership.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 _DB_FILENAME = "collections.json"
-_DB_VERSION = 1
+_DB_VERSION = 2
 ALL_COLLECTION_ID = "all"
 ALL_COLLECTION_NAME = "All Photos"
 
@@ -33,7 +32,7 @@ class CollectionNotFoundError(KeyError):
 
 
 class CollectionImmutableError(ValueError):
-    """Raised when a caller tries to mutate the protected All Photos collection."""
+    """Raised when a caller tries to mutate the virtual All Photos view."""
 
 
 @dataclass(frozen=True)
@@ -78,38 +77,20 @@ class CollectionStore:
         self._members: dict[str, set[str]] = {}
         self._load()
 
-        # Creating the protected collection is the complete migration for an
-        # existing installation. Existing image files remain untouched and are
-        # included automatically by the virtual All Photos semantics.
-        with self._lock:
-            if ALL_COLLECTION_ID not in self._collections:
-                now = time.time()
-                self._collections[ALL_COLLECTION_ID] = Collection(
-                    id=ALL_COLLECTION_ID,
-                    name=ALL_COLLECTION_NAME,
-                    description="Every image in the library.",
-                    created_at=now,
-                    updated_at=now,
-                )
-                self._save_locked()
-
     @property
     def path(self) -> Path:
         return self._path
 
-    def list(self) -> list[Collection]:
+    def list(self, *, include_all: bool = False) -> list[Collection]:
         with self._lock:
-            return sorted(
-                self._collections.values(),
-                key=lambda c: (c.id != ALL_COLLECTION_ID, c.name.casefold()),
-            )
+            collections = sorted(self._collections.values(), key=lambda c: c.name.casefold())
+            if include_all:
+                return [self._all_view(), *collections]
+            return collections
 
     def get(self, collection_id: str) -> Collection:
         with self._lock:
-            try:
-                return self._collections[collection_id]
-            except KeyError as e:
-                raise CollectionNotFoundError(collection_id) from e
+            return self._require(collection_id)
 
     def contains(self, collection_id: str, image_name: str) -> bool:
         with self._lock:
@@ -122,12 +103,16 @@ class CollectionStore:
         """Return explicit membership names; All Photos is resolved by its caller."""
         with self._lock:
             self._require(collection_id)
+            if collection_id == ALL_COLLECTION_ID:
+                return set()
             return set(self._members.get(collection_id, set()))
 
     def create(self, name: str, description: str = "") -> Collection:
         clean_name = self._validate_name(name)
         clean_description = self._validate_description(description)
         with self._lock:
+            if clean_name.casefold() == ALL_COLLECTION_NAME.casefold():
+                raise ValueError("All Photos is the unfiltered view, not a collection")
             if any(c.name.casefold() == clean_name.casefold() for c in self._collections.values()):
                 raise ValueError(f"A collection named {clean_name!r} already exists")
             now = time.time()
@@ -208,6 +193,41 @@ class CollectionStore:
                 self._save_locked()
             return before - len(members)
 
+    def image_collections(self, image_name: str) -> set[str]:
+        """Return the explicit collection IDs containing ``image_name``."""
+        with self._lock:
+            return {
+                collection_id
+                for collection_id, members in self._members.items()
+                if collection_id in self._collections and image_name in members
+            }
+
+    def set_image_collections(
+        self, image_name: str, collection_ids: list[str] | set[str]
+    ) -> set[str]:
+        """Replace an image's explicit memberships and return the resulting IDs."""
+        if not isinstance(collection_ids, (list, set)):
+            raise ValueError("collection_ids must be a list of collection IDs")
+        ids = set()
+        with self._lock:
+            for collection_id in collection_ids:
+                if not isinstance(collection_id, str) or not collection_id:
+                    raise ValueError("collection IDs must be non-empty strings")
+                self._require_mutable(collection_id)
+                ids.add(collection_id)
+            current = self.image_collections(image_name)
+            changed = current.symmetric_difference(ids)
+            for collection_id in changed:
+                members = self._members.setdefault(collection_id, set())
+                if collection_id in ids:
+                    members.add(image_name)
+                else:
+                    members.discard(image_name)
+                self._touch_locked(collection_id)
+            if changed:
+                self._save_locked()
+            return ids
+
     def remove_image(self, image_name: str) -> None:
         """Remove a deleted library image from every explicit collection."""
         with self._lock:
@@ -221,6 +241,8 @@ class CollectionStore:
                 self._save_locked()
 
     def _require(self, collection_id: str) -> Collection:
+        if collection_id == ALL_COLLECTION_ID:
+            return self._all_view()
         try:
             return self._collections[collection_id]
         except KeyError as e:
@@ -276,13 +298,15 @@ class CollectionStore:
         if not isinstance(data, dict):
             logger.warning("Invalid %s root (starting with All Photos)", _DB_FILENAME)
             return
-        if data.get("version") != _DB_VERSION:
+        version = data.get("version")
+        if version not in (1, _DB_VERSION):
             logger.warning(
-                "Unsupported %s version %r (starting with All Photos)",
+                "Unsupported %s version %r (starting with empty collections)",
                 _DB_FILENAME,
-                data.get("version"),
+                version,
             )
             return
+        needs_migration = version != _DB_VERSION
         raw_collections = data.get("collections", [])
         if not isinstance(raw_collections, list):
             logger.warning("Invalid collections in %s (starting with All Photos)", _DB_FILENAME)
@@ -294,19 +318,31 @@ class CollectionStore:
                 logger.warning("Skipping malformed collection: %s", e)
                 continue
             if collection.id == ALL_COLLECTION_ID:
-                collection = replace(
-                    collection,
-                    name=ALL_COLLECTION_NAME,
-                    description="Every image in the library.",
-                )
+                needs_migration = True
+                continue
             self._collections[collection.id] = collection
         raw_members = data.get("memberships", {})
         if isinstance(raw_members, dict):
-            self._members = {
-                collection_id: {name for name in names if isinstance(name, str)}
-                for collection_id, names in raw_members.items()
-                if isinstance(collection_id, str) and isinstance(names, list)
-            }
+            for collection_id, names in raw_members.items():
+                if not isinstance(collection_id, str) or not isinstance(names, list):
+                    needs_migration = True
+                    continue
+                if collection_id == ALL_COLLECTION_ID or collection_id not in self._collections:
+                    needs_migration = True
+                    continue
+                self._members[collection_id] = {name for name in names if isinstance(name, str)}
+        if needs_migration:
+            self._save_locked()
+
+    @staticmethod
+    def _all_view() -> Collection:
+        return Collection(
+            id=ALL_COLLECTION_ID,
+            name=ALL_COLLECTION_NAME,
+            description="Every image in the library.",
+            created_at=0.0,
+            updated_at=0.0,
+        )
 
     def _save_locked(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

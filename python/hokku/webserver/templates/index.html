@@ -632,8 +632,18 @@
   .collection-row .collection-actions { display:flex; gap:6px; flex-shrink:0; }
   .bulk-image-actions { display:none; align-items:center; gap:8px; flex-wrap:wrap; padding:9px 0; margin-bottom:10px; border-bottom:1px solid var(--bamboo-soft); }
   .bulk-image-actions.show { display:flex; }
+  .bulk-image-actions select { min-width: 170px; min-height: 72px; }
   .image-select { position:absolute; top:10px; left:10px; z-index:4; width:22px; height:22px; accent-color:var(--indigo); }
   .image-card.filtered-out { display:none; }
+  .image-collection-editor { margin: 14px 0 16px; padding: 12px 14px; border: 1px solid var(--bamboo); border-radius: 8px; background: rgba(241, 232, 213, 0.35); }
+  .image-collection-editor h4 { margin: 0 0 4px; font-family: var(--font-serif); color: var(--sumi); }
+  .image-collection-editor .info { margin: 0 0 10px; }
+  .collection-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+  .collection-check { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 6px 8px; border: 1px solid var(--bamboo-soft); border-radius: 6px; background: var(--paper-card-solid); cursor: pointer; }
+  .collection-check input { width: 20px; height: 20px; accent-color: var(--indigo); flex-shrink: 0; }
+  .image-collection-editor.is-saving { opacity: 0.6; }
+  .collection-check.is-saving { opacity: 0.55; pointer-events: none; }
+  .collection-membership-summary { margin: 0 0 10px; color: var(--stone); font-size: 0.86em; }
 
   /* ── Confirmation modal ───────────────────────────────────── */
   .modal-backdrop {
@@ -839,6 +849,22 @@
   .img-detail-modal td:first-child { color: var(--stone); width: 40%; font-weight: 500; }
   .img-detail-modal .detail-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
 
+  @media (max-width: 600px) {
+    .page { padding: 14px 12px; }
+    .collection-toolbar { align-items: stretch; }
+    .collection-toolbar label { width: 100%; }
+    .collection-toolbar select, .collection-toolbar button { width: 100%; min-height: 42px; }
+    .collection-manager .config-row { align-items: stretch; }
+    .collection-manager .config-row input, .collection-manager .config-row button { width: 100%; min-height: 42px; }
+    .collection-row { align-items: flex-start; }
+    .collection-row .collection-actions { flex-direction: column; }
+    .bulk-image-actions { align-items: stretch; }
+    .bulk-image-actions strong, .bulk-image-actions select, .bulk-image-actions button { width: 100%; min-height: 42px; }
+    .bulk-image-actions select { min-height: 96px; }
+    .img-detail-modal { width: calc(100vw - 24px); min-width: 0; padding: 18px; }
+    .collection-checks { grid-template-columns: 1fr; }
+  }
+
   .image-card .card-body { padding: 10px 12px; }
   .image-card .card-actions {
     display: flex; gap: 6px; align-items: center;
@@ -936,9 +962,9 @@
   </div>
   <div id="bulk-image-actions" class="bulk-image-actions">
     <strong><span id="selected-image-count">0</span> selected</strong>
-    <select id="bulk-collection-select"><option value="">Choose collection…</option></select>
-    <button type="button" class="btn btn-secondary btn-small" onclick="addSelectedToCollection()">Add to collection</button>
-    <button type="button" class="btn btn-secondary btn-small" onclick="removeSelectedFromCollection()">Remove from collection</button>
+    <select id="bulk-collection-select" multiple size="3" aria-label="Collections for selected photos"><option value="">Choose collection…</option></select>
+    <button type="button" class="btn btn-secondary btn-small" onclick="addSelectedToCollection()">Add to collection(s)</button>
+    <button type="button" class="btn btn-secondary btn-small" onclick="removeSelectedFromCollection()">Remove from collection(s)</button>
     <button type="button" class="btn btn-secondary btn-small" onclick="clearImageSelection()">Clear</button>
   </div>
 
@@ -1336,6 +1362,12 @@
     </div>
     <table id="img-detail-table"></table>
     <div class="detail-actions" id="img-detail-actions"></div>
+
+    <div class="image-collection-editor">
+      <h4>Collections</h4>
+      <p class="collection-membership-summary" id="img-detail-collection-summary"></p>
+      <div class="collection-checks" id="img-detail-collections"></div>
+    </div>
 
     <!-- Per-picture conversion. Both halves are independent overrides on the
          image's record: either can be set without the other, and "Use
@@ -3684,14 +3716,17 @@ function clearImageSelection() {
 
 async function changeSelectedCollection(method) {
   const names = selectedImageNames();
-  const collectionId = document.getElementById('bulk-collection-select').value;
-  if (!names.length || !collectionId) { showToast('Select photos and a collection first.'); return; }
+  const collectionIds = Array.from(document.getElementById('bulk-collection-select').selectedOptions)
+    .map(option => option.value)
+    .filter(Boolean);
+  if (!names.length || !collectionIds.length) { showToast('Select photos and one or more collections first.'); return; }
   try {
-    const r = await fetch(`/hokku/api/collections/${encodeURIComponent(collectionId)}/images`, {method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify({images: names})});
+    const r = await fetch('/hokku/api/images/collections', {method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify({images: names, collection_ids: collectionIds})});
     const body = await r.json();
     if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
     clearImageSelection();
-    showToast(method === 'POST' ? 'Photos added to collection.' : 'Photos removed from collection.');
+    document.getElementById('bulk-collection-select').selectedIndex = -1;
+    showToast(method === 'POST' ? 'Photos added to collection(s).' : 'Photos removed from collection(s).');
     await refreshStatus();
   } catch (e) { showToast('Collection update failed: ' + e.message); }
 }
@@ -3776,6 +3811,56 @@ function renderImageGrid(uploadFiles, serveData, nextImages) {
     grid.appendChild(card);
   });
   updateSelectionActions();
+}
+
+function renderImageCollectionEditor(fname, entry) {
+  const host = document.getElementById('img-detail-collections');
+  const summary = document.getElementById('img-detail-collection-summary');
+  if (!host || !summary) return;
+  const memberships = new Set(entry.collection_ids || []);
+  const collections = (lastCollections || []).filter(c => c.id !== 'all');
+  const names = collections.filter(c => memberships.has(c.id)).map(c => c.name);
+  summary.textContent = names.length ? `Member of: ${names.join(', ')}` : 'Not assigned to a collection.';
+  if (!collections.length) {
+    host.innerHTML = '<span class="info">Create a collection to organize this photo.</span>';
+    return;
+  }
+  host.innerHTML = collections.map(c => `
+    <label class="collection-check">
+      <input type="checkbox" data-collection-id="${escapeHtml(c.id)}"${memberships.has(c.id) ? ' checked' : ''}>
+      <span>${escapeHtml(c.name)}</span>
+    </label>`).join('');
+  host.querySelectorAll('input[type="checkbox"]').forEach(input => {
+    input.addEventListener('change', () => saveImageCollections(fname, host));
+  });
+}
+
+async function saveImageCollections(fname, host) {
+  const inputs = Array.from(host.querySelectorAll('input[type="checkbox"]'));
+  const collectionIds = inputs.filter(input => input.checked).map(input => input.dataset.collectionId);
+  host.classList.add('is-saving');
+  inputs.forEach(input => { input.disabled = true; });
+  try {
+    const resp = await fetch('/hokku/api/image/' + encodeURIComponent(fname) + '/collections', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({collection_ids: collectionIds}),
+    });
+    const body = await resp.json();
+    if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+    const entry = (lastUploadFiles || []).find(item => item.name === fname);
+    if (entry) entry.collection_ids = body.collection_ids || collectionIds;
+    await refreshStatus();
+    const updated = (lastUploadFiles || []).find(item => item.name === fname);
+    if (updated) renderImageCollectionEditor(fname, updated);
+    showToast('Collections updated.');
+  } catch (e) {
+    showToast('Could not update collections: ' + e.message);
+    const entry = (lastUploadFiles || []).find(item => item.name === fname);
+    if (entry) renderImageCollectionEditor(fname, entry);
+  } finally {
+    host.classList.remove('is-saving');
+  }
 }
 
 function showImageDetails(fname) {
@@ -3866,6 +3951,8 @@ function showImageDetails(fname) {
   } else {
     actions.innerHTML = '<span style="color:#92400e;font-size:0.85em">Dithered version not ready yet</span>';
   }
+
+  renderImageCollectionEditor(fname, entry);
 
   setupImageOverrideEditor(fname, entry);
 
@@ -4542,6 +4629,8 @@ async function uploadOneFile(file, row, renderAll) {
   // not doom the batch.
   const form = new FormData();
   form.append('files', file);
+  const uploadCollectionId = currentCollectionFilter !== 'all' ? currentCollectionFilter : null;
+  if (uploadCollectionId) form.append('collection_id', uploadCollectionId);
   try {
     const resp = await fetch('/hokku/api/upload', {method: 'POST', body: form});
     if (!resp.ok) {
@@ -4556,8 +4645,14 @@ async function uploadOneFile(file, row, renderAll) {
       row.status = 'ok';
       row.message = saved === file.name ? 'Uploaded' : 'Uploaded as ' + saved;
     } else if (skipped) {
-      row.status = 'error';
-      row.message = skipped.reason;
+      if (skipped.collection_added) {
+        row.status = 'ok';
+        const collection = collectionById(uploadCollectionId);
+        row.message = `Already existed; added to ${collection ? collection.name : 'collection'}`;
+      } else {
+        row.status = 'error';
+        row.message = skipped.reason;
+      }
     } else {
       row.status = 'error';
       row.message = 'Failed';
