@@ -29,7 +29,7 @@ from hokku.webserver.presets import (
 
 logger = logging.getLogger(__name__)
 
-_CURRENT_VERSION = 10
+_CURRENT_VERSION = 11
 
 
 def _migrate_v1_to_v2(d: dict) -> dict:
@@ -122,6 +122,23 @@ def _migrate_v9_to_v10(d: dict) -> dict:
     return d
 
 
+def _migrate_v10_to_v11(d: dict) -> dict:
+    """Add `prepare_autocontrast`, keeping every existing config as it renders.
+
+    The shipped presets now switch autocontrast off — per-channel stretching is
+    an automatic white balance that casts photographs yellow, and off rated
+    better on glass. An upgrade must not change what a running server produces
+    without being asked, though, so a stored pipeline that predates the field
+    takes ``per_channel``, which is exactly what it has been doing. Changing it
+    is one dropdown in the config editor.
+    """
+    for key in ("image_config_default", "image_config_bw", "image_config_face"):
+        blob = d.get(key)
+        if isinstance(blob, dict):
+            blob.setdefault("prepare_autocontrast", "per_channel")
+    return d
+
+
 # v(N) → v(N+1) upgrade functions. Populated as the schema evolves.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     1: _migrate_v1_to_v2,
@@ -133,6 +150,7 @@ _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     7: _migrate_v7_to_v8,
     8: _migrate_v8_to_v9,
     9: _migrate_v9_to_v10,
+    10: _migrate_v10_to_v11,
 }
 
 

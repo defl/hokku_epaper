@@ -149,8 +149,16 @@ def _apply_prepare_enhancements(
     cfg: ImageConfig,
     keepout_bboxes_canvas: list[tuple[int, int, int, int]] | None = None,
 ) -> Image.Image:
-    # 1. Global autocontrast
-    canvas = ImageOps.autocontrast(canvas, cutoff=cfg.prepare_autocontrast_cutoff)
+    # 1. Global autocontrast. Per channel it doubles as an automatic white
+    #    balance — measured up to +13 b* of cast on a library photograph, which
+    #    is what "yellow skin" in the rating notes turned out to be — so the mode
+    #    is configurable and "off" is what rated best on glass.
+    if cfg.prepare_autocontrast != "off":
+        canvas = ImageOps.autocontrast(
+            canvas,
+            cutoff=cfg.prepare_autocontrast_cutoff,
+            preserve_tone=cfg.prepare_autocontrast == "preserve_tone",
+        )
 
     # 2. Gamma correction (power curve via uint8 LUT)
     gamma_lut = [int(((i / 255.0) ** cfg.prepare_gamma) * 255) for i in range(256)] * 3

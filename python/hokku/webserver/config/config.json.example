@@ -29,6 +29,7 @@
     "dither_noise": 2.0,
     "drc_chroma_space": "oklab",
     "drc_l_space": "oklab",
+    "prepare_autocontrast": "off",
     "prepare_autocontrast_cutoff": 0.5,
     "prepare_brightness": 1.0,
     "prepare_contrast": 1.1,
@@ -63,6 +64,7 @@
     "dither_noise": 2.0,
     "drc_chroma_space": "oklab",
     "drc_l_space": "oklab",
+    "prepare_autocontrast": "off",
     "prepare_autocontrast_cutoff": 0.5,
     "prepare_brightness": 1.0,
     "prepare_contrast": 1.1,
@@ -97,6 +99,7 @@
     "dither_noise": 2.0,
     "drc_chroma_space": "cielab",
     "drc_l_space": "cielab",
+    "prepare_autocontrast": "off",
     "prepare_autocontrast_cutoff": 0.5,
     "prepare_brightness": 1.0,
     "prepare_contrast": 1.1,
@@ -126,5 +129,5 @@
   ],
   "server_threads": 4,
   "upload_dir": "/var/lib/hokku/images",
-  "version": 10
+  "version": 11
 }

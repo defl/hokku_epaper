@@ -21,6 +21,16 @@ def _hue_aware(algorithm: AlgorithmName, serpentine: bool = False) -> ImageConfi
             hue_cutoff_deg=95.0,
             neutral_chroma=8.0,
         ),
+        # Off. PIL's autocontrast stretches R, G and B independently, which is an
+        # automatic white balance: measured over 30 library photographs rendered
+        # as the server renders them, it moved mean b* by up to +13 (yellow) and
+        # a* by -17, and the photographs it hit hardest were the ones whose
+        # ratings read "skin of baby is nearly all yellow" and "all 3 have yellow
+        # skin". Switching it off beat leaving it on on glass (+0.45 of a
+        # five-point rating, better on 9 photographs and worse on 3), and its
+        # biggest gains were exactly the photographs with the largest measured
+        # cast. The cutoff below is kept for anyone who turns the stage back on.
+        prepare_autocontrast="off",
         prepare_autocontrast_cutoff=0.5,
         prepare_gamma=0.88,
         prepare_brightness=1.0,
@@ -120,6 +130,13 @@ def _calibration_raw() -> ImageConfig:
             hue_cutoff_deg=95.0,
             neutral_chroma=8.0,
         ),
+        # Off, and this preset is why the setting had to exist rather than being
+        # a cutoff of 0: at cutoff 0 autocontrast still stretches each channel's
+        # own darkest and brightest pixel to 0 and 255, so a target authored in
+        # the panel's inks came out moved off its anchors unless it happened to
+        # contain a pure black and a pure white in every channel. "Pixel-exact
+        # passthrough" now really is one.
+        prepare_autocontrast="off",
         prepare_autocontrast_cutoff=0.0,
         prepare_gamma=1.0,
         prepare_brightness=1.0,

@@ -368,6 +368,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--knn", type=int, default=8)
     ap.add_argument("--blur-radius", type=int, default=1)
     ap.add_argument("--blend", type=float, default=1.0)
+    ap.add_argument(
+        "--chroma-trim",
+        type=float,
+        default=1.0,
+        help="compose a global chroma reduction into the result (1.0 = none). The "
+        "shipped huessen LUT carries 0.85: rated on glass against no trim, better "
+        "on 11 photographs and worse on 3. Without this the next rebuild would "
+        "silently drop it.",
+    )
     ap.add_argument("--out", type=pathlib.Path)
     ap.add_argument(
         "--dry-run", action="store_true", help="build + validate, do not write the asset"
@@ -438,6 +447,18 @@ def main(argv: list[str] | None = None) -> int:
     validation_report(
         display, prim_mat, n, DEFAULT_IMAGE_CONFIG.dither, canvas_hw, corrected, anchor_l
     )
+
+    if args.chroma_trim != 1.0:
+        # Composed last, on top of the finished correction: the trim is a
+        # perceptual choice ("crazy saturated" in the rating notes), not part of
+        # the measured panel correction, and composing keeps it out of the
+        # inversion and its sanity gates.
+        from neon_lut import build as compose_chroma_trim  # noqa: PLC0415
+
+        corrected = compose_chroma_trim(
+            corrected, args.chroma_trim, protect_skin=False, n=corrected.shape[0]
+        )
+        print(f"\ncomposed a global chroma trim of {args.chroma_trim}")
 
     if args.dry_run:
         print(f"\n--dry-run: not writing {out}")

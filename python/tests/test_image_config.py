@@ -31,6 +31,7 @@ def _default_dither() -> DitherConfig:
 def _default_image_config() -> ImageConfig:
     return ImageConfig(
         dither=_default_dither(),
+        prepare_autocontrast="per_channel",
         prepare_autocontrast_cutoff=0.5,
         prepare_gamma=0.85,
         prepare_brightness=1.0,

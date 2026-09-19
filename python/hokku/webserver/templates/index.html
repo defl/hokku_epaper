@@ -1592,6 +1592,7 @@ let imgcfgCropOverride = null;
 // specific control the user is hovering — never another control's options.
 const DITHER_HELP = {
   // ── Tonal preparation ────────────────────────────────────────────────
+  autocontrast_mode: `<p><strong>Autocontrast</strong> — stretches the picture so its darkest pixel becomes black and its brightest white, before anything else runs.</p><p><em>Off:</em> the picture keeps its own contrast. This is what ships, and what rated best on glass.</p><p><em>Keep colour balance:</em> one stretch computed on brightness and applied to red, green and blue alike — more contrast, no colour shift.</p><p><em>Per channel:</em> stretches red, green and blue separately, which also acts as an automatic white balance. It can rescue a flat, colour-cast scan, but on ordinary photographs it tints them: measured across 30 library photographs it moved colour by up to 13 units of yellow, and the pictures it hit hardest were the ones that looked "yellow skin".</p>`,
   autocontrast: `<p><strong>Autocontrast cutoff</strong> — before stretching the image so its darkest pixel becomes pure black and its brightest pure white, ignore this many percent of pixels at each extreme.</p><p>0 means "use the actual darkest and brightest pixels"; a handful of stray hot or dead pixels can then prevent any meaningful stretch. The default 0.5 ignores half a percent at each end, which is enough to defeat sensor noise without losing real detail.</p><p>Higher values stretch more aggressively but start clipping highlights and crushing shadows.</p>`,
 
   gamma: `<p><strong>Gamma</strong> brightens or darkens midtones without touching pure black or pure white.</p><p>Values below 1.0 lift midtones (the image looks brighter overall). Values above 1.0 darken them (more punchy, more contrast). 1.0 leaves the image alone.</p><p>E-ink panels naturally compress midtones, so 0.85 is a common default — it lifts midtones to compensate for what the display loses.</p>`,
@@ -2060,7 +2061,14 @@ function renderDitherPanel(panelId) {
 
   // 1. Tonal preparation
   sections.push(group('Tonal preparation',
-    fn('Autocontrast cutoff', ['prepare_autocontrast_cutoff'], {min: 0, max: 49, step: 0.5, help: 'autocontrast'}) +
+    fs('Autocontrast', ['prepare_autocontrast'], [
+      ['off',           'Off'],
+      ['preserve_tone', 'Keep colour balance'],
+      ['per_channel',   'Per channel'],
+    ], 'autocontrast_mode') +
+    (d.prepare_autocontrast && d.prepare_autocontrast !== 'off'
+      ? fn('Autocontrast cutoff', ['prepare_autocontrast_cutoff'], {min: 0, max: 49, step: 0.5, help: 'autocontrast'})
+      : '') +
     fn('Gamma', ['prepare_gamma'], {min: 0.1, max: 3, step: 0.05, help: 'gamma'}) +
     fn('Midtone lift', ['prepare_midtone'], {min: 0.5, max: 2, step: 0.01, help: 'midtone'}) +
     fn('Brightness', ['prepare_brightness'], {min: 0.1, max: 3, step: 0.05, help: 'brightness'}) +
