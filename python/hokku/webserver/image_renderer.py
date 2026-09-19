@@ -583,11 +583,15 @@ class ImageRenderer(AbstractImageRenderer):
     # against the noise floor of a dithered 6-ink panel. The FULL old-range-
     # vs-new-range gap that was clearly visible measured ~7.6 L* at its peak
     # (computed the same way, see git history). A logistic sigmoid isn't
-    # capped like a fixed-degree polynomial is: k=8 reaches ~8.4 L* peak
-    # difference from linear, comfortably past the ~7.6 L* bar that was
-    # already confirmed visible — chosen for that reason, not yet re-
-    # validated on real glass at this specific value.
-    _DRC_SIGMOID_K = 8.0
+    # capped like a fixed-degree polynomial is.
+    #
+    # k swept directly on real glass (both panels) against a very dark,
+    # mostly-shadow test photo: k=8 didn't crush a solid-black dress dark
+    # enough; k=20 overcorrected ("muting everything too much" — highlights
+    # got flattened along with the shadows, since the curve is symmetric);
+    # k=12 still lost to k=8 on overall balance; k=6 lost to k=8. k=7 was the
+    # winner of that sweep.
+    _DRC_SIGMOID_K = 7.0
 
     @staticmethod
     def _scurve(t: NDArray[np.float32], k: float) -> NDArray[np.float32]:

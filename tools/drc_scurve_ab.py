@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -144,6 +145,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--divider", type=int, default=2, help="black separator width in px")
     ap.add_argument("--save", type=Path, help="write the composed preview as a PNG, no upload")
     ap.add_argument(
+        "--clahe",
+        type=float,
+        default=None,
+        help="override clahe_clip_limit on BOTH sides (default: whatever "
+        "DEFAULT_IMAGE_CONFIG currently ships)",
+    )
+    ap.add_argument(
         "--bench-flip180",
         action="store_true",
         help="rotate the composed image 180° before sending — for a unit that is "
@@ -161,6 +169,9 @@ def main(argv: list[str] | None = None) -> int:
 
     img = Image.open(args.image).convert("RGB")
     cfg = DEFAULT_IMAGE_CONFIG
+    if args.clahe is not None:
+        cfg = replace(cfg, clahe_clip_limit=args.clahe)
+        print(f"  (clahe_clip_limit overridden to {args.clahe} on both sides)")
     half = display.visual_w // 2
 
     left_vis = render_half(display, cfg, img, True, half)

@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -122,6 +123,13 @@ def main(argv: list[str] | None = None) -> int:
         "identity (same as --blend having no effect vs LEFT). Interpolated "
         "in-memory against the shipped asset, no rebuild needed.",
     )
+    ap.add_argument(
+        "--clahe",
+        type=float,
+        default=None,
+        help="override clahe_clip_limit on BOTH sides (default: whatever "
+        "DEFAULT_IMAGE_CONFIG currently ships)",
+    )
     ap.add_argument("--save", type=Path, help="write the composed preview as a PNG, no upload")
     ap.add_argument(
         "--bench-flip180",
@@ -143,6 +151,9 @@ def main(argv: list[str] | None = None) -> int:
 
     img = Image.open(args.image).convert("RGB")
     cfg = DEFAULT_IMAGE_CONFIG
+    if args.clahe is not None:
+        cfg = replace(cfg, clahe_clip_limit=args.clahe)
+        print(f"  (clahe_clip_limit overridden to {args.clahe} on both sides)")
     half = display.visual_w // 2
 
     left_vis = render_half(display, cfg, img, False, half)
