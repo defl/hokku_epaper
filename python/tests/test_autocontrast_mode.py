@@ -84,6 +84,27 @@ def test_an_unknown_mode_is_rejected_with_the_allowed_values():
     assert "'off'" in str(excinfo.value)
 
 
+def test_upgrade_from_before_the_blobs_were_completed_also_keeps_per_channel():
+    """A v9 config is completed against today's presets — which say "off".
+
+    That is right for a field whose default never moved and wrong here, so the
+    completion must not be the thing that decides this one. Found on a live
+    server that turned out to be at v9, not v10.
+    """
+    stored: dict[str, object] = {"version": 9}
+    for key in ("image_config_default", "image_config_bw", "image_config_face"):
+        blob = asdict(PRESET_IMAGE_CONFIGS["default_general"])
+        del blob["prepare_autocontrast"]
+        del blob["clahe_keepout_feather"]  # a genuinely absent field, filled from the preset
+        stored[key] = blob
+
+    migrated = _migrate(json.loads(json.dumps(stored)))
+
+    for key in ("image_config_default", "image_config_bw", "image_config_face"):
+        assert migrated[key]["prepare_autocontrast"] == "per_channel"
+        assert "clahe_keepout_feather" in migrated[key]
+
+
 def test_upgrade_keeps_an_existing_pipeline_rendering_as_it_did():
     """A stored config predating the field must not change appearance on upgrade."""
     stored: dict[str, object] = {"version": 10}

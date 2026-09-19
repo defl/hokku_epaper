@@ -118,7 +118,16 @@ def _migrate_v9_to_v10(d: dict) -> dict:
         ("image_config_bw", DEFAULT_BW_IMAGE_CONFIG),
         ("image_config_face", DEFAULT_FACE_IMAGE_CONFIG),
     ):
-        d[key] = complete_image_config_blob(d.get(key), default=default, field_path=key)
+        blob = d.get(key)
+        if isinstance(blob, dict):
+            # Completion fills a missing field from TODAY's preset, which is
+            # right for a field that has always had one value and wrong for one
+            # whose default later changed. `prepare_autocontrast` is the second
+            # kind: the presets ship it off, but a config written before it
+            # existed was rendering per-channel and must keep doing so until
+            # someone chooses otherwise (see _migrate_v10_to_v11).
+            blob.setdefault("prepare_autocontrast", "per_channel")
+        d[key] = complete_image_config_blob(blob, default=default, field_path=key)
     return d
 
 
