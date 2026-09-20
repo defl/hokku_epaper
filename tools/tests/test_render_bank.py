@@ -10,12 +10,14 @@ import os
 import sys
 
 import numpy as np
+import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "python"))
 
 import config_space
+import param_search
 import render_bank
 from cam_compare import block_mean
 from color_validate_photos import lab_img, srgb_img_to_xyz
@@ -169,3 +171,70 @@ class TestCacheKeyIncludesTheDisplay:
         key = render_bank.cache_key(base.cache_slug(), "huessen_epf1301")
         assert render_bank.bank_version() in key
         assert "huessen_epf1301" in key
+
+
+class TestTrustRegion:
+    """The search must not optimise its way outside the evidence.
+
+    The first full turn of the loop did exactly that: the objective correctly
+    learned from 832 ratings that less saturation was wanted, had nothing telling
+    it where to stop, and produced renders judged "so overlit it's useless".
+    Nine of seventeen notes called the tuned version washed out; none said that
+    of the baseline it was beating.
+    """
+
+    def _region(self, tmp_path, weights, rows, quantile=0.02, top=20):
+        path = tmp_path / "corpus.csv"
+        pd.DataFrame(rows).to_csv(path, index=False)
+        return param_search.TrustRegion(path, weights, quantile, top)
+
+    def test_a_metric_outside_the_judged_range_is_refused(self, tmp_path):
+        region = self._region(
+            tmp_path, {"contrast_ratio": -2.0}, {"contrast_ratio": np.linspace(0.4, 1.0, 100)}
+        )
+        bands = region.widen_for({"contrast_ratio": 0.7})
+        assert param_search.TrustRegion.allows(bands, {"contrast_ratio": 0.7})
+        assert not param_search.TrustRegion.allows(bands, {"contrast_ratio": 0.1})
+
+    def test_the_baseline_is_always_a_legal_starting_point(self, tmp_path):
+        """A live config already outside the judged range must still be searchable."""
+        region = self._region(
+            tmp_path, {"contrast_ratio": -2.0}, {"contrast_ratio": np.linspace(0.4, 1.0, 100)}
+        )
+        bands = region.widen_for({"contrast_ratio": 0.2})  # below anything judged
+        assert param_search.TrustRegion.allows(bands, {"contrast_ratio": 0.2})
+        assert not param_search.TrustRegion.allows(bands, {"contrast_ratio": 0.15})
+
+    def test_the_contrast_family_is_bounded_whatever_its_leverage(self, tmp_path):
+        """Leverage is |weight| x numeric range, which under-ranks a ratio.
+
+        `contrast_ratio` spans about 0.4-1.0 against a dE metric's 40 units, so
+        ranking by leverage alone dropped the one metric that had actually been
+        observed to break the picture.
+        """
+        region = self._region(
+            tmp_path,
+            {"contrast_ratio": -2.0, "yn_de00": -2.0},
+            {
+                "contrast_ratio": np.linspace(0.4, 1.0, 100),
+                "yn_de00": np.linspace(5.0, 45.0, 100),
+            },
+            top=1,
+        )
+        assert "yn_de00" in region.bands  # wins on leverage
+        assert "contrast_ratio" in region.bands  # pinned by name regardless
+
+    def test_a_metric_the_corpus_never_measured_is_not_bounded(self, tmp_path):
+        region = self._region(
+            tmp_path, {"invented": 5.0}, {"contrast_ratio": np.linspace(0.4, 1.0, 100)}
+        )
+        assert "invented" not in region.bands
+
+    def test_a_missing_measurement_does_not_refuse_a_candidate(self, tmp_path):
+        """Region metrics vanish when their mask is empty; that is not a violation."""
+        region = self._region(
+            tmp_path, {"contrast_ratio": -2.0}, {"contrast_ratio": np.linspace(0.4, 1.0, 100)}
+        )
+        bands = region.widen_for({"contrast_ratio": 0.7})
+        assert param_search.TrustRegion.allows(bands, {})
+        assert param_search.TrustRegion.allows(bands, {"contrast_ratio": float("nan")})
