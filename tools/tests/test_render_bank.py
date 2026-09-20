@@ -132,3 +132,40 @@ class TestChromaVsSourceOnGreyscale:
         """The same divide-by-nothing trap, on the other chroma metric."""
         canvas = np.full((64, 64, 3), 250, dtype=np.uint8)
         assert self._measure(canvas)["chroma_use"] < 10.0
+
+
+class TestCacheKeyIncludesTheDisplay:
+    """A LUT arm and the baseline must not share a cache row.
+
+    The correction LUT is selected by the *display*, not by the ImageConfig, and
+    every LUT arm in this project is rendered through a variant display with its
+    own `model_id`. The cache keyed on `(image, config_slug, div)` only, so
+    `gamut_50` and `baseline` on one photograph collided: the second one measured
+    returned the first one's numbers and reported success. Most of the arms rated
+    in the campaign are LUT swaps, so a preference fit over them would have been
+    fitted to duplicated rows without anything looking wrong.
+    """
+
+    def test_two_displays_do_not_collide(self, tmp_path, base):
+        conn = render_bank.open_cache(tmp_path / "bank.sqlite")
+        slug = base.cache_slug()
+        render_bank.cache_put(conn, "img", slug, 1, "huessen_epf1301", {"yn_dC": 1.0})
+        render_bank.cache_put(conn, "img", slug, 1, "huessen_gamut50", {"yn_dC": 2.0})
+
+        assert render_bank.cache_get(conn, "img", slug, 1, "huessen_epf1301") == {"yn_dC": 1.0}
+        assert render_bank.cache_get(conn, "img", slug, 1, "huessen_gamut50") == {"yn_dC": 2.0}
+        conn.close()
+
+    def test_a_row_is_not_served_to_another_display(self, tmp_path, base):
+        conn = render_bank.open_cache(tmp_path / "bank.sqlite")
+        slug = base.cache_slug()
+        render_bank.cache_put(conn, "img", slug, 1, "huessen_epf1301", {"yn_dC": 1.0})
+
+        assert render_bank.cache_get(conn, "img", slug, 1, "huessen_red100") is None
+        conn.close()
+
+    def test_the_metric_code_still_invalidates(self, base):
+        """`bank_version()` must stay in the key beside the display."""
+        key = render_bank.cache_key(base.cache_slug(), "huessen_epf1301")
+        assert render_bank.bank_version() in key
+        assert "huessen_epf1301" in key

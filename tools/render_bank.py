@@ -29,9 +29,10 @@ red-wall chroma from 11 to 33 while flattening the shading into a slab, and the
 chroma metric called that an improvement. ``detail_l``/``detail_c`` are the
 guard against that, and they are why this returns a vector and not a number.
 
-Results are cached in SQLite keyed by (image content, config slug, canvas), so a
-search that revisits a config pays for it once. Workers compute; only the parent
-writes.
+Results are cached in SQLite keyed by image content, config slug, display (the
+correction LUT rides on it), crop decision, resolution and a hash of the metric
+code, so a search that revisits a config pays for it once and a row is never
+served to something it was not measured for. Workers compute; the parent writes.
 
     python tools/render_bank.py --image build/camcal/server_images/foo.jpg
 """
@@ -167,7 +168,12 @@ def to_visible(idx: np.ndarray, display) -> np.ndarray:
 
 
 def render(
-    display, img: Image.Image, cfg: ImageConfig, div: int = 1, seed: int | None = None
+    display,
+    img: Image.Image,
+    cfg: ImageConfig,
+    div: int = 1,
+    seed: int | None = None,
+    crop_to_fill_threshold: float = 0.0,
 ) -> np.ndarray:
     """Palette-index raster in *visual* orientation, via the production pipeline.
 
@@ -187,7 +193,9 @@ def render(
     if seed is not None:
         np.random.seed(seed % (2**32))
     w, h = display.panel_w // div, display.panel_h // div
-    idx = renderer_for(display).render_indices(img.copy(), cfg, Orientation.LANDSCAPE, w, h)
+    idx = renderer_for(display).render_indices(
+        img.copy(), cfg, Orientation.LANDSCAPE, w, h, crop_to_fill_threshold
+    )
     return to_visible(idx, display)
 
 
@@ -318,26 +326,38 @@ def face_mask(boxes, shape: tuple[int, int]) -> np.ndarray:
     return mask
 
 
-def reference_for(image: Path, display, model: dict, block: int, div: int) -> dict:
+def reference_for(
+    image: Path,
+    display,
+    model: dict,
+    block: int,
+    div: int,
+    crop_to_fill_threshold: float = 0.0,
+) -> dict:
     """Everything about the SOURCE that no config can change, computed once.
 
     The geometry, the Lab conversion and the region masks depend only on the
-    image: `crop_to_fill_threshold` lives on the classifier decision, not on
-    ImageConfig, so every candidate for one picture shares an identical canvas.
-    Recomputing them per candidate was costing more than the render itself —
-    measured at 1.0 render/s across 24 workers where the render alone supports
-    roughly 18/s.
+    image and the classifier's crop decision — not on ImageConfig — so every
+    candidate for one picture shares an identical canvas. Recomputing them per
+    candidate was costing more than the render itself: measured at 1.0 render/s
+    across 24 workers where the render alone supports roughly 18/s.
 
-    Cached per process and keyed by (path, block, div). Jobs are dispatched
-    image-major, so a worker sees a run of candidates for one image and a
-    two-entry cache is enough; it is cleared rather than grown so a 245-image
-    sweep cannot accumulate a gigabyte of canvases per worker.
+    ``crop_to_fill_threshold`` comes from the classifier decision and decides
+    whether the picture is fitted or cropped to fill, so it changes the canvas.
+    It defaulted to 0 here while production plans carry 0.14, which compared a
+    fitted reference against a fill-cropped render — every metric on such a pair
+    measures the offset, not the colour.
+
+    Cached per process and keyed by (path, block, div, threshold). Jobs are
+    dispatched image-major, so a worker sees a run of candidates for one image
+    and a two-entry cache is enough; it is cleared rather than grown so a
+    245-image sweep cannot accumulate a gigabyte of canvases per worker.
     """
-    key = (str(image), block, div)
+    key = (str(image), block, div, crop_to_fill_threshold)
     hit = _REFERENCE.get(key)
     if hit is not None:
         return hit
-    canvas = source_canvas(image, display, "x")
+    canvas = source_canvas(image, display, "x", crop_to_fill_threshold)
     # Measure the picture, not the letterbox. A portrait photo on this landscape
     # panel is 40-50 % white bar, which every render reproduces exactly, so any
     # whole-canvas mean, percentile or ratio was diluted by that much and the
@@ -345,7 +365,7 @@ def reference_for(image: Path, display, model: dict, block: int, div: int) -> di
     # so cropping to it once makes every reduction below a picture-only one.
     from letterbox import padding_visible, picture_rect  # noqa: PLC0415 — avoids a cycle
 
-    full = picture_rect(padding_visible(image, display))
+    full = picture_rect(padding_visible(image, display, crop_to_fill_threshold))
     if full is None:
         full = (0, 0, canvas.shape[1], canvas.shape[0])
     # The render arrives at 1/div of the canvas, so its crop is the scaled rect.
@@ -388,6 +408,108 @@ def reference_for(image: Path, display, model: dict, block: int, div: int) -> di
             del _REFERENCE[k]
     _REFERENCE[key] = reference
     return reference
+
+
+# The six complaints that 72 of 78 free-text rating notes name, as hue sectors
+# for the chroma-gain metrics below. Boundaries are the usual 60-degree sectors
+# on the source's own hue, so "the grass went neon" is asked of pixels that were
+# green to begin with rather than of pixels that ended up green.
+HUE_SECTORS = {
+    "red": (-30.0, 30.0),
+    "yellow": (30.0, 90.0),
+    "green": (90.0, 150.0),
+    "cyan": (150.0, 210.0),
+    "blue": (210.0, 270.0),
+    "magenta": (270.0, 330.0),
+}
+# Below this source chroma a pixel has no colour to be neon about, and its hue
+# is noise. Above this chroma gain it is visibly more saturated than the source.
+COMPLAINT_CHROMA_FLOOR = 8.0
+COMPLAINT_GAIN = 10.0
+
+
+def complaint_metrics(reference: dict, src_lab: np.ndarray, yn_lab: np.ndarray) -> dict[str, float]:
+    """Metrics named after what the notes actually complain about.
+
+    The bank's general metrics turned out to be one-dimensional against the
+    ratings: fitted over all 65 of them, held-out accuracy matched the single
+    best metric alone. That is not a sample-size problem — 832 ratings did no
+    better than 80 — it is the bank measuring overall error six ways and none of
+    the six specific failures a person names when they look at the glass:
+
+        oversaturated / neon (33 notes), blue in skin or lips (10), washed out
+        (10), yellow skin or hair (10), crushed black (5), banding (3)
+
+    Each metric here is one of those, as a signed quantity so its direction is
+    readable, and measured where the complaint lives rather than over the frame.
+    """
+    out: dict[str, float] = {}
+    src_c = np.hypot(src_lab[..., 1], src_lab[..., 2])
+    got_c = np.hypot(yn_lab[..., 1], yn_lab[..., 2])
+    hue = np.degrees(np.arctan2(src_lab[..., 2], src_lab[..., 1]))
+    coloured = src_c >= COMPLAINT_CHROMA_FLOOR
+
+    # "all colours look neon", "neon grass", "red over saturated". Chroma GAIN,
+    # not chroma: the complaint is that the render added saturation the
+    # photograph did not have, which is a different thing from a colourful photo.
+    gain = got_c - src_c
+    worst = []
+    for name, (low, high) in HUE_SECTORS.items():
+        centred = (hue - low) % 360.0
+        mask = coloured & (centred < (high - low) % 360.0)
+        if mask.sum() >= 200:
+            value = float(gain[mask].mean())
+            out[f"neon_{name}"] = value
+            worst.append(value)
+    if worst:
+        out["neon_worst"] = max(worst)
+    if coloured.sum() >= 200:
+        # How much of the picture is visibly more saturated than it should be —
+        # "all 3 are terrible, with orange crowns oversaturated red" is about an
+        # area of the picture, not about its average.
+        out["neon_area"] = float((gain[coloured] > COMPLAINT_GAIN).mean())
+
+    # "skin of baby is yellow", "all 3 have yellow skin", "hair too neon yellow".
+    # b* is the yellow-blue axis, so its signed shift is the complaint itself;
+    # the existing skin_dhue and skin_dC cannot tell yellow from blue.
+    for region in ("skin", "face"):
+        mask = reference["masks"]["skin"] if region == "skin" else reference["face"]
+        if mask.sum() >= 200:
+            out[f"{region}_db"] = float((yn_lab[..., 2] - src_lab[..., 2])[mask].mean())
+            out[f"{region}_da"] = float((yn_lab[..., 1] - src_lab[..., 1])[mask].mean())
+
+    # "hands are way too black and look dead in most images". Measured against
+    # the panel-adapted reference, so it is the pipeline's crush and not the
+    # panel's floor, which no config can lift.
+    ref_lab = reference["ref_lab"]
+    dark = (src_lab[..., 0] > 18.0) & (src_lab[..., 0] < 45.0)
+    if dark.sum() >= 200:
+        out["shadow_crush"] = float((ref_lab[..., 0] - yn_lab[..., 0])[dark].mean())
+
+    # "oks have the sky washed out to white", "5 looks washed out". Detail lost
+    # off the top, as the share of bright source that lands on the panel's white.
+    bright = src_lab[..., 0] > 75.0
+    if bright.sum() >= 200:
+        out["highlight_blown"] = float((yn_lab[..., 0][bright] > 0.95 * PANEL_WHITE_L).mean())
+
+    # "led of girl has hard lines in them from lack of range in nuance": structure
+    # appearing where the photograph was smooth. Taken over the flattest quarter
+    # of the picture, where a gradient in the render cannot have come from the
+    # source.
+    src_grad = _gradient(src_lab[..., 0])
+    if src_grad.size >= 400:
+        flat = src_grad <= np.percentile(src_grad, 25)
+        if flat.sum() >= 100:
+            out["banding"] = float(
+                _gradient(yn_lab[..., 0])[flat].mean() / max(src_grad[flat].mean(), 1e-6)
+            )
+    return out
+
+
+def _gradient(plane: np.ndarray) -> np.ndarray:
+    """Local gradient magnitude, same shape as the input."""
+    dy, dx = np.gradient(plane.astype(np.float64))
+    return np.hypot(dy, dx)
 
 
 def ink_lab(display) -> np.ndarray:
@@ -603,6 +725,9 @@ def measure(
     # spatial integration), but it carries the dither artifact detectors that the
     # block model averages away.
     out.update(ink_metrics(reference, idx_visual, display))
+    # Named after the complaints rather than after the colour space; see there
+    # for why the general metrics above needed the company.
+    out.update(complaint_metrics(reference, src_lab, yn_lab))
     return out
 
 
@@ -633,6 +758,8 @@ def bank_version() -> str:
             inspect.getsource(fn)
             for fn in (
                 measure,
+                complaint_metrics,
+                _gradient,
                 ink_metrics,
                 _region_masks,
                 _pair_stats,
@@ -668,18 +795,37 @@ def image_key(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
 
 
-def cache_get(conn, img: str, slug: str, div: int) -> dict | None:
+def cache_key(slug: str, model_id: str, crop: float = 0.0) -> str:
+    """The stored slug: config, metric code, display, and the crop decision.
+
+    ``model_id`` belongs here because the correction LUT is a property of the
+    *display*, not of the ImageConfig — variant displays are how every LUT arm in
+    this project is rendered (`ab_session._variant_display`). Without it, a
+    gamut-mapped arm and the baseline share `(image, config, div)` and the cache
+    hands back whichever was measured first, silently, reporting success. That
+    would have poisoned any fit over the rated LUT arms, which are most of them.
+
+    ``crop`` is the classifier's `crop_to_fill_threshold`, which decides whether
+    the picture is fitted or cropped to fill and so changes both the render and
+    the reference it is measured against.
+    """
+    return f"{slug}@{model_id}@{crop:g}@{bank_version()}"
+
+
+def cache_get(conn, img: str, slug: str, div: int, model_id: str, crop: float = 0.0) -> dict | None:
     row = conn.execute(
         "SELECT metrics FROM bank WHERE img=? AND slug=? AND div=?",
-        (img, f"{slug}@{bank_version()}", div),
+        (img, cache_key(slug, model_id, crop), div),
     ).fetchone()
     return json.loads(row[0]) if row else None
 
 
-def cache_put(conn, img: str, slug: str, div: int, metrics: dict) -> None:
+def cache_put(
+    conn, img: str, slug: str, div: int, model_id: str, metrics: dict, crop: float = 0.0
+) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO bank VALUES (?,?,?,?)",
-        (img, f"{slug}@{bank_version()}", div, json.dumps(metrics)),
+        (img, cache_key(slug, model_id, crop), div, json.dumps(metrics)),
     )
 
 
@@ -692,21 +838,29 @@ def evaluate(
     model_id: str = "huessen_epf1301",
     div: int = 1,
     seed: int | None = -1,
+    crop_to_fill_threshold: float = 0.0,
 ) -> dict[str, float]:
     """Render *cfg* on *image* and measure it. The unit of work for the search.
 
     ``seed=-1`` (the default) derives a stable seed from the pair, so the result
     is reproducible and cacheable. Pass an explicit integer to sample a different
     draw of the dither noise, or ``None`` for production's unseeded behaviour.
+
+    ``crop_to_fill_threshold`` is the classifier decision's, and must be the same
+    one production would use for this picture: it changes the canvas, so the
+    render and the reference have to agree on it or the metrics measure a
+    misregistration. The live server's value is 0.14.
     """
     display = DISPLAY_REGISTRY[model_id]
     model = load_model(model_id)
     block = max(1, BLOCK // div)
-    reference = reference_for(image, display, model, block, div)
+    reference = reference_for(image, display, model, block, div, crop_to_fill_threshold)
     use = render_seed(image, cfg) if seed == -1 else seed
     # Production's loader: EXIF rotation and the server's pre-shrink included.
     with open_image_for_render(Path(image)) as img:
-        idx = render(display, img, cfg, div=div, seed=use)
+        idx = render(
+            display, img, cfg, div=div, seed=use, crop_to_fill_threshold=crop_to_fill_threshold
+        )
     return measure(reference, idx, display, model, block=block)
 
 
@@ -724,9 +878,13 @@ def _worker_init(model_id: str) -> None:
 
 
 def _worker(job: tuple) -> tuple[str, str, dict]:
-    image, cfg, model_id, div = job
+    image, cfg, model_id, div, crop = job
     try:
-        return str(image), cfg.cache_slug(), evaluate(Path(image), cfg, model_id, div)
+        return (
+            str(image),
+            cfg.cache_slug(),
+            evaluate(Path(image), cfg, model_id, div, crop_to_fill_threshold=crop),
+        )
     except Exception as exc:  # one bad config must not kill a whole sweep
         return str(image), cfg.cache_slug(), {"error": f"{type(exc).__name__}: {exc}"}
 
@@ -775,6 +933,7 @@ def evaluate_many(
     cache_path: Path | None = None,
     div: int = 1,
     verbose: bool = True,
+    crop_to_fill_threshold: float = 0.0,
 ) -> list[dict[str, float]]:
     """Measure many (image, config) pairs across a process pool, with caching.
 
@@ -793,7 +952,8 @@ def evaluate_many(
     conn = open_cache(cache_path) if cache_path else None
     keys = [(image_key(Path(img)), cfg.cache_slug()) for img, cfg in jobs]
     results: list[dict | None] = [
-        cache_get(conn, ik, slug, div) if conn else None for ik, slug in keys
+        cache_get(conn, ik, slug, div, model_id, crop_to_fill_threshold) if conn else None
+        for ik, slug in keys
     ]
     todo = [i for i, r in enumerate(results) if r is None]
     if verbose:
@@ -802,7 +962,7 @@ def evaluate_many(
     def remember(i: int, metrics: dict) -> None:
         results[i] = metrics
         if conn is not None and "error" not in metrics and metrics:
-            cache_put(conn, keys[i][0], keys[i][1], div, metrics)
+            cache_put(conn, keys[i][0], keys[i][1], div, model_id, metrics, crop_to_fill_threshold)
 
     if todo:
         n_workers = workers or DEFAULT_WORKERS
@@ -814,7 +974,9 @@ def evaluate_many(
         # ~1.3 s of actual render. Sorting here fixes it for every caller rather
         # than asking each one to remember.
         todo = sorted(todo, key=lambda i: str(jobs[i][0]))
-        payload = [(str(jobs[i][0]), jobs[i][1], model_id, div) for i in todo]
+        payload = [
+            (str(jobs[i][0]), jobs[i][1], model_id, div, crop_to_fill_threshold) for i in todo
+        ]
         pool = get_pool(model_id, n_workers)
         for done, (i, (_img, _slug, metrics)) in enumerate(
             zip(todo, pool.imap(_worker, payload, chunksize=4), strict=True), 1
@@ -830,7 +992,16 @@ def evaluate_many(
                 print(f"    retrying {len(retry)} failed job(s) in-process")
             for i in retry:
                 try:
-                    remember(i, evaluate(jobs[i][0], jobs[i][1], model_id, div))
+                    remember(
+                        i,
+                        evaluate(
+                            jobs[i][0],
+                            jobs[i][1],
+                            model_id,
+                            div,
+                            crop_to_fill_threshold=crop_to_fill_threshold,
+                        ),
+                    )
                 except Exception as exc:
                     results[i] = {"error": f"{type(exc).__name__}: {exc}"}
         if conn is not None:

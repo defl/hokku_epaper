@@ -15,6 +15,14 @@ yellow without them.
 Pillow can do the same stretch without the cast: ``preserve_tone=True`` computes
 it on luminance and applies it to all channels alike. These modes let a capture
 plan test that, and "off", without touching shipped code.
+
+**Superseded, kept for replay.** That experiment is over: `prepare_autocontrast`
+is now a real ImageConfig field and the shipped presets set it to "off", so new
+work should set the field rather than patch PIL. This module survives because the
+plans captured before the field existed carry the mode as a per-entry override,
+and replaying those captures byte for byte is what lets their ratings be reused.
+Since the renderer now passes ``preserve_tone`` itself, the overrides below must
+replace that argument rather than add it — passing both raised TypeError.
 """
 
 from __future__ import annotations
@@ -36,7 +44,7 @@ import hokku.webserver.image_abc as image_abc
 _REAL = ImageOps.autocontrast
 AUTOCONTRAST_MODES = {
     "per_channel": _REAL,  # production
-    "preserve_tone": lambda im, **kw: _REAL(im, preserve_tone=True, **kw),
+    "preserve_tone": lambda im, **kw: _REAL(im, **{**kw, "preserve_tone": True}),
     "off": lambda im, **_kw: im,
 }
 
