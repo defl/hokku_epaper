@@ -141,15 +141,27 @@ class TrustRegion:
         self.bands = {name: candidates[name][1] for name in ranked}
         self.leverage = {name: candidates[name][0] for name in ranked}
 
-    def widen_for(self, baseline: dict[str, float]) -> dict[str, tuple[float, float]]:
-        """This photograph's bands: the judged range, stretched to admit its baseline."""
+    def widen_for(
+        self, baseline: dict[str, float], relax: float = 0.0
+    ) -> dict[str, tuple[float, float]]:
+        """This photograph's bands: the judged range, stretched to admit its baseline.
+
+        ``relax`` deliberately steps *outside* the evidence by that fraction of
+        each band's width. It exists to sample the gap rather than to loosen the
+        fence: the constrained search gives ground on exactly the photographs
+        whose defect is severe ("Both are worse than previous, orange is red
+        again"), because the wins there lie in a region nothing was ever judged
+        in. A ladder of relax values, captured and rated, turns that absence into
+        verdicts — after which the bands can be redrawn from evidence instead.
+        """
         out = {}
         for name, (low, high) in self.bands.items():
+            margin = relax * (high - low)
+            low, high = low - margin, high + margin
             value = baseline.get(name)
-            if value is None or not np.isfinite(value):
-                out[name] = (low, high)
-            else:
-                out[name] = (min(low, float(value)), max(high, float(value)))
+            if value is not None and np.isfinite(value):
+                low, high = min(low, float(value)), max(high, float(value))
+            out[name] = (low, high)
         return out
 
     @staticmethod
@@ -241,6 +253,13 @@ def main(argv: list[str] | None = None) -> int:
         help="rated corpus whose metric range bounds the search; pass '' to disable",
     )
     ap.add_argument("--trust-quantile", type=float, default=0.02)
+    ap.add_argument(
+        "--trust-relax",
+        type=float,
+        default=0.0,
+        help="step this fraction of each band's width OUTSIDE the judged range, "
+        "to sample the region no verdict covers",
+    )
     ap.add_argument(
         "--trust-top",
         type=int,
@@ -336,7 +355,9 @@ def main(argv: list[str] | None = None) -> int:
     score = {str(p): objective(m) for p, m in zip(images, baseline, strict=True)}
     start_score = dict(score)
     start_metrics = {str(p): m for p, m in zip(images, baseline, strict=True)}
-    bands = {key: trust.widen_for(m) for key, m in start_metrics.items()}
+    bands = {key: trust.widen_for(m, args.trust_relax) for key, m in start_metrics.items()}
+    if args.trust_relax:
+        print(f"  relaxed {args.trust_relax:.0%} beyond the judged range — sampling the gap")
 
     improved_total, refused = 0, 0
     for round_no in range(1, args.rounds + 1):
@@ -415,6 +436,7 @@ def main(argv: list[str] | None = None) -> int:
                 "crop_to_fill_threshold": crop,
                 "trust_bands": {k: list(v) for k, v in trust.bands.items()},
                 "trust_refused": refused,
+                "trust_relax": args.trust_relax,
                 "results": rows,
             },
             indent=1,
