@@ -79,6 +79,26 @@ def preset_of(app: AppConfig, decision: ImageClassifierDecision) -> str:
     return "override"
 
 
+def plan_tag(image_name: str, arm: str) -> str:
+    """A capture tag that is readable and cannot collide.
+
+    Every plan builder used ``Path(name).stem[:22]``, which is readable and is
+    also how two different photographs get the same tag. A capture is written to
+    ``<tag>__shot.jpg`` / ``__expected.png``, and the rating page keys its crops
+    on the same string, so a collision does not fail — it silently overwrites one
+    photograph's capture with another's and then shows the survivor under both
+    names. Found in a 73-photograph plan where four tags each covered two
+    pictures: two `Marieke en Dennis Boot-*` and two `MNQUIJEN.NL Fotografie-*`,
+    whose names differ only beyond the 22nd character.
+
+    The digest is of the full name, so it is stable across runs and a resumed
+    capture still recognises its own files.
+    """
+    stem = Path(image_name).stem[:22].rstrip()
+    digest = hashlib.sha256(image_name.encode()).hexdigest()[:4]
+    return f"{stem}_{digest}__{arm}"
+
+
 def plan_fields(app: AppConfig, decision: ImageClassifierDecision) -> dict:
     """What a plan entry must carry to render exactly this decision."""
 

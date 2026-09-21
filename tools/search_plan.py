@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         for arm, cfg in configs.items():
             candidates.append(
                 {
-                    "tag": f"{Path(name).stem[:22]}__{arm}",
+                    "tag": production.plan_tag(name, arm),
                     "image": str(path),
                     "image_name": name,
                     "config_tag": arm,

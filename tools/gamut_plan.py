@@ -235,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
                 extra = production.plan_fields(app, decisions[name])
             candidates.append(
                 {
-                    "tag": f"{Path(name).stem[:22]}__{arm}",
+                    "tag": production.plan_tag(name, arm),
                     "image": str(args.imagedir / name),
                     "image_name": name,
                     "config_tag": arm,

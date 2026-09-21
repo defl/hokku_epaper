@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "python")
 
 import config_space
 import param_search
+import production
 import render_bank
 import render_bank as _rb  # noqa: F401
 from cam_compare import block_mean
@@ -299,3 +300,36 @@ class TestSkipFarOutsideBaselines:
             {"chroma_contrast_ratio": np.linspace(0.18, 1.38, 100)},
         )
         assert region.far_outside({"chroma_contrast_ratio": 1.5}, 3.0) == []
+
+
+class TestPlanTagsCannotCollide:
+    """Two photographs must never share a capture tag.
+
+    A capture is written to `<tag>__shot.jpg` and `<tag>__expected.png`, and the
+    rating page keys its crops on the same string. Every plan builder used
+    `Path(name).stem[:22]`, so two names differing only beyond the 22nd character
+    produced one tag: the second capture overwrote the first and the page then
+    showed the survivor under both photographs' names. Found in a 73-photograph
+    plan, where four tags each covered two pictures.
+    """
+
+    def test_names_differing_late_get_different_tags(self):
+        a = production.plan_tag("Marieke en Dennis Boot-34.jpg", "live")
+        b = production.plan_tag("Marieke en Dennis Boot-35.JPEG", "live")
+        assert a != b
+
+    def test_the_tag_still_reads_as_the_photograph(self):
+        assert production.plan_tag("Marieke en Dennis Boot-34.jpg", "live").startswith(
+            "Marieke en Dennis Boot"
+        )
+        assert production.plan_tag("x.jpg", "live").endswith("__live")
+
+    def test_it_is_stable_across_runs(self):
+        """A resumed capture has to recognise the files it already wrote."""
+        assert production.plan_tag("a-very-long-photograph-name.jpg", "tuned") == (
+            production.plan_tag("a-very-long-photograph-name.jpg", "tuned")
+        )
+
+    def test_arms_of_one_photograph_stay_distinct(self):
+        name = "MNQUIJEN.NL Fotografie-Familie shoot-HR-2022-8696.jpg"
+        assert production.plan_tag(name, "live") != production.plan_tag(name, "tuned")

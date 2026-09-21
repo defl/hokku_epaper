@@ -41,6 +41,7 @@ except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
 import config_space
+import production
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.image_config import ImageConfig
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
@@ -206,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
             cfg = next(c for t, c in pool if t == tag)
             candidates.append(
                 {
-                    "tag": f"{Path(name).stem[:22]}__{tag}",
+                    "tag": production.plan_tag(name, tag),
                     "image": str(args.imagedir / name),
                     "image_name": name,
                     "config_tag": tag,
