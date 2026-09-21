@@ -164,6 +164,31 @@ class TrustRegion:
             out[name] = (low, high)
         return out
 
+    def far_outside(self, baseline: dict[str, float], limit: float) -> list[str]:
+        """Bounded metrics whose baseline is absurdly outside anything judged.
+
+        Widening a band to admit the baseline is right when the baseline is a
+        little outside — it must stay a legal starting point. It is wrong when
+        the baseline is hundreds of band-widths out, because then the corridor
+        it opens is enormous and the objective's weight on that metric dominates
+        every real difference. That happened on the first library-scale run: a
+        greyscale photograph measured `chroma_contrast_ratio` 639.6 against a
+        judged range of [0.18, 1.38], and the search banked a fictional +970.
+
+        The metric bug behind that number is fixed, but a photograph the
+        objective was never fitted anywhere near should be reported and skipped
+        rather than optimised on faith.
+        """
+        out = []
+        for name, (low, high) in self.bands.items():
+            value = baseline.get(name)
+            if value is None or not np.isfinite(value):
+                continue
+            span = max(high - low, 1e-9)
+            if max((low - value) / span, (value - high) / span) > limit:
+                out.append(name)
+        return out
+
     @staticmethod
     def allows(bands: dict[str, tuple[float, float]], metrics: dict) -> bool:
         for name, (low, high) in bands.items():
@@ -253,6 +278,13 @@ def main(argv: list[str] | None = None) -> int:
         help="rated corpus whose metric range bounds the search; pass '' to disable",
     )
     ap.add_argument("--trust-quantile", type=float, default=0.02)
+    ap.add_argument(
+        "--skip-outside",
+        type=float,
+        default=3.0,
+        help="skip a photograph whose baseline sits this many band-widths outside "
+        "the judged range on any bounded metric",
+    )
     ap.add_argument(
         "--trust-relax",
         type=float,
@@ -356,6 +388,15 @@ def main(argv: list[str] | None = None) -> int:
     start_score = dict(score)
     start_metrics = {str(p): m for p, m in zip(images, baseline, strict=True)}
     bands = {key: trust.widen_for(m, args.trust_relax) for key, m in start_metrics.items()}
+    # Refuse photographs the objective was never fitted anywhere near.
+    skipped = {k: trust.far_outside(m, args.skip_outside) for k, m in start_metrics.items()}
+    skipped = {k: v for k, v in skipped.items() if v}
+    for key, names in skipped.items():
+        print(f"  skipping {Path(key).name}: baseline far outside judged range on {names}")
+    images = [p for p in images if str(p) not in skipped]
+    if not images:
+        print("  nothing left to search")
+        return 1
     if args.trust_relax:
         print(f"  relaxed {args.trust_relax:.0%} beyond the judged range — sampling the gap")
 

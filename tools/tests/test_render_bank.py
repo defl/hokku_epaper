@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "python")
 import config_space
 import param_search
 import render_bank
+import render_bank as _rb  # noqa: F401
 from cam_compare import block_mean
 from color_validate_photos import lab_img, srgb_img_to_xyz
 from hokku.screens.registry import DISPLAY_REGISTRY
@@ -238,3 +239,63 @@ class TestTrustRegion:
         bands = region.widen_for({"contrast_ratio": 0.7})
         assert param_search.TrustRegion.allows(bands, {})
         assert param_search.TrustRegion.allows(bands, {"contrast_ratio": float("nan")})
+
+
+class TestNeutralSourceRatios:
+    """Chroma ratios must not explode on a greyscale photograph.
+
+    `chroma_contrast_ratio` divides by the SPREAD of source chroma, which on a
+    neutral picture is about zero. It measured 639.6 on one library image against
+    a judged range of [0.18, 1.38]; the objective weights it -1.52, so a search
+    "improving" it banked a fictional +970 rating points and drowned every real
+    difference in a 90-image run. Two sibling metrics already had this guard.
+    """
+
+    def _neutral(self):
+        """A grey ramp: plenty of lightness structure, no chroma at all."""
+        y, x = np.mgrid[0:64, 0:64]
+        v = (255 * (x + y) / 126).astype(np.uint8)
+        return np.stack([v, v, v], -1)
+
+    def _lab(self, rgb, block):
+        return lab_img(block_mean(srgb_img_to_xyz(rgb), block))
+
+    def test_omitted_for_a_neutral_source(self):
+        src = self._lab(self._neutral(), 8)
+        assert not render_bank._chroma_variation(src, np.ones(src.shape[:2], bool)) > 1.0
+        spread = float(np.hypot(src[..., 1], src[..., 2]).std())
+        assert spread < render_bank.CHROMA_SPREAD_FLOOR
+
+    def test_present_for_a_coloured_source(self):
+        y, x = np.mgrid[0:64, 0:64]
+        rgb = np.stack([255 * x / 63, 255 * y / 63, 128 * np.ones_like(x)], -1).astype(np.uint8)
+        src = self._lab(rgb, 8)
+        spread = float(np.hypot(src[..., 1], src[..., 2]).std())
+        assert spread >= render_bank.CHROMA_SPREAD_FLOOR
+
+
+class TestSkipFarOutsideBaselines:
+    """A photograph the objective was never fitted near should be skipped."""
+
+    def _region(self, tmp_path, weights, rows):
+        path = tmp_path / "corpus.csv"
+        pd.DataFrame(rows).to_csv(path, index=False)
+        return param_search.TrustRegion(path, weights, 0.02, 20)
+
+    def test_a_wild_baseline_is_reported(self, tmp_path):
+        region = self._region(
+            tmp_path,
+            {"chroma_contrast_ratio": -1.5},
+            {"chroma_contrast_ratio": np.linspace(0.18, 1.38, 100)},
+        )
+        assert region.far_outside({"chroma_contrast_ratio": 639.6}, 3.0) == [
+            "chroma_contrast_ratio"
+        ]
+
+    def test_a_baseline_just_outside_is_kept(self, tmp_path):
+        region = self._region(
+            tmp_path,
+            {"chroma_contrast_ratio": -1.5},
+            {"chroma_contrast_ratio": np.linspace(0.18, 1.38, 100)},
+        )
+        assert region.far_outside({"chroma_contrast_ratio": 1.5}, 3.0) == []

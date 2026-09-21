@@ -81,6 +81,11 @@ PANEL_BLACK_L, PANEL_WHITE_L = 10.86, 66.94
 # Greyscale photographs measure ~0.002 here; colour ones 2.3-7.4.
 CHROMA_DETAIL_FLOOR = 0.25
 
+# Likewise for the *spread* of source chroma, which divides chroma_contrast_ratio.
+# A neutral photograph has essentially none, and the quotient then reports
+# hundreds rather than degrading gracefully.
+CHROMA_SPREAD_FLOOR = 1.0
+
 _MODEL: dict | None = None
 _RENDERER: dict = {}
 _REFERENCE: dict = {}
@@ -660,10 +665,18 @@ def measure(
     # much of the source's global contrast survives, which is a different
     # question from the local gradient ratio detail_l already reports.
     out["contrast_ratio"] = float(yn_lab[..., 0].std() / max(src_lab[..., 0].std(), 1e-6))
-    out["chroma_contrast_ratio"] = float(
-        np.hypot(yn_lab[..., 1], yn_lab[..., 2]).std()
-        / max(np.hypot(src_lab[..., 1], src_lab[..., 2]).std(), 1e-6)
-    )
+    # Omitted for a source with no chroma variation to preserve, the same trap
+    # `detail_c` and `chroma_vs_source` above already guard against and this one
+    # did not: the denominator is the spread of source chroma, which on a
+    # greyscale photograph is ~0. Measured 639.6 on one library image against a
+    # judged range of [0.18, 1.38], and since the objective weights this term
+    # -1.52, a search "improving" it scored a fictional +970 rating points and
+    # dominated every real difference in a 90-image run.
+    src_c_spread = float(np.hypot(src_lab[..., 1], src_lab[..., 2]).std())
+    if src_c_spread >= CHROMA_SPREAD_FLOOR:
+        out["chroma_contrast_ratio"] = float(
+            np.hypot(yn_lab[..., 1], yn_lab[..., 2]).std() / src_c_spread
+        )
 
     # Detail. The reason this returns a vector: a config can win every colour
     # metric above by flattening the picture, and this is what catches it.
