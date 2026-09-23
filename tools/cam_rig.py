@@ -62,7 +62,7 @@ DEFAULT_KEY = Path.home() / ".ssh" / "hokku_cam"
 # of a lamp change are on different calibrations; earlier ones are kept in
 # build/camcal/calib_20260906 and calib_20260918_dim1.
 AWB_GAINS = (1.4375, 1.2751)
-SHUTTER_US = 90_000
+SHUTTER_US = 40_000
 GAIN = 1.0
 SENSOR_W, SENSOR_H = 2592, 1944
 
