@@ -66,6 +66,12 @@ PAGE = """<!doctype html>
  button.same:hover { background:#242c3a }
  kbd { background:#000; border:1px solid #444; border-radius:3px; padding:1px 5px }
  #grid { display:grid; grid-template-columns:repeat(__COLS__,1fr); gap:8px; padding:10px }
+ /* Every version has to be on screen at once. Judging by scrolling compares
+    the top row against a memory of the bottom one, which is exactly the
+    comparison this page exists to avoid. The images are bounded by the
+    viewport height divided by the number of rows; click any one to see it
+    full size. */
+ .cell img { max-height:calc((100vh - 250px) / __ROWS__); object-fit:contain }
  .cell { position:relative; cursor:pointer; border:3px solid transparent; border-radius:5px }
  .cell img { width:100%; display:block; border-radius:3px }
  .cell:hover { border-color:#555 }
@@ -190,6 +196,12 @@ PAGE_RATE = """<!doctype html>
  button:hover { background:#2c2c2c }
  kbd { background:#000; border:1px solid #444; border-radius:3px; padding:1px 5px }
  #grid { display:grid; grid-template-columns:repeat(__COLS__,1fr); gap:8px; padding:10px }
+ /* Every version has to be on screen at once. Judging by scrolling compares
+    the top row against a memory of the bottom one, which is exactly the
+    comparison this page exists to avoid. The images are bounded by the
+    viewport height divided by the number of rows; click any one to see it
+    full size. */
+ .cell img { max-height:calc((100vh - 250px) / __ROWS__); object-fit:contain }
  .cell { position:relative; border:3px solid transparent; border-radius:5px; background:#171717 }
  .cell.focus { border-color:#6b9bd1 }
  .cell img { width:100%; display:block; border-radius:3px 3px 0 0; cursor:pointer }
@@ -228,7 +240,7 @@ PAGE_RATE = """<!doctype html>
 </header>
 <div id="grid"></div>
 <div id="notewrap"><textarea id="note" rows="2" oninput="setNote(this.value)"
-  placeholder="Optional: what separates them, or what is wrong with all of them?"></textarea></div>
+  placeholder="__NOTEPROMPT__"></textarea></div>
 <div id="src"><img id="SRC"><div>original file</div></div>
 <div id="big" onclick="this.style.display='none'"><img id="BIG"></div>
 <script>
@@ -385,6 +397,12 @@ def main(argv: list[str] | None = None) -> int:
         help="only these arms — a two-way test resolves far more than a six-way one",
     )
     ap.add_argument(
+        "--note-prompt",
+        default="Optional: what separates them, or what is wrong with all of them?",
+        help="the placeholder in the notes box — a focused page should ask its own "
+        "question there, since a generic prompt gets generic notes",
+    )
+    ap.add_argument(
         "--rate",
         action="store_true",
         help="rate every version on the five-point scale instead of picking one",
@@ -537,12 +555,19 @@ def main(argv: list[str] | None = None) -> int:
             print("  Its verdicts would lose their key. Use another --out, or --force.")
             return 1
 
-    columns = min(max(len(items[0]["files"]), 1), 3)
+    # Lay out as wide as needed to keep the row count down: eight versions in
+    # three columns is three rows and does not fit a screen, four columns is two
+    # and does. Capped at 4 so a cell never becomes too narrow to judge colour in.
+    per_image = max(len(items[0]["files"]), 1)
+    columns = min(per_image, 4)
+    rows = -(-per_image // columns)
     page = (
         (PAGE_RATE if args.rate else PAGE)
         .replace("__ITEMS__", json.dumps(items))
         .replace("__STAMP__", stamp)
         .replace("__COLS__", str(columns))
+        .replace("__ROWS__", str(rows))
+        .replace("__NOTEPROMPT__", args.note_prompt)
     )
     out.write_text(page, encoding="utf-8")
     key_path.write_text(
