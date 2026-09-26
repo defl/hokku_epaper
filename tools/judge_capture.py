@@ -256,6 +256,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--settle", type=int, default=2500)
     ap.add_argument("--limit", type=int, default=0, help="first N candidates (smoke test)")
     ap.add_argument("--redo", action="store_true", help="recapture even if output exists")
+    ap.add_argument(
+        "--max-consecutive-failures",
+        type=int,
+        default=5,
+        help="give up if this many captures fail before any has succeeded — a "
+        "dead rig otherwise spends a full panel refresh per failure, silently",
+    )
     args = ap.parse_args(argv)
 
     display = DISPLAY_REGISTRY[args.model]
@@ -322,6 +329,19 @@ def main(argv: list[str] | None = None) -> int:
             failed.append({"tag": entry["tag"], "error": f"{type(exc).__name__}: {exc}"})
             print(f"  {label}: FAILED {type(exc).__name__}: {exc}", flush=True)
             traceback.print_exc(limit=2)
+            # ...but a run where nothing succeeds is not bad luck, it is a dead
+            # rig, and every attempt still costs a full panel refresh. A camera
+            # Pi that dropped off the network burned 55 refreshes over 27 minutes
+            # before anyone looked, because each capture failed individually and
+            # the loop dutifully carried on. Stop and say so instead.
+            if len(failed) >= args.max_consecutive_failures and not done:
+                print(
+                    f"\n  ABORTING: {len(failed)} captures in a row failed and none "
+                    f"has succeeded. The rig is not working — check the camera "
+                    f"({cam_rig.DEFAULT_HOST}) and the panel before retrying.",
+                    flush=True,
+                )
+                break
 
     summary = {
         "captured": done,
