@@ -1,5 +1,101 @@
 # Changelog
 
+## 4.0.0 beta 3
+
+The beta where the colour stopped being guesswork. Two measurement campaigns
+replaced a tonal chain that had been tuned by eye: 1733 spectrophotometer
+readings taken off the glass, then 443 blind ratings of photographs
+photographed back off the panel with a calibrated camera rig. Photographs
+should look calmer and more like themselves — skin especially. You can also now
+change the settings for a single picture without changing them for everything.
+
+### Added
+
+- **Per-picture settings.** A photograph that renders badly no longer forces you
+  to retune the defaults for the whole library. Each picture can carry its own
+  dither and crop settings, set from the same editor the defaults use, and they
+  survive a database rebuild. Also available over the HTTP API.
+- **The three shipped defaults are now named presets.** The preset dropdown
+  shows "General (default)", "Black & white (default)" and "Faces (default)"
+  and lists them first. A fresh install used to read "Custom (your edits)" for
+  all three, which looked as though someone had already been fiddling.
+- **Frames accept a whole panel image over USB.** A `frame` command on the
+  serial console uploads a full-resolution image straight to the glass, with no
+  server and no network in between — how the panel gets measured. It comes with
+  an interactive mode that stops a screen going to sleep or refreshing on its
+  own schedule while a cable is driving it.
+- **The Bigme F7 can be flashed into either A/B slot over USB**, guarded by
+  which slot is actually active.
+
+### Changed
+
+- **Photographs are rendered from a measured model of the panel.** The palette
+  table said the panel's white was L\* 79.9 and its black L\* 0.55. Measured on
+  real glass, they are **66.9 and 10.9** — a usable range about 20 points
+  narrower than the code believed. Every photograph was being squeezed into a
+  range the panel does not have, which clipped both ends. Each screen now
+  supplies its own measured anchors.
+- **Tone mapping is no longer a straight line.** A single slope cannot serve
+  both a correct, narrow range and a punchy-looking picture, so lightness now
+  goes through a bounded S-curve — steeper through the midtones, easing off at
+  both ends so it can never overshoot what the panel can print. Its steepness
+  was chosen by comparing renders on the glass, not by modelling.
+- **Colour is calmer, and skin looks like skin.** The old pipeline stretched
+  red, green and blue independently before anything else ran, which is an
+  accidental white balance: on a test set of 30 photographs it moved colour by
+  up to 13 units toward yellow — which is what the rating notes kept calling
+  yellow skin on a baby. It is off by default now, and still selectable if you
+  want it back. The saturation and "vivid" boosts are off too: of every change
+  tried, turning those off was the single biggest improvement, better on 17
+  photographs and worse on 1.
+- **Out-of-gamut colours are mapped with a correction built from the
+  measurements**, applied at half strength with a chroma trim, both settled by
+  looking at real prints rather than at a number.
+- **Faces** get the same local contrast and sharpening as everything else now.
+  The gentler-CLAHE, stronger-sharpening trade sounded right and did not survive
+  being rated.
+- **Black-and-white photographs** no longer get a 5 % colour boost from the one
+  preset that promises not to boost colour.
+- **Better dither defaults, measured rather than chosen.** All three pipelines
+  move to Atkinson error diffusion with dynamic-range compression in OKLAB,
+  picked by scoring every combination over a test corpus.
+
+### Fixed
+
+- **A configuration reload could quietly revert the image database**, losing
+  recent changes.
+- **The crop preview did not match what was rendered.**
+- **The face keep-out overlay was offered on pictures where keep-out cannot
+  happen**, which implied a setting that would do nothing.
+
+### Upgrading from beta 2
+
+Two things deliberately do not change by themselves:
+
+- **Your settings are kept, including the old per-channel autocontrast.** A new
+  install gets it switched off; an existing one keeps what it has, so an
+  upgrade cannot silently restyle your library. To get the skin improvement
+  described above, set *Autocontrast* to `off` — or to `preserve tone`, which
+  keeps the contrast without the colour shift.
+- **Photographs already converted stay as they are.** The cache is keyed on
+  your settings, and your settings have not changed, so existing renders are
+  reused and only newly added pictures go through the new tone mapping. Clear
+  the cache to re-render the library.
+
+### Firmware
+
+- `huessen_epf1301` **1.2.21 → 1.2.25** — USB frame upload, interactive mode,
+  and three protocol bugs found bringing it up on real hardware.
+- `seeedstudio_e1004` 1.2.5 (unchanged).
+
+### For the curious
+
+The whole investigation is written up, including the parts that were wrong:
+four claims made and later retracted, a metric that scored a greyscale
+photograph at 639 on a scale that tops out near 1, and a cache that silently
+handed two different renderings each other's measurements. See
+`docs/screens/huessen_epf1301/rendering_campaign.md`.
+
 ## 4.0.0 beta 2
 
 The second beta of the 4.0 appliance line. Beta 1 shipped an appliance that

@@ -197,9 +197,14 @@ things that did not work.
 
 Each row is the best-scoring combination of algorithm × LUT × saturation space
 × DRC space × adaptive-vivid × serpentine over the test corpus for that
-pipeline. Only those six dimensions were swept; the tonal chain (CLAHE,
-unsharp, gamma) is unchanged and still hand-tuned, and the face pipeline keeps
-its gentler CLAHE and stronger unsharp.
+pipeline. Only those six dimensions were swept by that search; the tonal
+chain (CLAHE, unsharp, gamma) was hand-tuned at the time.
+
+The tonal chain has since been settled on real glass instead — measured,
+photographed off the panel and judged blind. The face pipeline no longer keeps
+a gentler CLAHE and a stronger unsharp mask: that trade did not survive being
+rated, and faces now match the general default on both. See
+[the rendering campaign](screens/huessen_epf1301/rendering_campaign.md).
 
 Three things are worth knowing about that table:
 
@@ -340,17 +345,29 @@ gets picked. Red's residual shoves everything around it cool again — but the
 single Red pixel is visible against otherwise-white fabric, and the surrounding
 correction produces pink-noise speckle.
 
-**Fix: `adaptive_vivid=True` in `compress_dynamic_range()`.**
+**Mechanism: `adaptive_vivid` in `compress_dynamic_range()`.**
 
-The Spectra 6 panel's white ink is measured at L\*≈80, not 100. Without
-remapping, source pixels at L\*=100 and L\*=80 both end up at the White
-palette entry, and the dither has no room to represent them differently.
-`compress_dynamic_range()` linearly maps source L\* into the panel's range:
+Described here because the mechanism is worth understanding, but note it is
+**off in all three shipped pipelines**: every arm that raised chroma lost when
+the renderings were rated blind off the glass. The field remains available.
 
-```
-L'_pixel = black_L + (L_source / 100.0) × (white_L − black_L)
-         ≈ 0.55 + L_source × 0.79
-```
+The panel's white ink cannot reach L\*=100. Without remapping, source
+pixels at the top of the range all end up at the White palette entry and the
+dither has no room to represent them differently.
+
+The numbers here used to read L\*≈80 for white and 0.55 for black, taken from
+the palette table. A 1733-reading spectrophotometer campaign measured the real
+glass at **white L\* 66.94, black L\* 10.86** — a reachable range about 20 L\*
+narrower than the table claimed, and on the Bigme F7 the same mismatch was
+collapsing half a test portrait into flat black. Each panel now supplies its
+own `drc_anchor_l`; see
+[the colour campaign findings](screens/huessen_epf1301/measurements/findings.md).
+
+The map is also no longer linear. A single slope cannot serve both a correct
+(narrow) range and the old range's punch, so `compress_dynamic_range()` applies
+a bounded logistic S-curve to normalised source lightness before mapping into
+the anchors — steeper through the midtones, tapering to zero slope at both ends
+so it can never overshoot them. Its steepness (k = 7) was swept on real glass.
 
 Without any chroma treatment, compressing L by 0.79× also shifts the
 chroma-to-lightness ratio, making already-dim near-white pixels look
@@ -399,7 +416,9 @@ amplifies that noise into visible colour. There are two complementary fixes.
 **Fix 1: detect near-grayscale images and route them to a conservative
 `ImageConfig`.** The `ImageClassifier` (see §6) runs B&W detection and, if
 enabled, selects `AppConfig.image_config_bw` instead of the default. The B&W
-config uses `use_adaptive_saturate=False`, `color_enhance=1.05` (very mild),
+config uses `use_adaptive_saturate=False`, `color_enhance=1.0` (the 1.05 it
+used to carry was a 5 % chroma boost in the one preset that promises not to
+boost colour),
 `adaptive_vivid=False`, and a Euclidean LUT — because there is no meaningful
 hue in a grey image to protect.
 
