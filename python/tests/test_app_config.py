@@ -44,13 +44,31 @@ def test_pipeline_defaults_are_actually_different():
 
 
 def test_face_default_is_tuned_for_skin():
-    """Face pipeline: local contrast no more aggressive than default, stronger/wider unsharp."""
+    """Face pipeline: no chroma boost reaches skin, and local contrast is not raised.
+
+    This used to also require a stronger, wider unsharp mask than the general
+    default, on the reasoning that sharpening features beats equalising local
+    contrast on skin. The blind rating campaign did not support that trade and
+    the shipped preset no longer makes it, so the assertion would now only be
+    pinning a belief that lost. What it pins instead is the part that did
+    survive: nothing in this pipeline boosts chroma, and skin gets no more
+    local contrast than an ordinary photograph.
+    """
     cfg = AppConfig()
     face, default = cfg.image_config_face, cfg.image_config_default
     assert face.clahe_clip_limit <= default.clahe_clip_limit
-    assert face.prepare_usm_amount > default.prepare_usm_amount
-    assert face.prepare_usm_radius > default.prepare_usm_radius
     assert face.dither.algorithm == "atkinson"
+
+    # Both adaptive boosters off — measured as a two-thirds cut in blue ink
+    # landing on saturated lips.
+    assert face.adaptive_saturate_space == "off"
+    assert face.adaptive_vivid is False
+
+    # And the trap that follows from the line above: `color_enhance` is applied
+    # only when adaptive saturation is off (image_abc.py), so faces are the one
+    # shipped pipeline where it actually bites. A value above 1.0 here is a real
+    # chroma boost on skin, however neutral it looks beside the other two.
+    assert face.color_enhance == 1.0
 
 
 def test_dropdown_presets_unchanged_by_pipeline_defaults():

@@ -60,6 +60,13 @@ def _hue_aware(algorithm: AlgorithmName, serpentine: bool = False) -> ImageConfi
         # tools/drc_scurve_ab.py). With CLAHE on, the panel showed measurably
         # weaker background/shadow contrast than with it off; judged clearly
         # better off ("left is better by a lot").
+        #
+        # LATER, AND CONTRADICTED FOR THE SHIPPED DEFAULTS. That A/B compared a
+        # handful of photographs. The blind rating campaign put CLAHE off in
+        # front of 20 photographs and it lost -- worse on 11, better on 6, mean
+        # -0.30 of a five-point rating. All three `*_default()` builders below
+        # therefore set 1.75 again. This lineage keeps 0.0, so the dropdown
+        # alternates still behave as their descriptions say.
         clahe_clip_limit=0.0,
         clahe_keepout_feather=0.015,
         prepare_usm_radius=1.0,
@@ -97,6 +104,11 @@ def _face(algorithm: AlgorithmName = "atkinson", serpentine: bool = False) -> Im
     ``_hue_aware``'s ``clahe_clip_limit``) — so CLAHE is off here too, same as
     default, traded for a slightly wider, stronger unsharp mask, which
     sharpens features (eyes, hairline) without amplifying skin texture.
+
+    That trade did not survive the rating campaign, and ``_face_default()``
+    reverses both halves of it. This builder is kept as written because it is
+    the hand-tuned lineage the argument above belongs to; the shipped preset is
+    the one below it.
     """
     return replace(
         _hue_aware(algorithm, serpentine),
@@ -176,6 +188,29 @@ def _calibration_raw() -> ImageConfig:
 # and still hand-tuned.
 
 
+# What four evenings of blind rating on real glass endorsed.
+#
+# 443 ratings over 62 photographs and 21 alternative renderings, each rendered,
+# pushed to the bench panel, photographed with the calibrated camera rig and
+# judged blind against the settings the Foyer server actually runs. Nothing beat
+# those settings: every alternative scored a negative mean and three were
+# significantly worse. Over months of tuning in the UI the server had drifted
+# away from this file, so it was this file that was wrong, not the server.
+#
+# The deltas below move the general and face defaults onto that judged
+# configuration exactly. The black-and-white default is deliberately NOT moved
+# onto the server's values: not one judged photograph was near-greyscale, so
+# that pipeline has no evidence behind it either way -- see `_bw_default`.
+#
+# The dropdown alternates further down keep the older hand-tuned lineage
+# untouched: the campaign says nothing about them, and changing them would
+# silently invalidate their descriptions in PRESET_META and alter the rendering
+# for anyone who has deliberately selected one.
+#
+# Method, numbers and what did not work:
+# docs/screens/huessen_epf1301/rendering_campaign.md
+
+
 def _general_default() -> ImageConfig:
     """Ordinary photos: Atkinson, with saturation and DRC in OKLAB.
 
@@ -189,6 +224,16 @@ def _general_default() -> ImageConfig:
         adaptive_saturate_space="oklab",
         drc_l_space="oklab",
         drc_chroma_space="oklab",
+        # Judged settings. CLAHE back on: the glass A/B behind _hue_aware's 0.0
+        # tested a handful of photographs, and the campaign's 20-photograph
+        # blind arm disagreed with it (`clahe_off` -0.30, worse on 11 of 20).
+        # The larger, blind evidence wins. Both chroma boosts sit at neutral --
+        # every arm that raised them lost, and `color_enhance` is inert here
+        # anyway because adaptive saturation runs (see image_abc.py).
+        clahe_clip_limit=1.75,
+        adaptive_vivid=False,
+        color_enhance=1.0,
+        saturate_max_enhance=1.0,
     )
 
 
@@ -203,6 +248,20 @@ def _bw_default() -> ImageConfig:
         _bw("atkinson", serpentine=True),
         drc_l_space="oklab",
         drc_chroma_space="oklab",
+        # NOT a campaign result: not one of the 62 photographs judged on glass
+        # was near-greyscale, so this pipeline was never in front of anyone.
+        # The server runs CIELAB saturation and CLAHE 1.75 here; those are left
+        # alone above, because "off" is the honest description of a saturation
+        # space that cannot change which of two inks is picked, and the harder
+        # local-contrast push has a stated reason in `_bw`.
+        #
+        # This one line is a fix on its own merits. `color_enhance` applies only
+        # when adaptive saturation is off (image_abc.py) -- which, in this
+        # pipeline, it is. So 1.05 was a live 5 % chroma boost on photographs
+        # selected for having no colour, in the one preset whose description
+        # promises "colour boosting off, so JPEG noise and film grain cannot be
+        # amplified into a pink or yellow cast". It now does what it says.
+        color_enhance=1.0,
     )
 
 
@@ -219,6 +278,17 @@ def _face_default() -> ImageConfig:
         _face("atkinson", serpentine=True),
         adaptive_saturate_space="off",
         adaptive_vivid=False,
+        # Judged settings, and this is the pipeline that matters most: 79 of the
+        # 100 photographs sampled from the library classify as faces. CLAHE on,
+        # the milder unsharp mask of the other two pipelines, and colour enhance
+        # at neutral -- which DOES bite here, because adaptive saturation is off
+        # above, so this was a real 1.25x chroma boost on skin that the server
+        # had long since turned down and the ratings never asked for back.
+        clahe_clip_limit=1.75,
+        prepare_usm_amount=120,
+        prepare_usm_radius=1.0,
+        color_enhance=1.0,
+        saturate_max_enhance=1.0,
     )
 
 
@@ -273,7 +343,7 @@ PRESET_META: dict[str, dict[str, str]] = {
     },
     "default_face": {
         "label": "Faces (default)",
-        "description": "What the server ships with for photos containing faces. CLAHE is off (like the general default) and traded for a wider, stronger unsharp mask — local contrast on skin makes cheeks blotchy — and both chroma boosters are off, which measured a two-thirds cut in blue ink landing on saturated lips. Deliberately gentle, so it is a poor general-purpose choice.",
+        "description": "What the server ships with for photos containing faces, and what most of a typical library gets. Both chroma boosters are off, which measured a two-thirds cut in blue ink landing on saturated lips, and colour enhance sits at neutral rather than boosting skin. Local contrast and sharpening match the general default. These are the settings that came through four evenings of blind rating on glass unbeaten.",
     },
     "floyd_steinberg_hue_aware": {
         "label": "Floyd-Steinberg (hue-aware)",
