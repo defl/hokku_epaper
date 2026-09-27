@@ -82,7 +82,7 @@ void hokku_console_printf_line(const char *line)
 
 /* ── Command loop ─────────────────────────────────────────────────────────── */
 
-static void handle_line(char *line)
+static void handle_line(const char *line)
 {
     if (line[0] == '\0')
         return;
