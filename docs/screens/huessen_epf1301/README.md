@@ -25,8 +25,9 @@ future firmware updates go [over the air](../../manual.md) from the web app.
 - [Image quality](image_quality.md) — how this panel renders, measured
 - [Colour campaign](measurements/findings.md) — 1733 spectrophotometer readings
   off real glass, head-to-head against the Bigme F7
-- [Rendering campaign](rendering_campaign.md) — 443 blind ratings of photographs
-  shot off the panel; what beat the shipped pipeline, and why the answer is nothing
+- [Rendering campaign](rendering_campaign.md) — the whole arc from "the reds look
+  wrong" to a measured answer: the tonal chain, the gamut-correction LUT, and 443
+  blind ratings of photographs shot off real glass
 
 **Developing**
 - [Firmware source and build](../../../firmware/huessen_epf1301/README.md)

@@ -77,6 +77,31 @@ def test_dropdown_presets_unchanged_by_pipeline_defaults():
     assert PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].clahe_clip_limit == 0.0
 
 
+@pytest.mark.parametrize(
+    "pipeline", ["image_config_default", "image_config_bw", "image_config_face"]
+)
+def test_no_shipped_pipeline_boosts_chroma(pipeline: str):
+    """Every chroma amplifier is at its identity value, in all three pipelines.
+
+    This was the single largest measured win of the colour campaign -- better on
+    17 photographs and worse on 1, p < 0.001, judged blind off the glass -- and
+    it is easy to undo by accident, because the four knobs live in different
+    stages and three of them look harmless at 1.25.
+
+    They are asserted together rather than per preset because which ones *bite*
+    depends on another field: `color_enhance` applies only when adaptive
+    saturation is off, and `saturate_max_enhance` only when it is on. Pinning
+    the whole set means the invariant survives someone changing the saturation
+    space, which is exactly the edit that would otherwise quietly re-enable a
+    boost. See docs/screens/huessen_epf1301/rendering_campaign.md.
+    """
+    cfg = getattr(AppConfig(), pipeline)
+    assert cfg.color_enhance == 1.0
+    assert cfg.saturate_max_enhance == 1.0
+    assert cfg.adaptive_vivid is False
+    assert cfg.scale_chroma is False
+
+
 # ── the shipped defaults are named presets ───────────────────────────────────
 
 
