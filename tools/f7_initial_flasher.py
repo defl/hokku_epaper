@@ -9,12 +9,12 @@ drops the port and misses the window). No vendor tool needed.
 
 Modes:
 
-  pure-python (DEFAULT) — catch the BROM via the replug+press, then flash_slot0.
+  pure-python (DEFAULT) — catch the BROM via the replug+press, then flash_slot.
       Writes ONLY slot0 (our app-chain) + the A/B cfg; NEVER erases the bootloader
       or slot1. Portable (works on a Pi). No PhoenixMC.
 
   --phoenixmc — fallback: the vendor GUI tool catches the BROM (Windows-only), then
-      is killed to free the port and the in-BROM device is handed to flash_slot0.
+      is killed to free the port and the in-BROM device is handed to flash_slot.
 
   --full <oem_dump> — fallback: PhoenixMC full-erase + write of a composed 4 MB
       image (OEM base + our app in slot0 + cfg -> seq0). Proven, but a full erase
@@ -45,7 +45,7 @@ sys.path.insert(0, str(_HERE.parent / "python"))
 
 from hokku.common.xr872.catch import hammer_sync, open_stable  # noqa: E402
 from hokku.common.xr872.flasher import XR872Flasher  # noqa: E402
-from hokku.common.xr872.slot0 import BL_SIZE, OTA_ADDR, build_fdcm_seq0, flash_slot0  # noqa: E402
+from hokku.common.xr872.slots import BL_SIZE, OTA_ADDR, build_fdcm, flash_slot  # noqa: E402
 
 FLASH_SIZE = 0x400000
 SLOT0_APP = BL_SIZE  # 0x8000
@@ -68,7 +68,7 @@ def _catch_python(image: pathlib.Path, port: str) -> int:
     Catches the XR872 mask-BROM by hammering 0x55 on an already-open CH340 port
     while the user does a USB **replug + power press** (the replug brings the port
     up first, so there's no re-enumeration gap to miss — a plain long-press drops
-    the port and fails). Then hands the in-BROM device to the proven flash_slot0."""
+    the port and fails). Then hands the in-BROM device to the proven flash_slot."""
     img = image.read_bytes()
     if img[:4] != b"AWIH":
         raise SystemExit("image is not an AWIH xr_system.img")
@@ -98,7 +98,7 @@ def _catch_python(image: pathlib.Path, port: str) -> int:
                     continue
                 # sys_reboot leaves the XR872 in BROM, so reboot=False and let the
                 # user power-cycle (a clean power-on is what actually boots the app).
-                flash_slot0(f, img, reboot=False)
+                flash_slot(f, img, slot=0, reboot=False, allow_active_slot=True)
                 print("\nDONE (pure-Python)." + PROVISION_HELP)
                 return 0
         finally:
@@ -164,11 +164,11 @@ def _surgical(image: pathlib.Path, port: str) -> int:
             "stayed in BROM). Re-run with `--full <oem_dump>` for the composed full-flash."
         )
     with f:
-        # flash_slot0 validates the live OEM bootloader header, writes only the
+        # flash_slot validates the live OEM bootloader header, writes only the
         # app-chain into slot0, read-back verifies, flips the cfg to seq0 LAST, and
         # leaves the bootloader + slot1 untouched. reboot=False: sys_reboot only
         # re-enters BROM here, so the user power-cycles to boot the app.
-        flash_slot0(f, img, reboot=False)
+        flash_slot(f, img, slot=0, reboot=False, allow_active_slot=True)
     print("\nDONE (surgical)." + PROVISION_HELP)
     return 0
 
@@ -185,7 +185,7 @@ def _compose_bootstrap(oem_path: pathlib.Path, image: pathlib.Path) -> bytes:
         raise SystemExit(f"app-chain too big: ends 0x{SLOT0_APP + len(app):x} >= 0x{OTA_ADDR:x}")
     oem[SLOT0_APP:OTA_ADDR] = b"\xff" * (OTA_ADDR - SLOT0_APP)
     oem[SLOT0_APP : SLOT0_APP + len(app)] = app
-    oem[OTA_ADDR:OTA_SECTOR_END] = build_fdcm_seq0() + b"\xff" * (0x1000 - 512)
+    oem[OTA_ADDR:OTA_SECTOR_END] = build_fdcm(0) + b"\xff" * (0x1000 - 512)
     return bytes(oem)  # bootloader 0x0-0x8000 kept -> ota_addr stays 0x180000
 
 
@@ -242,7 +242,7 @@ def main() -> int:
     ap.add_argument(
         "--phoenixmc",
         action="store_true",
-        help="fallback: PhoenixMC catches BROM, then hand off to flash_slot0 (Windows-only)",
+        help="fallback: PhoenixMC catches BROM, then hand off to flash_slot (Windows-only)",
     )
     ap.add_argument(
         "--full",

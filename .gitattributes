@@ -50,6 +50,13 @@ installer/debian/*         text eol=lf
 # consistent.
 installer/files/*          text eol=lf
 
+# Measurement datasets are a primary scientific record, and `text=auto` above
+# would rewrite their line endings on a Windows checkout. That does not corrupt
+# the JSON, but it means the file no longer round-trips byte-for-byte, so a
+# checksum taken against a copy on one platform disagrees on another for a
+# reason that has nothing to do with the data. Pin them.
+docs/screens/*/measurements/data/* text eol=lf
+
 # pi-gen build inputs. `config` is sourced by bash, so a CR becomes part of
 # every value it sets (IMG_NAME, TARGET_HOSTNAME, ...); 00-packages is fed to
 # apt one line at a time, which then looks for a package literally named

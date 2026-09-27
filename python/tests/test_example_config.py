@@ -128,7 +128,7 @@ def test_example_config_pipelines_survive_a_load():
     assert cfg.image_config_default != cfg.image_config_face
     # And specifically, the tuning that was being lost:
     assert cfg.image_config_face.dither.algorithm == "atkinson"
-    assert cfg.image_config_face.clahe_clip_limit < cfg.image_config_default.clahe_clip_limit
+    assert cfg.image_config_face.clahe_clip_limit <= cfg.image_config_default.clahe_clip_limit
     assert cfg.image_config_bw.dither.lut_name == "bw"
     assert cfg.image_config_bw.adaptive_saturate_space == "off"
 

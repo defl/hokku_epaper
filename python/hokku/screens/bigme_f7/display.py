@@ -29,6 +29,8 @@ Fine-tune against the physical F7 if desired.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -59,6 +61,34 @@ class BigmeF7Display(Display):
         ],
         dtype=np.float32,
     )
+
+    # Measured on this glass with an X-Rite ColorMunki Photo (ArgyllCMS spotread,
+    # reflective 45/0, D65), averaged over 11 readings of each solid ink:
+    # black L* 10.21, white L* 68.02 — a contrast ratio of 31.9:1.
+    #
+    # The full campaign later put 42 readings on each ink across 20 sessions and
+    # landed on L* 10.18 / 67.96 (33.0:1). Left unchanged: the difference is
+    # 0.03 and 0.06 L*, an order of magnitude inside the 0.35 dE noise floor, so
+    # editing these would be churn that reads like a real change in git blame.
+    #
+    # The palette table above is NOT the source for this. It came from a
+    # third-party dataset and puts white at L* 79.26, which is 11 L* beyond
+    # anything this panel can actually show. Deriving the DRC range from it
+    # compresses images into a range wider than the display, clipping both ends.
+    # See docs/screens/bigme_f7/measurements/findings.md.
+    drc_anchor_l = (10.21, 68.02)
+
+    # Built by tools/color_lut_build.py from the gamut_dense measurement phase.
+    # Corrects gamut/hue drift the palette-selection LUT doesn't account for
+    # (dot gain, ink impurity) — complements drc_anchor_l, which only corrects
+    # lightness. Rebuilt after a real bug found on glass (see git history):
+    # the inversion target now adapts to this panel's own reachable L* range
+    # (not the unreachable reference white/black), weights lightness over
+    # chroma when picking nearest neighbours, and breaks Lab-space ties
+    # toward RGB proximity to the request — a neutral grey ramp now stays
+    # within ~17 RGB units of neutral end to end (grey_axis_sanity gate in
+    # the build script). See docs/screens/bigme_f7/measurements/findings.md.
+    correction_lut_path = Path(__file__).parent / "correction_lut.npy"
 
     palette_preview_rgb = np.array(
         [

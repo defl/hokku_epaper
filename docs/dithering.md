@@ -26,6 +26,12 @@ its 1200 × 1600 pixels can be exactly one of:
 | 4 | Blue   | (5, 64, 158)       | (29.83,  22.18, −55.47) | −68°      | 59.7   |
 | 5 | Green  | (39, 102, 60)      | (38.30, −30.62, 17.87)  | 150°      | 35.5   |
 
+These values, and the equivalents for the other screen models, come from
+`palette_measured_rgb` in each model's `display.py`. Their provenance is
+weak — see [color_calibration.md](color_calibration.md) for how to re-measure
+them on real glass with a colorimeter, and how to check whether the panel
+mixes inks the way the error diffusion below assumes.
+
 Two key properties:
 
 - **The palette is sparse.** Six anchors in a 3D colour space leave huge gaps.

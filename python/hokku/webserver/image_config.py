@@ -15,6 +15,17 @@ logger = logging.getLogger(__name__)
 
 AdaptiveSaturateSpace = Literal["off", "cielab", "oklab"]
 DrcSpace = Literal["cielab", "oklab"]
+#: How the first prepare stage stretches the histogram.
+#:
+#: ``per_channel`` is PIL's default and what shipped until now: R, G and B are
+#: stretched independently, which is an automatic white balance and puts a
+#: photograph-dependent colour cast on the picture. Measured across 30 library
+#: photographs rendered as the server renders them, that cast reaches +13 b*
+#: (yellow) and -17 a*; the photographs it hits hardest are the ones whose
+#: ratings complained of "yellow skin". ``preserve_tone`` computes one stretch on
+#: luminance and applies it to every channel, so contrast is expanded without
+#: moving colour. ``off`` skips the stage, which rated best on glass.
+AutocontrastMode = Literal["per_channel", "preserve_tone", "off"]
 
 
 @dataclass(frozen=True)
@@ -26,6 +37,7 @@ class ImageConfig:
     """
 
     dither: DitherConfig
+    prepare_autocontrast: AutocontrastMode
     prepare_autocontrast_cutoff: float
     prepare_gamma: float
     prepare_brightness: float

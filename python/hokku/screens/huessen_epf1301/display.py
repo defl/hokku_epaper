@@ -7,6 +7,8 @@ Color depth: 6-color Spectra 6, nibble-packed (UC8179C controller).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -37,6 +39,40 @@ class HuessenEpf1301Display(Display):
         ],
         dtype=np.float32,
     )
+
+    # Measured on this glass with an X-Rite ColorMunki Photo (ArgyllCMS spotread,
+    # reflective 45/0, D65): black L* 10.86, white L* 66.94 (29.4:1 contrast),
+    # from the full 1733-reading, 20-session campaign.
+    #
+    # palette_measured_rgb above is NOT the source for this — it implies white
+    # at L* 79.86 and black at L* 0.55, a range this glass cannot reach. Left
+    # unset, the DRC would derive its target range from that table and clip
+    # both ends, the same bug the F7 had before drc_anchor_l was added there.
+    # See docs/screens/huessen_epf1301/measurements/findings.md.
+    drc_anchor_l = (10.86, 66.94)
+
+    # Built by tools/color_lut_build.py from the gamut_dense measurement phase.
+    # Corrects gamut/hue drift the palette-selection LUT doesn't account for
+    # (dot gain, ink impurity) — complements drc_anchor_l, which only corrects
+    # lightness. Rebuilt after a real bug found on glass (see git history):
+    # the inversion target now adapts to this panel's own reachable L* range
+    # (not the unreachable reference white/black), weights lightness over
+    # chroma when picking nearest neighbours, and breaks Lab-space ties
+    # toward RGB proximity to the request — a neutral grey ramp now stays
+    # within ~14 RGB units of neutral end to end (grey_axis_sanity gate in
+    # the build script). See docs/screens/huessen_epf1301/measurements/findings.md.
+    #
+    # It also carries a global chroma trim of 0.85, composed on top of the
+    # measured correction — a perceptual choice, not a measurement. Rated on
+    # glass against the same pipeline without it: better on 11 photographs,
+    # worse on 3, and the notes that drove it were "colors are not crazy
+    # saturated, hair looks real" against "neon grass", "too neon yellow". It is
+    # on a 33^3 grid rather than 17^3 so the composition is not resampled
+    # through the coarser grid; the renderer reads the size from the file.
+    # Rebuild with:
+    #   python tools/color_lut_build.py --model huessen_epf1301 --blend 0.5 \
+    #       --steps 33 --chroma-trim 0.85
+    correction_lut_path = Path(__file__).parent / "correction_lut.npy"
 
     # Punchier RGB used only for browser previews (real ink is duller).
     palette_preview_rgb = np.array(

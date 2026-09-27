@@ -44,19 +44,62 @@ def test_pipeline_defaults_are_actually_different():
 
 
 def test_face_default_is_tuned_for_skin():
-    """Face pipeline: gentler local contrast, stronger/wider unsharp than default."""
+    """Face pipeline: no chroma boost reaches skin, and local contrast is not raised.
+
+    This used to also require a stronger, wider unsharp mask than the general
+    default, on the reasoning that sharpening features beats equalising local
+    contrast on skin. The blind rating campaign did not support that trade and
+    the shipped preset no longer makes it, so the assertion would now only be
+    pinning a belief that lost. What it pins instead is the part that did
+    survive: nothing in this pipeline boosts chroma, and skin gets no more
+    local contrast than an ordinary photograph.
+    """
     cfg = AppConfig()
     face, default = cfg.image_config_face, cfg.image_config_default
-    assert face.clahe_clip_limit < default.clahe_clip_limit
-    assert face.prepare_usm_amount > default.prepare_usm_amount
-    assert face.prepare_usm_radius > default.prepare_usm_radius
+    assert face.clahe_clip_limit <= default.clahe_clip_limit
     assert face.dither.algorithm == "atkinson"
+
+    # Both adaptive boosters off — measured as a two-thirds cut in blue ink
+    # landing on saturated lips.
+    assert face.adaptive_saturate_space == "off"
+    assert face.adaptive_vivid is False
+
+    # And the trap that follows from the line above: `color_enhance` is applied
+    # only when adaptive saturation is off (image_abc.py), so faces are the one
+    # shipped pipeline where it actually bites. A value above 1.0 here is a real
+    # chroma boost on skin, however neutral it looks beside the other two.
+    assert face.color_enhance == 1.0
 
 
 def test_dropdown_presets_unchanged_by_pipeline_defaults():
     """The face tuning must not leak into the general-purpose Atkinson preset."""
     assert DEFAULT_FACE_IMAGE_CONFIG != PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
-    assert PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].clahe_clip_limit == 1.75
+    assert PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].clahe_clip_limit == 0.0
+
+
+@pytest.mark.parametrize(
+    "pipeline", ["image_config_default", "image_config_bw", "image_config_face"]
+)
+def test_no_shipped_pipeline_boosts_chroma(pipeline: str):
+    """Every chroma amplifier is at its identity value, in all three pipelines.
+
+    This was the single largest measured win of the colour campaign -- better on
+    17 photographs and worse on 1, p < 0.001, judged blind off the glass -- and
+    it is easy to undo by accident, because the four knobs live in different
+    stages and three of them look harmless at 1.25.
+
+    They are asserted together rather than per preset because which ones *bite*
+    depends on another field: `color_enhance` applies only when adaptive
+    saturation is off, and `saturate_max_enhance` only when it is on. Pinning
+    the whole set means the invariant survives someone changing the saturation
+    space, which is exactly the edit that would otherwise quietly re-enable a
+    boost. See docs/screens/huessen_epf1301/rendering_campaign.md.
+    """
+    cfg = getattr(AppConfig(), pipeline)
+    assert cfg.color_enhance == 1.0
+    assert cfg.saturate_max_enhance == 1.0
+    assert cfg.adaptive_vivid is False
+    assert cfg.scale_chroma is False
 
 
 # ── the shipped defaults are named presets ───────────────────────────────────

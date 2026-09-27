@@ -5,12 +5,14 @@
 #include "common/cmd/cmd.h"
 
 #include "hokku_config.h"
+#include "interactive.h"
 #include "led.h"
 
 /* Defined in main.c. */
 extern int      hokku_wifi_provision(const char *ssid, const char *psk);
 extern uint32_t hokku_battery_mv(void);
 extern void     hokku_ota_manual(void);
+extern int      hokku_frame_receive(void);
 
 static const struct cmd_data g_net_cmds[] = {
     { "sta", cmd_wlan_sta_exec },
@@ -134,12 +136,67 @@ static enum cmd_status cmd_hokku_ota_exec(char *cmd)
     return CMD_STATUS_ACKED;
 }
 
+/*
+ * `frame` — upload one ready-made panel buffer over this console and display it.
+ * No server, no WiFi, no render pipeline: the host sends exact bytes, the device
+ * shows them. For bring-up and colour measurement, where the picture on the
+ * glass has to be known precisely. Protocol in firmware/common/all/frame_proto.h;
+ * host side is tools/f7_send_frame.py.
+ */
+static enum cmd_status cmd_frame_exec(char *cmd)
+{
+    (void)cmd;
+    /* No cmd_write_respond here: hokku_frame_receive prints READY itself and
+     * then takes the UART, so an extra ACK line would land mid-handshake. */
+    hokku_frame_receive();
+    return CMD_STATUS_ACKED;
+}
+
+/*
+ * `interactive on|off` — hand the screen to a host driving it over USB.
+ *
+ * While on, the refresh thread stops fetching and the device stops hibernating,
+ * so the console stays where the host left it. Without this, host-driven work is
+ * a race: the refresh loop can hibernate between two uploads and take the console
+ * with it, and a host can only poll and hope to land in a gap.
+ *
+ * Deliberately not persisted. Any reset clears it, so a screen cannot be left
+ * mute by a host that crashed or forgot to turn it off — power-cycling is always
+ * the way out. It also only takes effect on USB (see interactive.h), so pulling
+ * the cable restores normal behaviour rather than draining the battery.
+ */
+static enum cmd_status cmd_interactive_exec(char *cmd)
+{
+    char *argv[1];
+    int argc = cmd_parse_argv(cmd, argv, cmd_nitems(argv));
+
+    if (argc != 1)
+        return CMD_STATUS_INVALID_ARG;
+
+    if (cmd_strcmp(argv[0], "on") == 0) {
+        hokku_interactive_set(1);
+    } else if (cmd_strcmp(argv[0], "off") == 0) {
+        hokku_interactive_set(0);
+    } else {
+        return CMD_STATUS_INVALID_ARG;
+    }
+
+    /* Report engaged state, not just the request: on battery the mode is set but
+     * inert, and a host that saw a bare "OK" would think it had the screen. */
+    cmd_write_respond(CMD_STATUS_OK, hokku_interactive_engaged(led_usb_present())
+                                         ? "OK interactive engaged"
+                                         : "OK interactive requested (no USB — inert)");
+    return CMD_STATUS_ACKED;
+}
+
 static const struct cmd_data g_main_cmds[] = {
     { "net",     cmd_net_exec },
     { "wifi",    cmd_wifi_exec },
     { "cfg",     cmd_cfg_exec },
     { "ota",     cmd_hokku_ota_exec },
+    { "frame",   cmd_frame_exec },
     { "upgrade", cmd_upgrade_exec },
+    { "interactive", cmd_interactive_exec },
 };
 
 void main_cmd_exec(char *cmd)

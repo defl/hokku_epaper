@@ -7,7 +7,7 @@ replug + power press** (the replug brings the CH340 port up first, so we hammer
 ``0x55`` straight through the BROM sync window — a plain long-press drops the port
 and misses it).
 
-Safety is inherited unchanged from ``flash_slot0``: only slot 0 + its A/B cfg sector
+Safety is inherited unchanged from ``flash_slot``: only slot 0 + its A/B cfg sector
 are written, the bootloader and OEM slot 1 are never touched, the cfg flip is the
 last write, and any header/verify failure aborts via ``die()`` (which we surface as
 an error) leaving slot 1 bootable. Nothing here relaxes those checks.
@@ -41,7 +41,7 @@ def tooling_available() -> bool:
     try:
         import serial  # noqa: F401, PLC0415
 
-        from hokku.common.xr872 import catch, flasher, slot0  # noqa: F401, PLC0415
+        from hokku.common.xr872 import catch, flasher, slots  # noqa: F401, PLC0415
     except ImportError:
         return False
     return True
@@ -111,9 +111,9 @@ def _import_tools():
 
     from hokku.common.xr872.catch import hammer_sync, open_stable  # noqa: PLC0415
     from hokku.common.xr872.flasher import XR872Flasher, send_upgrade_command  # noqa: PLC0415
-    from hokku.common.xr872.slot0 import flash_slot0  # noqa: PLC0415
+    from hokku.common.xr872.slots import flash_slot  # noqa: PLC0415
 
-    return flash_slot0, hammer_sync, open_stable, XR872Flasher, send_upgrade_command, serial
+    return flash_slot, hammer_sync, open_stable, XR872Flasher, send_upgrade_command, serial
 
 
 def _software_entry(port, writer, should_cancel, XR872Flasher, send_upgrade_command, attempts):
@@ -192,10 +192,23 @@ PROVISION_BOOT_TIMEOUT_S = 150.0
 
 def _open_console(port, serial):
     """Open the F7 console; return the serial handle if the firmware answers, else None."""
+    # DTR/RTS set on an unopened Serial object, not after Serial(...) has already
+    # opened the port. Confirmed on the huessen board that the latter is too
+    # late — Windows' serial driver asserts the control lines as part of its own
+    # port-open sequence, before any Python attribute assignment runs, so a
+    # chip wired to reset on RTS (as esptool's own "hard reset" relies on) has
+    # already been reset by the time `s.dtr = False` executes. Not confirmed to
+    # cause a problem on THIS board specifically — applied here for correctness
+    # and consistency with tools/send_frame.py's open_device(), not because a
+    # fault was reproduced here.
+    s = serial.Serial()
+    s.port = port
+    s.baudrate = 115200
+    s.timeout = 0.3
+    s.dtr = False
+    s.rts = False
     try:
-        s = serial.Serial(port, 115200, timeout=0.3)
-        s.dtr = False
-        s.rts = False
+        s.open()
     except (serial.SerialException, OSError):
         return None
     try:
@@ -303,7 +316,7 @@ def bootstrap_device(
     if not tooling_available():
         raise RuntimeError("Bigme F7 flash tooling (tools/) is not present on this install")
     (
-        flash_slot0,
+        flash_slot,
         hammer_sync,
         open_stable,
         XR872Flasher,
@@ -341,7 +354,7 @@ def bootstrap_device(
     else:
         on_line("*** BROM entered via `upgrade` — writing firmware (do NOT unplug now) ***")
 
-    # Write. flash_slot0 prints its own progress and raises SystemExit via die() on
+    # Write. flash_slot prints its own progress and raises SystemExit via die() on
     # ANY safety-check failure, which leaves slot 1 (OEM) bootable. reboot=False:
     # sys_reboot only re-enters BROM on this chip, so the operator power-cycles.
     had_existing_cfg = False
@@ -349,7 +362,7 @@ def bootstrap_device(
         try:
             on_line(f"Writing {Path(image_path).name} -> slot 0 (do NOT unplug now)...")
             with contextlib.redirect_stdout(writer):
-                flash_slot0(f, img, reboot=False)
+                flash_slot(f, img, slot=0, reboot=False, allow_active_slot=True)
             writer.flush()
         except SystemExit as e:
             writer.flush()

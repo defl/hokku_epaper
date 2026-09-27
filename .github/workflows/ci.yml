@@ -134,8 +134,14 @@ jobs:
 
       # tools/ CLIs (esp32_setup, hokku_setup, hokku_config, ...) import the hokku
       # package and pyserial/esptool — all pulled in by the hokku-server install.
+      #
+      # requirements.txt on top of it, because the colour-analysis tools reach
+      # for scipy, pandas, scikit-learn and matplotlib. Those are deliberately
+      # NOT pyproject runtime dependencies — that is what keeps them out of the
+      # wheel and the .deb — so installing the package alone leaves tools/
+      # unimportable here even though it works in a dev checkout.
       - name: Install dependencies
-        run: pip install -e "python/[test]"
+        run: pip install -e "python/[test]" -r requirements.txt
 
       - name: Run tools tests
         run: pytest tools/tests
@@ -155,7 +161,14 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install -e "python/[test]"
+          # requirements.txt too: pyright resolves imports for real, and the
+          # colour-analysis tools import scipy, pandas and scikit-learn. Those
+          # are deliberately not pyproject runtime dependencies (it is what
+          # keeps them out of the wheel and the .deb), so without this every
+          # one of them reports reportMissingImports.
+          .venv/bin/pip install -e "python/[test]" -r requirements.txt
+          # Pinned last on purpose: requirements.txt carries ruff and pyright
+          # unpinned, and lint results have to be reproducible run to run.
           .venv/bin/pip install ruff==0.15.14 pyright==1.1.409
 
       - name: Ruff lint

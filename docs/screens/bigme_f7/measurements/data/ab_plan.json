@@ -1,0 +1,275 @@
+{
+  "model": "bigme_f7",
+  "seed": 20260811,
+  "created": "2026-08-11 22:09:11",
+  "arm_descriptions": {
+    "production": "atkinson/hue_aware 95/8 serpentine \u2014 ships today",
+    "tone_closed": "production + closed-loop tone curve",
+    "tone_naive": "production + naive open-loop tone curve",
+    "euclidean": "plain CIELAB",
+    "oklab": "OKLAB nearest",
+    "cam16ucs": "CAM16-UCS",
+    "bw": "two inks \u2014 CATCH TRIAL",
+    "pal_d65": "our measured palette under D65",
+    "pal_ambient": "our measured palette under the measured room light"
+  },
+  "trials": [
+    {
+      "arm_a": "pal_ambient",
+      "arm_b": "pal_d65",
+      "content": "gamut_rgb",
+      "kind": "main",
+      "trial": 0,
+      "a_side": "left",
+      "image": "images/test/RGB_corner_gradient_bilinear_1200.png"
+    },
+    {
+      "arm_a": "pal_ambient",
+      "arm_b": "pal_d65",
+      "content": "gamut_albi",
+      "kind": "main",
+      "trial": 1,
+      "a_side": "left",
+      "image": "images/test/Albi_Panorama_Sunset_Panini_General.heif"
+    },
+    {
+      "arm_a": "tone_naive",
+      "arm_b": "production",
+      "content": "gamut_albi",
+      "kind": "main",
+      "trial": 2,
+      "a_side": "left",
+      "image": "images/test/Albi_Panorama_Sunset_Panini_General.heif"
+    },
+    {
+      "arm_a": "oklab",
+      "arm_b": "production",
+      "content": "skin_wayuu",
+      "kind": "main",
+      "trial": 3,
+      "a_side": "left",
+      "image": "images/test/Wayuu_woman_with_sad_face_in_the_market_buying.jpg"
+    },
+    {
+      "arm_a": "tone_naive",
+      "arm_b": "production",
+      "content": "detail_hare",
+      "kind": "main",
+      "trial": 4,
+      "a_side": "right",
+      "image": "images/test/Albrecht_Duerer_Hare_1502_Google_Art_Project.jxl"
+    },
+    {
+      "arm_a": "cam16ucs",
+      "arm_b": "production",
+      "content": "gamut_rgb",
+      "kind": "main",
+      "trial": 5,
+      "a_side": "left",
+      "image": "images/test/RGB_corner_gradient_bilinear_1200.png"
+    },
+    {
+      "arm_a": "oklab",
+      "arm_b": "production",
+      "content": "neutral_bar",
+      "kind": "main",
+      "trial": 6,
+      "a_side": "right",
+      "image": "images/test/grayscale_linear_bar_1200x300.png"
+    },
+    {
+      "arm_a": "bw",
+      "arm_b": "production",
+      "content": "gamut_rgb",
+      "kind": "catch",
+      "trial": 7,
+      "a_side": "right",
+      "image": "images/test/RGB_corner_gradient_bilinear_1200.png"
+    },
+    {
+      "arm_a": "tone_closed",
+      "arm_b": "production",
+      "content": "skin_deniro",
+      "kind": "main",
+      "trial": 8,
+      "a_side": "right",
+      "image": "images/test/Robert_De_Niro_KVIFF_portrait.jpg"
+    },
+    {
+      "arm_a": "tone_naive",
+      "arm_b": "production",
+      "content": "skin_deniro",
+      "kind": "main",
+      "trial": 9,
+      "a_side": "right",
+      "image": "images/test/Robert_De_Niro_KVIFF_portrait.jpg"
+    },
+    {
+      "arm_a": "pal_ambient",
+      "arm_b": "pal_d65",
+      "content": "neutral_forest",
+      "kind": "main",
+      "trial": 10,
+      "a_side": "left",
+      "image": "images/test/Forest_road_Slavne_2017_BW_G9.jpg"
+    },
+    {
+      "arm_a": "euclidean",
+      "arm_b": "production",
+      "content": "neutral_bar",
+      "kind": "main",
+      "trial": 11,
+      "a_side": "right",
+      "image": "images/test/grayscale_linear_bar_1200x300.png"
+    },
+    {
+      "arm_a": "oklab",
+      "arm_b": "production",
+      "content": "detail_hare",
+      "kind": "main",
+      "trial": 12,
+      "a_side": "left",
+      "image": "images/test/Albrecht_Duerer_Hare_1502_Google_Art_Project.jxl"
+    },
+    {
+      "arm_a": "bw",
+      "arm_b": "production",
+      "content": "skin_deniro",
+      "kind": "catch",
+      "trial": 13,
+      "a_side": "right",
+      "image": "images/test/Robert_De_Niro_KVIFF_portrait.jpg"
+    },
+    {
+      "arm_a": "cam16ucs",
+      "arm_b": "production",
+      "content": "skin_unterberger",
+      "kind": "main",
+      "trial": 14,
+      "a_side": "left",
+      "image": "images/test/Actress_Anna_Unterberger-2.jpg"
+    },
+    {
+      "arm_a": "euclidean",
+      "arm_b": "production",
+      "content": "skin_deniro",
+      "kind": "main",
+      "trial": 15,
+      "a_side": "left",
+      "image": "images/test/Robert_De_Niro_KVIFF_portrait.jpg"
+    },
+    {
+      "arm_a": "tone_closed",
+      "arm_b": "production",
+      "content": "gamut_albi",
+      "kind": "main",
+      "trial": 16,
+      "a_side": "right",
+      "image": "images/test/Albi_Panorama_Sunset_Panini_General.heif"
+    },
+    {
+      "arm_a": "tone_closed",
+      "arm_b": "tone_naive",
+      "content": "neutral_bar",
+      "kind": "main",
+      "trial": 17,
+      "a_side": "right",
+      "image": "images/test/grayscale_linear_bar_1200x300.png"
+    },
+    {
+      "arm_a": "tone_closed",
+      "arm_b": "tone_naive",
+      "content": "gamut_albi",
+      "kind": "main",
+      "trial": 18,
+      "a_side": "right",
+      "image": "images/test/Albi_Panorama_Sunset_Panini_General.heif"
+    },
+    {
+      "arm_a": "tone_closed",
+      "arm_b": "production",
+      "content": "gamut_albi",
+      "kind": "repeat",
+      "repeat_of": 16,
+      "trial": 19,
+      "a_side": "right",
+      "image": "images/test/Albi_Panorama_Sunset_Panini_General.heif"
+    },
+    {
+      "arm_a": "tone_naive",
+      "arm_b": "production",
+      "content": "neutral_bar",
+      "kind": "main",
+      "trial": 20,
+      "a_side": "left",
+      "image": "images/test/grayscale_linear_bar_1200x300.png"
+    },
+    {
+      "arm_a": "pal_ambient",
+      "arm_b": "pal_d65",
+      "content": "skin_unterberger",
+      "kind": "main",
+      "trial": 21,
+      "a_side": "right",
+      "image": "images/test/Actress_Anna_Unterberger-2.jpg"
+    },
+    {
+      "arm_a": "tone_closed",
+      "arm_b": "production",
+      "content": "detail_hare",
+      "kind": "main",
+      "trial": 22,
+      "a_side": "left",
+      "image": "images/test/Albrecht_Duerer_Hare_1502_Google_Art_Project.jxl"
+    },
+    {
+      "arm_a": "pal_ambient",
+      "arm_b": "pal_d65",
+      "content": "gamut_rgb",
+      "kind": "repeat",
+      "repeat_of": 0,
+      "trial": 23,
+      "a_side": "right",
+      "image": "images/test/RGB_corner_gradient_bilinear_1200.png"
+    },
+    {
+      "arm_a": "pal_ambient",
+      "arm_b": "pal_d65",
+      "content": "gamut_albi",
+      "kind": "repeat",
+      "repeat_of": 1,
+      "trial": 24,
+      "a_side": "right",
+      "image": "images/test/Albi_Panorama_Sunset_Panini_General.heif"
+    },
+    {
+      "arm_a": "tone_closed",
+      "arm_b": "production",
+      "content": "neutral_bar",
+      "kind": "main",
+      "trial": 25,
+      "a_side": "right",
+      "image": "images/test/grayscale_linear_bar_1200x300.png"
+    },
+    {
+      "arm_a": "tone_naive",
+      "arm_b": "production",
+      "content": "neutral_bar",
+      "kind": "repeat",
+      "repeat_of": 19,
+      "trial": 26,
+      "a_side": "left",
+      "image": "images/test/grayscale_linear_bar_1200x300.png"
+    },
+    {
+      "arm_a": "tone_naive",
+      "arm_b": "production",
+      "content": "skin_deniro",
+      "kind": "repeat",
+      "repeat_of": 9,
+      "trial": 27,
+      "a_side": "left",
+      "image": "images/test/Robert_De_Niro_KVIFF_portrait.jpg"
+    }
+  ]
+}

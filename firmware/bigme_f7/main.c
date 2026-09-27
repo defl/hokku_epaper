@@ -29,6 +29,8 @@
 
 #include "image/image.h"
 #include "ota/ota.h"
+#include "console/console.h"
+#include "driver/chip/hal_uart.h"
 #include "driver/chip/hal_wdg.h"
 #include "driver/chip/hal_adc.h"
 #include "driver/chip/hal_wakeup.h"
@@ -45,6 +47,8 @@
 #include "frame_state.h"
 #include "backoff.h"
 #include "logbuf.h"
+#include "frame_proto.h"
+#include "interactive.h"
 
 /* SoC-shared XR872 code (firmware/common/xr872 — usable by any XR872/XR872AT
  * screen): activity log, software clock, HTTP-header helpers, hibernation. */
@@ -61,7 +65,7 @@
 #define HOKKU_SERVER_URL        "http://192.168.6.111:8080/hokku/screen/"
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.10"
+#define FIRMWARE_VERSION        "1.2.12"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -326,6 +330,92 @@ void hokku_ota_manual(void)
 }
 
 /*
+ * Console-triggered raw frame upload (`frame` command). Receives one ready-made
+ * panel buffer over the console UART and streams it to the EPD — no server, no
+ * WiFi, no render pipeline. Used for bring-up and for colour measurement, where
+ * an exact known raster has to reach the glass on demand.
+ *
+ * The device stays a dumb pipe: the host decides what to send, so new test
+ * images never need a rebuild. See firmware/common/all/frame_proto.h for the
+ * wire exchange and tools/f7_send_frame.py for the host side.
+ *
+ * Console recovery is the load-bearing property here. Taking the UART means
+ * detaching the console's RX callback, so EVERY exit path must put it back or
+ * the unit loses its command interface (and with it the `upgrade` route into
+ * BROM). Hence: one exit, no early returns, and a bounded per-chunk timeout so a
+ * host that dies mid-transfer cannot wedge us. Belt and braces, console_disable
+ * state is pure RAM — any reboot restores it, and the mask-BROM replug+press
+ * catch works regardless of what the app is doing.
+ *
+ * The rollback watchdog is already stopped by hokku_rollback_commit() before any
+ * console command can run, so the ~17 s transfer cannot trigger a reset.
+ */
+static uint8_t g_frame_buf[FRAME_PROTO_CHUNK_BYTES];
+
+int hokku_frame_receive(void)
+{
+    UART_ID  uart;
+    uint32_t received = 0;
+    uint32_t crc = 0;
+    uint8_t  ack = FRAME_PROTO_ACK;
+    int      ok = 1;
+
+    if (!OS_MutexIsValid(&g_ota_lock) || OS_MutexLock(&g_ota_lock, 0) != OS_OK) {
+        hlog("hokku: frame busy (refresh/OTA in progress) — retry shortly\n");
+        return -1;
+    }
+
+    uart = console_get_uart_id();
+    printf("%s %u %u\r\n", FRAME_PROTO_READY,
+           (unsigned)EPD_IMAGE_BYTES, (unsigned)FRAME_PROTO_CHUNK_BYTES);
+
+    /* From here the console does not own the UART. Do not return early. */
+    console_disable();
+
+    epd_send_cmd(0x10);                     /* DTM: data start transmission */
+
+    while (received < EPD_IMAGE_BYTES) {
+        uint32_t want = frame_proto_chunk_size(EPD_IMAGE_BYTES,
+                                               FRAME_PROTO_CHUNK_BYTES,
+                                               received / FRAME_PROTO_CHUNK_BYTES);
+        int32_t  n = HAL_UART_Receive_Poll(uart, g_frame_buf, (int32_t)want,
+                                           FRAME_PROTO_RX_TIMEOUT_MS);
+        uint32_t i;
+
+        if (n != (int32_t)want) {           /* timeout or short read: host gone */
+            ok = 0;
+            break;
+        }
+        crc = frame_proto_crc32(crc, g_frame_buf, want);
+        for (i = 0; i < want; i++)
+            epd_send_data(g_frame_buf[i]);
+        received += want;
+        console_write(&ack, 1);             /* flow control: host may send more */
+    }
+
+    console_enable();                       /* single restore point */
+
+    if (!ok) {
+        /* The panel is left mid-DTM; a later `frame` re-issues 0x10 and starts
+         * over. Deliberately NOT refreshing — showing a half-received picture
+         * during colour measurement is worse than showing nothing. */
+        hlog("hokku: frame ABORTED at %u/%u bytes — not refreshing\n",
+             (unsigned)received, (unsigned)EPD_IMAGE_BYTES);
+        OS_MutexUnlock(&g_ota_lock);
+        return -1;
+    }
+
+    printf("%s %08x\r\n", FRAME_PROTO_DONE, (unsigned)crc);
+    hlog("hokku: frame received (%u B, crc %08x) — refreshing\n",
+         (unsigned)received, (unsigned)crc);
+    epd_refresh();                          /* ~30 s */
+    printf("%s\r\n", FRAME_PROTO_REFRESHED);
+
+    OS_MutexUnlock(&g_ota_lock);
+    return 0;
+}
+
+/*
  * Fetch one image from the server and stream it byte-by-byte to the EPD.
  * Returns the number of seconds to sleep before the next refresh, or -1 on
  * any error (caller should retry after a short backoff).
@@ -455,6 +545,17 @@ static int do_refresh(void)
 /* True when the device should deep-sleep (vs stay awake) between refreshes. */
 static int hokku_should_sleep(void)
 {
+    /* A host driving this screen over USB needs the console to still be there
+     * next time it looks. Hibernating closes it, so interactive mode outranks
+     * the configured power mode — including an explicit `power sleep`, which is
+     * a standing preference rather than an instruction about right now.
+     *
+     * Gated on USB inside hokku_interactive_engaged(): if the cable is pulled
+     * while the mode is set, this falls straight back to the configured
+     * behaviour instead of sitting awake until the battery is flat. */
+    if (hokku_interactive_engaged(led_usb_present()))
+        return 0;
+
     switch (hokku_config_get()->power_mode) {
     case HOKKU_PWR_SLEEP: return 1;
     case HOKKU_PWR_AWAKE: return 0;
@@ -480,6 +581,18 @@ static void refresh_thread_fn(void *arg)
     unsigned refresh_failures = 0;
 
     while (1) {
+        /* USB-interactive mode: a host owns the screen, so do not fetch and do
+         * not repaint. Checked before taking the lock — do_refresh() holds it for
+         * the length of a network round trip, and a `frame` upload waiting behind
+         * that would stall for seconds with the host already mid-protocol.
+         *
+         * Polled rather than event-driven because the thread has to keep
+         * re-testing anyway: the mode is plain RAM and the USB cable can move. */
+        if (hokku_interactive_engaged(led_usb_present())) {
+            OS_MSleep(500);
+            continue;
+        }
+
         /* Hold the OTA/flash lock across the whole refresh (which may itself run
          * an OTA on X-Firmware-Update) so a console `ota` can't run concurrently. */
         OS_MutexLock(&g_ota_lock, OS_WAIT_FOREVER);

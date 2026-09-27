@@ -28,6 +28,7 @@
 #include "mocks/driver/gpio.h"
 #include "mocks/driver/spi_master.h"
 #include "mocks/driver/rtc_io.h"
+#include "mocks/driver/usb_serial_jtag.h"
 #include "mocks/esp_adc/adc_oneshot.h"
 #include "mocks/esp_adc/adc_cali.h"
 #include "mocks/esp_adc/adc_cali_scheme.h"
@@ -64,6 +65,9 @@
 #include "../../../common/all/sleep_cal.c"    /* oscillator-drift calibration       */
 #include "../../../common/all/json_util.c"    /* json_escape                        */
 #include "../../../common/all/logbuf.c"       /* log buffer primitive (two-tier log)*/
+#include "../../../common/all/frame_proto.c"   /* serial frame-upload protocol       */
+#include "../../../common/all/interactive.c"   /* USB-interactive mode policy        */
+#include "../../main/console.c"                  /* USB Serial/JTAG console + dispatch   */
 #include "../../main/main.c"                     /* all firmware logic                   */
 
 /* ── Minimal test framework ──────────────────────────────────────────── */
@@ -339,8 +343,281 @@ static void test_logger_ring_lifecycle(void)
     CHECK(n == 0 && s_log_ring_used == 0, "logger: reset clears the ring after upload");
 }
 
+/* ── `frame` upload over the USB Serial/JTAG console ──────────────────────
+ *
+ * Two properties matter more than the happy path.
+ *
+ * The console "busy" flag gates the USB_AWAKE regime's restarts. A frame that
+ * sets it without clearing it leaves a device that can never refresh or reboot
+ * on schedule again, which on a wall-mounted screen looks like a dead unit.
+ *
+ * And a transfer that fails must leave the glass ALONE. This board buffers the
+ * whole 960 KB in PSRAM precisely so the CRC can be checked before the panel is
+ * touched; a half-written picture during colour measurement is worse than no
+ * picture, because it is measurable and wrong rather than obviously absent. */
+
+static void frame_test_reset(void)
+{
+    _mock_usb_avail = 0;
+    _mock_usb_delivered = 0;
+    _mock_usb_reads = 0;
+    _mock_usb_tx_len = 0;
+    _mock_usb_tx_dropped = 0;
+    _mock_usb_prefix_len = 0;
+    _mock_usb_prefix_pos = 0;
+    _mock_usb_install_result = ESP_OK;
+    _mock_usb_install_calls = 0;
+    s_busy = false;
+    _mock_gpio[PIN_EPAPER_BUSY] = 1;   /* controller idle, so waits return at once */
+}
+
+/* Did the device write this control line? The capture is raw bytes, not a C
+ * string, so search rather than strstr. */
+static int wire_contains(const char *needle)
+{
+    size_t n = strlen(needle);
+    uint32_t i;
+
+    if (n > _mock_usb_tx_len)
+        return 0;
+    for (i = 0; i + n <= _mock_usb_tx_len; i++) {
+        if (memcmp(_mock_usb_tx + i, needle, n) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static uint32_t wire_count_byte(uint8_t b)
+{
+    uint32_t i, c = 0;
+    for (i = 0; i < _mock_usb_tx_len; i++)
+        if (_mock_usb_tx[i] == b)
+            c++;
+    return c;
+}
+
+/* Parses the hex digits following "DONE ", or 0 (with *found = 0) if the line
+ * is not on the wire at all. Distinct from wire_contains(FRAME_PROTO_DONE):
+ * that only proves the word appeared, not that the number after it means what
+ * the host will think it means. This is what actually caught this firmware
+ * printing the CRC as "%u" — decimal — while the host parses it as hex
+ * (int(line.split()[1], 16), matching the F7's reference "%08x"). Both sides
+ * printed something, both sides "worked" in isolation, and the mismatch only
+ * ever showed up as a CRC failure against a perfectly good upload. */
+static uint32_t wire_parse_done_crc_hex(int *found)
+{
+    static const char needle[] = "DONE ";
+    size_t n = strlen(needle);
+    uint32_t i, v = 0;
+
+    *found = 0;
+    if (n > _mock_usb_tx_len)
+        return 0;
+    for (i = 0; i + n <= _mock_usb_tx_len; i++) {
+        if (memcmp(_mock_usb_tx + i, needle, n) != 0)
+            continue;
+        *found = 1;
+        i += (uint32_t)n;
+        for (; i < _mock_usb_tx_len; i++) {
+            uint8_t c = _mock_usb_tx[i];
+            uint8_t digit;
+            if (c >= '0' && c <= '9') digit = c - '0';
+            else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
+            else break;
+            v = (v << 4) | digit;
+        }
+        return v;
+    }
+    return 0;
+}
+
+static void test_frame_rejects_when_already_busy(void)
+{
+    frame_test_reset();
+    s_busy = true;                      /* a transfer is already in flight */
+    _mock_usb_avail = TOTAL_IMAGE_SIZE;
+
+    CHECK(hokku_frame_receive() != 0, "frame: refused while another is in progress");
+    CHECK(_mock_usb_reads == 0, "frame: does not touch the wire when refused");
+    CHECK(!wire_contains(FRAME_PROTO_READY), "frame: no READY when refused");
+}
+
+static void test_frame_leaves_panel_untouched_when_host_dies(void)
+{
+    frame_test_reset();
+    _mock_usb_avail = FRAME_PROTO_CHUNK_BYTES + 7;   /* one chunk, then silence */
+
+    CHECK(hokku_frame_receive() != 0, "frame: truncated transfer reports failure");
+    CHECK(!wire_contains(FRAME_PROTO_DONE), "frame: no DONE on a short read");
+    CHECK(!wire_contains(FRAME_PROTO_REFRESHED),
+          "frame: panel untouched when the host vanishes mid-transfer");
+    CHECK(!hokku_console_busy(), "frame: busy flag released on the failure path");
+}
+
+static void test_frame_complete_transfer_acks_and_refreshes(void)
+{
+    uint32_t chunks = frame_proto_chunk_count(TOTAL_IMAGE_SIZE, FRAME_PROTO_CHUNK_BYTES);
+
+    frame_test_reset();
+    _mock_usb_avail = TOTAL_IMAGE_SIZE;
+
+    CHECK(hokku_frame_receive() == 0, "frame: complete transfer succeeds");
+    CHECK(_mock_usb_delivered == TOTAL_IMAGE_SIZE, "frame: consumes the whole image");
+    CHECK(wire_count_byte(FRAME_PROTO_ACK) >= chunks, "frame: one ACK per chunk");
+    CHECK(wire_contains(FRAME_PROTO_READY), "frame: announced READY");
+    CHECK(wire_contains(FRAME_PROTO_DONE), "frame: reported DONE with a CRC");
+    CHECK(wire_contains(FRAME_PROTO_REFRESHED), "frame: reported REFRESHED");
+    CHECK(!hokku_console_busy(), "frame: busy flag released on the success path");
+
+    /* The mock UART delivers a fixed, known byte sequence (see hal_uart.h), so
+     * the CRC of a full transfer is computable independently and compared
+     * field-for-field against what the firmware put on the wire — not just
+     * "a DONE line appeared". Any base mismatch between what this code prints
+     * and what the host parses shows up here as a numeric disagreement,
+     * exactly the failure mode this test exists to catch on the next firmware
+     * that gets this wrong. */
+    {
+        static uint8_t expected_stream[TOTAL_IMAGE_SIZE];
+        uint32_t k, expected_crc;
+        int found = 0;
+
+        for (k = 0; k < TOTAL_IMAGE_SIZE; k++)
+            expected_stream[k] = (uint8_t)k;
+        expected_crc = frame_proto_crc32(0, expected_stream, TOTAL_IMAGE_SIZE);
+
+        uint32_t got_crc = wire_parse_done_crc_hex(&found);
+        CHECK(found, "frame: DONE line is parseable");
+        CHECK(got_crc == expected_crc,
+              "frame: DONE reports the CRC in hex, matching the host's parser");
+    }
+}
+
+/* Drives "frame\r\n" byte-by-byte through the REAL console_process_byte(), the
+ * same function console_task()'s own infinite loop calls — as opposed to every
+ * other test in this file, which calls handle_line()/hokku_frame_receive()
+ * directly and so can never see a bug in how raw bytes get grouped into a
+ * dispatched line. This is exactly the gap that let a real bug reach hardware:
+ * console_process_byte() used to dispatch on '\r' without draining the paired
+ * '\n' from "frame\r\n" first, so hokku_frame_receive()'s first payload read
+ * picked up that stray byte and every subsequent byte of a 960000-byte
+ * transfer landed one position off — correct total count, correct per-chunk
+ * ACKs, wrong CRC every time. 50 assertions passed the whole time this bug
+ * existed, because none of them exercised this path. */
+static void test_frame_via_console_task_byte_stream(void)
+{
+    static const char cmd[] = "frame\r\n";
+    console_line_state_t st = { .len = 0, .overflowed = false };
+    uint32_t i;
+    int found = 0;
+    static uint8_t expected_stream[TOTAL_IMAGE_SIZE];
+    uint32_t k, expected_crc, got_crc;
+
+    frame_test_reset();
+    memcpy(_mock_usb_prefix, cmd, strlen(cmd));
+    _mock_usb_prefix_len = (uint32_t)strlen(cmd);
+    _mock_usb_avail = TOTAL_IMAGE_SIZE;   /* payload begins right after the prefix */
+
+    /* Feed only "frame\r" — six bytes — one at a time, exactly as
+     * console_task()'s own for(;;) loop would. The seventh byte, '\n', must be
+     * drained by console_process_byte() itself when it sees '\r', not by this
+     * loop; that is the entire property under test. */
+    for (i = 0; i < strlen(cmd) - 1; i++) {
+        uint8_t ch;
+        int n = usb_serial_jtag_read_bytes(&ch, 1, 0);
+        CHECK(n == 1, "frame-via-console: byte available from the prefix");
+        console_process_byte(&st, ch);
+    }
+
+    for (k = 0; k < TOTAL_IMAGE_SIZE; k++)
+        expected_stream[k] = (uint8_t)k;
+    expected_crc = frame_proto_crc32(0, expected_stream, TOTAL_IMAGE_SIZE);
+    got_crc = wire_parse_done_crc_hex(&found);
+
+    CHECK(_mock_usb_prefix_pos == _mock_usb_prefix_len,
+          "frame-via-console: the trailing LF was consumed, not left on the wire");
+    CHECK(_mock_usb_delivered == TOTAL_IMAGE_SIZE,
+          "frame-via-console: full payload consumed after the command line");
+    CHECK(found, "frame-via-console: DONE line is parseable");
+    CHECK(got_crc == expected_crc,
+          "frame-via-console: CRC matches the UNSHIFTED payload — the actual regression check");
+    CHECK(wire_contains(FRAME_PROTO_REFRESHED), "frame-via-console: panel refreshed");
+}
+
+static void test_console_ping_identifies_the_board(void)
+{
+    char line[] = "ping";
+
+    frame_test_reset();
+    handle_line(line);
+    CHECK(wire_contains("PONG"), "console: ping answers PONG");
+    CHECK(wire_contains("huessen_epf1301"), "console: ping names the model");
+}
+
+static void test_console_interactive_round_trip(void)
+{
+    char on[] = "interactive on";
+    char off[] = "interactive off";
+
+    frame_test_reset();
+    hokku_interactive_set(false);
+
+    handle_line(on);
+    CHECK(hokku_interactive_requested(), "console: `interactive on` sets the mode");
+    CHECK(wire_contains("INTERACTIVE on"), "console: echoes the new state back");
+
+    /* The host has to be able to re-read it, because a crash reboot clears the
+     * mode silently and a host that assumed it still held the screen would be
+     * racing the refresh loop again without knowing. */
+    _mock_usb_tx_len = 0;
+    char ping[] = "ping";
+    handle_line(ping);
+    CHECK(wire_contains("interactive=on"), "console: ping reports the mode is on");
+
+    _mock_usb_tx_len = 0;
+    handle_line(off);
+    CHECK(!hokku_interactive_requested(), "console: `interactive off` clears the mode");
+    CHECK(wire_contains("INTERACTIVE off"), "console: echoes the cleared state");
+
+    _mock_usb_tx_len = 0;
+    handle_line(ping);
+    CHECK(wire_contains("interactive=off"), "console: ping reports the mode is off");
+}
+
+static void test_console_interactive_gates_on_usb(void)
+{
+    char on[] = "interactive on";
+
+    frame_test_reset();
+    hokku_interactive_set(false);
+    handle_line(on);
+
+    /* Requesting the mode is not the same as holding the screen. On battery the
+     * request stands but must be inert, or an unplugged screen would never sleep
+     * again. */
+    CHECK(hokku_interactive_engaged(true), "console: engaged while USB is present");
+    CHECK(!hokku_interactive_engaged(false), "console: inert once USB goes away");
+    hokku_interactive_set(false);
+}
+
+static void test_console_rejects_unknown_command(void)
+{
+    char line[] = "framez";
+
+    frame_test_reset();
+    handle_line(line);
+    CHECK(wire_contains("ERR"), "console: unknown command rejected");
+    CHECK(_mock_usb_reads == 0, "console: unknown command starts no transfer");
+}
+
 int main(void)
 {
+    /* Unbuffered: when a test crashes the harness rather than failing a CHECK,
+     * a block-buffered stdout discards every PASS line printed so far and the
+     * run looks like it produced nothing at all. The last line printed is the
+     * cheapest possible pointer at where it died. */
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     /* All mock GPIO pins start at 0 (LOW). Set defaults appropriate for the
      * firmware's expected hardware idle state. */
     memset(_mock_gpio, 0, sizeof(_mock_gpio));
@@ -377,6 +654,16 @@ int main(void)
 
     /* Logger (single RTC ring) */
     test_logger_ring_lifecycle();
+
+    /* Serial `frame` upload */
+    test_frame_rejects_when_already_busy();
+    test_frame_leaves_panel_untouched_when_host_dies();
+    test_frame_complete_transfer_acks_and_refreshes();
+    test_frame_via_console_task_byte_stream();
+    test_console_ping_identifies_the_board();
+    test_console_interactive_round_trip();
+    test_console_interactive_gates_on_usb();
+    test_console_rejects_unknown_command();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

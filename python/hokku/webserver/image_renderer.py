@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import threading
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,9 +34,11 @@ from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.bounding_box import BoundingBox
 from hokku.webserver.dither_abc import AbstractDither
 from hokku.webserver.dither_streaming import (
-    # PALETTE_LAB / PALETTE_OKLAB are the Huessen reference DRC L*-anchors
-    # (black/white lightness).  Bigme F7 ink is not yet photographically
-    # measured, so its DRC reuses these reference anchors until calibrated.
+    # Huessen reference DRC anchors. Now only a LAST-RESORT default inside the
+    # DRC helpers: the renderer supplies the target panel's own range via
+    # _drc_anchors(). Reusing these for another screen compressed images into a
+    # range that screen could not show — on the F7, L* 0.55..79.86 against a real
+    # 10.21..68.02, clipping both ends.
     PALETTE_LAB,
     PALETTE_OKLAB,
     adaptive_saturate,
@@ -54,6 +57,23 @@ from hokku.webserver.orientation import Orientation
 _REFERENCE_DISPLAY = DISPLAY_REGISTRY["huessen_epf1301"]
 _SCREEN_W = _REFERENCE_DISPLAY.panel_w
 _SCREEN_H = _REFERENCE_DISPLAY.panel_h
+
+
+@lru_cache(maxsize=8)
+def _cached_correction_lut(model_id: str) -> NDArray[np.float32] | None:
+    """(N,N,N,3) float32 RGB->RGB gamut-correction LUT for this panel, or None.
+
+    Keyed by model_id, same pattern as dither_streaming.py's palette-LUT
+    caches — the array itself never enters the cache key. Built offline by
+    tools/color_lut_build.py from the gamut_dense measurement phase; see
+    docs/screens/<model>/measurements/findings.md.
+    """
+    display = DISPLAY_REGISTRY[model_id]
+    path = getattr(display, "correction_lut_path", None)
+    if path is None:
+        return None
+    return np.load(path).astype(np.float32)
+
 
 IMAGE_EXTENSIONS = {
     ".jpg",
@@ -430,6 +450,63 @@ class ImageRenderer(AbstractImageRenderer):
         )
         return np.clip(srgb * f32(255), f32(0), f32(255))
 
+    def _drc_anchors(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """(CIELAB, OKLAB) lightness ranges the DRC should compress into.
+
+        Prefers ``display.drc_anchor_l`` when the panel has been measured, since
+        a palette table carried over from a vendor or another model can be a long
+        way from the real black and white points. Falls back to deriving the range
+        from the display's own palette, which is still correct-by-construction for
+        the screen being rendered — unlike the module-level reference constant
+        this replaced.
+        """
+        explicit = getattr(self._display, "drc_anchor_l", None)
+        if explicit is not None:
+            lo_l, hi_l = float(explicit[0]), float(explicit[1])
+            greys = np.stack([np.arange(256, dtype=np.float32)] * 3, axis=-1)
+            ls = rgb_to_lab(greys)[:, 0]
+            rows = np.stack([greys[int(np.argmin(np.abs(ls - v)))] for v in (lo_l, hi_l)])
+            ok = rgb_to_oklab(rows)
+            return (lo_l, hi_l), (float(ok[0, 0]), float(ok[1, 0]))
+        pal = np.asarray(self._display.palette_measured_rgb, dtype=np.float32)[:2]
+        lab_l = rgb_to_lab(pal)
+        ok_l = rgb_to_oklab(pal)
+        return (float(lab_l[0, 0]), float(lab_l[1, 0])), (float(ok_l[0, 0]), float(ok_l[1, 0]))
+
+    def _correction_lut(self) -> NDArray[np.float32] | None:
+        """Cached (N,N,N,3) RGB->RGB gamut-correction LUT for this panel, or
+        None if this panel has none built yet. See _cached_correction_lut."""
+        return _cached_correction_lut(self._display.model_id)
+
+    @staticmethod
+    def apply_correction_lut(
+        rgb: NDArray[np.float32], lut: NDArray[np.float32]
+    ) -> NDArray[np.float32]:
+        """Trilinear-interpolate a stripe-shaped float32 RGB array through an
+        (N,N,N,3) RGB->RGB correction LUT.
+
+        Hand-rolled (this package has no scipy dependency) — an 8-corner
+        weighted gather, vectorized over the whole input array at once, same
+        amortisation tier as compress_dynamic_range (runs once per stripe, not
+        per pixel).
+        """
+        n = lut.shape[0]
+        scale = 255.0 / (n - 1)
+        coords = np.clip(rgb, 0.0, 255.0) / scale
+        i0 = np.clip(np.floor(coords).astype(np.int32), 0, n - 2)
+        i1 = i0 + 1
+        frac = coords - i0
+        r0, g0, b0 = i0[..., 0], i0[..., 1], i0[..., 2]
+        r1, g1, b1 = i1[..., 0], i1[..., 1], i1[..., 2]
+        fr, fg, fb = frac[..., 0:1], frac[..., 1:2], frac[..., 2:3]
+        c00 = lut[r0, g0, b0] * (1 - fr) + lut[r1, g0, b0] * fr
+        c10 = lut[r0, g1, b0] * (1 - fr) + lut[r1, g1, b0] * fr
+        c01 = lut[r0, g0, b1] * (1 - fr) + lut[r1, g0, b1] * fr
+        c11 = lut[r0, g1, b1] * (1 - fr) + lut[r1, g1, b1] * fr
+        c0 = c00 * (1 - fg) + c10 * fg
+        c1 = c01 * (1 - fg) + c11 * fg
+        return (c0 * (1 - fb) + c1 * fb).astype(np.float32)
+
     @staticmethod
     def compress_dynamic_range(
         img_array,
@@ -442,6 +519,8 @@ class ImageRenderer(AbstractImageRenderer):
         vivid_chroma_high_oklab: float = 0.075,
         drc_l_space: DrcSpace = "cielab",
         drc_chroma_space: DrcSpace = "cielab",
+        anchor_lab_l: tuple[float, float] | None = None,
+        anchor_oklab_l: tuple[float, float] | None = None,
     ) -> NDArray[np.float32]:
         """Map source range into the panel's reachable L\\* range.
 
@@ -462,9 +541,9 @@ class ImageRenderer(AbstractImageRenderer):
 
         # Stage 1: L compression in the requested space.
         if drc_l_space == "cielab":
-            rgb = ImageRenderer._drc_cielab_l(rgb)
+            rgb = ImageRenderer._drc_cielab_l(rgb, anchor_lab_l)
         else:
-            rgb = ImageRenderer._drc_oklab_l(rgb)
+            rgb = ImageRenderer._drc_oklab_l(rgb, anchor_oklab_l)
 
         # Stage 2: chroma scaling in the requested space.
         if drc_chroma_space == "cielab":
@@ -483,49 +562,104 @@ class ImageRenderer(AbstractImageRenderer):
             vivid_chroma_high=vivid_chroma_high_oklab,
         )
 
+    # Steepness of the logistic S-curve _scurve() applies to the normalized
+    # source lightness, for _drc_cielab_l/_drc_oklab_l. 0 = pure linear (no
+    # shadow/highlight softening at all).
+    #
+    # Exists because a linear-only map, sized to the panel's own measured
+    # range, was measurably flatter in shadows/midtones than the OLD (wrong,
+    # too-wide) range it replaced — confirmed on real glass: tie pattern and
+    # facial shadow detail were visibly crisper under the old, inaccurate
+    # range, at the cost of blown highlights (the old range assumed white
+    # brighter than the panel can show). A pure linear map can't have both —
+    # one slope end to end. An S-curve can: steeper through the middle
+    # (recovering the lost contrast) while tapering smoothly to zero slope
+    # at BOTH anchors, so neither end can ever overshoot the panel's real
+    # range the way the old wide-range bug did.
+    #
+    # A first attempt used a smoothstep blend (3t²-2t³), capped at 1.5x the
+    # linear slope at the midpoint (max ~5.4 L* peak difference from linear
+    # on the F7's anchor range) — confirmed on real glass to be imperceptible
+    # against the noise floor of a dithered 6-ink panel. The FULL old-range-
+    # vs-new-range gap that was clearly visible measured ~7.6 L* at its peak
+    # (computed the same way, see git history). A logistic sigmoid isn't
+    # capped like a fixed-degree polynomial is.
+    #
+    # k swept directly on real glass (both panels) against a very dark,
+    # mostly-shadow test photo: k=8 didn't crush a solid-black dress dark
+    # enough; k=20 overcorrected ("muting everything too much" — highlights
+    # got flattened along with the shadows, since the curve is symmetric);
+    # k=12 still lost to k=8 on overall balance; k=6 lost to k=8. k=7 was the
+    # winner of that sweep.
+    _DRC_SIGMOID_K = 7.0
+
     @staticmethod
-    def _drc_cielab_l(rgb: NDArray[np.float32]) -> NDArray[np.float32]:
-        """Map source L* into the panel's CIELAB L* range + tanh soft shoulder."""
+    def _scurve(t: NDArray[np.float32], k: float) -> NDArray[np.float32]:
+        """Normalized logistic S-curve on [0, 1] -> [0, 1]. k=0 is identity;
+        higher k gives a steeper midpoint and softer toe/shoulder.
+
+        Hits (0, 0) and (1, 1) EXACTLY by construction — rescaled against the
+        raw sigmoid's own values at t=0 and t=1, not just asymptotically
+        close — so composing this with a linear anchor map can never
+        overshoot [black_L, white_L], at any k.
+        """
+        if k == 0.0:
+            return t
+        f32 = np.float32
+        kf = f32(k)
+        raw = f32(1.0) / (f32(1.0) + np.exp(-kf * (t - f32(0.5))))
+        raw0 = 1.0 / (1.0 + np.exp(kf * f32(0.5)))
+        raw1 = 1.0 / (1.0 + np.exp(-kf * f32(0.5)))
+        return ((raw - f32(raw0)) / f32(raw1 - raw0)).astype(f32)
+
+    @staticmethod
+    def _drc_cielab_l(
+        rgb: NDArray[np.float32], anchor_l: tuple[float, float] | None = None
+    ) -> NDArray[np.float32]:
+        """Map source L* into the panel's CIELAB L* range via a bounded S-curve.
+
+        ``anchor_l`` is the target range. It must describe the panel being
+        rendered for: the module-level PALETTE_LAB is the Huessen reference, and
+        using it for another screen compresses into a range that screen cannot
+        show, clipping both ends.
+
+        The output is provably confined to [black_L, white_L]: _scurve() only
+        ever returns a value in [0, 1], so no separate clamp/shoulder step is
+        needed the way the old pure-linear map required one.
+        """
         f32 = np.float32
         lab = rgb_to_lab(rgb, dtype=f32)
         L = lab[..., 0]
-        black_L = f32(PALETTE_LAB[0, 0])
-        white_L = f32(PALETTE_LAB[1, 0])
-        ratio = f32((float(white_L) - float(black_L)) / 100.0)
-        np.multiply(L, ratio, out=L)
-        np.add(L, black_L, out=L)
-        threshold = black_L + f32(0.85) * (white_L - black_L)
-        headroom = white_L - threshold
-        above = L > threshold
-        if np.any(above):
-            delta = L[above] - threshold
-            L[above] = (threshold + headroom * np.tanh(delta / headroom)).astype(f32)
+        lo, hi = anchor_l if anchor_l is not None else (PALETTE_LAB[0, 0], PALETTE_LAB[1, 0])
+        black_L = f32(lo)
+        white_L = f32(hi)
+        t = np.clip(L / f32(100.0), f32(0.0), f32(1.0)).astype(f32)
+        t_curved = ImageRenderer._scurve(t, ImageRenderer._DRC_SIGMOID_K)
+        lab[..., 0] = black_L + (white_L - black_L) * t_curved
         return ImageRenderer._lab_to_rgb(lab)
 
     @staticmethod
-    def _drc_oklab_l(rgb: NDArray[np.float32]) -> NDArray[np.float32]:
-        """Map source L into the panel's OKLAB L range + tanh soft shoulder.
+    def _drc_oklab_l(
+        rgb: NDArray[np.float32], anchor_l: tuple[float, float] | None = None
+    ) -> NDArray[np.float32]:
+        """Map source L into the panel's OKLAB L range via a bounded S-curve.
 
         Panel anchors come from PALETTE_OKLAB (black L ≈ 0.085, white ≈ 0.825).
         OKLAB has noticeably better perceived-lightness prediction than CIELAB
-        (Bottosson 2020), so the soft shoulder follows perceived brightness
-        more faithfully near the panel-white limit.
+        (Bottosson 2020), so the curve follows perceived brightness more
+        faithfully near the panel's limits. See _drc_cielab_l for the S-curve
+        rationale and _DRC_SIGMOID_K for the steepness — identical shape
+        here, just on OKLAB's native [0, 1] L axis.
         """
         f32 = np.float32
         oklab = rgb_to_oklab(rgb, dtype=f32)
         L = oklab[..., 0]
-        black_L = f32(PALETTE_OKLAB[0, 0])
-        white_L = f32(PALETTE_OKLAB[1, 0])
-        # Source L is in [0, 1] in OKLAB — scale to [black_L, white_L].
-        ratio = white_L - black_L
-        np.multiply(L, ratio, out=L)
-        np.add(L, black_L, out=L)
-        threshold = black_L + f32(0.85) * (white_L - black_L)
-        headroom = white_L - threshold
-        above = L > threshold
-        if np.any(above):
-            delta = L[above] - threshold
-            L[above] = (threshold + headroom * np.tanh(delta / headroom)).astype(f32)
+        lo, hi = anchor_l if anchor_l is not None else (PALETTE_OKLAB[0, 0], PALETTE_OKLAB[1, 0])
+        black_L = f32(lo)
+        white_L = f32(hi)
+        t = np.clip(L, f32(0.0), f32(1.0)).astype(f32)
+        t_curved = ImageRenderer._scurve(t, ImageRenderer._DRC_SIGMOID_K)
+        oklab[..., 0] = black_L + (white_L - black_L) * t_curved
         return oklab_to_rgb(oklab, dtype=f32)
 
     @staticmethod
@@ -623,6 +757,15 @@ class ImageRenderer(AbstractImageRenderer):
             crop_anchor_bboxes_norm=crop_anchor_bboxes_norm,
         )
 
+        # The DRC squeezes the image into the panel's reachable lightness range,
+        # so that range must come from THIS panel. It used to read the module
+        # PALETTE_LAB, which is the Huessen reference regardless of target: on the
+        # F7 that meant compressing into L* 0.55..79.86 when the panel spans
+        # 10.21..68.02, clipping both ends — 50 % of one test portrait collapsed
+        # into flat black.
+        drc_anchor_lab, drc_anchor_oklab = self._drc_anchors()
+        correction_lut = self._correction_lut()
+
         sat_space = cfg.adaptive_saturate_space
         sat_max = cfg.saturate_max_enhance
         sat_lo_cielab = cfg.saturate_low_chroma_thresh
@@ -648,7 +791,11 @@ class ImageRenderer(AbstractImageRenderer):
                 vivid_chroma_high_oklab=cfg.vivid_chroma_high_oklab,
                 drc_l_space=cfg.drc_l_space,
                 drc_chroma_space=cfg.drc_chroma_space,
+                anchor_lab_l=drc_anchor_lab,
+                anchor_oklab_l=drc_anchor_oklab,
             )
+            if correction_lut is not None:
+                f32 = ImageRenderer.apply_correction_lut(f32, correction_lut)
             if noise_std > 0.0:
                 noise = np.random.normal(0.0, noise_std, f32.shape).astype(np.float32)
                 f32 = np.clip(f32 + noise, 0.0, 255.0)

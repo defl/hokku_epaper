@@ -49,6 +49,32 @@ rules directly. They are absolute and override "it's easier", "to be safe", and
    state exactly what you will erase/write and wait for it. Otherwise flash only the
    app partitions you changed; leave the bootloader and the known-good slot intact.
 
+## Colour calibration — USB upload ONLY, never over HTTP
+
+**Getting a calibration target onto a panel MUST use the direct USB/serial frame
+upload.** The `frame` console command (see
+[`docs/screens/bigme_f7/custom_firmware.md`](docs/screens/bigme_f7/custom_firmware.md))
+plus [`tools/f7_send_frame.py`](tools/f7_send_frame.py) push the exact bytes down
+the UART. That is what the firmware feature exists for.
+
+**Do NOT propose, and do not fall back to, serving the target over HTTP from a
+hokku server** — not production, not the test Pi, not a throwaway local server.
+It does not work for this purpose and the human has ruled it out. Concretely, the
+server route is wrong because:
+
+- the render pipeline re-processes the image (autocontrast, gamma, CLAHE,
+  unsharp, error diffusion), so what reaches the glass is not the target that was
+  generated — measuring it measures the pipeline, not the panel;
+- it requires temporarily rewriting a live server's preset and the screen's
+  `server_url`, both of which are disruptive and have to be restored;
+- it makes the measurement depend on WiFi, poll timing and which host the screen
+  happens to point at, so a session cannot be reproduced.
+
+The USB route has none of those properties: exact bytes, on demand, no server,
+no config churn. Use it. If the firmware on a unit is too old to have `frame`,
+the answer is to flash it (subject to the STOP rules above), not to reach for
+HTTP.
+
 ## Python environment
 - Venv: `.venv/` at repo root
 - Windows: `.venv/Scripts/python` | Linux/macOS: `.venv/bin/python`
