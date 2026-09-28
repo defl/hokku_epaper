@@ -30,6 +30,16 @@ from hokku.screens.bigme_f7.config import write_config_via_brom
 
 CATCH_TIMEOUT_S = 300.0
 
+# How to boot the unit after a write. sys_reboot only re-enters the BROM on this
+# chip, and with a charged battery a USB unplug/replug is NOT a power cycle — the
+# SoC keeps running off the pack and drops straight back into the BROM (issue #44).
+# Only a long-press actually removes power.
+POWER_CYCLE_HOW = (
+    "LONG-PRESS the power button until the LED goes out; the unit then restarts on "
+    "its own (if it stays off, short-press power). Unplugging/replugging USB does "
+    "NOT reboot it while the battery is charged."
+)
+
 
 def tooling_available() -> bool:
     """True if the XR872 flash primitives (and pyserial) can be imported.
@@ -238,7 +248,7 @@ def _provision_over_console(port, prov, on_line, should_cancel, serial):
     """After the firmware is written, wait for the operator to power-cycle, then write
     Wi-Fi + config over the booted firmware's console. Never logs the password."""
     on_line("")
-    on_line("POWER-CYCLE the unit now (unplug/replug USB, or long-press) to boot it —")
+    on_line(f"Boot the unit now: {POWER_CYCLE_HOW}")
     on_line("Wi-Fi and config are then written over the console automatically. Waiting...")
     deadline = time.monotonic() + PROVISION_BOOT_TIMEOUT_S
     last = 0.0
@@ -250,11 +260,15 @@ def _provision_over_console(port, prov, on_line, should_cancel, serial):
         if s is not None:
             break
         if time.monotonic() - last > 5:
-            on_line("  waiting for the unit to boot... (power-cycle it if you haven't)")
+            on_line(
+                "  waiting for the unit to boot... (long-press power until the LED goes out, if you haven't)"
+            )
             last = time.monotonic()
         time.sleep(1.0)
     if s is None:
-        raise RuntimeError("console never came up — power-cycle the unit and re-run to provision")
+        raise RuntimeError(
+            "console never came up — long-press power until the LED goes out, then re-run to provision"
+        )
 
     try:
         on_line("Console up — writing configuration...")
@@ -402,10 +416,10 @@ def bootstrap_device(
             on_line(f"NOTE: Wi-Fi not set over console ({e}).")
             on_line("Set it after boot over the console (115200): `wifi <ssid> <pw>`.")
     elif provision:
-        on_line("Config provisioned to flash. POWER-CYCLE the unit (unplug/replug) to boot it.")
+        on_line(f"Config provisioned to flash. Boot the unit: {POWER_CYCLE_HOW}")
         on_line("It keeps its existing Wi-Fi and comes straight back online under the new name.")
     else:
-        on_line("POWER-CYCLE the unit (unplug/replug, or long-press) to boot it.")
+        on_line(f"Boot the unit: {POWER_CYCLE_HOW}")
         on_line("A fresh unit needs Wi-Fi + server set over the console (115200):")
         on_line("`wifi <ssid> <pw>`, then `cfg save`. Details: docs/screens/bigme_f7/bootstrap.md")
     return {"ok": True}

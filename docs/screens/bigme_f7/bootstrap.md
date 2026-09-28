@@ -101,7 +101,11 @@ Entry is two-phase, so the physical dance is usually unnecessary:
 So a stock unit needs the replug+press; a unit already on our firmware doesn't.
 
 After the write, if you supplied Wi-Fi/config the log asks you to **power-cycle** the
-unit (needed to boot on this chip regardless). The server then waits for the console
+unit (needed to boot on this chip regardless) — a **long-press** until the LED goes
+out, never a USB replug (see step 3 above; a replug-only prompt is what stranded a
+unit in the BROM in issue #44). Re-confirmed on 6000135 on 2026-09-27: a fast replug
+left it in the BROM; a long-press until the LED went out booted it, with the unit
+powering back on by itself (USB connected) — no second press needed. The server then waits for the console
 to come up and writes `cfg server`/`cfg name`/`cfg save` + `wifi <ssid> <psk>`
 (password never logged), and briefly watches for the join + first server POST.
 

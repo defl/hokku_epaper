@@ -1022,8 +1022,10 @@
 
       <ol class="flash-f7-steps">
         <li>Press <em>Bootstrap F7</em> and watch the log.</li>
-        <li>When the log says so, <strong>power-cycle</strong> the unit — it boots and
-            the Wi-Fi/config is written automatically.</li>
+        <li>When the log says so, <strong>long-press</strong> the power button until the
+            LED goes out — the unit restarts on its own (if it stays off, press power)
+            and the Wi-Fi/config is written automatically. Unplugging USB does
+            <em>not</em> reboot it while the battery is charged.</li>
       </ol>
       <div class="config-advanced-toggle" id="flash-f7-manual-toggle" onclick="toggleF7ManualSteps()">
         <span class="toggle-arrow">▶</span>
@@ -2722,7 +2724,7 @@ function pollF7Flash() {
     const log = document.getElementById('flash-log');
     if (j.log && j.log.length) { log.hidden = false; log.textContent = j.log.join('\n'); log.scrollTop = log.scrollHeight; }
     if (j.state === 'running') {
-      setF7Status('Working… follow the log (it will tell you when to power-cycle)', '');
+      setF7Status('Working… follow the log (it will tell you when to long-press power)', '');
     } else if (j.state === 'done') {
       clearInterval(flashPollTimer); flashPollTimer = null;
       setF7Status('Done — firmware written and Wi-Fi/config provisioned.', 'ok');
