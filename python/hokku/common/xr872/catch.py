@@ -143,7 +143,9 @@ def main() -> int:
                         reboot=args.reboot,
                         allow_active_slot=args.allow_active_slot,
                     )
-                    print(f"\n[{ts()}] DONE. Power-cycle / watch UART to see it boot.")
+                    print(
+                        f"\n[{ts()}] DONE. Long-press power until the LED goes out to boot it (a USB replug is not a power cycle)."
+                    )
                     return 0
             finally:
                 with contextlib.suppress(Exception):
