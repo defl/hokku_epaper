@@ -26,13 +26,14 @@ from typing import Any
 
 import defusedxml.ElementTree as ET
 import zstd
-from PIL import ExifTags, Image, ImageOps
+from PIL import Image, ImageOps
 
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.filesystem import atomic_write_json
 from hokku.webserver.image_classifier import ImageClassifier, ImageClassifierDecision
 from hokku.webserver.image_config import ImageConfig
+from hokku.webserver.image_orientation import displayed_size
 from hokku.webserver.image_record import (
     ConversionProgress,
     ConvertStatus,
@@ -55,10 +56,6 @@ logger = logging.getLogger(__name__)
 _DB_FILENAME = "image_manager.json"
 _DB_VERSION = 5  # bump whenever ImageRecord schema changes; v3/v4 auto-migrate (see _load_db)
 
-# EXIF Orientation values (transpose, rotate 90/270, transverse) whose display
-# form swaps width and height.
-_EXIF_AXIS_SWAPPING = frozenset({5, 6, 7, 8})
-
 # Distinguishes "argument not supplied" from an explicit None, which callers use
 # to clear an override.
 _UNSET: Any = object()
@@ -74,18 +71,6 @@ _THUMB_MAX_PX = 300
 _THUMB_QUALITY = 85
 
 _KNOWN_SUFFIXES = (_PANEL_SUFFIX, _PREVIEW_SUFFIX, _THUMB_SUFFIX)
-
-
-def _header_exif_orientation(img: Image.Image) -> int | None:
-    """The EXIF Orientation tag, read without decoding pixel data.
-
-    PNG's getexif() calls load() when no eXIf chunk precedes IDAT — a full
-    decode — so for PNG only an already-parsed header chunk is consulted. An
-    eXIf chunk placed after IDAT is missed; that layout is rare.
-    """
-    if img.format == "PNG" and "exif" not in img.info:
-        return None
-    return img.getexif().get(ExifTags.Base.Orientation)
 
 
 def _decision_to_screen_image_config(
@@ -785,8 +770,7 @@ class AbstractImageManager(ABC):
                 # EXIF rotation; the render path applies it (exif_transpose),
                 # so the recorded dims must too or native_orientation is wrong
                 # (issue #40).
-                if _header_exif_orientation(img) in _EXIF_AXIS_SWAPPING:
-                    w, h = h, w
+                w, h = displayed_size(img)
         except Exception as e:
             return None, None, f"{type(e).__name__}: {e}"
         return w, h, None
@@ -1387,7 +1371,8 @@ class AbstractImageManager(ABC):
         else:
             logger.info("Dithering complete: all %d image(s) done", total)
 
-    def _materialize_thumbnail(self, src_path: Path, thumb_path: Path) -> None:
+    @staticmethod
+    def _materialize_thumbnail(src_path: Path, thumb_path: Path) -> None:
         thumb_path.parent.mkdir(parents=True, exist_ok=True)
         if src_path.suffix.lower() == ".svg":
             with open_image_for_render(src_path) as img:
