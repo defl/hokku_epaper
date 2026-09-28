@@ -108,14 +108,17 @@ def test_recorded_dims_are_the_displayed_dims(fixture_dir: Path, kind: str, o: i
 
 
 # The face detector reads files with cv2.imread, not Pillow. OpenCV only knows
-# EXIF orientation in JPEG and PNG eXIf-before-IDAT; it never reads XMP, and
-# can't decode HEIF/AVIF/JXL (or TIFF with a rotation tag) at all. Unreadable
-# means "no faces" (a missed optimisation), which is tolerated; readable in the
-# wrong frame means face boxes land on the wrong part of the picture — the
-# CLAHE keep-out and face-aware crop then protect the wrong region. Those cases
-# are pinned as strict xfails so that fixing the detector's loader flips them.
+# EXIF orientation in JPEG and PNG eXIf-before-IDAT; it never reads XMP. Which
+# other formats it can decode depends on the OpenCV build: the Windows wheel
+# can't read HEIF/AVIF/JXL (or TIFF with a rotation tag), while the Linux wheel
+# — what the Pi runs — reads AVIF but ignores its orientation. Unreadable means
+# "no faces" (a missed optimisation), reported as a skip; readable in the wrong
+# frame means face boxes land on the wrong part of the picture — the CLAHE
+# keep-out and face-aware crop then protect the wrong region. Those cases are
+# pinned as strict xfails so that fixing the detector's loader flips them.
 _CV2_WRONG_FRAME = frozenset(
     {
+        "avif",
         "jpeg_xmp_only",
         "png_exif_after_idat",
         "png_xmp_only",
@@ -142,7 +145,10 @@ def test_face_detector_sees_the_rendered_frame(fixture_dir: Path, kind: str, o: 
     applies them to its own decode. Both must be the same frame."""
     loaded = load_image_resized(_path(fixture_dir, kind, o))
     if loaded is None:
-        return  # unreadable by OpenCV: no face boxes, so none in the wrong place
+        # No face boxes, so none in the wrong place. A skip rather than a pass:
+        # it also stops a strict xfail from "passing" on a build that can't
+        # read the format at all.
+        pytest.skip("this OpenCV build cannot decode the file")
     rgb = Image.fromarray(np.ascontiguousarray(loaded[0][:, :, ::-1]))
     assert upright_mismatch(rgb) is None, upright_mismatch(rgb)
 
