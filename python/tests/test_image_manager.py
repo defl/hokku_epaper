@@ -408,6 +408,57 @@ def test_overrides_are_salvaged_across_a_db_version_wipe(
     assert rec.crop_to_fill_threshold == pytest.approx(0.2)
 
 
+def _make_exif_portrait_jpeg(path: Path) -> None:
+    """A phone-style portrait: 400x200 sensor pixels tagged 'rotate 90 CW'."""
+    exif = _Image.Exif()
+    exif[0x0112] = 6  # Orientation
+    _Image.new("RGB", (400, 200), (120, 80, 40)).save(path, exif=exif)
+
+
+def test_exif_rotated_upload_is_portrait(app_config: AppConfig, image_manager_factory):
+    """Issue #40: an EXIF-rotated phone portrait must register as PORTRAIT."""
+    _make_exif_portrait_jpeg(Path(app_config.upload_dir) / "phone.jpg")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+
+    rec = mgr.status("phone.jpg")
+    assert rec is not None and rec.convert_status == "ok"
+    assert (rec.image_width, rec.image_height) == (200, 400)
+    assert rec.native_orientation == Orientation.PORTRAIT
+    assert rec.matches_orientation_filter(Orientation.PORTRAIT)
+    assert not rec.matches_orientation_filter(Orientation.LANDSCAPE)
+
+
+def test_v4_db_migration_corrects_exif_rotated_dims(app_config: AppConfig, image_manager_factory):
+    """A v4 DB recorded raw sensor dims; loading it must fix them in place.
+
+    Only the dims change — status and rendered slugs survive, so the upgrade
+    does not trigger a re-render.
+    """
+    _make_exif_portrait_jpeg(Path(app_config.upload_dir) / "phone.jpg")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    mgr.shutdown()
+
+    db_path = Path(app_config.cache_dir) / "image_manager.json"
+    db = json.loads(db_path.read_text())
+    db["version"] = 4
+    row = db["images"]["phone.jpg"]
+    row["image_width"], row["image_height"] = 400, 200  # what the old reader stored
+    slugs_before = row["slugs"]
+    db_path.write_text(json.dumps(db))
+
+    mgr2 = image_manager_factory(app_config)
+    rec = mgr2.status("phone.jpg")
+    assert rec is not None
+    assert (rec.image_width, rec.image_height) == (200, 400)
+    assert rec.native_orientation == Orientation.PORTRAIT
+    assert rec.convert_status == "ok"
+    assert rec.slugs == slugs_before
+
+
 def test_salvaged_override_for_a_deleted_file_is_forgotten(
     app_config: AppConfig, image_manager_factory, make_test_image
 ):
