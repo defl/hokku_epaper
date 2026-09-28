@@ -701,6 +701,87 @@ def test_screen_mac_is_durable_key_across_rename(bare_client):
     assert "new" in screens and "old" not in screens
 
 
+_RENAME_CAPABLE_STATE = '{"ota": 1, "rename": 1}'
+
+
+def _check_in(client, name: str, mac: str | None, frame_state: str | None = _RENAME_CAPABLE_STATE):
+    headers = {"X-Screen-Name": name, "X-Screen-Model": "huessen_epf1301"}
+    if mac:
+        headers["X-Screen-Mac"] = mac
+    if frame_state:
+        headers["X-Frame-State"] = frame_state
+    return client.get("/hokku/screen/", headers=headers)
+
+
+def test_rename_is_sent_until_the_device_takes_it(bare_client):
+    """A UI rename rides X-Screen-Rename on every response (even a 404 with no
+    images) until the device reports the new name; the record is kept."""
+    client, state = bare_client
+    mac = "de:ad:be:ef:00:0a"
+    assert "X-Screen-Rename" not in _check_in(client, "old", mac).headers
+
+    r = client.post("/hokku/api/screens/old/rename", json={"name": " hallway "})
+    assert r.status_code == 200 and r.get_json()["pending_name"] == "hallway"
+    assert _check_in(client, "old", mac).headers["X-Screen-Rename"] == "hallway"
+
+    r = _check_in(client, "hallway", mac)
+    assert "X-Screen-Rename" not in r.headers
+    screens = state.scheduler.screens()
+    assert list(screens) == ["hallway"] and screens["hallway"].pending_name is None
+
+
+def test_rename_cancel(bare_client):
+    client, _ = bare_client
+    _check_in(client, "old", "de:ad:be:ef:00:0b")
+    client.post("/hokku/api/screens/old/rename", json={"name": "new"})
+    r = client.post("/hokku/api/screens/old/rename", json={"name": None})
+    assert r.status_code == 200 and r.get_json()["pending_name"] is None
+    assert "X-Screen-Rename" not in _check_in(client, "old", "de:ad:be:ef:00:0b").headers
+
+
+@pytest.mark.parametrize("bad", ["", "a/b", "<b>", "x" * 64, 'a"b', "a\tb", "café", 7])
+def test_rename_rejects_names_the_firmware_would_refuse(bare_client, bad):
+    client, state = bare_client
+    _check_in(client, "old", "de:ad:be:ef:00:0c")
+    r = client.post("/hokku/api/screens/old/rename", json={"name": bad})
+    # A blank name means "cancel" (the API strips surrounding whitespace);
+    # everything else here is invalid.
+    if bad == "":
+        assert r.status_code == 200
+    else:
+        assert r.status_code == 400
+    assert state.scheduler.pending_rename("old") is None
+
+
+def test_rename_refused_for_firmware_that_cannot_apply_it(bare_client):
+    """Firmware that doesn't advertise rename (or sends no MAC) would ignore the
+    header forever, so the request is refused up front."""
+    client, _ = bare_client
+    _check_in(client, "no-flag", "de:ad:be:ef:00:0d", frame_state='{"ota": 1}')
+    _check_in(client, "no-mac", None)
+    assert client.post("/hokku/api/screens/no-flag/rename", json={"name": "x"}).status_code == 409
+    assert client.post("/hokku/api/screens/no-mac/rename", json={"name": "y"}).status_code == 409
+
+
+def test_rename_refuses_a_name_in_use_and_unknown_screens(bare_client):
+    client, _ = bare_client
+    _check_in(client, "a", "de:ad:be:ef:00:0e")
+    _check_in(client, "b", "de:ad:be:ef:00:0f")
+    assert client.post("/hokku/api/screens/a/rename", json={"name": "b"}).status_code == 409
+    assert client.post("/hokku/api/screens/zzz/rename", json={"name": "c"}).status_code == 404
+
+
+def test_status_reports_rename_state(bare_client):
+    client, _ = bare_client
+    _check_in(client, "a", "de:ad:be:ef:00:10")
+    _check_in(client, "old-fw", "de:ad:be:ef:00:11", frame_state='{"ota": 1}')
+    client.post("/hokku/api/screens/a/rename", json={"name": "kitchen"})
+    screens = client.get("/hokku/api/status").get_json()["screens"]
+    assert screens["a"]["rename_capable"] is True
+    assert screens["a"]["pending_name"] == "kitchen"
+    assert screens["old-fw"]["rename_capable"] is False
+
+
 # ── navigation ────────────────────────────────────────────────────────────────
 
 

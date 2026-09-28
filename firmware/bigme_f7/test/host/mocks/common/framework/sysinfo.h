@@ -12,6 +12,7 @@ struct sysinfo_wlan_sta_param {
 };
 
 struct sysinfo {
+    uint8_t                       mac_addr[6];
     enum wlan_mode                wlan_mode;
     struct sysinfo_wlan_sta_param wlan_sta_param;
 };

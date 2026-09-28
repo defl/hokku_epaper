@@ -87,7 +87,7 @@ void frame_state_build(char *buf, size_t buflen, const frame_state_t *fs)
         "\"last_sleep\":\"%s\",\"rssi\":%d,\"heap_kb\":%u,"
         "\"spurious\":%u,\"cfg_ver\":%u,\"clk_now\":%s,"
         "\"next_ep\":%s,\"sleep_err_s\":%s%s,\"wifi_cached\":%s,"
-        "\"ota\":1}",
+        "\"ota\":1,\"rename\":1}",
         fs->fw, fs->boot, fs->wake, fs->regime,
         uptime_buf, batfield, fs->usb,
         fs->last_sleep, fs->rssi, fs->heap_kb,

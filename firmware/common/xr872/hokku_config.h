@@ -44,5 +44,8 @@ void            hokku_config_load(void);
 hokku_config_t *hokku_config_get(void);
 /* Persist the current config to flash. Returns 0 on success. */
 int             hokku_config_save(void);
+/* Rename this screen (server-requested via X-Screen-Rename): validate, then
+ * update and persist. Returns 0 on success; -1 leaves the old name in place. */
+int             hokku_config_set_screen_name(const char *name);
 
 #endif /* HOKKU_CONFIG_H */

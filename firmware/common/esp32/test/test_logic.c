@@ -49,6 +49,7 @@
 #include "../../all/firmware_url.c"
 #include "../../all/frame_state.c"
 #include "../../all/sleep_cal.c"
+#include "../../all/screen_ident.c"
 #include "config.c"
 #include "state.c"
 #include "scheduler.c"
@@ -252,6 +253,29 @@ static void test_config_valid(void)
     CHECK(!config_is_valid(), "config: invalid on cfg_ver mismatch");
 }
 
+static void test_config_set_screen_name(void)
+{
+    memset(&config, 0, sizeof(config));
+    strcpy(config.screen_name, "old");
+    _mock_nvs_open_fail = 0;
+    _mock_nvs_set_str_fail = 0;
+    _mock_nvs_set_screen_name[0] = '\0';
+
+    CHECK(config_set_screen_name("kitchen"), "rename: valid name accepted");
+    CHECK(strcmp(config.screen_name, "kitchen") == 0, "rename: live config updated");
+    CHECK(strcmp(_mock_nvs_set_screen_name, "kitchen") == 0, "rename: persisted to NVS");
+
+    CHECK(!config_set_screen_name("bad/name"), "rename: invalid name refused");
+    CHECK(strcmp(config.screen_name, "kitchen") == 0, "rename: refused name leaves config alone");
+
+    _mock_nvs_set_str_fail = 1;
+    CHECK(!config_set_screen_name("hall"), "rename: NVS write failure reported");
+    CHECK(strcmp(config.screen_name, "kitchen") == 0,
+          "rename: failed write leaves the old name (RAM never ahead of flash)");
+    _mock_nvs_set_str_fail = 0;
+    _mock_nvs_open_fail = 1;
+}
+
 int main(void)
 {
     printf("=== test_logic (common/esp32) ===\n\n");
@@ -267,6 +291,7 @@ int main(void)
     test_adopt_cal_seed();
     test_log_ring_lifecycle();
     test_config_valid();
+    test_config_set_screen_name();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;
 }

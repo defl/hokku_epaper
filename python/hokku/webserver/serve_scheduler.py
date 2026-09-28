@@ -95,6 +95,9 @@ class ScreenTelemetryEntry:
     # Hardware model this screen self-reported via X-Screen-Model (e.g.
     # "huessen_epf1301", "bigme_f7"). None until the screen first identifies.
     screen_model: str | None = None
+    # Name the user asked for in the UI, not yet taken by the device. Sent as
+    # X-Screen-Rename on every response until the device reports it as its name.
+    pending_name: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -123,6 +126,7 @@ class ScreenTelemetryEntry:
             ota_error=d.get("ota_error"),
             ota_error_at=d.get("ota_error_at"),
             screen_model=d.get("screen_model"),
+            pending_name=d.get("pending_name"),
         )
 
 
@@ -425,7 +429,15 @@ class ServeScheduler:
                 ota_error=existing.ota_error if existing else None,
                 ota_error_at=existing.ota_error_at if existing else None,
                 screen_model=screen_model or (existing.screen_model if existing else None),
+                # The rename has landed once the device reports the new name.
+                pending_name=(
+                    existing.pending_name
+                    if existing and existing.pending_name != screen_name
+                    else None
+                ),
             )
+            if existing and existing.pending_name == screen_name:
+                logger.info("Screen %s renamed itself to %r", sid, screen_name)
             self._save()
             return sid
 
@@ -451,6 +463,45 @@ class ServeScheduler:
             sid = self._resolve_sid_locked(name, None)
             t = self._screens.get(sid) if sid else None
             return t.screen_model if t else None
+
+    # ── Rename (server-requested, applied by the device) ──────────
+
+    def request_rename(self, name: str, new_name: str | None) -> None:
+        """Ask the screen called ``name`` to rename itself to ``new_name``.
+
+        The device keeps the name in its own flash, so the rename only takes
+        effect when the device next checks in and applies X-Screen-Rename; until
+        then the record keeps its current name and ``pending_name`` shows the
+        request. ``new_name`` None (or equal to the current name) cancels a
+        pending rename. The record is keyed by MAC, so its history and
+        calibration carry over.
+
+        Raises KeyError if the screen is unknown, ValueError if the new name is
+        already used (or requested) by another screen. The caller validates the
+        name itself (screen_headers.screen_name_valid).
+        """
+        with self._lock:
+            sid = self._resolve_sid_locked(name, None)
+            if sid is None:
+                raise KeyError(name)
+            entry = self._screens[sid]
+            if new_name is None or new_name == entry.name:
+                target = None
+            else:
+                for other_sid, other in self._screens.items():
+                    if other_sid != sid and new_name in (other.name, other.pending_name):
+                        raise ValueError(f"name {new_name!r} is already used by another screen")
+                target = new_name
+            logger.info("Rename of %r -> %r", entry.name, target)
+            self._screens[sid] = replace(entry, pending_name=target)
+            self._save()
+
+    def pending_rename(self, name: str | None = None, mac: str | None = None) -> str | None:
+        """The name this screen has been asked to take, or None."""
+        with self._lock:
+            sid = self._resolve_sid_locked(name, mac)
+            e = self._screens.get(sid) if sid else None
+            return e.pending_name if e else None
 
     # ── OTA: per-screen update request + migration errors ─────────
 

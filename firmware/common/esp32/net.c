@@ -1,5 +1,7 @@
 #include "net.h"
 #include "log.h"    /* hokku_log_snapshot / hokku_log_reset / HOKKU_LOG_MAX_UPLOAD */
+#include "config.h" /* config_set_screen_name */
+#include "screen_ident.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -29,6 +31,10 @@ typedef struct {
      * many measurements back it (a cold-start seed; see sleep_cal). */
     char     cal_ppm_hdr[16];
     char     cal_n_hdr[16];
+    /* X-Screen-Rename: the name the user gave this screen in the server UI.
+     * One byte beyond the max so an over-long value stays over-long (and is
+     * refused) instead of being silently truncated into a valid one. */
+    char     rename_hdr[HOKKU_SCREEN_NAME_MAX + 2];
 } http_download_ctx_t;
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
@@ -48,6 +54,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             ctx->fw_update_hdr[0]     = '\0';
             ctx->cal_ppm_hdr[0]       = '\0';
             ctx->cal_n_hdr[0]         = '\0';
+            ctx->rename_hdr[0]        = '\0';
             break;
         case HTTP_EVENT_ON_HEADER:
             if (evt->header_key && evt->header_value) {
@@ -71,6 +78,10 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
                     strncpy(ctx->cal_n_hdr, evt->header_value,
                             sizeof(ctx->cal_n_hdr) - 1);
                     ctx->cal_n_hdr[sizeof(ctx->cal_n_hdr) - 1] = '\0';
+                } else if (strcasecmp(evt->header_key, HOKKU_HDR_SCREEN_RENAME) == 0) {
+                    strncpy(ctx->rename_hdr, evt->header_value,
+                            sizeof(ctx->rename_hdr) - 1);
+                    ctx->rename_hdr[sizeof(ctx->rename_hdr) - 1] = '\0';
                 }
             }
             break;
@@ -94,8 +105,7 @@ void hokku_screen_mac_str(char *out, size_t len)
         out[0] = '\0';
         return;
     }
-    snprintf(out, len, "%02x:%02x:%02x:%02x:%02x:%02x",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    hokku_mac_format(mac, out, len);
 }
 
 bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
@@ -134,7 +144,7 @@ bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
     if (screen_model && screen_model[0] != '\0')
         esp_http_client_set_header(client, "X-Screen-Model", screen_model);
     /* X-Screen-Mac: the server's durable per-device key (name is only a label). */
-    char mac_str[18];
+    char mac_str[HOKKU_MAC_STR_LEN];
     hokku_screen_mac_str(mac_str, sizeof(mac_str));
     if (mac_str[0] != '\0')
         esp_http_client_set_header(client, "X-Screen-Mac", mac_str);
@@ -232,6 +242,11 @@ bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
     /* Log upload succeeded with the image: reset the ring so the next cycle
      * starts fresh rather than re-uploading the same content. */
     hokku_log_reset();
+
+    /* Server-requested rename: persist it so the next request carries the new
+     * name. The server keys this screen by MAC, so nothing is lost. */
+    if (ctx.rename_hdr[0] != '\0')
+        config_set_screen_name(ctx.rename_hdr);
 
     if (ctx.received != expect_bytes) {
         ESP_LOGE("hokku", "Image size mismatch: got %d, expected %d",

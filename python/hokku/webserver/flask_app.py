@@ -83,6 +83,8 @@ from hokku.webserver.screen_headers import (
     parse_frame_state,
     parse_mac_header,
     parse_screen_model,
+    rename_capable,
+    screen_name_valid,
 )
 from hokku.webserver.time_utils import calculate_sleep_seconds, format_duration_human
 
@@ -314,12 +316,18 @@ def create_app(
         screen_mac = parse_mac_header(request.headers.get("X-Screen-Mac"))
         cal_ppm = parse_cal_ppm(frame_state.get("cal_ppm")) if frame_state else None
 
-        def _add_cal_seed(resp):
-            """Attach the MAC-pinned drift seed to every response; the device
-            decides whether to adopt it (based on the sample count)."""
+        def _add_screen_headers(resp):
+            """Attach the MAC-pinned drift seed to every response (the device
+            decides whether to adopt it, based on the sample count), and any
+            rename the user asked for in the UI. Firmware applies the rename only
+            on a 200, so it is repeated on every response until it lands."""
             mean_ppm, samples = scheduler.cal_seed_for(screen_name, screen_mac)
             resp.headers["X-Sleep-Cal-PPM"] = str(mean_ppm)
             resp.headers["X-Sleep-Cal-N"] = str(samples)
+            new_name = scheduler.pending_rename(screen_name, screen_mac)
+            if new_name and new_name != screen_name and rename_capable(frame_state):
+                resp.headers["X-Screen-Rename"] = new_name
+                logger.info("Asking %s to rename itself to %r", screen_name, new_name)
             return resp
 
         # A device that reports its model's bundled version has finished any
@@ -372,7 +380,7 @@ def create_app(
             resp = make_response(msg, status)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
             logger.debug("%s: %s told to retry in %ss", label, screen_name, sleep_seconds)
-            return _add_cal_seed(resp)
+            return _add_screen_headers(resp)
 
         binary = manager.panel_bytes_for_model_orientation(chosen, screen_model, cfg.orientation)
         if binary is None:
@@ -394,7 +402,7 @@ def create_app(
             )
             resp = make_response("Cached binary missing, try again shortly", 503)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
-            return _add_cal_seed(resp)
+            return _add_screen_headers(resp)
 
         scheduler.mark_served(chosen)
         scheduler.record_screen_call(
@@ -418,7 +426,7 @@ def create_app(
         response.headers["X-Sleep-Seconds"] = str(sleep_seconds)
         response.headers["X-Server-Time-Epoch"] = str(int(_time.time()))
         response.headers["Content-Disposition"] = "attachment; filename=hokku.bin"
-        _add_cal_seed(response)
+        _add_screen_headers(response)
 
         # Manual OTA: if the user toggled "update on next refresh" and the screen
         # is OTA-capable with firmware to ship, tell it to update (it ignores this
@@ -516,6 +524,14 @@ def create_app(
         if url_override:
             migrated["image_url"] = url_override
             logger.info("Applying server URL override for %s: %s", screen_name, url_override)
+        # A rename still pending when an OTA starts goes into the new config too,
+        # so the update can't quietly bring the old name back.
+        new_name = state.scheduler.pending_rename(
+            screen_name, parse_mac_header(request.headers.get("X-Screen-Mac"))
+        )
+        if new_name:
+            migrated["screen_name"] = new_name
+            logger.info("Applying pending rename for %s: %r", screen_name, new_name)
 
         if not _nvs_build_slots.acquire(blocking=False):
             logger.warning("firmware-config: NVS build slots exhausted, refusing %s", screen_name)
@@ -801,6 +817,38 @@ def create_app(
         """
         state.scheduler.remove_screen(name)
         return jsonify({"ok": True})
+
+    @app.route("/hokku/api/screens/<string:name>/rename", methods=["POST"])
+    def api_screen_rename(name: str):
+        """Ask a screen to rename itself; ``{"name": null}`` cancels.
+
+        The name lives in the device's own flash, so this only records the
+        request: the screen applies it on its next check-in. The server keys the
+        screen by MAC, so its history, settings and calibration carry over."""
+        body = request.get_json(silent=True) or {}
+        new_name = body.get("name")
+        if isinstance(new_name, str):
+            new_name = new_name.strip() or None
+        entry = state.scheduler.screens().get(name)
+        if entry is None:
+            return jsonify({"error": f"unknown screen {name!r}"}), 404
+        if new_name is not None:
+            if not screen_name_valid(new_name):
+                return jsonify(
+                    {
+                        "error": "name must be 1-63 letters, digits, spaces or - _ . ' ( ), "
+                        "without leading or trailing spaces"
+                    }
+                ), 400
+            if not (rename_capable(entry.frame_state) and entry.mac):
+                return jsonify(
+                    {"error": "this screen's firmware can't be renamed remotely; update it first"}
+                ), 409
+        try:
+            state.scheduler.request_rename(name, new_name)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 409
+        return jsonify({"ok": True, "pending_name": state.scheduler.pending_rename(name)})
 
     @app.route("/hokku/api/screens/<string:name>/config", methods=["PATCH"])
     def api_screen_config(name: str):
@@ -1124,6 +1172,8 @@ def create_app(
                 "firmware_build": t.firmware_build,
                 "ota_pending": scheduler.is_ota_pending(sname),
                 "ota_capable": bool(t.frame_state and t.frame_state.get("ota")),
+                "rename_capable": rename_capable(t.frame_state) and t.mac is not None,
+                "pending_name": t.pending_name,
                 "ota_error": t.ota_error,
                 "ota_error_at": (
                     datetime.fromtimestamp(t.ota_error_at).isoformat(timespec="seconds")

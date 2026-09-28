@@ -7,6 +7,8 @@ import random
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
 from hokku.webserver.orientation import Orientation
@@ -191,6 +193,57 @@ def test_calibration_survives_rename_via_mac(app_config: AppConfig):
     assert "new-name" in screens and "old-name" not in screens
     mean, n = sched.cal_seed_for("new-name")
     assert mean == 8000 and n == 2  # both samples kept across the rename
+
+
+def test_requested_rename_lands_on_the_same_record(app_config: AppConfig):
+    """A UI rename stays pending until the device reports the new name, then
+    clears, and the record (with its calibration) is the same one."""
+    sched = ServeScheduler(SingleThreadedImageManager(app_config))
+    mac = "de:ad:be:ef:00:02"
+    sched.record_screen_call("old", "1.1.1.1", 300, None, None, None, mac=mac, cal_ppm=7000)
+    sid = sched.resolve(name="old")
+
+    sched.request_rename("old", "hallway")
+    assert sched.pending_rename("old") == "hallway"
+    assert sched.pending_rename(mac=mac) == "hallway"
+    # The device hasn't applied it yet: still reports the old name.
+    sched.record_screen_call("old", "1.1.1.1", 300, None, None, None, mac=mac)
+    assert sched.screens()["old"].pending_name == "hallway"
+
+    sched.record_screen_call("hallway", "1.1.1.1", 300, None, None, None, mac=mac)
+    screens = sched.screens()
+    assert "hallway" in screens and "old" not in screens
+    assert screens["hallway"].pending_name is None
+    assert sched.resolve(name="hallway") == sid
+    assert sched.cal_seed_for("hallway") == (7000, 1)
+
+
+def test_rename_cancel_and_conflicts(app_config: AppConfig):
+    sched = ServeScheduler(SingleThreadedImageManager(app_config))
+    sched.record_screen_call("a", "1.1.1.1", 300, None, None, None, mac="aa:aa:aa:aa:aa:01")
+    sched.record_screen_call("b", "1.1.1.2", 300, None, None, None, mac="aa:aa:aa:aa:aa:02")
+
+    with pytest.raises(ValueError, match="already used"):
+        sched.request_rename("a", "b")
+    sched.request_rename("a", "c")
+    with pytest.raises(ValueError, match="already used"):
+        sched.request_rename("b", "c")  # "c" is spoken for by a's pending rename
+    with pytest.raises(KeyError):
+        sched.request_rename("nobody", "d")
+
+    sched.request_rename("a", None)
+    assert sched.pending_rename("a") is None
+    sched.request_rename("a", "c")
+    sched.request_rename("a", "a")  # renaming to its own name also cancels
+    assert sched.pending_rename("a") is None
+
+
+def test_pending_rename_persists(app_config: AppConfig):
+    mgr = SingleThreadedImageManager(app_config)
+    sched = ServeScheduler(mgr)
+    sched.record_screen_call("a", "1.1.1.1", 300, None, None, None, mac="aa:aa:aa:aa:aa:01")
+    sched.request_rename("a", "kitchen")
+    assert ServeScheduler(mgr).pending_rename("a") == "kitchen"
 
 
 def test_calibration_reattaches_when_mac_appears(app_config: AppConfig):

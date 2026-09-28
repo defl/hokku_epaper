@@ -503,3 +503,28 @@ def test_firmware_config_returns_migrated_nvs_image(esp32_mod, app_config, tmp_p
     assert back["screen_name"] == "Den"
     assert back["image_url"] == cfg["image_url"]
     assert back["wifi_order"] == 1
+
+
+@pytest.mark.skipif(
+    not esp32_nvs.nvs_tool_available(), reason="esp-idf-nvs-partition-gen not installed"
+)
+def test_firmware_config_carries_a_pending_rename(esp32_mod, app_config, tmp_path):
+    """An OTA that starts before a UI rename has landed writes the NEW name into
+    the rebuilt NVS, so the update can't bring the old name back."""
+    state = _bare_state(app_config)
+    client = _client(state, tmp_path)
+    mac = "de:ad:be:ef:00:20"
+    state.scheduler.record_screen_call("Den", "1.1.1.1", 300, None, None, None, mac=mac)
+    state.scheduler.request_rename("Den", "Study")
+    cfg = {"wifi_ssid1": "Net", "image_url": "http://x/hokku/screen/", "screen_name": "Den"}
+    r = client.get(
+        "/hokku/firmware-config",
+        headers={
+            "X-Screen-Name": "Den",
+            "X-Screen-Mac": mac,
+            "X-Screen-Model": esp32_mod.SPEC.model_id,
+            "X-Config-State": json.dumps(cfg),
+        },
+    )
+    assert r.status_code == 200
+    assert esp32_mod.read_nvs(r.data)["screen_name"] == "Study"

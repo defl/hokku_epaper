@@ -18,6 +18,7 @@
 
 #include "mocks/image/fdcm.h"
 
+#include "../../../common/all/screen_ident.c"
 #include "../../../common/xr872/hokku_config.c"
 
 /* ── Minimal test framework ────────────────────────────────────────────── */
@@ -184,6 +185,38 @@ static void test_save_fails_when_fdcm_open_fails(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+ *  hokku_config_set_screen_name — server-requested rename
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+static void test_rename_persists(void)
+{
+    reset_mock_fdcm();
+    strncpy(g_cfg.screen_name, "bigme-f7", HOKKU_NAME_MAX - 1);
+    CHECK(hokku_config_set_screen_name("hallway") == 0, "rename: valid name accepted");
+    const hokku_config_t *written = (const hokku_config_t *)_mock_fdcm_write_buf;
+    CHECK(strcmp(g_cfg.screen_name, "hallway") == 0 &&
+          strcmp(written->screen_name, "hallway") == 0,
+          "rename: live config and flash both carry the new name");
+}
+static void test_rename_refuses_invalid(void)
+{
+    reset_mock_fdcm();
+    strncpy(g_cfg.screen_name, "bigme-f7", HOKKU_NAME_MAX - 1);
+    CHECK(hokku_config_set_screen_name("a\r\nb") == -1, "rename: CR/LF refused");
+    CHECK(_mock_fdcm_write_call_count == 0, "rename: refused name is never written");
+    CHECK(strcmp(g_cfg.screen_name, "bigme-f7") == 0, "rename: refused name leaves config alone");
+}
+static void test_rename_keeps_old_name_on_write_failure(void)
+{
+    reset_mock_fdcm();
+    strncpy(g_cfg.screen_name, "bigme-f7", HOKKU_NAME_MAX - 1);
+    _mock_fdcm_open_fail = 1;  /* g_cfg_fdcm is NULL, so save() must open and fails */
+    CHECK(hokku_config_set_screen_name("hallway") == -1, "rename: write failure reported");
+    CHECK(strcmp(g_cfg.screen_name, "bigme-f7") == 0,
+          "rename: failed write restores the old name (RAM never ahead of flash)");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
  *  Entry point
  * ═══════════════════════════════════════════════════════════════════════ */
 
@@ -200,6 +233,9 @@ int main(void)
     test_save_stamps_magic_and_version();
     test_save_opens_fdcm_lazily_if_not_yet_open();
     test_save_fails_when_fdcm_open_fails();
+    test_rename_persists();
+    test_rename_refuses_invalid();
+    test_rename_keeps_old_name_on_write_failure();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

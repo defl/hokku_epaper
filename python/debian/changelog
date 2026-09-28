@@ -1,3 +1,13 @@
+hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
+
+  * Rename a screen from the web UI. The server asks the screen to rename
+    itself (X-Screen-Rename) and keeps its history, settings and calibration,
+    since screens are keyed by MAC. The Bigme F7 now sends X-Screen-Mac too.
+  * Firmware versions: huessen_epf1301 1.2.26, seeedstudio_e1004 1.2.6,
+    bigme_f7 1.2.13 (the rename needs these on the screen).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 28 Sep 2026 02:36:33 +0000
+
 hokku-server (4.0.0~beta3-1) unstable; urgency=medium
 
   * Release v4.0.0-beta3

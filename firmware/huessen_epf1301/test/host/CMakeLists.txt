@@ -74,6 +74,7 @@ target_include_directories(test_config PRIVATE
     ${HOKKU_TEST}/mocks
     ${HOKKU_TEST}
     ${HOKKU_COMMON}
+    ${HOKKU_COMMON_ALL} # screen_ident.h (config_set_screen_name)
     ../../main
     ${CMAKE_BINARY_DIR} # for generated version.h
 )

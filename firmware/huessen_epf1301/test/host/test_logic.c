@@ -64,6 +64,7 @@
 #include "../../../common/all/frame_state.c"  /* X-Frame-State JSON builder         */
 #include "../../../common/all/sleep_cal.c"    /* oscillator-drift calibration       */
 #include "../../../common/all/json_util.c"    /* json_escape                        */
+#include "../../../common/all/screen_ident.c" /* X-Screen-Mac format + rename rule  */
 #include "../../../common/all/logbuf.c"       /* log buffer primitive (two-tier log)*/
 #include "../../../common/all/frame_proto.c"   /* serial frame-upload protocol       */
 #include "../../../common/all/interactive.c"   /* USB-interactive mode policy        */

@@ -22,5 +22,6 @@ idf_component_register(
          "${HOKKU_COMMON_ALL}/logbuf.c"
          "${HOKKU_COMMON_ALL}/backoff.c"
          "${HOKKU_COMMON_ALL}/sleep_cal.c"
+         "${HOKKU_COMMON_ALL}/screen_ident.c"
     INCLUDE_DIRS "." "${HOKKU_COMMON}" "${HOKKU_COMMON_ALL}" "${CMAKE_BINARY_DIR}"
 )
