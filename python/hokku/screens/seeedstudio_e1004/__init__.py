@@ -19,8 +19,6 @@ from hokku.common.esp32.spec import Esp32Spec
 from . import constants
 from .constants import (
     CONFIG_VERSION,
-    ESP32S3_PID,
-    ESP32S3_VID,
     NVS_OFFSET,
     NVS_SIZE,
 )
@@ -37,8 +35,8 @@ SPEC = Esp32Spec(
     ota1_offset=constants.OTA1_OFFSET,
     otadata_offset=constants.OTADATA_OFFSET,
     otadata_size=constants.OTADATA_SIZE,
-    vid=constants.ESP32S3_VID,
-    pid=constants.ESP32S3_PID,
+    vid=constants.USB_VID,
+    pid=constants.USB_PID,
     baud=constants.ESPTOOL_BAUD,
     nvs_namespace=constants.NVS_NAMESPACE,
 )
@@ -79,8 +77,6 @@ flash_device = partial(_flasher.flash_device, SPEC)
 
 __all__ = [
     "CONFIG_VERSION",
-    "ESP32S3_PID",
-    "ESP32S3_VID",
     "NVS_OFFSET",
     "NVS_SIZE",
     "SPEC",

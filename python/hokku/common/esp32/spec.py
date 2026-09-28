@@ -8,8 +8,10 @@ screens; only these values change:
   - partition offsets   — from the screen's ``firmware/<model>/partitions.csv``
   - ``model_id``        — also derives the release-artifact name ``hokku-<model>-<ver>.bin``
 
-The USB VID:PID and NVS-format constants are the same for every ESP32-S3 board,
-so they default; a screen only overrides them if its hardware genuinely differs.
+The NVS-format constants are the same for every ESP32-S3 board, so they default.
+The USB VID:PID defaults to the SoC's native USB Serial/JTAG, but that is board
+wiring, not silicon: a board whose USB-C goes through a UART bridge (the Seeed
+E1004's CH340K) enumerates as the bridge and must override it.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ class Esp32Spec:
     otadata_offset: int = 0x610000
     otadata_size: int = 0x2000
 
-    # ESP32-S3 USB Serial/JTAG VID:PID (same for every board here).
+    # USB VID:PID the board enumerates as; defaults to native USB Serial/JTAG.
     vid: int = 0x303A
     pid: int = 0x1001
     baud: str = "921600"

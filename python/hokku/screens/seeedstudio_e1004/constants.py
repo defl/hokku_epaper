@@ -1,17 +1,20 @@
 """ESP32-S3 / NVS constants for the Seeed reTerminal E1004.
 
 Partition layout matches ``firmware/seeedstudio_e1004/partitions.csv`` (A/B OTA,
-32 MB flash). The NVS binary-format + USB VID/PID constants are the ESP32-S3
-standard, identical to huessen_epf1301. ``CONFIG_VERSION`` must match the seeed
-firmware's CONFIG_VERSION (the CONFIG digit of ``firmware/seeedstudio_e1004/VERSION``
+32 MB flash). The NVS binary-format constants are the ESP32-S3 standard, identical
+to huessen_epf1301; the USB VID:PID is not (see below). ``CONFIG_VERSION`` must
+match the seeed firmware's CONFIG_VERSION (the CONFIG digit of ``firmware/seeedstudio_e1004/VERSION``
 = PROTOCOL.CONFIG.N); seeed shares huessen's exact config schema, hence 2.
 """
 
 from __future__ import annotations
 
-# ESP32-S3 USB Serial/JTAG VID:PID (same silicon as huessen).
-ESP32S3_VID = 0x303A
-ESP32S3_PID = 0x1001
+# USB VID:PID the board enumerates as. Unlike huessen, the USB-C port is an
+# external CH340K bridge on UART0, not the SoC's native USB Serial/JTAG, so the
+# host sees 1A86:7522 and never 303A:1001 (docs/screens/seeedstudio_e1004/
+# hardware_facts.md). Not to be confused with the Bigme F7's CH340 (1A86:7523).
+USB_VID = 0x1A86
+USB_PID = 0x7522
 
 # NVS partition location (from firmware/seeedstudio_e1004/partitions.csv).
 NVS_OFFSET = 0x9000

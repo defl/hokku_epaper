@@ -40,12 +40,12 @@ except ImportError:
 
 # Constants + NVS read/build come from the shared huessen_epf1301 library (single source
 # of truth, no ESP-IDF dependency). CONFIG_VERSION is re-exported for esp32_setup.
+from hokku.common.esp32.device import usb_spec
+from hokku.screens.flasher_registry import esp32_specs
 from hokku.screens.huessen_epf1301 import build_nvs_binary as _build_nvs_binary
 from hokku.screens.huessen_epf1301 import read_nvs as _read_nvs
 from hokku.screens.huessen_epf1301.constants import (
     CONFIG_VERSION,  # noqa: F401 — re-exported for esp32_setup.py
-    ESP32S3_PID,
-    ESP32S3_VID,
     NVS_OFFSET,
     NVS_SIZE,
     PAGE_ACTIVE,  # noqa: F401 — re-exported for tools tests
@@ -53,10 +53,13 @@ from hokku.screens.huessen_epf1301.constants import (
 
 
 def find_esp32_port():
-    """Auto-detect ESP32-S3 USB Serial/JTAG port."""
-    ports = serial.tools.list_ports.comports()
-    for port in ports:
-        if port.vid == ESP32S3_VID and port.pid == ESP32S3_PID:
+    """Auto-detect the port of any ESP32-S3 hokku screen, by its USB VID:PID.
+
+    Each board has its own id (huessen: native USB Serial/JTAG, E1004: CH340K
+    bridge); their NVS layout is identical, so the model does not matter here."""
+    specs = esp32_specs()
+    for port in serial.tools.list_ports.comports():
+        if usb_spec(specs, port.vid, port.pid) is not None:
             return port.device
     return None
 

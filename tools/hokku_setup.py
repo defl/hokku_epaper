@@ -10,8 +10,8 @@ Usage:
     python hokku_setup.py [--model <screen_model>]
 
     --model selects the ESP32-S3 screen to flash/configure (default
-    huessen_epf1301). The two ESP32 boards share a USB VID:PID, so the model is an
-    explicit choice, not auto-detected.
+    huessen_epf1301). The model is an explicit choice, and only a device with that
+    model's USB id (huessen 303A:1001, E1004 CH340K 1A86:7522) is offered.
 """
 
 import shutil

@@ -23,6 +23,26 @@ class TestFindPort:
         assert hokku_config.find_esp32_port() == "/dev/ttyACM0"
 
     @patch("serial.tools.list_ports.comports")
+    def test_finds_e1004_behind_ch340k(self, mock_comports):
+        # The E1004's USB-C is a CH340K bridge (1A86:7522), never 303A:1001 (#45).
+        port = MagicMock()
+        port.vid = 0x1A86
+        port.pid = 0x7522
+        port.device = "COM12"
+        mock_comports.return_value = [port]
+        assert hokku_config.find_esp32_port() == "COM12"
+
+    @patch("serial.tools.list_ports.comports")
+    def test_ignores_bigme_f7_ch340(self, mock_comports):
+        # The F7's CH340 (1A86:7523) is not an ESP32 screen.
+        port = MagicMock()
+        port.vid = 0x1A86
+        port.pid = 0x7523
+        port.device = "COM9"
+        mock_comports.return_value = [port]
+        assert hokku_config.find_esp32_port() is None
+
+    @patch("serial.tools.list_ports.comports")
     def test_no_esp32(self, mock_comports):
         mock_comports.return_value = []
         assert hokku_config.find_esp32_port() is None

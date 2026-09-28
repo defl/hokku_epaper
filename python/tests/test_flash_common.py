@@ -589,6 +589,15 @@ def test_flash_devices_classifies_bigme_f7(app_config, tmp_path, monkeypatch):
                 "vid": 0x303A,
                 "pid": 0x1001,
                 "is_esp32": True,
+                "model": "huessen_epf1301",
+            },
+            {
+                "port": "COM12",
+                "description": "USB-SERIAL CH340K",
+                "vid": 0x1A86,
+                "pid": 0x7522,
+                "is_esp32": True,
+                "model": "seeedstudio_e1004",
             },
         ],
     )
@@ -596,6 +605,25 @@ def test_flash_devices_classifies_bigme_f7(app_config, tmp_path, monkeypatch):
     devs = {d["port"]: d for d in client.get("/hokku/api/flash/devices").get_json()["devices"]}
     assert devs["COM7"]["is_bigme_f7"] is True  # CH340 -> Bigme F7
     assert devs["COM3"]["is_bigme_f7"] is False  # ESP32-S3 -> not F7
+    assert devs["COM12"]["is_bigme_f7"] is False  # E1004's CH340K -> not F7
+
+
+def test_flash_devices_scan_recognises_every_esp32_model(app_config, tmp_path, monkeypatch):
+    # The web scan is not told the model, so it must match every ESP32 screen's
+    # USB id, not just huessen's (#45).
+    fw = tmp_path / "hokku-huessen_epf1301-1.2.9.bin"
+    fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
+    monkeypatch.setattr(huessen_epf1301, "merged_firmware_file", lambda *a, **k: fw)
+    seen = {}
+
+    def fake_scan(**kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(huessen_epf1301, "scan_devices", fake_scan)
+    client = _client(_bare_state(app_config), tmp_path)
+    assert client.get("/hokku/api/flash/devices").status_code == 200
+    assert {s.model_id for s in seen["specs"]} == {"huessen_epf1301", "seeedstudio_e1004"}
 
 
 # ── ServeScheduler: OTA pending flag ──────────────────────────────────────────

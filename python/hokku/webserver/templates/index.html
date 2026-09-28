@@ -952,7 +952,7 @@
           <option value="huessen_epf1301">Huessen EPF1301 (EL133UF1, 16 MB)</option>
           <option value="seeedstudio_e1004">Seeed reTerminal E1004 (32 MB)</option>
         </select>
-        <span class="flash-hint">Both boards are ESP32-S3 and look identical to USB — pick the one you're flashing.</span>
+        <span class="flash-hint">Picked from the scanned device's USB id — check it matches the screen you're flashing.</span>
       </div>
       <div class="config-row">
         <label>Wi-Fi network:</label>
@@ -2415,10 +2415,16 @@ function showToast(msg) {
 let flashDevices = [];
 let flashPollTimer = null;
 
+// Display name of an ESP32 model_id, taken from the model <select>.
+function flashModelName(model) {
+  const opt = [...document.getElementById('flash-model').options].find(o => o.value === model);
+  return opt ? opt.textContent : '';
+}
+
 function flashDeviceLabel(d) {
   if (d.is_bigme_f7) return `${d.port} — Bigme F7 (XR872)`;
   if (d.is_esp32) {
-    let s = `${d.port} — ESP32-S3 screen (Huessen EPF1301 or Seeed E1004)`;
+    let s = `${d.port} — ${flashModelName(d.model) || 'ESP32-S3 screen'}`;
     if (d.config && d.config.screen_name) s += ` · "${d.config.screen_name}"`;
     return s;
   }
@@ -2435,10 +2441,9 @@ async function scanFlashDevices() {
   btn.disabled = true; btn.textContent = 'Scanning…';
   note.textContent = 'Scanning USB serial ports…';
   try {
-    // Judge device firmware freshness against the currently-selected model (the
-    // two ESP32 boards enumerate identically; only the version compare differs).
-    const model = (document.getElementById('flash-model') || {}).value || '';
-    const r = await fetch('/hokku/api/flash/devices' + (model ? `?model=${encodeURIComponent(model)}` : ''));
+    // Each ESP32 device comes back with the model its USB id identifies, and its
+    // firmware freshness judged against that model's release.
+    const r = await fetch('/hokku/api/flash/devices');
     if (r.status === 409) { showToast('A flash is in progress'); note.textContent = ''; return; }
     if (r.status === 503) {
       const j = await r.json();
@@ -2517,6 +2522,9 @@ function onFlashDeviceChange() {
     note.textContent = 'Warning: this port is not an ESP32-S3. Flashing will likely fail.';
     return;
   }
+  // The USB id tells the two ESP32 boards apart; start the model on the right one.
+  const modelSel = document.getElementById('flash-model');
+  if (dev.model && flashModelName(dev.model)) modelSel.value = dev.model;
 
   // Build the note line.
   const parts = [];
@@ -2553,14 +2561,14 @@ function onFlashDeviceChange() {
 }
 
 function onFlashModelChange() {
-  // The freshness note ("up to date?") was computed for whichever model was
-  // selected at scan time. If a device is already selected, prompt a re-scan so
-  // the check reflects the newly-chosen model.
+  // The scan identified the device's model from its USB id. Overriding it means
+  // flashing another board's firmware (flash size and partitions differ), so say so.
   const sel = document.getElementById('flash-device');
   const dev = flashDevices.find(d => d.port === (sel && sel.value));
-  if (dev && dev.is_esp32) {
+  const model = document.getElementById('flash-model').value;
+  if (dev && dev.is_esp32 && dev.model && dev.model !== model) {
     const note = document.getElementById('flash-device-note');
-    if (note) note.textContent = 'Model changed — press Scan to re-check this device against the selected model.';
+    if (note) note.textContent = `Warning: this device identifies as ${flashModelName(dev.model)} over USB, not the selected model.`;
   }
 }
 
