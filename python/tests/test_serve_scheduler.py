@@ -182,68 +182,60 @@ def test_cal_seed_unknown_is_zero(app_config: AppConfig):
     assert sched.cal_seed_for("frame-1") == (0, 0)
 
 
-def test_calibration_survives_rename_via_mac(app_config: AppConfig):
-    """Renaming a device (same MAC) keeps its record + calibration."""
+def test_known_screen_keeps_the_servers_name(app_config: AppConfig):
+    """Once the server knows a device (by MAC) it owns the name: a different
+    reported name doesn't rename the record, and calibration stays with it."""
     mgr = SingleThreadedImageManager(app_config)
     sched = ServeScheduler(mgr)
     mac = "de:ad:be:ef:00:01"
     sched.record_screen_call("old-name", "1.1.1.1", 300, None, None, None, mac=mac, cal_ppm=8000)
     sched.record_screen_call("new-name", "1.1.1.1", 300, None, None, None, mac=mac, cal_ppm=8000)
-    screens = sched.screens()
-    assert "new-name" in screens and "old-name" not in screens
-    mean, n = sched.cal_seed_for("new-name")
-    assert mean == 8000 and n == 2  # both samples kept across the rename
+    assert list(sched.screens()) == ["old-name"]
+    assert sched.identify("new-name", mac) == "old-name"
+    mean, n = sched.cal_seed_for("old-name")
+    assert mean == 8000 and n == 2
 
 
-def test_requested_rename_lands_on_the_same_record(app_config: AppConfig):
-    """A UI rename stays pending until the device reports the new name, then
-    clears, and the record (with its calibration) is the same one."""
-    sched = ServeScheduler(SingleThreadedImageManager(app_config))
+def test_rename_keeps_the_record(app_config: AppConfig):
+    """A UI rename changes the server's name at once; the device, still
+    reporting its old name, is handled under the new one."""
+    mgr = SingleThreadedImageManager(app_config)
+    sched = ServeScheduler(mgr)
     mac = "de:ad:be:ef:00:02"
     sched.record_screen_call("old", "1.1.1.1", 300, None, None, None, mac=mac, cal_ppm=7000)
     sid = sched.resolve(name="old")
 
-    sched.request_rename("old", "hallway")
-    assert sched.pending_rename("old") == "hallway"
-    assert sched.pending_rename(mac=mac) == "hallway"
-    # The device hasn't applied it yet: still reports the old name.
+    sched.rename_screen("old", "hallway")
+    assert list(sched.screens()) == ["hallway"]
+    assert sched.identify("old", mac) == "hallway"
     sched.record_screen_call("old", "1.1.1.1", 300, None, None, None, mac=mac)
-    assert sched.screens()["old"].pending_name == "hallway"
-
-    sched.record_screen_call("hallway", "1.1.1.1", 300, None, None, None, mac=mac)
-    screens = sched.screens()
-    assert "hallway" in screens and "old" not in screens
-    assert screens["hallway"].pending_name is None
+    assert list(sched.screens()) == ["hallway"]
     assert sched.resolve(name="hallway") == sid
     assert sched.cal_seed_for("hallway") == (7000, 1)
+    assert list(ServeScheduler(mgr).screens()) == ["hallway"]  # persisted
 
 
-def test_rename_cancel_and_conflicts(app_config: AppConfig):
+def test_rename_conflicts(app_config: AppConfig):
     sched = ServeScheduler(SingleThreadedImageManager(app_config))
     sched.record_screen_call("a", "1.1.1.1", 300, None, None, None, mac="aa:aa:aa:aa:aa:01")
     sched.record_screen_call("b", "1.1.1.2", 300, None, None, None, mac="aa:aa:aa:aa:aa:02")
-
     with pytest.raises(ValueError, match="already used"):
-        sched.request_rename("a", "b")
-    sched.request_rename("a", "c")
-    with pytest.raises(ValueError, match="already used"):
-        sched.request_rename("b", "c")  # "c" is spoken for by a's pending rename
+        sched.rename_screen("a", "b")
     with pytest.raises(KeyError):
-        sched.request_rename("nobody", "d")
-
-    sched.request_rename("a", None)
-    assert sched.pending_rename("a") is None
-    sched.request_rename("a", "c")
-    sched.request_rename("a", "a")  # renaming to its own name also cancels
-    assert sched.pending_rename("a") is None
+        sched.rename_screen("nobody", "d")
+    sched.rename_screen("a", "a")  # no-op
+    assert set(sched.screens()) == {"a", "b"}
 
 
-def test_pending_rename_persists(app_config: AppConfig):
-    mgr = SingleThreadedImageManager(app_config)
-    sched = ServeScheduler(mgr)
-    sched.record_screen_call("a", "1.1.1.1", 300, None, None, None, mac="aa:aa:aa:aa:aa:01")
-    sched.request_rename("a", "kitchen")
-    assert ServeScheduler(mgr).pending_rename("a") == "kitchen"
+def test_new_screen_with_a_taken_name_gets_a_unique_one(app_config: AppConfig):
+    """Two devices reporting the same name (e.g. two F7s on the default) become
+    two records; the second is given a unique name, which is sent back."""
+    sched = ServeScheduler(SingleThreadedImageManager(app_config))
+    assert sched.identify("bigme-f7", "aa:aa:aa:aa:aa:01") == "bigme-f7"
+    assert sched.identify("bigme-f7", "aa:aa:aa:aa:aa:02") == "bigme-f7-2"
+    assert sched.identify("bigme-f7", "aa:aa:aa:aa:aa:03") == "bigme-f7-3"
+    assert sched.identify("bigme-f7", "aa:aa:aa:aa:aa:02") == "bigme-f7-2"  # stable
+    assert set(sched.screens()) == {"bigme-f7", "bigme-f7-2", "bigme-f7-3"}
 
 
 def test_calibration_reattaches_when_mac_appears(app_config: AppConfig):

@@ -76,10 +76,11 @@ int hokku_config_save(void)
 
 int hokku_config_set_screen_name(const char *name)
 {
+    /* Same name first: the server sends it on every response. */
+    if (name && strcmp(g_cfg.screen_name, name) == 0)
+        return 0;
     if (!hokku_screen_name_valid(name) || strlen(name) >= HOKKU_NAME_MAX)
         return -1;
-    if (strcmp(g_cfg.screen_name, name) == 0)
-        return 0;
     char old[HOKKU_NAME_MAX];
     memcpy(old, g_cfg.screen_name, sizeof(old));
     strncpy(g_cfg.screen_name, name, HOKKU_NAME_MAX - 1);

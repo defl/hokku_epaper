@@ -206,6 +206,15 @@ static void test_rename_refuses_invalid(void)
     CHECK(_mock_fdcm_write_call_count == 0, "rename: refused name is never written");
     CHECK(strcmp(g_cfg.screen_name, "bigme-f7") == 0, "rename: refused name leaves config alone");
 }
+static void test_rename_same_name_is_a_no_op(void)
+{
+    /* The server echoes the name on every response, including a legacy name the
+     * rename rule would refuse: that must not write flash or fail. */
+    reset_mock_fdcm();
+    strncpy(g_cfg.screen_name, "legacy/name", HOKKU_NAME_MAX - 1);
+    CHECK(hokku_config_set_screen_name("legacy/name") == 0, "rename: unchanged name accepted");
+    CHECK(_mock_fdcm_write_call_count == 0, "rename: unchanged name is never rewritten");
+}
 static void test_rename_keeps_old_name_on_write_failure(void)
 {
     reset_mock_fdcm();
@@ -235,6 +244,7 @@ int main(void)
     test_save_fails_when_fdcm_open_fails();
     test_rename_persists();
     test_rename_refuses_invalid();
+    test_rename_same_name_is_a_no_op();
     test_rename_keeps_old_name_on_write_failure();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);

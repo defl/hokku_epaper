@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import string
+from typing import TypeGuard
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,8 @@ def parse_mac_header(raw: str | None) -> str | None:
     return v
 
 
-# The rule for a server-sent screen name (X-Screen-Rename). Must equal
+# The rule for a screen name the server sends back (response X-Screen-Name).
+# Must equal
 # HOKKU_SCREEN_NAME_MAX / HOKKU_SCREEN_NAME_PUNCT in
 # firmware/common/all/screen_ident.h: the firmware refuses anything else.
 SCREEN_NAME_MAX = 63
@@ -90,7 +92,7 @@ SCREEN_NAME_PUNCT = " -_.'()"
 _SCREEN_NAME_CHARS = frozenset(string.ascii_letters + string.digits + SCREEN_NAME_PUNCT)
 
 
-def screen_name_valid(name: object) -> bool:
+def screen_name_valid(name: object) -> TypeGuard[str]:
     """Whether ``name`` is acceptable as a server-sent screen name.
 
     The same rule as the firmware's ``hokku_screen_name_valid``: 1..63 ASCII
@@ -104,11 +106,6 @@ def screen_name_valid(name: object) -> bool:
     if name[0] == " " or name[-1] == " ":
         return False
     return all(c in _SCREEN_NAME_CHARS for c in name)
-
-
-def rename_capable(frame_state: dict | None) -> bool:
-    """Whether the firmware applies X-Screen-Rename (advertises ``"rename":1``)."""
-    return bool(frame_state and frame_state.get("rename"))
 
 
 def parse_cal_ppm(raw) -> int | None:

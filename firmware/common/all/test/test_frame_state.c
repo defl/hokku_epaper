@@ -29,7 +29,7 @@ static void test_full_object_exact(void)
         "\"last_sleep\":\"timer_wake\",\"rssi\":-58,\"heap_kb\":210,"
         "\"spurious\":0,\"cfg_ver\":3,\"clk_now\":1700000000,"
         "\"next_ep\":1700003600,\"sleep_err_s\":-3,\"cal_ppm\":1234,\"wifi_cached\":true,"
-        "\"ota\":1,\"rename\":1}";
+        "\"ota\":1}";
     CHECK(strcmp(buf, expect) == 0, "frame_state: full object matches the locked schema exactly");
 }
 
@@ -122,8 +122,7 @@ static void test_always_ota_capable(void)
     char buf[512];
     frame_state_t fs = base_fs();
     frame_state_build(buf, sizeof(buf), &fs);
-    CHECK(strstr(buf, "\"ota\":1,\"rename\":1}") != NULL,
-          "frame_state: always advertises ota:1 and rename:1");
+    CHECK(strstr(buf, "\"ota\":1}") != NULL, "frame_state: always advertises ota:1");
 }
 
 static void test_epoch_beyond_int32(void)

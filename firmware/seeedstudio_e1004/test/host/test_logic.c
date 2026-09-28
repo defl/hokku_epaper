@@ -97,8 +97,8 @@ static void test_frame_state_schema(void)
           "frame_state: wake label reported");
     CHECK(strstr(buf, "\"last_sleep\":\"timer_wake\"") != NULL,
           "frame_state: last_sleep mapped from last_sleep_mode");
-    CHECK(strstr(buf, "\"ota\":1,\"rename\":1}") != NULL,
-          "frame_state: advertises OTA and rename capability");
+    CHECK(strstr(buf, "\"ota\":1}") != NULL,
+          "frame_state: advertises OTA capability");
 }
 
 static void test_frame_state_bat_omitted_when_unknown(void)

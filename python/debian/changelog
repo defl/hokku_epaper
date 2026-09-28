@@ -1,10 +1,12 @@
-hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.6-1) unstable; urgency=medium
 
-  * Rename a screen from the web UI. The server asks the screen to rename
-    itself (X-Screen-Rename) and keeps its history, settings and calibration,
-    since screens are keyed by MAC. The Bigme F7 now sends X-Screen-Mac too.
+  * Rename a screen from the web UI. The server owns the name of every screen
+    it knows (by MAC) and sends it back as X-Screen-Name; the screen saves it
+    when it differs. History, settings and calibration are kept. A new screen
+    reporting a name already in use gets a unique one. The Bigme F7 now sends
+    X-Screen-Mac too.
   * Firmware versions: huessen_epf1301 1.2.26, seeedstudio_e1004 1.2.6,
-    bigme_f7 1.2.13 (the rename needs these on the screen).
+    bigme_f7 1.2.13 (a screen adopts its new name from these on).
 
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Mon, 28 Sep 2026 02:36:33 +0000
 
@@ -69,7 +71,7 @@ hokku-server (4.0.1~dev.15-1) unstable; urgency=medium
 
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 02 Aug 2026 12:00:00 -0500
 
-hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.6-1) unstable; urgency=medium
 
   * Per-pipeline dither defaults are now measured rather than chosen. General
     and B&W move to Atkinson; general gains OKLAB adaptive-saturation and OKLAB
@@ -273,7 +275,7 @@ hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
 
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 26 Jul 2026 20:50:03 +0000
 
-hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.6-1) unstable; urgency=medium
 
   * feat(server): drive the image decode budget AND render worker count from a
     single cgroup-aware memory budget, replacing the hardcoded 16 MP decode cap

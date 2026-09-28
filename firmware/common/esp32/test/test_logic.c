@@ -268,6 +268,14 @@ static void test_config_set_screen_name(void)
     CHECK(!config_set_screen_name("bad/name"), "rename: invalid name refused");
     CHECK(strcmp(config.screen_name, "kitchen") == 0, "rename: refused name leaves config alone");
 
+    /* The server echoes the name on every response, including a legacy name
+     * (set over USB) the rename rule would refuse: that must be a quiet no-op. */
+    strcpy(config.screen_name, "caf\xc3\xa9/1");
+    _mock_nvs_set_screen_name[0] = '\0';
+    CHECK(config_set_screen_name("caf\xc3\xa9/1"), "rename: unchanged legacy name is a no-op");
+    CHECK(_mock_nvs_set_screen_name[0] == '\0', "rename: unchanged name is never rewritten");
+    strcpy(config.screen_name, "kitchen");
+
     _mock_nvs_set_str_fail = 1;
     CHECK(!config_set_screen_name("hall"), "rename: NVS write failure reported");
     CHECK(strcmp(config.screen_name, "kitchen") == 0,

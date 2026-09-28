@@ -1,11 +1,13 @@
 /*
  * Screen identity: the MAC string every firmware sends as X-Screen-Mac, and the
- * rule for a name the server hands down in X-Screen-Rename.
+ * rule for the name the server sends back in the response's X-Screen-Name.
  *
- * The server keys each screen by its MAC; the name is only a user-facing label,
- * so renaming never loses the screen's history or calibration. Pure C (see
- * README.md): the caller reads the MAC bytes from its own SDK and persists an
- * accepted name to its own config store.
+ * The server keys each screen by its MAC and owns the name of every screen it
+ * knows: a new screen is registered under the name it reports, and from then on
+ * the server's name (changed in the web UI) is sent back on every response. The
+ * screen saves it when it differs from its own. Pure C (see README.md): the
+ * caller reads the MAC bytes from its own SDK and persists the name to its own
+ * config store.
  */
 #ifndef HOKKU_SCREEN_IDENT_H
 #define HOKKU_SCREEN_IDENT_H
@@ -23,8 +25,8 @@
 /* Characters a name may use besides ASCII letters and digits. */
 #define HOKKU_SCREEN_NAME_PUNCT  " -_.'()"
 
-/* Response header carrying a server-requested rename. */
-#define HOKKU_HDR_SCREEN_RENAME  "X-Screen-Rename"
+/* Response header carrying the server's name for this screen. */
+#define HOKKU_HDR_SCREEN_NAME    "X-Screen-Name"
 
 /* Format mac as lowercase "aa:bb:cc:dd:ee:ff" into out (needs >= 18 bytes).
  * An all-zero MAC means "unknown" and yields "". */

@@ -513,12 +513,14 @@ static int do_refresh(void)
             hokku_clock_set(v);              /* sanity: after 2020-09-13 */
         read_resp_header_str(params.pHTTP, "X-Firmware-Update", fw_update, sizeof(fw_update));
 
-        /* Server-requested rename (set in the web UI). One byte beyond the max
-         * so an over-long value is refused rather than truncated into a valid
-         * one. Persisted now; the next request carries the new name. */
-        char rename[HOKKU_SCREEN_NAME_MAX + 2];
-        if (read_resp_header_str(params.pHTTP, HOKKU_HDR_SCREEN_RENAME, rename, sizeof(rename))) {
-            if (hokku_config_set_screen_name(rename) == 0)
+        /* The server owns the name of a screen it knows (set in its web UI):
+         * adopt it when it differs, so the next request carries it. One byte
+         * beyond the max so an over-long value is refused rather than
+         * truncated into a valid one. */
+        char name[HOKKU_SCREEN_NAME_MAX + 2];
+        if (read_resp_header_str(params.pHTTP, HOKKU_HDR_SCREEN_NAME, name, sizeof(name)) &&
+            strcmp(name, cfg->screen_name) != 0) {
+            if (hokku_config_set_screen_name(name) == 0)
                 hlog("hokku: renamed to '%s'\n", cfg->screen_name);
             else
                 hlog("hokku: rename refused\n");

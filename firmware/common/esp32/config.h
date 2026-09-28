@@ -24,7 +24,7 @@ extern config_t config;
 bool config_load(void);
 bool config_version_ok(void);
 bool config_is_valid(void);
-/* Rename this screen (server-requested via X-Screen-Rename): validate, persist
- * to NVS, then update config.screen_name. Returns false and changes nothing if
- * the name is invalid or cannot be written. */
+/* Adopt the server's name for this screen (response X-Screen-Name): a no-op if
+ * unchanged, else validate, persist to NVS, then update config.screen_name.
+ * Returns false and changes nothing if the name is invalid or can't be written. */
 bool config_set_screen_name(const char *name);

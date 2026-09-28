@@ -95,9 +95,6 @@ class ScreenTelemetryEntry:
     # Hardware model this screen self-reported via X-Screen-Model (e.g.
     # "huessen_epf1301", "bigme_f7"). None until the screen first identifies.
     screen_model: str | None = None
-    # Name the user asked for in the UI, not yet taken by the device. Sent as
-    # X-Screen-Rename on every response until the device reports it as its name.
-    pending_name: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -126,7 +123,6 @@ class ScreenTelemetryEntry:
             ota_error=d.get("ota_error"),
             ota_error_at=d.get("ota_error_at"),
             screen_model=d.get("screen_model"),
-            pending_name=d.get("pending_name"),
         )
 
 
@@ -272,15 +268,32 @@ class ServeScheduler:
             return sid
         return None
 
+    def _unique_name_locked(self, name: str) -> str:
+        """``name``, or ``name-2``, ``name-3``... if another record already has it."""
+        if name not in self._by_name:
+            return name
+        n = 2
+        while f"{name}-{n}" in self._by_name:
+            n += 1
+        return f"{name}-{n}"
+
     def _resolve_or_create_sid_locked(self, name: str, mac: str | None) -> str:
         """Return the sid for (name, MAC), creating a record and reconciling the
-        name/MAC indexes as needed. MAC is authoritative: a device that reappears
-        with a known MAC keeps its sid even if its name changed (rename), and a
-        record first seen by name adopts a MAC the moment the device reports one."""
+        name/MAC indexes as needed.
+
+        The server owns the name of any screen it knows: a device found by MAC
+        keeps its record's name whatever it reports (the name is sent back and
+        the device adopts it; change it with rename_screen, or remove the record
+        to let the device's own name back in). A device seen for the first time
+        is named after what it reports, made unique when another device already
+        has that name. A record first seen by name adopts a MAC the moment the
+        device reports one."""
         sid = self._resolve_sid_locked(name, mac)
         if sid is None:
             self._sid_seq += 1
             sid = str(self._sid_seq)
+            # Without a MAC the name is the only key, so it can't be changed.
+            name = self._unique_name_locked(name) if mac else name
             self._screens[sid] = ScreenTelemetryEntry(
                 name=name,
                 ip="",
@@ -298,18 +311,46 @@ class ServeScheduler:
                 firmware_build=None,
                 mac=mac,
             )
-        # Reconcile indexes for this sid — a rename repoints name->sid; a
-        # first-seen MAC attaches mac->sid; both stay unique.
+        # A first-seen MAC attaches mac->sid.
         entry = self._screens[sid]
-        if entry.name != name or entry.mac != (mac or entry.mac):
-            self._screens[sid] = replace(entry, name=name, mac=mac or entry.mac)
-        # Drop any stale name index entries that used to point here.
-        for n in [n for n, s in self._by_name.items() if s == sid and n != name]:
-            del self._by_name[n]
-        self._by_name[name] = sid
+        if mac and entry.mac != mac:
+            self._screens[sid] = replace(entry, mac=mac)
+        self._by_name[entry.name] = sid
         if mac:
             self._by_mac[mac] = sid
         return sid
+
+    def identify(self, name: str, mac: str | None) -> str:
+        """The name the server knows this device by, registering it if new.
+
+        This is the name to use for everything about the request and to send
+        back to the device (see _resolve_or_create_sid_locked for who wins)."""
+        with self._lock:
+            sid = self._resolve_or_create_sid_locked(name, mac)
+            self._save()
+            return self._screens[sid].name
+
+    def rename_screen(self, name: str, new_name: str) -> None:
+        """Rename the screen called ``name``. Takes effect on the server at once;
+        the device learns it from the next response and saves it. The record is
+        keyed by MAC, so history, settings and calibration stay with it.
+
+        Raises KeyError if the screen is unknown, ValueError if another screen
+        already has ``new_name``. The caller validates the name itself
+        (screen_headers.screen_name_valid) and that the screen has a MAC."""
+        with self._lock:
+            sid = self._resolve_sid_locked(name, None)
+            if sid is None:
+                raise KeyError(name)
+            if new_name == name:
+                return
+            if new_name in self._by_name:
+                raise ValueError(f"name {new_name!r} is already used by another screen")
+            logger.info("Renaming screen %r -> %r", name, new_name)
+            self._screens[sid] = replace(self._screens[sid], name=new_name)
+            del self._by_name[name]
+            self._by_name[new_name] = sid
+            self._save()
 
     def resolve(self, name: str | None = None, mac: str | None = None) -> str | None:
         """Public lookup: the sid for a screen addressed by name or MAC, or None."""
@@ -401,7 +442,7 @@ class ServeScheduler:
                 last_log_at = now
 
             self._screens[sid] = ScreenTelemetryEntry(
-                name=screen_name,
+                name=self._screens[sid].name,  # the server's name, not the reported one
                 ip=screen_ip,
                 request_count=req_count,
                 last_seen_at=now,
@@ -429,15 +470,7 @@ class ServeScheduler:
                 ota_error=existing.ota_error if existing else None,
                 ota_error_at=existing.ota_error_at if existing else None,
                 screen_model=screen_model or (existing.screen_model if existing else None),
-                # The rename has landed once the device reports the new name.
-                pending_name=(
-                    existing.pending_name
-                    if existing and existing.pending_name != screen_name
-                    else None
-                ),
             )
-            if existing and existing.pending_name == screen_name:
-                logger.info("Screen %s renamed itself to %r", sid, screen_name)
             self._save()
             return sid
 
@@ -463,45 +496,6 @@ class ServeScheduler:
             sid = self._resolve_sid_locked(name, None)
             t = self._screens.get(sid) if sid else None
             return t.screen_model if t else None
-
-    # ── Rename (server-requested, applied by the device) ──────────
-
-    def request_rename(self, name: str, new_name: str | None) -> None:
-        """Ask the screen called ``name`` to rename itself to ``new_name``.
-
-        The device keeps the name in its own flash, so the rename only takes
-        effect when the device next checks in and applies X-Screen-Rename; until
-        then the record keeps its current name and ``pending_name`` shows the
-        request. ``new_name`` None (or equal to the current name) cancels a
-        pending rename. The record is keyed by MAC, so its history and
-        calibration carry over.
-
-        Raises KeyError if the screen is unknown, ValueError if the new name is
-        already used (or requested) by another screen. The caller validates the
-        name itself (screen_headers.screen_name_valid).
-        """
-        with self._lock:
-            sid = self._resolve_sid_locked(name, None)
-            if sid is None:
-                raise KeyError(name)
-            entry = self._screens[sid]
-            if new_name is None or new_name == entry.name:
-                target = None
-            else:
-                for other_sid, other in self._screens.items():
-                    if other_sid != sid and new_name in (other.name, other.pending_name):
-                        raise ValueError(f"name {new_name!r} is already used by another screen")
-                target = new_name
-            logger.info("Rename of %r -> %r", entry.name, target)
-            self._screens[sid] = replace(entry, pending_name=target)
-            self._save()
-
-    def pending_rename(self, name: str | None = None, mac: str | None = None) -> str | None:
-        """The name this screen has been asked to take, or None."""
-        with self._lock:
-            sid = self._resolve_sid_locked(name, mac)
-            e = self._screens.get(sid) if sid else None
-            return e.pending_name if e else None
 
     # ── OTA: per-screen update request + migration errors ─────────
 

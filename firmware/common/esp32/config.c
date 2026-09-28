@@ -39,11 +39,12 @@ bool config_is_valid(void)
 
 bool config_set_screen_name(const char *name)
 {
+    /* Same name first: the server sends it on every response. */
+    if (name && strcmp(config.screen_name, name) == 0) return true;
     if (!hokku_screen_name_valid(name)) {
         ESP_LOGW("hokku", "rename refused: invalid name");
         return false;
     }
-    if (strcmp(config.screen_name, name) == 0) return true;
 
     nvs_handle_t nvs;
     if (nvs_open("hokku", NVS_READWRITE, &nvs) != ESP_OK) return false;

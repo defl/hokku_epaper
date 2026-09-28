@@ -31,10 +31,10 @@ typedef struct {
      * many measurements back it (a cold-start seed; see sleep_cal). */
     char     cal_ppm_hdr[16];
     char     cal_n_hdr[16];
-    /* X-Screen-Rename: the name the user gave this screen in the server UI.
+    /* X-Screen-Name: the server's name for this screen (set in its web UI).
      * One byte beyond the max so an over-long value stays over-long (and is
      * refused) instead of being silently truncated into a valid one. */
-    char     rename_hdr[HOKKU_SCREEN_NAME_MAX + 2];
+    char     name_hdr[HOKKU_SCREEN_NAME_MAX + 2];
 } http_download_ctx_t;
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
@@ -54,7 +54,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             ctx->fw_update_hdr[0]     = '\0';
             ctx->cal_ppm_hdr[0]       = '\0';
             ctx->cal_n_hdr[0]         = '\0';
-            ctx->rename_hdr[0]        = '\0';
+            ctx->name_hdr[0]          = '\0';
             break;
         case HTTP_EVENT_ON_HEADER:
             if (evt->header_key && evt->header_value) {
@@ -78,10 +78,10 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
                     strncpy(ctx->cal_n_hdr, evt->header_value,
                             sizeof(ctx->cal_n_hdr) - 1);
                     ctx->cal_n_hdr[sizeof(ctx->cal_n_hdr) - 1] = '\0';
-                } else if (strcasecmp(evt->header_key, HOKKU_HDR_SCREEN_RENAME) == 0) {
-                    strncpy(ctx->rename_hdr, evt->header_value,
-                            sizeof(ctx->rename_hdr) - 1);
-                    ctx->rename_hdr[sizeof(ctx->rename_hdr) - 1] = '\0';
+                } else if (strcasecmp(evt->header_key, HOKKU_HDR_SCREEN_NAME) == 0) {
+                    strncpy(ctx->name_hdr, evt->header_value,
+                            sizeof(ctx->name_hdr) - 1);
+                    ctx->name_hdr[sizeof(ctx->name_hdr) - 1] = '\0';
                 }
             }
             break;
@@ -243,10 +243,10 @@ bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
      * starts fresh rather than re-uploading the same content. */
     hokku_log_reset();
 
-    /* Server-requested rename: persist it so the next request carries the new
-     * name. The server keys this screen by MAC, so nothing is lost. */
-    if (ctx.rename_hdr[0] != '\0')
-        config_set_screen_name(ctx.rename_hdr);
+    /* The server owns the name of a screen it knows: adopt its name (a no-op
+     * when unchanged) so the next request carries it. */
+    if (ctx.name_hdr[0] != '\0')
+        config_set_screen_name(ctx.name_hdr);
 
     if (ctx.received != expect_bytes) {
         ESP_LOGE("hokku", "Image size mismatch: got %d, expected %d",

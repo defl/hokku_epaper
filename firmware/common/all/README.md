@@ -29,7 +29,7 @@ panel driver) does **not** belong here. ESP-IDF-specific shared code lives in
 | `firmware_url.c/.h` | derive the model-tagged firmware endpoint from the server base URL |
 | `frame_state.c/.h`  | build the `X-Frame-State` telemetry JSON from a `frame_state_t` |
 | `json_util.c/.h`    | `json_escape()` — minimal JSON string escaper |
-| `screen_ident.c/.h` | format the `X-Screen-Mac` string; validate a server-sent `X-Screen-Rename` |
+| `screen_ident.c/.h` | format the `X-Screen-Mac` string; validate the server's name for the screen (response `X-Screen-Name`) |
 
 Each firmware compiles these sources directly (ESP-IDF boards add them to their
 `main` component's `SRCS`; the F7 adds them to its Makefile source list) and the

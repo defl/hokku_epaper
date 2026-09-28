@@ -3063,9 +3063,7 @@ function renderScreens(screens, bundledFirmwareVersions) {
       : '<span style="color:var(--bamboo)">—</span>';
     let nameBadges = '';
     if (s.ota_error) nameBadges += ' <span title="Firmware update error" style="color:#a33;font-weight:700">⛔</span>';
-    else if (s.ota_pending) nameBadges += ' <span title="Firmware update scheduled for next refresh" style="color:var(--accent,#2a6);font-weight:700">⟳</span>';
-    if (s.pending_name) nameBadges += ` <span title="Will be renamed on its next refresh" style="color:var(--stone)">→ ${escapeHtml(s.pending_name)}</span>`;
-    const modelCell = s.screen_model
+    else if (s.ota_pending) nameBadges += ' <span title="Firmware update scheduled for next refresh" style="color:var(--accent,#2a6);font-weight:700">⟳</span>';    const modelCell = s.screen_model
       ? `<span style="font-family:var(--font-mono);font-size:0.85em">${escapeHtml(s.screen_model)}</span>`
       : '<span style="color:var(--bamboo)">—</span>';
     html += `<tr${rowClass}>
@@ -3153,9 +3151,8 @@ async function setScreenUrlOverride(name, value) {
   }
 }
 
-// Ask a screen to rename itself (null cancels). The name lives on the device,
-// so it only changes when the screen next refreshes; until then the table
-// shows the old name with "→ new".
+// Rename a screen. The server's name wins: the screen picks it up from its
+// next response and saves it.
 async function setScreenRename(name, newName) {
   const statusEl = document.getElementById('rename-status');
   try {
@@ -3166,9 +3163,12 @@ async function setScreenRename(name, newName) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || r.statusText);
-    if (lastScreens[name]) lastScreens[name].pending_name = data.pending_name;
+    if (data.name !== name && lastScreens[name]) {
+      lastScreens[data.name] = lastScreens[name];
+      delete lastScreens[name];
+    }
     renderScreens(lastScreens, lastBundledFirmwareVersions);
-    showScreenConfig(name);
+    showScreenConfig(data.name);
   } catch (e) {
     if (statusEl) {
       statusEl.textContent = e.message;
@@ -3266,19 +3266,16 @@ function showScreenConfig(name) {
 
   let body = `<div class="fw-section" style="margin-top:0">`;
   body += `<h4>Name</h4>`;
-  if (s.rename_capable) {
+  if (s.renamable) {
     body += `<div style="display:flex;gap:6px">
-        <input type="text" id="rename-input" value="${escapeHtml(s.pending_name || name)}" maxlength="63"
+        <input type="text" id="rename-input" value="${escapeHtml(name)}" maxlength="63"
           style="flex:1;font-size:0.9em"
           onkeydown="if (event.key === 'Enter') setScreenRename('${safeName}', this.value)">
         <button class="btn btn-secondary" onclick="setScreenRename('${safeName}', document.getElementById('rename-input').value)">Rename</button>
       </div>`;
-    const status = s.pending_name
-      ? `Will be renamed to <strong>${escapeHtml(s.pending_name)}</strong> on its next refresh. <a href="#" onclick="setScreenRename('${safeName}', null); return false">Cancel</a>`
-      : 'Letters, digits, spaces and - _ . \' ( ). Takes effect on the next refresh; history and settings are kept.';
-    body += `<div id="rename-status" style="font-size:0.85em;color:var(--stone);margin-top:4px">${status}</div>`;
+    body += `<div id="rename-status" style="font-size:0.85em;color:var(--stone);margin-top:4px">Letters, digits, spaces and - _ . ' ( ). The screen picks up the new name on its next refresh; history and settings are kept.</div>`;
   } else {
-    body += `<div style="font-size:0.85em;color:var(--stone)">This screen's firmware can't be renamed from here — update its firmware first.</div>`;
+    body += `<div style="font-size:0.85em;color:var(--stone)">This screen's firmware doesn't report a MAC address, so it can't be renamed from here — update its firmware first.</div>`;
   }
   body += `</div>`;
 

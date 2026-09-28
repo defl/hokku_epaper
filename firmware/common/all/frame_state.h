@@ -32,7 +32,6 @@ typedef struct {
 } frame_state_t;
 
 /* Serialise fs into buf (truncated to buflen) as the X-Frame-State JSON object.
- * Always emits "ota":1 and "rename":1 — capabilities every firmware linking this
- * builder has (A/B OTA; applying X-Screen-Rename). bat_mv < 0 omits the bat_mv
- * field. Every caller's buffer is 384 bytes; test_frame_state locks the headroom. */
+ * Always emits "ota":1 (the firmwares are OTA-capable). bat_mv < 0 omits the
+ * bat_mv field. */
 void frame_state_build(char *buf, size_t buflen, const frame_state_t *fs);
