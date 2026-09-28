@@ -86,6 +86,11 @@ CHROMA_DETAIL_FLOOR = 0.25
 # hundreds rather than degrading gracefully.
 CHROMA_SPREAD_FLOOR = 1.0
 
+# Data and caches resolve against the repository, not the working directory:
+# this module is imported by tests and other tools that may run from tools/.
+REPO = Path(__file__).resolve().parent.parent
+CAMCAL = REPO / "build/camcal"
+
 _MODEL: dict | None = None
 _RENDERER: dict = {}
 _REFERENCE: dict = {}
@@ -95,10 +100,10 @@ _REFERENCE: dict = {}
 
 
 def campaign_path(model: str) -> Path:
-    return Path("docs/screens") / model / "measurements/data/campaign.jsonl"
+    return REPO / "docs/screens" / model / "measurements/data/campaign.jsonl"
 
 
-def load_model(model: str = "huessen_epf1301", cache_dir: Path = Path("build/camcal")) -> dict:
+def load_model(model: str = "huessen_epf1301", cache_dir: Path = CAMCAL) -> dict:
     """Fit the Yule-Nielsen model and the gamut ceiling — once per machine.
 
     All three outputs are pure functions of the campaign file, so they are cached
@@ -266,7 +271,7 @@ def _pair_stats(src: np.ndarray, got: np.ndarray, mask: np.ndarray, prefix: str)
     return out
 
 
-FACE_CACHE = Path("build/camcal/face_boxes.json")
+FACE_CACHE = CAMCAL / "face_boxes.json"
 
 
 def face_boxes_on_canvas(
