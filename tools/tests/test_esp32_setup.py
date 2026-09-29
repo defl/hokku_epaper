@@ -104,3 +104,28 @@ def test_parse_model_arg():
         hokku_setup._parse_model_arg(["prog", "--model=seeedstudio_e1004"]) == "seeedstudio_e1004"
     )
     assert hokku_setup._parse_model_arg(["prog"]) is None
+
+
+def test_failed_flash_read_is_not_reported_as_no_firmware(capsys):
+    # A failed read leaves the state unknown: it must not print "will be
+    # overwritten" or default the menu to a full reflash (#45 follow-up).
+    dev = {
+        "port": "COM12",
+        "is_esp32": True,
+        "flash_read_ok": False,
+        "has_hokku_firmware": False,
+        "config_version_ok": False,
+        "config": None,
+    }
+    status = {"device": dev}
+    assert hokku_setup._menu_default(status) == "8"
+    hokku_setup._print_device_status(status)
+    out = capsys.readouterr().out
+    assert "could not read its flash" in out
+    assert "overwritten" not in out
+    assert "could not read its flash" in esp32_setup.format_device_line(1, dev)
+
+
+def test_readable_blank_device_still_defaults_to_flash():
+    dev = {"port": "COM12", "is_esp32": True, "flash_read_ok": True, "has_hokku_firmware": False}
+    assert hokku_setup._menu_default({"device": dev}) == "4"

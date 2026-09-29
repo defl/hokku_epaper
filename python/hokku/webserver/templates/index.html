@@ -2425,7 +2425,8 @@ function flashDeviceLabel(d) {
   if (d.is_bigme_f7) return `${d.port} — Bigme F7 (XR872)`;
   if (d.is_esp32) {
     let s = `${d.port} — ${flashModelName(d.model) || 'ESP32-S3 screen'}`;
-    if (d.config && d.config.screen_name) s += ` · "${d.config.screen_name}"`;
+    if (d.flash_read_ok === false) s += ' · flash unreadable';
+    else if (d.config && d.config.screen_name) s += ` · "${d.config.screen_name}"`;
     return s;
   }
   // A USB serial device we don't recognise vs. the host's own on-board UART.
@@ -2525,6 +2526,13 @@ function onFlashDeviceChange() {
   // The USB id tells the two ESP32 boards apart; start the model on the right one.
   const modelSel = document.getElementById('flash-model');
   if (dev.model && flashModelName(dev.model)) modelSel.value = dev.model;
+
+  // A failed read leaves the state unknown — never report it as "no firmware",
+  // which would invite a full reflash of what may be a working frame.
+  if (dev.flash_read_ok === false) {
+    note.textContent = 'Could not read this screen’s flash — check the USB cable/port and press Scan again before flashing.';
+    return;
+  }
 
   // Build the note line.
   const parts = [];

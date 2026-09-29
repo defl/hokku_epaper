@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import hokku_config
+from hokku.screens import seeedstudio_e1004
 
 
 class TestFindPort:
@@ -194,3 +195,38 @@ class TestBackupRestore:
         """Backup directory is created if missing."""
         d = hokku_config.backup_dir()
         assert d.exists()
+
+
+class TestBaud:
+    @patch("serial.tools.list_ports.comports")
+    def test_uses_the_screens_spec_baud(self, mock_comports):
+        port = MagicMock()
+        port.vid, port.pid, port.device = 0x1A86, 0x7522, "COM12"
+        mock_comports.return_value = [port]
+        assert hokku_config.port_baud("COM12") == seeedstudio_e1004.SPEC.baud
+
+    @patch("serial.tools.list_ports.comports")
+    def test_override_wins(self, mock_comports, monkeypatch):
+        mock_comports.return_value = []
+        monkeypatch.setattr(hokku_config, "BAUD_OVERRIDE", "115200")
+        assert hokku_config._baud("COM12") == "115200"
+
+
+class TestSetReadFailure:
+    def test_set_aborts_without_writing_when_the_read_fails(self, monkeypatch):
+        # A failed read must not become "empty config" and overwrite the device
+        # with only the flags given (#45 follow-up).
+        def failing_read(port):
+            raise RuntimeError("A fatal error occurred: Failed to connect")
+
+        writes = []
+        monkeypatch.setattr(hokku_config, "_read_nvs_from_device", failing_read)
+        monkeypatch.setattr(hokku_config, "_flash_nvs", lambda *a: writes.append(a))
+        args = MagicMock(port="COM12", ssid="net", url="http://x/hokku/screen/")
+        try:
+            hokku_config.cmd_set(args)
+        except SystemExit as e:
+            assert e.code == 1
+        else:
+            raise AssertionError("cmd_set should exit on a failed read")
+        assert writes == []

@@ -233,8 +233,14 @@ def parse_device_state(
 
     *release_header* is the bundled firmware's app header (256 bytes); if omitted
     it is read from the bundled image. Used to compute ``firmware_current``.
+
+    ``flash_read_ok`` is False when *app_header* is None, i.e. the esptool read
+    failed. ``has_hokku_firmware`` is then False only because nothing was read,
+    so callers must report the read error, never "no Hokku firmware" (which
+    invites a full reflash of what may be a working frame).
     """
     result = {
+        "flash_read_ok": app_header is not None,
         "config": None,
         "has_hokku_firmware": False,
         "config_version_ok": False,
@@ -308,6 +314,7 @@ def scan_devices(
     for dev in all_ports:
         dev.update(
             {
+                "flash_read_ok": None,
                 "config": None,
                 "has_hokku_firmware": False,
                 "config_version_ok": False,
@@ -327,6 +334,14 @@ def scan_devices(
                 )
             )
             state = dev
+            if not state["flash_read_ok"]:
+                logger.warning(
+                    "  %s: model=%s flash read FAILED (USB link?); state unknown",
+                    dev["port"],
+                    dev_spec.model_id,
+                )
+                devices.append(dev)
+                continue
             logger.info(
                 "  %s: model=%s hokku_firmware=%s version=%s firmware_current=%s screen_name=%r",
                 dev["port"],

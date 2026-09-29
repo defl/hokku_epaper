@@ -90,6 +90,10 @@ def _print_device_status(status):
     dev = status["device"]
     cfg = dev.get("config") or {}
     print(f"  Port:      {dev['port']}")
+    if dev.get("flash_read_ok") is False:
+        print(f"  Firmware:  unknown — {esp32_setup.FLASH_READ_FAILED}")
+        print("  Config:    unknown")
+        return
     if dev.get("has_hokku_firmware"):
         dv = dev.get("device_version") or "(unknown)"
         rv = dev.get("release_version")
@@ -299,6 +303,10 @@ def _menu_default(status):
     if status is None or "device" not in status:
         return "1"  # no device → appliance image is the most common starting point
     dev = status["device"]
+    if dev.get("flash_read_ok") is False:
+        # State unknown: never default to a full reflash of what may be a
+        # working frame. Exit so the operator fixes the link and reruns.
+        return "8"
     if not dev.get("has_hokku_firmware"):
         return "4"  # configure + flash ESP32
     if not dev.get("config_version_ok"):

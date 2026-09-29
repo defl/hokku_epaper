@@ -160,6 +160,7 @@ def scan_devices():
             "port": port.device,
             "description": port.description or port.device,
             "is_esp32": is_esp32,
+            "flash_read_ok": None,
             "config": None,
             "has_hokku_firmware": False,
             "config_version_ok": False,
@@ -191,11 +192,18 @@ def parse_device_state(nvs_data, app_header):
 
 # -------- device selection UI --------
 
+# Shown instead of any firmware verdict when the flash read failed: the device's
+# state is unknown, so it must not read as "no Hokku firmware" (see
+# hokku.common.esp32.device.parse_device_state).
+FLASH_READ_FAILED = "could not read its flash; check the USB cable/port and rescan"
+
 
 def format_device_line(idx, device):
     parts = [f"  [{idx}] {device['port']}"]
     if device["is_esp32"]:
-        if device["has_hokku_firmware"] and device["config_version_ok"]:
+        if device.get("flash_read_ok") is False:
+            parts.append(f"ESP32-S3 ({FLASH_READ_FAILED})")
+        elif device["has_hokku_firmware"] and device["config_version_ok"]:
             cfg = device["config"]
             detail = "Hokku firmware"
             if cfg.get("screen_name"):
@@ -222,7 +230,9 @@ def select_device(devices):
     if len(esp32_devices) == 1:
         dev = esp32_devices[0]
         print(f"  Found device: {dev['port']}", end="")
-        if dev["has_hokku_firmware"]:
+        if dev.get("flash_read_ok") is False:
+            print(f" ({FLASH_READ_FAILED})")
+        elif dev["has_hokku_firmware"]:
             cfg = dev.get("config") or {}
             name = cfg.get("screen_name", "")
             if dev["config_version_ok"] and name:

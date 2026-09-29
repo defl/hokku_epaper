@@ -115,6 +115,14 @@ def test_parse_device_state_recognises_every_hokku_app(esp32_mod, project):
     assert state["has_hokku_firmware"] is True
 
 
+def test_parse_device_state_failed_read(esp32_mod):
+    # read_device_flash returns (None, None) when esptool fails; that is "state
+    # unknown", flagged so callers don't report it as "no Hokku firmware".
+    state = esp32_mod.parse_device_state(None, None, release_header=_make_app_header())
+    assert state["flash_read_ok"] is False
+    assert esp32_mod.parse_device_state(b"", _make_app_header())["flash_read_ok"] is True
+
+
 def test_parse_device_state_foreign_app(esp32_mod):
     state = esp32_mod.parse_device_state(b"", _make_app_header(project=b"E_Frame"))
     assert state["has_hokku_firmware"] is False
