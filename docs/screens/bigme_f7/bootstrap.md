@@ -58,7 +58,12 @@ python tools/f7_initial_flasher.py --port COM7
    cfg save                        # server URL + name default from the compiled-in config
    ```
    (`cfg server <url>` / `cfg name <n>` / `cfg dhcp` / `cfg ip <ip> <gw> <nm>` to
-   override the compiled-in defaults.) `cfg show` verifies the running firmware.
+   override the compiled-in defaults: **DHCP** and `http://hokku.local:8080/hokku/screen/`
+   — no hard-coded addresses.) `cfg show` verifies the running firmware. Firmware
+   before 1.2.13 defaulted to a static `192.168.6.199` / gw `192.168.6.254` (the
+   developer's LAN), which strands a unit on any other network (issue #44); a
+   saved config still holding exactly that pair is now treated as unset and moved
+   to DHCP, both at boot and when the web flasher re-provisions it.
 5. **Done — OTA from here.** The unit associates, fetches an image, redraws, reports
    to the server, and takes all future firmware updates over-the-air. See
    [`ota.md`](ota.md).

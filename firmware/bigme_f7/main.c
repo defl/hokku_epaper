@@ -57,15 +57,9 @@
 #include "http_util.h"
 #include "pm.h"
 
-/* Static IP config — used when DHCP is unavailable on the network */
-#define STATIC_IP_ADDR   "192.168.6.199"
-#define STATIC_GW_ADDR   "192.168.6.254"
-#define STATIC_NM_ADDR   "255.255.255.0"
-
-#define HOKKU_SERVER_URL        "http://192.168.6.111:8080/hokku/screen/"
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.12"
+#define FIRMWARE_VERSION        "1.2.13"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
