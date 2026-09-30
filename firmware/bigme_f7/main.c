@@ -59,7 +59,7 @@
 
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.13"
+#define FIRMWARE_VERSION        "1.2.14"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -904,12 +904,21 @@ void platform_init_level0(void)
  *
  * WLAN_STA_CONF_FLAG_WPA3 advertises WPA3 support but negotiates down to WPA2-PSK,
  * which is what a WPA2/WPA3-mixed AP actually associates with.
+ *
+ * The station is disabled BEFORE it is reconfigured, matching every SDK path that
+ * re-points a live station (at_demo join, sc_assistant_port.c). Without it, a
+ * `wifi` switch while associated replaced the supplicant config under a running
+ * connection, and wlan_sta_enable() on an already-enabled station is a no-op: the
+ * unit never left the old AP and stopped checking in until a reboot (issue #44).
+ * Disabling an idle station at boot is harmless (the SDK paths do it unconditionally).
  */
 static int hokku_wifi_connect(const uint8_t *ssid, uint8_t ssid_len, const uint8_t *psk)
 {
+    wlan_sta_disable();
     if (wlan_sta_config((uint8_t *)ssid, ssid_len, (uint8_t *)psk,
                         WLAN_STA_CONF_FLAG_WPA3) != 0) {
         hlog("hokku: wlan_sta_config failed\n");
+        wlan_sta_enable();   /* don't leave the radio off: retry whatever config remains */
         return -1;
     }
     return wlan_sta_enable();

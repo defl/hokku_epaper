@@ -183,6 +183,9 @@ static void reset_all_mocks(void)
     _mock_wlan_sta_ap_rssi = 0;
     _mock_wlan_sta_config_result = 0;
     _mock_wlan_sta_enable_result = 0;
+    memset(_mock_wlan_calls, 0, sizeof(_mock_wlan_calls));
+    _mock_wlan_call_count = 0;
+    memset(_mock_wlan_config_ssid, 0, sizeof(_mock_wlan_config_ssid));
 
     memset(&_mock_sysinfo_state, 0, sizeof(_mock_sysinfo_state));
     _mock_sysinfo_get_null = 0;
@@ -609,6 +612,56 @@ static void test_wifi_provision_persists_creds_on_success(void)
     CHECK(_mock_sysinfo_save_call_count == 1,
           "wifi_provision: calls sysinfo_save() exactly once");
 }
+/* Issue #44 regression: `wifi <ssid> <pw>` while already associated must
+ * disable the station before reconfiguring it, then re-enable. Config-then-
+ * enable on a running station left the unit on the old AP, no longer checking in. */
+static void test_wifi_provision_live_switch_disables_config_enables(void)
+{
+    reset_all_mocks();
+    memcpy(_mock_sysinfo_state.wlan_sta_param.ssid, "MMIOT", 5); /* currently joined */
+    _mock_sysinfo_state.wlan_sta_param.ssid_len = 5;
+
+    CHECK(hokku_wifi_provision("McMansion", "password1") == 0,
+          "wifi_provision: live switch succeeds");
+    CHECK(_mock_wlan_call_count == 3 &&
+          _mock_wlan_calls[0] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[1] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[2] == MOCK_WLAN_ENABLE,
+          "wifi_provision: sequences wlan_sta_disable -> wlan_sta_config -> wlan_sta_enable");
+    CHECK(strcmp((const char *)_mock_wlan_config_ssid, "McMansion") == 0,
+          "wifi_provision: configures the NEW ssid");
+}
+static void test_wifi_provision_config_failure_reenables_station(void)
+{
+    reset_all_mocks();
+    _mock_wlan_sta_config_result = -1;
+    CHECK(hokku_wifi_provision("McMansion", "password1") == -1,
+          "wifi_provision: reports a wlan_sta_config failure");
+    CHECK(_mock_wlan_call_count == 3 &&
+          _mock_wlan_calls[0] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[1] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[2] == MOCK_WLAN_ENABLE,
+          "wifi_provision: a failed config still re-enables the station (radio not left off)");
+}
+static void test_wifi_connect_saved_uses_same_sequence(void)
+{
+    reset_all_mocks();
+    memcpy(_mock_sysinfo_state.wlan_sta_param.ssid, "McMansion", 9);
+    _mock_sysinfo_state.wlan_sta_param.ssid_len = 9;
+    hokku_wifi_connect_saved();
+    CHECK(_mock_wlan_call_count == 3 &&
+          _mock_wlan_calls[0] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[1] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[2] == MOCK_WLAN_ENABLE,
+          "wifi_connect_saved: boot connect uses disable -> config -> enable");
+}
+static void test_wifi_provision_rejected_input_leaves_station_alone(void)
+{
+    reset_all_mocks();
+    hokku_wifi_provision("", "password1");
+    CHECK(_mock_wlan_call_count == 0,
+          "wifi_provision: rejected input never touches the running station");
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
  *  hokku_hibernate — sleep_s clamping (5..60000)
@@ -811,6 +864,10 @@ int main(void)
     test_wifi_provision_rejects_empty_ssid();
     test_wifi_provision_rejects_oversized_psk();
     test_wifi_provision_persists_creds_on_success();
+    test_wifi_provision_live_switch_disables_config_enables();
+    test_wifi_provision_config_failure_reenables_station();
+    test_wifi_connect_saved_uses_same_sequence();
+    test_wifi_provision_rejected_input_leaves_station_alone();
 
     test_hibernate_clamps_low_sleep();
     test_hibernate_clamps_high_sleep();
