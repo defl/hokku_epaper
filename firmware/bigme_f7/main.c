@@ -25,6 +25,7 @@
 #include "net/HTTPClient/API/HTTPClientCommon.h"
 #include "lwip/netif.h"
 #include "lwip/dhcp.h"
+#include "lwip/netifapi.h"
 #include "lwip/ip_addr.h"
 
 #include "image/image.h"
@@ -935,9 +936,24 @@ void platform_init_level0(void)
  * connection, and wlan_sta_enable() on an already-enabled station is a no-op: the
  * unit never left the old AP and stopped checking in until a reboot (issue #44).
  * Disabling an idle station at boot is harmless (the SDK paths do it unconditionally).
+ *
+ * The IPv4 address is dropped first, as the SDK's net_switch_mode() does. On a
+ * plain disconnect the SDK keeps a BOUND lease (roaming), so on reconnect it
+ * logs "netif is already up", never restarts DHCP and never sends NETWORK_UP:
+ * a unit moved to another subnet would keep a stale address, and net_cb would
+ * never kick the refresh thread. net_config(nif, 0) releases the DHCP lease; the
+ * explicit clear also covers a static address (lwIP's release leaves those in
+ * place). With no address, the reconnect runs DHCP (or net_cb's static set) and
+ * the address change fires NETWORK_UP. Seen on hardware 2026-09-29 (1.2.14 test).
  */
 static int hokku_wifi_connect(const uint8_t *ssid, uint8_t ssid_len, const uint8_t *psk)
 {
+    struct netif *nif = g_wlan_netif;
+
+    if (nif != NULL && NET_IS_IP4_VALID(nif)) {
+        net_config(nif, 0);                                /* release the lease */
+        netifapi_netif_set_addr(nif, NULL, NULL, NULL);   /* and any static address */
+    }
     wlan_sta_disable();
     if (wlan_sta_config((uint8_t *)ssid, ssid_len, (uint8_t *)psk,
                         WLAN_STA_CONF_FLAG_WPA3) != 0) {

@@ -19,7 +19,8 @@ static int _mock_wlan_sta_enable_result;
 
 /* Call trace of the station control functions, in order, so tests can assert
  * the sequence (e.g. disable -> config -> enable), not just that each ran. */
-enum { MOCK_WLAN_DISABLE = 1, MOCK_WLAN_CONFIG, MOCK_WLAN_ENABLE };
+enum { MOCK_WLAN_DISABLE = 1, MOCK_WLAN_CONFIG, MOCK_WLAN_ENABLE,
+       MOCK_NET_CONFIG_DOWN, MOCK_NETIF_CLEAR_ADDR };   /* net_ctrl.h / netifapi.h mocks */
 #define MOCK_WLAN_CALLS_MAX 8
 static int _mock_wlan_calls[MOCK_WLAN_CALLS_MAX];
 static int _mock_wlan_call_count;

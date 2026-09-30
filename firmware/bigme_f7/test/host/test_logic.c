@@ -53,6 +53,7 @@
 #include "mocks/net/HTTPClient/API/HTTPClientCommon.h"
 #include "mocks/lwip/netif.h"
 #include "mocks/lwip/dhcp.h"
+#include "mocks/lwip/netifapi.h"
 #include "mocks/lwip/ip_addr.h"
 #include "mocks/image/image.h"
 #include "mocks/image/fdcm.h"
@@ -190,6 +191,8 @@ static void reset_all_mocks(void)
     memset(_mock_wlan_calls, 0, sizeof(_mock_wlan_calls));
     _mock_wlan_call_count = 0;
     memset(_mock_wlan_config_ssid, 0, sizeof(_mock_wlan_config_ssid));
+    g_wlan_netif = NULL;
+    _mock_net_ip4_valid = 0;
 
     memset(&_mock_sysinfo_state, 0, sizeof(_mock_sysinfo_state));
     _mock_sysinfo_get_null = 0;
@@ -622,16 +625,23 @@ static void test_wifi_provision_persists_creds_on_success(void)
 static void test_wifi_provision_live_switch_disables_config_enables(void)
 {
     reset_all_mocks();
+    static struct netif live_netif;
     memcpy(_mock_sysinfo_state.wlan_sta_param.ssid, "MMIOT", 5); /* currently joined */
     _mock_sysinfo_state.wlan_sta_param.ssid_len = 5;
+    g_wlan_netif = &live_netif;
+    _mock_net_ip4_valid = 1;                                      /* holding a lease */
 
     CHECK(hokku_wifi_provision("McMansion", "password1") == 0,
           "wifi_provision: live switch succeeds");
-    CHECK(_mock_wlan_call_count == 3 &&
-          _mock_wlan_calls[0] == MOCK_WLAN_DISABLE &&
-          _mock_wlan_calls[1] == MOCK_WLAN_CONFIG &&
-          _mock_wlan_calls[2] == MOCK_WLAN_ENABLE,
-          "wifi_provision: sequences wlan_sta_disable -> wlan_sta_config -> wlan_sta_enable");
+    /* Without the address drop the SDK reconnects with "netif is already up":
+     * no DHCP, no NETWORK_UP (seen on hardware with 1.2.14 before this). */
+    CHECK(_mock_wlan_call_count == 5 &&
+          _mock_wlan_calls[0] == MOCK_NET_CONFIG_DOWN &&
+          _mock_wlan_calls[1] == MOCK_NETIF_CLEAR_ADDR &&
+          _mock_wlan_calls[2] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[3] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[4] == MOCK_WLAN_ENABLE,
+          "wifi_provision: drops the address, then disable -> config -> enable");
     CHECK(strcmp((const char *)_mock_wlan_config_ssid, "McMansion") == 0,
           "wifi_provision: configures the NEW ssid");
 }
