@@ -135,6 +135,10 @@ static void reset_all_mocks(void)
     _mock_os_time_s = 1000;
     _mock_thread_created = 0;
     memset(&g_refresh_thread, 0, sizeof(g_refresh_thread));
+    memset(&g_refresh_kick, 0, sizeof(g_refresh_kick));
+    _mock_sem_count = 0;
+    _mock_sem_release_calls = 0;
+    _mock_sem_last_wait_ms = 0;
 
     _mock_http_header_present = 0;
     _mock_http_header_value = "";
@@ -752,6 +756,36 @@ static void test_net_cb_network_up_starts_refresh_thread_once(void)
     CHECK(_mock_thread_created == 1,
           "net_cb: a second NETWORK_UP does not start a duplicate thread");
 }
+/* Issue #44: after a `wifi` switch the refresh thread was mid-way through a
+ * server-given sleep (can be ~9 h overnight) and did not check in until it ended. */
+static void test_net_cb_network_up_kicks_running_refresh_thread(void)
+{
+    reset_all_mocks();
+    OS_SemaphoreCreateBinary(&g_refresh_kick);
+    net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL);   /* first up: starts the thread */
+    CHECK(_mock_sem_release_calls == 0,
+          "net_cb: first NETWORK_UP starts the thread, no kick needed");
+    net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL);   /* up again after a switch */
+    CHECK(_mock_sem_release_calls == 1,
+          "net_cb: NETWORK_UP with the thread running kicks the refresh wait");
+}
+static void test_refresh_wait_returns_early_when_kicked(void)
+{
+    reset_all_mocks();
+    OS_SemaphoreCreateBinary(&g_refresh_kick);
+    OS_SemaphoreRelease(&g_refresh_kick);
+    hokku_refresh_wait(33092U * 1000U);
+    CHECK(_mock_sem_last_wait_ms == 33092U * 1000U,
+          "refresh_wait: waits on the kick with the server-given sleep as timeout");
+    CHECK(_mock_sem_count == 0, "refresh_wait: consumes the kick");
+}
+static void test_refresh_wait_without_semaphore_falls_back_to_sleep(void)
+{
+    reset_all_mocks();   /* g_refresh_kick invalid */
+    hokku_refresh_wait(1000);
+    CHECK(_mock_sem_last_wait_ms == 0,
+          "refresh_wait: no semaphore -> plain sleep, never waits on an invalid handle");
+}
 static void test_net_cb_network_down_does_not_crash(void)
 {
     reset_all_mocks();
@@ -878,6 +912,9 @@ int main(void)
     test_net_cb_wlan_connected_static_ip_sets_address();
     test_net_cb_wlan_connected_bad_static_ip_leaves_dhcp();
     test_net_cb_network_up_starts_refresh_thread_once();
+    test_net_cb_network_up_kicks_running_refresh_thread();
+    test_refresh_wait_returns_early_when_kicked();
+    test_refresh_wait_without_semaphore_falls_back_to_sleep();
     test_net_cb_network_down_does_not_crash();
 
     test_frame_receive_acks_every_chunk();

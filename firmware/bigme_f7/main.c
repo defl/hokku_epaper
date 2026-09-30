@@ -85,6 +85,16 @@ static int         g_epd_ready = 0;
  */
 static OS_Mutex_t  g_ota_lock;
 
+/*
+ * Wakes the awake-mode refresh wait early. The server can hand out a sleep of
+ * many hours (overnight), and the refresh thread used to OS_MSleep() through it,
+ * so a `wifi` switch (or any reconnect) was not followed by a check-in until that
+ * sleep ended — it looked like the unit had stopped checking in. net_cb releases
+ * this on NETWORK_UP once the refresh thread exists, so the unit checks in on the
+ * new network straight away. Binary: repeated releases collapse into one wake.
+ */
+static OS_Semaphore_t g_refresh_kick;
+
 /* --------------------------------------------------------------------------
  * Reporting: wake reason, battery, and frame-state telemetry. The activity log
  * (hlog) and the software wall-clock (hokku_clock_*) are now shared XR872 code
@@ -557,6 +567,17 @@ static int hokku_should_sleep(void)
     }
 }
 
+/* Awake-mode wait between refreshes: `ms`, or less if net_cb kicks it. */
+static void hokku_refresh_wait(uint32_t ms)
+{
+    if (!OS_SemaphoreIsValid(&g_refresh_kick)) {
+        OS_MSleep(ms);
+        return;
+    }
+    if (OS_SemaphoreWait(&g_refresh_kick, ms) == OS_OK)
+        hlog("hokku: network came (back) up — refreshing now\n");
+}
+
 static void refresh_thread_fn(void *arg)
 {
     (void)arg;
@@ -605,7 +626,7 @@ static void refresh_thread_fn(void *arg)
             led_park_for_sleep();                   /* nothing driving the LEDs while asleep */
             hokku_hibernate((uint32_t)sleep_sec);   /* battery: deep sleep, restarts on wake */
         } else {
-            OS_MSleep((uint32_t)sleep_sec * 1000);  /* USB/awake: keep looping */
+            hokku_refresh_wait((uint32_t)sleep_sec * 1000);  /* USB/awake: keep looping */
         }
     }
 }
@@ -659,6 +680,9 @@ static void net_cb(uint32_t event, uint32_t data, void *arg)
                             NULL,
                             REFRESH_THREAD_PRIO,
                             REFRESH_THREAD_STACK);
+        } else if (OS_SemaphoreIsValid(&g_refresh_kick)) {
+            /* Reconnect / network switch: check in now, don't sleep it out. */
+            OS_SemaphoreRelease(&g_refresh_kick);
         }
         break;
     }
@@ -977,6 +1001,7 @@ int main(void)
     /* Create the OTA/refresh lock before platform_init() (which brings up the
      * console) so a `ota` command can never reference an uninitialised mutex. */
     OS_MutexCreate(&g_ota_lock);
+    OS_SemaphoreCreateBinary(&g_refresh_kick);   /* before net_cb can release it */
 
     platform_init();
 
