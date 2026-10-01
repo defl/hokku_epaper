@@ -28,6 +28,7 @@ import zlib
 from dataclasses import replace
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pillow_avif  # noqa: F401 — PIL plugin registration
 import pillow_jxl  # noqa: F401 — PIL plugin registration
@@ -35,7 +36,9 @@ import pytest
 from PIL import ExifTags, Image, ImageOps
 
 from hokku.webserver.app_config import AppConfig
+from hokku.webserver.bounding_box import BoundingBox
 from hokku.webserver.face_detect_abstract import load_image_resized
+from hokku.webserver.image_classifier import ImageClassifier, _cv2_saw_render_frame
 from hokku.webserver.image_manager_abstract import AbstractImageManager
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
 from hokku.webserver.image_renderer import open_image_for_render
@@ -82,9 +85,9 @@ def test_spec_table_agrees_with_opencv_on_plain_jpeg(fixture_dir: Path, o: int):
     code), so if this and the Pillow-based stages below all pass, both agree
     with the spec rather than merely with each other.
     """
-    loaded = load_image_resized(_path(fixture_dir, "jpeg", o))
-    assert loaded is not None
-    rgb = Image.fromarray(np.ascontiguousarray(loaded[0][:, :, ::-1]))
+    bgr = cv2.imread(str(_path(fixture_dir, "jpeg", o)))
+    assert bgr is not None
+    rgb = Image.fromarray(np.ascontiguousarray(bgr[:, :, ::-1]))
     assert upright_mismatch(rgb) is None, upright_mismatch(rgb)
 
 
@@ -107,50 +110,92 @@ def test_recorded_dims_are_the_displayed_dims(fixture_dir: Path, kind: str, o: i
     assert (w, h) == UPRIGHT_SIZE
 
 
-# The face detector reads files with cv2.imread, not Pillow. OpenCV only knows
-# EXIF orientation in JPEG and PNG eXIf-before-IDAT; it never reads XMP. Which
-# other formats it can decode depends on the OpenCV build: the Windows wheel
-# can't read HEIF/AVIF/JXL (or TIFF with a rotation tag), while the Linux wheel
-# — what the Pi runs — reads AVIF but ignores its orientation. Unreadable means
-# "no faces" (a missed optimisation), reported as a skip; readable in the wrong
-# frame means face boxes land on the wrong part of the picture — the CLAHE
-# keep-out and face-aware crop then protect the wrong region. Those cases are
-# pinned as strict xfails so that fixing the detector's loader flips them.
-_CV2_WRONG_FRAME = frozenset(
-    {
-        "avif",
-        "jpeg_xmp_only",
-        "png_exif_after_idat",
-        "png_xmp_only",
-        "png_xmp_after_idat",
-        "png_imagemagick_profile",
-        "png_imagemagick_profile_after_idat",
-    }
-)
-
-
-def _face_matrix():
-    for kind, o in _MATRIX:
-        marks = ()
-        if kind in _CV2_WRONG_FRAME and o != 1:
-            marks = pytest.mark.xfail(
-                strict=True, reason="cv2.imread ignores this orientation tag (face detector)"
-            )
-        yield pytest.param(kind, o, id=f"{kind}-o{o}", marks=marks)
-
-
-@pytest.mark.parametrize(("kind", "o"), list(_face_matrix()))
+@pytest.mark.parametrize(("kind", "o"), _MATRIX, ids=_MATRIX_IDS)
 def test_face_detector_sees_the_rendered_frame(fixture_dir: Path, kind: str, o: int):
     """Face boxes are fractions of the image the detector saw; the renderer
-    applies them to its own decode. Both must be the same frame."""
+    applies them to its own decode. Both must be the same frame, and every
+    format the renderer takes must reach the detector (cv2.imread, its old
+    loader, missed XMP, post-IDAT PNG and AVIF orientation, and depending on
+    the OpenCV build couldn't read HEIF/AVIF/JXL at all)."""
     loaded = load_image_resized(_path(fixture_dir, kind, o))
-    if loaded is None:
-        # No face boxes, so none in the wrong place. A skip rather than a pass:
-        # it also stops a strict xfail from "passing" on a build that can't
-        # read the format at all.
-        pytest.skip("this OpenCV build cannot decode the file")
+    assert loaded is not None
     rgb = Image.fromarray(np.ascontiguousarray(loaded[0][:, :, ::-1]))
     assert upright_mismatch(rgb) is None, upright_mismatch(rgb)
+
+
+@pytest.mark.parametrize(("kind", "o"), _MATRIX, ids=_MATRIX_IDS)
+def test_classifier_knows_where_old_cv2_face_boxes_were_wrong(fixture_dir: Path, kind: str, o: int):
+    """Face boxes cached before the detector moved off cv2.imread are kept only
+    where cv2 decoded the render frame. Checked against cv2 itself, so the
+    header-only predicate can't drift from the loader it stands in for.
+
+    Beyond JPEG/PNG/WebP, what cv2 reads depends on the build (the Linux wheel
+    the Pi runs decodes AVIF, ignoring its orientation; the Windows one can't
+    read it), so there the predicate only has to be safe: re-detecting a box
+    that was right costs a re-render, keeping one that was wrong is the bug."""
+    path = _path(fixture_dir, kind, o)
+    bgr = cv2.imread(str(path))
+    cv2_right = bgr is not None and (
+        upright_mismatch(Image.fromarray(np.ascontiguousarray(bgr[:, :, ::-1]))) is None
+    )
+    keep = _cv2_saw_render_frame(path)
+    if kind.startswith(("jpeg", "mpo", "png", "webp")):
+        assert keep == cv2_right
+    else:
+        assert cv2_right or not keep
+
+
+def test_classifier_redetects_only_faces_cv2_saw_in_the_wrong_frame(tmp_path: Path):
+    """v1 caches: boxes from a frame cv2 got right survive (no re-render); a
+    wrong frame, and "no face" in a format cv2 couldn't read, are detected
+    again — once."""
+    right = write_fixture("jpeg", 6, tmp_path)
+    wrong = write_fixture("jpeg_xmp_only", 6, tmp_path)
+    unreadable = write_fixture("heif", 6, tmp_path)
+    old_box = {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}
+    cache = tmp_path / "ca"
+    cache.mkdir()
+    (cache / "image_classifier.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "observations": {
+                    "right": {"is_bw": None, "face_bboxes": [old_box]},
+                    "wrong": {"is_bw": None, "face_bboxes": [old_box]},
+                    "unreadable": {"is_bw": None, "face_bboxes": []},
+                },
+            }
+        )
+    )
+    cfg = AppConfig(
+        upload_dir=str(tmp_path), cache_dir=str(cache), classifier_face_detect_enabled=True
+    )
+    new_box = BoundingBox(x=0.5, y=0.5, w=0.1, h=0.1)
+    detected: list[Path] = []
+
+    class _Detector:
+        def detect(self, path: Path) -> list[BoundingBox]:
+            detected.append(path)
+            return [new_box]
+
+    def classify_all(clf: ImageClassifier) -> dict[str, tuple[BoundingBox, ...] | None]:
+        clf._face_detector = _Detector()  # type: ignore[assignment]
+        out = {}
+        for sha, path in (("right", right), ("wrong", wrong), ("unreadable", unreadable)):
+            clf.decision_for(path, sha)
+            out[sha] = clf.observations_for(sha).face_bboxes
+        return out
+
+    got = classify_all(ImageClassifier(cfg))
+    assert detected == [wrong, unreadable]
+    assert got == {
+        "right": (BoundingBox(**old_box),),
+        "wrong": (new_box,),
+        "unreadable": (new_box,),
+    }
+    detected.clear()
+    assert classify_all(ImageClassifier(cfg)) == got
+    assert detected == []
 
 
 @pytest.mark.parametrize(("kind", "o"), _MATRIX, ids=_MATRIX_IDS)

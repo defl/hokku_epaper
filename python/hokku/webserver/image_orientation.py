@@ -34,7 +34,7 @@ from PIL import ExifTags, Image, ImageFile
 
 # EXIF Orientation values (transpose, rotate 90/270, transverse) whose display
 # form swaps width and height.
-_AXIS_SWAPPING = frozenset({5, 6, 7, 8})
+AXIS_SWAPPING = frozenset({5, 6, 7, 8})
 
 # Formats whose Pillow plugin reports the already-oriented size at open.
 _SIZE_ALREADY_ORIENTED = frozenset({"TIFF", "HEIF"})
@@ -53,12 +53,13 @@ def displayed_size(img: ImageFile.ImageFile) -> tuple[int, int]:
     w, h = img.size
     if img.format in _SIZE_ALREADY_ORIENTED:
         return w, h
-    if _orientation(img) in _AXIS_SWAPPING:
+    if exif_orientation(img) in AXIS_SWAPPING:
         return h, w
     return w, h
 
 
-def _orientation(img: ImageFile.ImageFile) -> int | None:
+def exif_orientation(img: ImageFile.ImageFile) -> int | None:
+    """The Orientation tag the render path's ``exif_transpose`` acts on. No decode."""
     if img.format == "PNG":
         _load_png_metadata_without_decoding(img)
         # The base-class getexif(): PngImageFile's override decodes the image
