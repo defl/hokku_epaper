@@ -384,6 +384,13 @@ static void display_message(const char *msg)
  * ═══════════════════════════════════════════════════════════════════ */
 static int read_battery_mv(void)
 {
+    /* enter_deep_sleep() isolates the enable pin, and rtc_gpio_isolate() also
+     * latches an RTC hold that survives the wake reset. Release it first:
+     * while the pad is held gpio_set_level() cannot drive it, the divider
+     * stays disconnected and the ADC reads a floating node (issue #43). */
+    rtc_gpio_hold_dis(PIN_BATT_ENABLE);
+    rtc_gpio_deinit(PIN_BATT_ENABLE);
+
     gpio_config_t en_cfg = { .pin_bit_mask = (1ULL << PIN_BATT_ENABLE), .mode = GPIO_MODE_OUTPUT };
     gpio_config(&en_cfg);
     gpio_set_level(PIN_BATT_ENABLE, 1);
@@ -600,7 +607,8 @@ static void enter_deep_sleep(int64_t sleep_us)
         rtc_gpio_pullup_en(btns[i]);
         rtc_gpio_pulldown_dis(btns[i]);
     }
-    /* Hold the panel-enable + divider low through sleep. */
+    /* Isolate the divider enable through sleep. This latches an RTC hold that
+     * outlives the wake; read_battery_mv() releases it. */
     rtc_gpio_isolate(PIN_BATT_ENABLE);
 
     rtc_magic = RTC_MAGIC;  /* keep RTC state valid across the wake */
