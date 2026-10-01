@@ -1,3 +1,12 @@
+hokku-server (4.0.1~dev.91-1) unstable; urgency=medium
+
+  * docs(agents): derive the dev-version N from the highest dev number in
+    python/debian/changelog on main rather than a commit count. The old
+    rev-list formula regressed as soon as PRs were squash-merged, and again
+    after every prerelease tag, so apt could stop seeing an upgrade.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 30 Sep 2026 21:27:32 -0500
+
 hokku-server (4.0.0~beta3-1) unstable; urgency=medium
 
   * Release v4.0.0-beta3

@@ -119,13 +119,39 @@ Versions follow semantic versioning with an even/odd PATCH convention:
 Dev version formula (run before every `git push`):
 ```
 LAST_TAG  = git describe --tags --match "v[0-9]*" --abbrev=0
-MAJOR, MINOR, PATCH = parse LAST_TAG (strip leading v, split on .)
+MAJOR, MINOR, PATCH = parse LAST_TAG (strip leading v, split on ., drop any
+                      prerelease suffix — v4.0.0-beta1 gives PATCH = 0, not "0-beta1")
 ODD_PATCH = PATCH + 1
-N         = git rev-list LAST_TAG..HEAD --count
+CUR       = the highest dev number ever released for this base, i.e. the
+            largest N in any `MAJOR.MINOR.ODD_PATCH~dev.N` entry of
+            python/debian/changelog at origin/main (none -> CUR = 0):
+            git show origin/main:python/debian/changelog \
+              | sed -n 's/^hokku-server (MAJOR\.MINOR\.ODD_PATCH~dev\.\([0-9]*\)-.*/\1/p' \
+              | sort -n | tail -1
+N         = CUR + 1
 DEV_VER   = MAJOR.MINOR.ODD_PATCH-dev.N   (semver, e.g. 3.0.1-dev.47)
 DEB_VER   = MAJOR.MINOR.ODD_PATCH~dev.N-1 (Debian, e.g. 3.0.1~dev.47-1)
 PEP_VER   = MAJOR.MINOR.ODD_PATCH.devN    (PEP 440, e.g. 3.0.1.dev47)
 ```
+
+**N comes from main's changelog, NOT from a commit count.** It used to be
+`git rev-list LAST_TAG..HEAD --count`, which regresses as soon as PRs are
+squash-merged: a branch counts its own commits, but the squash lands on main as
+one, so main's count sits well below the number the last merged branch declared.
+The next branch then computes a *lower* N than main already has, and apt stops
+seeing an upgrade — the whole point of the scheme. (Observed 2026-07-28: main
+declared `4.0.1.dev11` while its own rev-list count was 7, so a 2-commit branch
+computed `dev.9` and would have gone backwards.)
+
+Read the changelog, not main's `pyproject.toml` version: a prerelease tag
+(`v4.0.0-beta3`) resets pyproject to `4.0.0b3` but leaves ODD_PATCH unchanged,
+so "main's current `.devN`, else 0" would restart at `dev.1` below dev builds
+already shipped on that base. (Happened after beta2: `4.0.1~dev.24` was followed
+by `4.0.1~dev.5`.) The changelog is append-only, so its maximum only grows.
+
+If two branches are open at once they will compute the same N; the second to
+merge must recompute against the new main after merging it in, exactly as it
+would re-resolve any other conflict in these files.
 
 Before every `git push`, agents MUST:
 1. Compute the dev version using the formula above
