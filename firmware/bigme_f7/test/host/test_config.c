@@ -77,6 +77,12 @@ static void test_load_uses_defaults_when_fdcm_open_fails(void)
           "config_load: default power_mode is AUTO");
     CHECK(g_cfg.default_sleep_s == 300,
           "config_load: default default_sleep_s is 300");
+    /* Issue #44: no hard-coded addresses — DHCP, and an mDNS server name. */
+    CHECK(g_cfg.use_dhcp == 1, "config_load: default is DHCP");
+    CHECK(g_cfg.ip[0] == 0 && g_cfg.gw[0] == 0,
+          "config_load: no default static IP / gateway");
+    CHECK(strcmp(g_cfg.server_url, "http://hokku.local:8080/hokku/screen/") == 0,
+          "config_load: default server URL is hokku.local, not an IP");
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -132,6 +138,35 @@ static void test_load_reads_saved_fields(void)
           "config_load: reads power_mode from the saved blob");
     CHECK(g_cfg.default_sleep_s == 600,
           "config_load: reads default_sleep_s from the saved blob");
+}
+
+static void seed_static(const char *ip, const char *gw)
+{
+    seed_valid_saved_config();
+    hokku_config_t *seeded = (hokku_config_t *)_mock_fdcm_read_buf;
+    seeded->use_dhcp = 0;
+    strncpy(seeded->ip, ip, HOKKU_IP_MAX - 1);
+    strncpy(seeded->gw, gw, HOKKU_IP_MAX - 1);
+}
+static void test_load_moves_legacy_default_static_to_dhcp(void)
+{
+    /* Issue #44: a saved config still holding the old compiled-in 192.168.6.199 /
+     * .254 was never a user choice; on any other LAN it strands the unit. */
+    reset_mock_fdcm();
+    seed_static("192.168.6.199", "192.168.6.254");
+    hokku_config_load();
+    CHECK(g_cfg.use_dhcp == 1,
+          "config_load: legacy default static IP is switched to DHCP");
+    CHECK(strcmp(g_cfg.screen_name, "kitchen") == 0,
+          "config_load: legacy-static switch keeps the rest of the saved config");
+}
+static void test_load_keeps_user_static_ip(void)
+{
+    reset_mock_fdcm();
+    seed_static("10.0.0.50", "10.0.0.1");
+    hokku_config_load();
+    CHECK(g_cfg.use_dhcp == 0 && strcmp(g_cfg.ip, "10.0.0.50") == 0,
+          "config_load: a user-chosen static IP is kept");
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -238,6 +273,8 @@ int main(void)
     test_load_uses_defaults_when_version_wrong();
     test_load_uses_defaults_on_short_read();
     test_load_reads_saved_fields();
+    test_load_moves_legacy_default_static_to_dhcp();
+    test_load_keeps_user_static_ip();
     test_get_returns_pointer_to_live_config();
     test_save_stamps_magic_and_version();
     test_save_opens_fdcm_lazily_if_not_yet_open();

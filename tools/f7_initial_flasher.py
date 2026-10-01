@@ -45,7 +45,14 @@ sys.path.insert(0, str(_HERE.parent / "python"))
 
 from hokku.common.xr872.catch import hammer_sync, open_stable  # noqa: E402
 from hokku.common.xr872.flasher import XR872Flasher  # noqa: E402
-from hokku.common.xr872.slots import BL_SIZE, OTA_ADDR, build_fdcm, flash_slot  # noqa: E402
+from hokku.common.xr872.slots import (  # noqa: E402
+    BL_SIZE,
+    OTA_ADDR,
+    build_fdcm,
+    flash_slot,
+    inactive_slot,
+    read_active_slot,
+)
 
 FLASH_SIZE = 0x400000
 SLOT0_APP = BL_SIZE  # 0x8000
@@ -98,7 +105,7 @@ def _catch_python(image: pathlib.Path, port: str) -> int:
                     continue
                 # sys_reboot leaves the XR872 in BROM, so reboot=False and let the
                 # user power-cycle (a clean power-on is what actually boots the app).
-                flash_slot(f, img, slot=0, reboot=False, allow_active_slot=True)
+                flash_slot(f, img, slot=inactive_slot(read_active_slot(f)), reboot=False)
                 print("\nDONE (pure-Python)." + PROVISION_HELP)
                 return 0
         finally:
@@ -165,10 +172,11 @@ def _surgical(image: pathlib.Path, port: str) -> int:
         )
     with f:
         # flash_slot validates the live OEM bootloader header, writes only the
-        # app-chain into slot0, read-back verifies, flips the cfg to seq0 LAST, and
-        # leaves the bootloader + slot1 untouched. reboot=False: sys_reboot only
+        # app-chain into the INACTIVE slot (slot0 on a stock unit booting the OEM
+        # from slot1), read-back verifies, flips the cfg to it LAST, and leaves the
+        # bootloader + the running slot untouched. reboot=False: sys_reboot only
         # re-enters BROM here, so the user power-cycles to boot the app.
-        flash_slot(f, img, slot=0, reboot=False, allow_active_slot=True)
+        flash_slot(f, img, slot=inactive_slot(read_active_slot(f)), reboot=False)
     print("\nDONE (surgical)." + PROVISION_HELP)
     return 0
 

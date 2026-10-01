@@ -25,6 +25,7 @@
 #include "net/HTTPClient/API/HTTPClientCommon.h"
 #include "lwip/netif.h"
 #include "lwip/dhcp.h"
+#include "lwip/netifapi.h"
 #include "lwip/ip_addr.h"
 
 #include "image/image.h"
@@ -58,15 +59,9 @@
 #include "http_util.h"
 #include "pm.h"
 
-/* Static IP config — used when DHCP is unavailable on the network */
-#define STATIC_IP_ADDR   "192.168.6.199"
-#define STATIC_GW_ADDR   "192.168.6.254"
-#define STATIC_NM_ADDR   "255.255.255.0"
-
-#define HOKKU_SERVER_URL        "http://192.168.6.111:8080/hokku/screen/"
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.13"
+#define FIRMWARE_VERSION        "1.2.15"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -91,6 +86,16 @@ static int         g_epd_ready = 0;
  * itself does NOT lock — its callers already hold the lock (no recursive lock).
  */
 static OS_Mutex_t  g_ota_lock;
+
+/*
+ * Wakes the awake-mode refresh wait early. The server can hand out a sleep of
+ * many hours (overnight), and the refresh thread used to OS_MSleep() through it,
+ * so a `wifi` switch (or any reconnect) was not followed by a check-in until that
+ * sleep ended — it looked like the unit had stopped checking in. net_cb releases
+ * this on NETWORK_UP once the refresh thread exists, so the unit checks in on the
+ * new network straight away. Binary: repeated releases collapse into one wake.
+ */
+static OS_Semaphore_t g_refresh_kick;
 
 /* --------------------------------------------------------------------------
  * Reporting: wake reason, battery, and frame-state telemetry. The activity log
@@ -596,6 +601,17 @@ static int hokku_should_sleep(void)
     }
 }
 
+/* Awake-mode wait between refreshes: `ms`, or less if net_cb kicks it. */
+static void hokku_refresh_wait(uint32_t ms)
+{
+    if (!OS_SemaphoreIsValid(&g_refresh_kick)) {
+        OS_MSleep(ms);
+        return;
+    }
+    if (OS_SemaphoreWait(&g_refresh_kick, ms) == OS_OK)
+        hlog("hokku: network came (back) up — refreshing now\n");
+}
+
 static void refresh_thread_fn(void *arg)
 {
     (void)arg;
@@ -644,7 +660,7 @@ static void refresh_thread_fn(void *arg)
             led_park_for_sleep();                   /* nothing driving the LEDs while asleep */
             hokku_hibernate((uint32_t)sleep_sec);   /* battery: deep sleep, restarts on wake */
         } else {
-            OS_MSleep((uint32_t)sleep_sec * 1000);  /* USB/awake: keep looping */
+            hokku_refresh_wait((uint32_t)sleep_sec * 1000);  /* USB/awake: keep looping */
         }
     }
 }
@@ -698,6 +714,9 @@ static void net_cb(uint32_t event, uint32_t data, void *arg)
                             NULL,
                             REFRESH_THREAD_PRIO,
                             REFRESH_THREAD_STACK);
+        } else if (OS_SemaphoreIsValid(&g_refresh_kick)) {
+            /* Reconnect / network switch: check in now, don't sleep it out. */
+            OS_SemaphoreRelease(&g_refresh_kick);
         }
         break;
     }
@@ -943,12 +962,36 @@ void platform_init_level0(void)
  *
  * WLAN_STA_CONF_FLAG_WPA3 advertises WPA3 support but negotiates down to WPA2-PSK,
  * which is what a WPA2/WPA3-mixed AP actually associates with.
+ *
+ * The station is disabled BEFORE it is reconfigured, matching every SDK path that
+ * re-points a live station (at_demo join, sc_assistant_port.c). Without it, a
+ * `wifi` switch while associated replaced the supplicant config under a running
+ * connection, and wlan_sta_enable() on an already-enabled station is a no-op: the
+ * unit never left the old AP and stopped checking in until a reboot (issue #44).
+ * Disabling an idle station at boot is harmless (the SDK paths do it unconditionally).
+ *
+ * The IPv4 address is dropped first, as the SDK's net_switch_mode() does. On a
+ * plain disconnect the SDK keeps a BOUND lease (roaming), so on reconnect it
+ * logs "netif is already up", never restarts DHCP and never sends NETWORK_UP:
+ * a unit moved to another subnet would keep a stale address, and net_cb would
+ * never kick the refresh thread. net_config(nif, 0) releases the DHCP lease; the
+ * explicit clear also covers a static address (lwIP's release leaves those in
+ * place). With no address, the reconnect runs DHCP (or net_cb's static set) and
+ * the address change fires NETWORK_UP. Seen on hardware 2026-09-29 (1.2.14 test).
  */
 static int hokku_wifi_connect(const uint8_t *ssid, uint8_t ssid_len, const uint8_t *psk)
 {
+    struct netif *nif = g_wlan_netif;
+
+    if (nif != NULL && NET_IS_IP4_VALID(nif)) {
+        net_config(nif, 0);                                /* release the lease */
+        netifapi_netif_set_addr(nif, NULL, NULL, NULL);   /* and any static address */
+    }
+    wlan_sta_disable();
     if (wlan_sta_config((uint8_t *)ssid, ssid_len, (uint8_t *)psk,
                         WLAN_STA_CONF_FLAG_WPA3) != 0) {
         hlog("hokku: wlan_sta_config failed\n");
+        wlan_sta_enable();   /* don't leave the radio off: retry whatever config remains */
         return -1;
     }
     return wlan_sta_enable();
@@ -1007,6 +1050,7 @@ int main(void)
     /* Create the OTA/refresh lock before platform_init() (which brings up the
      * console) so a `ota` command can never reference an uninitialised mutex. */
     OS_MutexCreate(&g_ota_lock);
+    OS_SemaphoreCreateBinary(&g_refresh_kick);   /* before net_cb can release it */
 
     platform_init();
 
