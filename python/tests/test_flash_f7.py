@@ -1,12 +1,16 @@
 """Tests for the Bigme F7 (XR872) web bootstrap: FlashJobManager.start_f7 / cancel,
 the bootstrap streaming/cancel contract, and the /flash/start_f7 + /flash/cancel
-routes. Hardware-free — the BROM catch + slot-0 write are stubbed."""
+routes. Hardware-free — the BROM catch + A/B slot write are stubbed."""
 
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
+from hokku.common.xr872.slots import OTA_ADDR, build_fdcm, inactive_slot
 from hokku.screens import huessen_epf1301
 from hokku.screens.bigme_f7 import bootstrap as bigme_bootstrap
 from hokku.screens.bigme_f7 import config as f7cfg
@@ -280,14 +284,16 @@ def test_software_entry_honors_cancel():
 
 
 def _stub_import_tools(monkeypatch, flash_records):
-    def fake_flash_slot0(f, img, reboot=False):
-        flash_records.append(reboot)
+    def fake_flash_slot(f, img, slot=0, reboot=False, allow_active_slot=False):
+        # Record the slot too: _FakeFlasher has no readable A/B cfg (a fresh unit),
+        # so the inactive-slot pick falls back to the slot-0 bootstrap default.
+        flash_records.append((slot, reboot))
 
     monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
     monkeypatch.setattr(
         bigme_bootstrap,
         "_import_tools",
-        lambda: (fake_flash_slot0, None, None, object(), lambda p: None, None),
+        lambda: (fake_flash_slot, None, None, object(), lambda p: None, None),
     )
 
 
@@ -309,10 +315,49 @@ def test_bootstrap_prefers_software_entry(tmp_path, monkeypatch):
     lines: list[str] = []
     result = bigme_bootstrap.bootstrap_device("COM7", img, lines.append, lambda: False)
     assert result == {"ok": True}
-    assert records == [False]  # flash_slot0 called once, reboot=False
+    assert records == [(0, False)]  # flash_slot called once: slot 0, reboot=False
     assert catch_calls["n"] == 0  # never fell back to the manual catch
     assert fake_f.closed is True
     assert any("upgrade" in ln for ln in lines)
+
+
+@pytest.mark.parametrize(("active", "expected"), [(0, 1), (1, 0)])
+def test_bootstrap_writes_the_inactive_slot(tmp_path, monkeypatch, active, expected):
+    # Issue #44: a unit already running Hokku from slot 0 was re-flashed INTO slot 0
+    # (allow_active_slot=True), destroying its only known-good image. The target
+    # must be the slot the A/B cfg says the unit does NOT boot, and the active slot
+    # must never be allowed.
+    img = tmp_path / "x.img"
+    img.write_bytes(b"AWIH" + b"\x00" * 32)
+    calls: list[tuple[int, bool]] = []
+
+    def fake_flash_slot(f, img, slot=0, reboot=False, allow_active_slot=False):
+        calls.append((slot, allow_active_slot))
+
+    monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
+    monkeypatch.setattr(
+        bigme_bootstrap,
+        "_import_tools",
+        lambda: (fake_flash_slot, None, None, object(), lambda p: None, None),
+    )
+
+    class FF(_FakeFlasher):
+        def read_sector(self, addr, length):
+            if addr == OTA_ADDR:
+                return build_fdcm(active).ljust(length, b"\xff")
+            return super().read_sector(addr, length)
+
+    monkeypatch.setattr(bigme_bootstrap, "_software_entry", lambda *a, **k: FF())
+    lines: list[str] = []
+    bigme_bootstrap.bootstrap_device("COM7", img, lines.append, lambda: False)
+    assert calls == [(expected, False)]
+    assert any(f"slot {expected}" in ln for ln in lines)
+
+
+def test_inactive_slot():
+    assert inactive_slot(0) == 1
+    assert inactive_slot(1) == 0
+    assert inactive_slot(None) == 0  # no readable cfg: fresh unit, bootstrap default
 
 
 def test_bootstrap_falls_back_to_catch_for_stock(tmp_path, monkeypatch):
@@ -333,7 +378,7 @@ def test_bootstrap_falls_back_to_catch_for_stock(tmp_path, monkeypatch):
     lines: list[str] = []
     result = bigme_bootstrap.bootstrap_device("COM7", img, lines.append, lambda: False)
     assert result == {"ok": True}
-    assert records == [False]
+    assert records == [(0, False)]
     assert catch_calls["n"] == 1  # fell back to the manual catch
     assert any("stock unit" in ln.lower() for ln in lines)
 
@@ -508,6 +553,56 @@ def test_route_start_f7_no_provision_when_blank(app_config, tmp_path, monkeypatc
     assert r.status_code == 200
     _wait_state(state.flash_jobs, "done")
     assert captured["provision"] is None
+
+
+def _f7_ready(tmp_path, monkeypatch):
+    img = tmp_path / "xr_system.img"
+    img.write_bytes(b"AWIH" + b"\x00" * 32)
+    monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
+    monkeypatch.setattr("hokku.webserver.flask_app.bigme_firmware.firmware_image_file", lambda: img)
+    monkeypatch.setattr(
+        flashing.f7_bootstrap,
+        "bootstrap_device",
+        lambda port, image_path, on_line, should_cancel, provision=None, **kw: {"ok": True},
+    )
+
+
+def test_route_start_f7_remembers_wifi_credentials(app_config, tmp_path, monkeypatch):
+    """A bootstrap persists its Wi-Fi credentials like the ESP32 flash does, so
+    the form pre-fills next time. The F7 has no fallback network, so a previously
+    remembered second network must survive untouched."""
+    _f7_ready(tmp_path, monkeypatch)
+    cfg = replace(app_config, flash_wifi_ssid2="Old2", flash_wifi_pass2="oldpw2")
+    state = _bare_state(cfg)
+    client = _client(state, tmp_path)
+
+    r = client.post(
+        "/hokku/api/flash/start_f7",
+        json={"port": "COM7", "wifi_ssid1": "Net", "wifi_pass1": "secret"},
+    )
+    assert r.status_code == 200
+    _wait_state(state.flash_jobs, "done")
+    assert state.config.flash_wifi_ssid == "Net"
+    assert state.config.flash_wifi_pass == "secret"  # noqa: S105
+    assert state.config.flash_wifi_ssid2 == "Old2"  # not clobbered by a model without one
+    assert state.config.flash_wifi_pass2 == "oldpw2"
+
+
+def test_route_start_f7_without_wifi_keeps_remembered_credentials(
+    app_config, tmp_path, monkeypatch
+):
+    """Bootstrapping with the Wi-Fi fields blank (provision skipped) must not wipe
+    the remembered credentials."""
+    _f7_ready(tmp_path, monkeypatch)
+    cfg = replace(app_config, flash_wifi_ssid="Net", flash_wifi_pass="secret")
+    state = _bare_state(cfg)
+    client = _client(state, tmp_path)
+
+    r = client.post("/hokku/api/flash/start_f7", json={"port": "COM7"})
+    assert r.status_code == 200
+    _wait_state(state.flash_jobs, "done")
+    assert state.config.flash_wifi_ssid == "Net"
+    assert state.config.flash_wifi_pass == "secret"  # noqa: S105
 
 
 def test_route_start_f7_rejects_spaces(app_config, tmp_path, monkeypatch):

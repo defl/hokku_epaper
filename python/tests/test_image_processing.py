@@ -31,6 +31,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from hokku.screens.display import Display
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import DitherConfig
 from hokku.webserver.dither_streaming import PALETTE_LAB, adaptive_saturate, rgb_to_lab
@@ -249,6 +250,136 @@ def test_drc_adaptive_vivid_no_boost_for_neutral():
     assert np.allclose(out_vivid, out_plain, atol=2.0), (
         "adaptive_vivid should not change neutral grey"
     )
+
+
+# ── fast: DRC S-curve (_drc_cielab_l / _drc_oklab_l) ─────────────────────────
+
+
+def _rgb_for_l(target_l: float) -> int:
+    """The uint8 grey value whose CIELAB L* is closest to target_l.
+
+    rgb_to_lab is itself nonlinear (sRGB gamma + CIELAB's cube root), so
+    testing the DRC's L-compression slope requires controlling L*-space
+    input directly — evenly-spaced RGB grey values are NOT evenly spaced in
+    L*, and conflating the two produced a false failure on the first pass of
+    these tests (measured "slope" was really d(L_out)/d(RGB_in), not
+    d(L_out)/d(L_in), understating the true L*-space slope by ~2.5x).
+    """
+    vals = np.arange(256, dtype=np.float32)
+    greys = np.stack([vals, vals, vals], axis=-1)
+    ls = rgb_to_lab(greys.astype(np.float64))[:, 0]
+    return int(vals[np.argmin(np.abs(ls - target_l))])
+
+
+def _drc_l_out(black_l: float, white_l: float, l_in: float) -> float:
+    """Achieved CIELAB L* after DRC L-compression, for a source grey at L*=l_in."""
+    grey = np.full((1, 1, 3), float(_rgb_for_l(l_in)), dtype=np.float32)
+    drced = ImageRenderer._drc_cielab_l(grey, anchor_l=(black_l, white_l))
+    return float(rgb_to_lab(drced.astype(np.float64))[0, 0, 0])
+
+
+def test_drc_scurve_bounded_within_anchor_range():
+    """No source L*, from 0 to 100, may map outside [black_L, white_L] — the
+    whole point of a bounded S-curve over the old shoulder-only approach,
+    which only guarded the top end."""
+    black_l, white_l = 10.21, 68.02
+    outs = [_drc_l_out(black_l, white_l, l_in) for l_in in range(0, 101, 5)]
+    assert min(outs) >= black_l - 0.5, f"undershoot below black_L: {min(outs)}"
+    assert max(outs) <= white_l + 0.5, f"overshoot above white_L: {max(outs)}"
+
+
+def test_drc_scurve_endpoints_match_anchor():
+    """Pure black/white must still land (approximately) exactly on the anchors,
+    same contract the old linear map had."""
+    black_l, white_l = 10.21, 68.02
+    assert abs(_drc_l_out(black_l, white_l, 0) - black_l) < 1.0
+    assert abs(_drc_l_out(black_l, white_l, 100) - white_l) < 1.5  # rgb=255 rounding
+
+
+def test_drc_scurve_midtone_steeper_than_pure_linear():
+    """The whole reason for the S-curve: recover shadow/midtone contrast that
+    a pure linear map (ratio = span/100 throughout) doesn't have. Check the
+    curve's midtone slope, measured in L*-space, exceeds the linear-only rate."""
+    black_l, white_l = 10.21, 68.02
+    linear_ratio = (white_l - black_l) / 100.0
+    lo, hi = 45.0, 55.0  # straddles L*=50, the curve's midpoint
+    measured_slope = (_drc_l_out(black_l, white_l, hi) - _drc_l_out(black_l, white_l, lo)) / (
+        hi - lo
+    )
+    assert measured_slope > linear_ratio * 1.1, (
+        f"midtone slope {measured_slope:.3f} should clearly exceed the pure-linear "
+        f"rate {linear_ratio:.3f} — the S-curve isn't adding contrast"
+    )
+
+
+def test_drc_scurve_softer_than_linear_near_extremes():
+    """Near the very top and bottom, the S-curve should compress MORE gently
+    than a pure linear map would (that's the toe/shoulder softening) — i.e.
+    the local slope near the edges, in L*-space, is below the linear rate."""
+    black_l, white_l = 10.21, 68.02
+    linear_ratio = (white_l - black_l) / 100.0
+    edge_slope = (_drc_l_out(black_l, white_l, 10) - _drc_l_out(black_l, white_l, 0)) / 10
+    assert edge_slope < linear_ratio, (
+        f"near-black slope {edge_slope:.3f} should be gentler than the linear "
+        f"rate {linear_ratio:.3f} — the toe isn't softening"
+    )
+
+
+# ── fast: apply_correction_lut ───────────────────────────────────────────────
+
+
+def _identity_lut(n: int = 5) -> np.ndarray:
+    """An (n,n,n,3) LUT that maps every grid node to its own coordinates."""
+    vals = np.linspace(0.0, 255.0, n, dtype=np.float32)
+    return np.stack(np.meshgrid(vals, vals, vals, indexing="ij"), axis=-1).astype(np.float32)
+
+
+def test_correction_lut_identity_is_a_noop():
+    """An identity LUT must leave arbitrary input unchanged (interpolating
+    between identity corners is still identity)."""
+    rng = np.random.default_rng(0)
+    stripe = rng.uniform(0.0, 255.0, size=(20, 30, 3)).astype(np.float32)
+    out = ImageRenderer.apply_correction_lut(stripe, _identity_lut())
+    assert np.allclose(out, stripe, atol=1e-3)
+
+
+def test_correction_lut_exact_grid_node_recovery():
+    """At exact grid-node coordinates, output must exactly equal that cell —
+    no interpolation blur at the nodes themselves."""
+    rng = np.random.default_rng(1)
+    n = 5
+    lut = rng.uniform(0.0, 255.0, size=(n, n, n, 3)).astype(np.float32)
+    vals = np.linspace(0.0, 255.0, n, dtype=np.float32)
+    corners = np.array([[0.0, 0.0, 0.0], [255.0, 255.0, 255.0], [vals[2], vals[2], vals[2]]])
+    stripe = corners.reshape(1, 3, 3).astype(np.float32)
+    out = ImageRenderer.apply_correction_lut(stripe, lut)
+    assert np.allclose(out[0, 0], lut[0, 0, 0])
+    assert np.allclose(out[0, 1], lut[-1, -1, -1])
+    assert np.allclose(out[0, 2], lut[2, 2, 2])
+
+
+def test_correction_lut_output_in_valid_rgb_range():
+    """Output stays within [0, 255] even for a LUT whose values push outward,
+    given inputs are clipped to the grid's own coordinate range first."""
+    rng = np.random.default_rng(2)
+    lut = rng.uniform(0.0, 255.0, size=(5, 5, 5, 3)).astype(np.float32)
+    stripe = rng.uniform(-50.0, 400.0, size=(10, 10, 3)).astype(np.float32)
+    out = ImageRenderer.apply_correction_lut(stripe, lut)
+    assert float(out.min()) >= 0.0
+    assert float(out.max()) <= 255.0
+
+
+def test_correction_lut_path_defaults_to_none():
+    """A new Display subclass that doesn't set correction_lut_path inherits
+    None from the base class, so ImageRenderer._correction_lut() returns None
+    and the pipeline stage is skipped entirely (see render_indices) — the same
+    None-safe contract drc_anchor_l already has.
+
+    Note: every currently-registered model now has a path, either set directly
+    (bigme_f7, huessen_epf1301) or inherited (seeedstudio_e1004 deliberately
+    subclasses HuessenEpf1301Display wholesale — see its own module docstring)
+    — this checks the base class's own default, not a live "unset" panel."""
+    assert Display.correction_lut_path is None
 
 
 # ── fast: _apply_prepare_enhancements ────────────────────────────────────────

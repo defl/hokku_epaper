@@ -19,6 +19,7 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+from typing import Any
 
 import pillow_jxl  # noqa: F401 — PIL plugin registration
 import psutil
@@ -49,8 +50,13 @@ from hokku.webserver.app_state import AppState
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.firmware_library import FirmwareStore
 from hokku.webserver.image_abc import transform_bboxes_to_canvas_norm
-from hokku.webserver.image_config import _image_config_from_dict
-from hokku.webserver.image_record import ConvertStatus
+from hokku.webserver.image_classifier import Observations
+from hokku.webserver.image_config import (
+    ImageConfigError,
+    image_config_from_dict_strict,
+    parse_crop_to_fill_threshold,
+)
+from hokku.webserver.image_record import ConvertStatus, ImageRecord
 from hokku.webserver.image_renderer import (
     IMAGE_EXTENSIONS,
     MAX_UPLOAD_PIXELS,
@@ -70,10 +76,12 @@ from hokku.webserver.resource_budget import (
 from hokku.webserver.resource_limits import detect_memory_limit_bytes
 from hokku.webserver.screen_headers import (
     parse_battery_header,
+    parse_cal_ppm,
     parse_config_state,
     parse_firmware_build,
     parse_firmware_version,
     parse_frame_state,
+    parse_mac_header,
     parse_screen_model,
 )
 from hokku.webserver.time_utils import calculate_sleep_seconds, format_duration_human
@@ -168,6 +176,21 @@ OTA_MAX_ATTEMPTS = 5
 OTA_NVS_MAX_CONCURRENT_BUILDS = 4
 _nvs_build_slots = threading.BoundedSemaphore(OTA_NVS_MAX_CONCURRENT_BUILDS)
 
+# Bound concurrent one-off dither previews. Each decodes the full source image —
+# up to the decode budget, tens of MB — and that decode, not the dither,
+# dominates the cost. Unbounded, a client looping the endpoint or a compare grid
+# fired in parallel would hold one decoded image per request thread and starve
+# the screen-serving path. Excess requests get a 503 and can retry.
+PREVIEW_MAX_CONCURRENT = 2
+_preview_slots = threading.BoundedSemaphore(PREVIEW_MAX_CONCURRENT)
+
+# Preview canvas bounds, in pixels on the long edge. The default matches
+# ImageRenderer's own; the floor keeps a caller from asking for something too
+# small to judge. Note that lowering it speeds up the resize and the dither but
+# not the decode, so the saving is real but modest.
+_PREVIEW_MAX_SIDE_PX = 800
+_PREVIEW_MIN_SIDE_PX = 200
+
 # Upper byte-bounds on the USB-flash config string fields (in addition to the
 # 64-byte screen_name cap enforced inline). SSID: 802.11 max; PSK: WPA2 max; URL:
 # the firmware's server-URL buffer. Rejected with 400 before the NVS generator.
@@ -182,6 +205,41 @@ _FLASH_FIELD_MAX_BYTES = {
 
 def _busy_retry_seconds(config: AppConfig) -> int:
     return min(300, calculate_sleep_seconds(config))
+
+
+def _request_sync(state: AppState) -> None:
+    """Ask for a sync as soon as possible, without blocking this request.
+
+    Deliberately not ``manager.sync()``: on the default single-threaded manager
+    that renders inline, so the caller would hold one of the server's four
+    request threads for the length of a full conversion — seconds on a Pi. Waking
+    the watcher hands the work to the thread that owns the sync cadence and
+    returns immediately, which is why these endpoints answer "queued" rather
+    than "done".
+
+    Falls back to an inline sync when there is no watcher (tests, embedded use),
+    where being synchronous is what the caller wants anyway.
+    """
+    if state.watcher is not None:
+        state.watcher.wake()
+    else:
+        state.manager.sync()
+
+
+def _pipeline_label(rec: ImageRecord, obs: Observations | None) -> str:
+    """Which pipeline a picture renders through, for the UI to show as a chip.
+
+    Mirrors the dispatch order in ImageClassifier plus the override that
+    outranks it, so the UI can say *why* a picture looks the way it does
+    without re-deriving the policy.
+    """
+    if rec.image_config is not None:
+        return "override"
+    if obs is not None and obs.is_bw:
+        return "bw"
+    if obs is not None and obs.face_bboxes:
+        return "face"
+    return "default"
 
 
 def create_app(
@@ -250,6 +308,19 @@ def create_app(
         frame_state = parse_frame_state(request.headers.get("X-Frame-State"))
         fw_version = parse_firmware_version(request.headers.get("X-Firmware-Version"))
         fw_build = parse_firmware_build(request.headers.get("X-Firmware-Build"))
+        # X-Screen-Mac is the durable per-device key; cal_ppm (in the frame-state
+        # JSON) is the device's current drift correction, folded into the pinned
+        # long-term mean that seeds cold-start devices.
+        screen_mac = parse_mac_header(request.headers.get("X-Screen-Mac"))
+        cal_ppm = parse_cal_ppm(frame_state.get("cal_ppm")) if frame_state else None
+
+        def _add_cal_seed(resp):
+            """Attach the MAC-pinned drift seed to every response; the device
+            decides whether to adopt it (based on the sample count)."""
+            mean_ppm, samples = scheduler.cal_seed_for(screen_name, screen_mac)
+            resp.headers["X-Sleep-Cal-PPM"] = str(mean_ppm)
+            resp.headers["X-Sleep-Cal-N"] = str(samples)
+            return resp
 
         # A device that reports its model's bundled version has finished any
         # update — drop a stale OTA-migration error and, if an UPGRADE was
@@ -291,6 +362,8 @@ def create_app(
                 firmware_version=fw_version,
                 firmware_build=fw_build,
                 screen_model=screen_model,
+                mac=screen_mac,
+                cal_ppm=cal_ppm,
             )
             if converting:
                 msg, status, label = "Converting images, try again shortly", 503, "Converting"
@@ -299,7 +372,7 @@ def create_app(
             resp = make_response(msg, status)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
             logger.debug("%s: %s told to retry in %ss", label, screen_name, sleep_seconds)
-            return resp
+            return _add_cal_seed(resp)
 
         binary = manager.panel_bytes_for_model_orientation(chosen, screen_model, cfg.orientation)
         if binary is None:
@@ -316,10 +389,12 @@ def create_app(
                 firmware_version=fw_version,
                 firmware_build=fw_build,
                 screen_model=screen_model,
+                mac=screen_mac,
+                cal_ppm=cal_ppm,
             )
             resp = make_response("Cached binary missing, try again shortly", 503)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
-            return resp
+            return _add_cal_seed(resp)
 
         scheduler.mark_served(chosen)
         scheduler.record_screen_call(
@@ -333,6 +408,8 @@ def create_app(
             firmware_version=fw_version,
             firmware_build=fw_build,
             screen_model=screen_model,
+            mac=screen_mac,
+            cal_ppm=cal_ppm,
         )
         logger.debug("Serving: %s to %s (sleep_seconds=%s)", chosen, screen_name, sleep_seconds)
 
@@ -341,6 +418,7 @@ def create_app(
         response.headers["X-Sleep-Seconds"] = str(sleep_seconds)
         response.headers["X-Server-Time-Epoch"] = str(int(_time.time()))
         response.headers["Content-Disposition"] = "attachment; filename=hokku.bin"
+        _add_cal_seed(response)
 
         # Manual OTA: if the user toggled "update on next refresh" and the screen
         # is OTA-capable with firmware to ship, tell it to update (it ignores this
@@ -591,6 +669,93 @@ def create_app(
             logger.info("Retry: image %r not found", name)
             return jsonify({"error": f"image {name!r} not found"}), 404
         return jsonify({"ok": True})
+
+    @app.route("/hokku/api/image/<path:name>/config", methods=["GET"])
+    def api_image_config_get(name: str):
+        """This picture's overrides, and what it actually renders with.
+
+        ``effective`` is what the details UI opens its editor on, so tuning
+        starts from the picture as it looks now rather than from an arbitrary
+        preset. Cheap by construction: no detection is run.
+        """
+        rec = state.manager.status(name)
+        if rec is None:
+            logger.info("Image config: image %r not found", name)
+            return jsonify({"error": f"image {name!r} not found"}), 404
+
+        decision = state.manager.effective_decision(name)
+        obs = state.classifier.observations_for(rec.original_sha1) if rec.original_sha1 else None
+        return jsonify(
+            {
+                "overrides": {
+                    "image_config": asdict(rec.image_config) if rec.image_config else None,
+                    "crop_to_fill_threshold": rec.crop_to_fill_threshold,
+                },
+                "effective": {
+                    "image_config": asdict(decision.image_config),
+                    "crop_to_fill_threshold": decision.crop_to_fill_threshold,
+                }
+                if decision is not None
+                else None,
+                "pipeline": _pipeline_label(rec, obs),
+            }
+        )
+
+    @app.route("/hokku/api/image/<path:name>/config", methods=["PATCH"])
+    def api_image_config_patch(name: str):
+        """Set or clear this picture's dither and/or crop override.
+
+        PATCH because the two fields are independent: a key that is absent is
+        left alone, and an explicit null clears that one override. So the same
+        route covers setting either, clearing either, and doing both at once.
+
+        Nothing is written unless the whole body validates — a rejected request
+        must leave the picture exactly as it was.
+        """
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            logger.info("Image config: expected JSON object, got %r", type(body).__name__)
+            return jsonify({"error": "expected JSON object"}), 400
+
+        unknown = body.keys() - {"image_config", "crop_to_fill_threshold"}
+        if unknown:
+            return jsonify(
+                {"error": f"unknown field(s): {', '.join(sorted(unknown))}"},
+            ), 400
+
+        rec = state.manager.status(name)
+        if rec is None:
+            logger.info("Image config: image %r not found", name)
+            return jsonify({"error": f"image {name!r} not found"}), 404
+        if rec.image_width is None:
+            return jsonify(
+                {"error": f"image {name!r} cannot be rendered, so it cannot be configured"}
+            ), 409
+
+        changes: dict[str, Any] = {}
+        try:
+            if "image_config" in body:
+                raw = body["image_config"]
+                changes["image_config"] = (
+                    None if raw is None else image_config_from_dict_strict(raw)
+                )
+            if "crop_to_fill_threshold" in body:
+                raw = body["crop_to_fill_threshold"]
+                changes["crop_to_fill_threshold"] = (
+                    None if raw is None else parse_crop_to_fill_threshold(raw)
+                )
+        except ImageConfigError as e:
+            logger.info("Image config: rejected override for %r: %s", name, e)
+            return jsonify({"error": str(e), "errors": e.errors}), 400
+
+        try:
+            queued = state.manager.set_overrides(name, **changes)
+        except FileNotFoundError:
+            return jsonify({"error": f"image {name!r} not found"}), 404
+
+        if queued:
+            _request_sync(state)
+        return jsonify({"ok": True, "queued": queued})
 
     @app.route("/hokku/api/show_next/<path:name>", methods=["POST"])
     def api_show_next(name: str):
@@ -877,6 +1042,15 @@ def create_app(
                 "face_bboxes": [[b.x, b.y, b.w, b.h] for b in obs.face_bboxes]
                 if (obs and obs.face_bboxes)
                 else [],
+                # Enough for the grid chip and for the modal to decide whether
+                # it is showing an override. Deliberately NOT the ImageConfig
+                # itself: this runs for the whole library on every poll, and a
+                # 24-field blob per picture would be a few hundred KB a poll on
+                # a large library. The editor fetches the full config for the
+                # one picture it is opening.
+                "has_image_config_override": r.image_config is not None,
+                "crop_to_fill_threshold": r.crop_to_fill_threshold,
+                "pipeline": _pipeline_label(r, obs),
             }
             upload_files.append(entry)
             if r.convert_status == ConvertStatus.FAILED:
@@ -901,7 +1075,8 @@ def create_app(
 
         screens_payload: dict[str, dict] = {}
         screen_peek_orientations: set[Orientation] = set()
-        for sname, t in scheduler.screens().items():
+        for _sid, t in scheduler.screens().items():
+            sname = t.name
             next_update_at = None
             if t.last_seen_at and t.last_sleep_seconds:
                 next_update_at = datetime.fromtimestamp(
@@ -913,6 +1088,10 @@ def create_app(
             )
             screen_peek_orientations.add(peek_orientation)
             screens_payload[sname] = {
+                "mac": t.mac,
+                "cal_ppm": t.cal_ppm,
+                "cal_mean_ppm": (round(t.cal_mean_ppm, 1) if t.cal_mean_ppm is not None else None),
+                "cal_samples": t.cal_samples,
                 "ip": t.ip,
                 "request_count": t.request_count,
                 "last_seen": (
@@ -1015,6 +1194,10 @@ def create_app(
                 "config": state.config.to_dict(),
                 "config_defaults": AppConfig().to_dict(),
                 "dither_presets": presets,
+                # jsonify sorts object keys, so the catalog's own order does not
+                # survive the wire — without this the dropdown would be
+                # alphabetical and the three shipped defaults would not lead it.
+                "dither_preset_order": list(PRESET_IMAGE_CONFIGS),
                 "server_time": datetime.now().isoformat(timespec="seconds"),
                 # Per-model panel geometry, keyed by model id — auto-includes any
                 # model added to the registry.  The legacy "panel" key mirrors the
@@ -1081,8 +1264,11 @@ def create_app(
         """Render a one-off dithered preview for a given image + image_config.
 
         Body: {name: str, image: ImageConfig dict, clahe_keepout?: bool,
-        face_aware_crop?: bool}. Returns PNG bytes. ``clahe_keepout`` and
-        ``face_aware_crop`` default to the saved config when omitted.
+        face_aware_crop?: bool, crop_to_fill_threshold?: float,
+        max_side_px?: int}. Returns PNG bytes. ``clahe_keepout``,
+        ``face_aware_crop`` and ``crop_to_fill_threshold`` default to the saved
+        config when omitted; ``max_side_px`` trades preview detail for speed and
+        is what the compare-presets grid uses for its thumbnails.
         The ``X-Face-Bboxes`` response header carries face bboxes already
         transformed into the rendered preview's coordinate space (JSON list
         of [x, y, w, h] tuples, each normalised 0..1 against the preview
@@ -1108,11 +1294,29 @@ def create_app(
         except FileNotFoundError:
             logger.info("Dither preview: image %r not found", name)
             return jsonify({"error": f"image {name!r} not found"}), 404
+        # Strict, unlike the stored-config path: a preview the user cannot trust
+        # to be the config they typed is worse than no preview. The lenient
+        # parser would keep a default for a misspelled knob and render something
+        # subtly different from what is on screen.
         try:
-            cfg = _image_config_from_dict(image_blob)
-        except (TypeError, ValueError) as e:
+            cfg = image_config_from_dict_strict(image_blob, field_path="image")
+        except ImageConfigError as e:
             logger.info("Dither preview: invalid image config: %s", e)
-            return jsonify({"error": f"invalid image config: {e}"}), 400
+            return jsonify({"error": str(e), "errors": e.errors}), 400
+
+        crop_threshold = state.config.crop_to_fill_threshold
+        if body.get("crop_to_fill_threshold") is not None:
+            try:
+                crop_threshold = parse_crop_to_fill_threshold(body["crop_to_fill_threshold"])
+            except ImageConfigError as e:
+                return jsonify({"error": str(e), "errors": e.errors}), 400
+
+        max_side_px = _PREVIEW_MAX_SIDE_PX
+        if body.get("max_side_px") is not None:
+            raw_side = body["max_side_px"]
+            if isinstance(raw_side, bool) or not isinstance(raw_side, int):
+                return jsonify({"error": "max_side_px must be a whole number"}), 400
+            max_side_px = max(_PREVIEW_MIN_SIDE_PX, min(_PREVIEW_MAX_SIDE_PX, raw_side))
 
         # Look up cached face bboxes (original-image normalised) so we can map
         # them onto the rendered preview's coordinate space below.
@@ -1142,20 +1346,36 @@ def create_app(
             if native != Orientation.NEUTRAL:
                 render_orientation = native
 
-        logger.debug("Preview: %r", name)
-        with open_image_for_render(path) as img:
-            orig_w, orig_h = img.size
-            png = ImageRenderer(
-                NumbaStreamingDither(preview_display), preview_display
-            ).render_preview_png(
-                img,
-                cfg,
-                render_orientation,
-                clahe_keepout_bboxes_norm=keepout,
-                crop_anchor_bboxes_norm=crop_anchor,
-            )
-        logger.debug("Preview done: %r", name)
+        # Previews decode the full source image, which dominates their cost and
+        # is bounded only by the decode budget. Without a cap, a client looping
+        # this endpoint (or a compare grid firing in parallel) would hold one
+        # decoded image per request thread and starve the screen-serving path.
+        if not _preview_slots.acquire(blocking=False):
+            logger.info("Dither preview: refused, %d already rendering", PREVIEW_MAX_CONCURRENT)
+            return jsonify({"error": "busy rendering previews, retry shortly"}), 503
+        try:
+            logger.debug("Preview: %r", name)
+            with open_image_for_render(path) as img:
+                orig_w, orig_h = img.size
+                png = ImageRenderer(
+                    NumbaStreamingDither(preview_display), preview_display
+                ).render_preview_png(
+                    img,
+                    cfg,
+                    render_orientation,
+                    max_side_px=max_side_px,
+                    crop_to_fill_threshold=crop_threshold,
+                    clahe_keepout_bboxes_norm=keepout,
+                    crop_anchor_bboxes_norm=crop_anchor,
+                )
+            logger.debug("Preview done: %r", name)
+        finally:
+            _preview_slots.release()
 
+        # Same threshold the render above used. These two used to disagree: the
+        # render took the 0.0 default because the argument was positional, so it
+        # always letterboxed, while the overlay was computed for a cover-cropped
+        # canvas the returned PNG did not have.
         canvas_bboxes = transform_bboxes_to_canvas_norm(
             face_bboxes_orig,
             orig_w,
@@ -1163,7 +1383,7 @@ def create_app(
             render_orientation,
             preview_display.panel_w,
             preview_display.panel_h,
-            state.config.crop_to_fill_threshold,
+            crop_threshold,
             panel_rotated=preview_display.panel_rotated,
             crop_anchor_bboxes_norm=crop_anchor,
         )
@@ -1241,6 +1461,30 @@ def create_app(
             {"address": ip, "via": "ip", "port": port, "url": f"http://{ip}:{port}/hokku/screen/"}
         )
 
+    def _remember_flash_wifi(ssid1: str, pass1: str, ssid2: str | None, pass2: str | None) -> None:
+        """Persist the Wi-Fi credentials a flash just used so the form pre-fills.
+
+        Shared by every flash route — the same network provisions every screen,
+        whatever the model. ``ssid2``/``pass2`` are ``None`` for models without a
+        fallback network (the F7): those keep whatever was remembered before
+        instead of being cleared by a flash that never asked for them."""
+        if not config_path:
+            return
+        cfg = state.config
+        fields = {"flash_wifi_ssid": ssid1, "flash_wifi_pass": pass1}
+        if ssid2 is not None:
+            fields["flash_wifi_ssid2"] = ssid2
+            fields["flash_wifi_pass2"] = pass2 or ""
+        if all(getattr(cfg, k) == v for k, v in fields.items()):
+            return
+        try:
+            new_cfg = replace(cfg, **fields)
+            new_cfg.save(config_path)
+            with state._lock:
+                state.config = new_cfg
+        except Exception as e:
+            logger.warning("Could not persist WiFi credentials to config: %s", e)
+
     @app.route("/hokku/api/flash/start", methods=["POST"])
     def api_flash_start():
         """Begin flashing firmware + NVS config to a connected screen.
@@ -1315,29 +1559,9 @@ def create_app(
             return jsonify({"error": "a flash is already in progress"}), 409
 
         # Persist WiFi credentials so the form pre-fills next time.
-        wifi_pass1 = body.get("wifi_pass1") or ""
-        wifi_pass2 = body.get("wifi_pass2") or ""
-        if config_path:
-            cfg = state.config
-            if (
-                wifi_ssid1 != cfg.flash_wifi_ssid
-                or wifi_pass1 != cfg.flash_wifi_pass
-                or ssid2 != cfg.flash_wifi_ssid2
-                or wifi_pass2 != cfg.flash_wifi_pass2
-            ):
-                try:
-                    new_cfg = replace(
-                        cfg,
-                        flash_wifi_ssid=wifi_ssid1,
-                        flash_wifi_pass=wifi_pass1,
-                        flash_wifi_ssid2=ssid2,
-                        flash_wifi_pass2=wifi_pass2,
-                    )
-                    new_cfg.save(config_path)
-                    with state._lock:
-                        state.config = new_cfg
-                except Exception as e:
-                    logger.warning("Could not persist WiFi credentials to config: %s", e)
+        _remember_flash_wifi(
+            wifi_ssid1, body.get("wifi_pass1") or "", ssid2, body.get("wifi_pass2") or ""
+        )
 
         return jsonify({"job_id": job_id})
 
@@ -1346,7 +1570,7 @@ def create_app(
         """Bootstrap a fresh Bigme F7 (XR872) into Hokku firmware over USB.
 
         Catches the mask-BROM (the operator power-cycles with a USB replug + power
-        press) and writes slot 0 via the same validated ``flash_slot0`` — bootloader
+        press) and writes slot 0 via the same validated ``flash_slot`` — bootloader
         and OEM slot 1 untouched. Wi-Fi/config are provisioned afterward over the
         device console, not here. Progress polls the shared ``/flash/status``."""
         if not bigme_bootstrap.tooling_available():
@@ -1383,6 +1607,12 @@ def create_app(
         if job_id is None:
             logger.warning("F7 bootstrap rejected: a flash is already in progress")
             return jsonify({"error": "a flash is already in progress"}), 409
+
+        # Persist WiFi credentials so the form pre-fills next time. The F7 has no
+        # fallback network, so the remembered second network is left alone.
+        if ssid:
+            _remember_flash_wifi(ssid, psk, None, None)
+
         return jsonify({"job_id": job_id})
 
     @app.route("/hokku/api/flash/cancel", methods=["POST"])

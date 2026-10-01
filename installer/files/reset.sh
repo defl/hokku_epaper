@@ -11,4 +11,10 @@ fi
 
 echo "Removing setup sentinel and rebooting into installer mode..."
 rm -f "$SENTINEL"
+
+# Setup mode gets the USB serial console back (hokku mode leaves the port in
+# host mode so it can flash a frame). Best-effort — never block the revert.
+/usr/lib/hokku-installer/usb-mode.sh peripheral || \
+    echo "WARNING: could not restore the USB serial console" >&2
+
 systemctl reboot

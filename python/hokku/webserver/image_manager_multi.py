@@ -55,6 +55,8 @@ class MultiThreadedImageManager(AbstractImageManager):
             )
         )
 
-    def shutdown(self) -> None:
+    def _stop_workers(self) -> None:
+        # wait=False: in-flight renders finish on their own threads. Their
+        # completion callbacks still run, but the DB is frozen by then (see
+        # AbstractImageManager.retire), so they cannot write.
         self._executor.shutdown(wait=False)
-        super().shutdown()

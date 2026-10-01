@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import ExifTags, Image
 
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.bounding_box import BoundingBox
@@ -22,11 +22,21 @@ from hokku.webserver.dither_streaming import rgb_to_lab
 from hokku.webserver.face_detect_yunet_opencv import OpenCVYuNetFaceDetector
 from hokku.webserver.filesystem import atomic_write_json
 from hokku.webserver.image_config import ImageConfig
+from hokku.webserver.image_orientation import AXIS_SWAPPING, exif_orientation
 from hokku.webserver.image_renderer import open_image_for_render
 
 logger = logging.getLogger(__name__)
 
 _DB_NAME = "image_classifier.json"
+# v2: face detection decodes through open_image_for_render. v1 face bboxes came
+# from cv2.imread and are re-checked once each (see _cv2_saw_render_frame).
+_DB_VERSION = 2
+
+# Formats cv2.imread decoded, orienting by the EXIF block Pillow exposes at open
+# as info["exif"]: JPEG APP1, PNG eXIf before IDAT, WebP EXIF. It never saw XMP
+# or PNG chunks after IDAT, and couldn't read anything else except TIFF, which
+# it oriented correctly but failed to decode at all for the axis-swapping 5-8.
+_CV2_EXIF_FORMATS = frozenset({"JPEG", "MPO", "PNG", "WEBP"})
 
 GRAYSCALE_CHROMA_THRESHOLD = 8.0
 
@@ -65,6 +75,12 @@ class ImageClassifier:
       2. Face detection (if ``classifier_face_detect_enabled``).
       3. Default.
 
+    A picture carrying a per-picture override outranks all three, but that is
+    applied by the image manager on top of the decision returned here — see
+    ``AbstractImageManager._decision_for_record``. Overrides live in the
+    manager's DB and outlive this object, which is rebuilt on every config
+    reload, so the classifier deliberately knows nothing about them.
+
     Raw observations (``is_bw``, ``has_face``, ``face_bbox``) are persisted in
     ``<cache_dir>/image_classifier.json`` keyed by sha1 of the original file
     so re-instantiation after restart doesn't require re-detection.
@@ -83,17 +99,28 @@ class ImageClassifier:
         self._config = config
         self._lock = threading.RLock()
         self._db_path = Path(config.cache_dir) / _DB_NAME
+        # sha1s whose cached face_bboxes came from the pre-v2 cv2.imread loader
+        # and have not yet been checked against the render frame.
+        self._cv2_face_bboxes: set[str] = set()
         self._cache: dict[str, Observations] = self._load()
         self._face_detector = None
 
     # ── Public API ───────────────────────────────────────────────────────────
 
-    def decision_for(self, path: Path, sha1: str) -> ImageClassifierDecision:
+    def decision_for(
+        self, path: Path, sha1: str, *, detect: bool = True
+    ) -> ImageClassifierDecision:
         """Return the ImageClassifierDecision for this image: dither pipeline, crop
         policy, and any face keep-out bboxes.
+
+        With ``detect=False`` only cached observations are consulted: nothing is
+        decoded and the face detector is never constructed. Read-only callers
+        want this — loading the ~57 MB YuNet graph inside a request would block
+        one of the server's handful of request threads on work whose result
+        nobody is waiting for.
         """
         cfg = self._config
-        chosen, face_bboxes = self._classify(path, sha1)
+        chosen, face_bboxes = self._classify(path, sha1, detect=detect)
         keepout = face_bboxes if cfg.classifier_face_detect_clahe_keepout else None
         crop_bboxes = face_bboxes if cfg.classifier_face_aware_crop_enabled else None
         return ImageClassifierDecision(
@@ -113,6 +140,7 @@ class ImageClassifier:
         logger.info("Clearing classifier cache")
         with self._lock:
             self._cache = {}
+            self._cv2_face_bboxes = set()
             try:
                 self._db_path.unlink()
             except FileNotFoundError:
@@ -155,8 +183,14 @@ class ImageClassifier:
         with Image.open(path) as img:
             return ImageClassifier._is_near_grayscale(img)
 
-    def _classify(self, path: Path, sha1: str) -> tuple[ImageConfig, tuple[BoundingBox, ...]]:
-        """Return (image_config, face_bboxes) for this image."""
+    def _classify(
+        self, path: Path, sha1: str, *, detect: bool = True
+    ) -> tuple[ImageConfig, tuple[BoundingBox, ...]]:
+        """Return (image_config, face_bboxes) for this image.
+
+        ``detect=False`` skips any observation that has not been made yet,
+        falling through to whatever the cached ones imply.
+        """
         cfg = self._config
         if not (cfg.classifier_bw_detect_enabled or cfg.classifier_face_detect_enabled):
             return cfg.image_config_default, ()
@@ -165,11 +199,20 @@ class ImageClassifier:
             obs = self._cache.get(sha1, Observations())
             dirty = False
 
-            if cfg.classifier_bw_detect_enabled and obs.is_bw is None:
+            if detect and cfg.classifier_bw_detect_enabled and obs.is_bw is None:
                 obs = replace(obs, is_bw=self._check_grayscale(path))
                 dirty = True
 
-            if cfg.classifier_face_detect_enabled and obs.face_bboxes is None:
+            if detect and cfg.classifier_face_detect_enabled and sha1 in self._cv2_face_bboxes:
+                # Boxes found in a frame the renderer doesn't use, or "no face"
+                # for a format cv2 couldn't read: detect again. Boxes cv2 found
+                # in the render frame are kept, so they don't re-render.
+                self._cv2_face_bboxes.discard(sha1)
+                if not _cv2_saw_render_frame(path):
+                    obs = replace(obs, face_bboxes=None)
+                dirty = True
+
+            if detect and cfg.classifier_face_detect_enabled and obs.face_bboxes is None:
                 if self._face_detector is None:
                     self._face_detector = OpenCVYuNetFaceDetector()
                 bboxes = self._face_detector.detect(path)
@@ -209,6 +252,10 @@ class ImageClassifier:
                 is_bw=d.get("is_bw"),
                 face_bboxes=face_bboxes,
             )
+        if data.get("version", 1) < 2:
+            self._cv2_face_bboxes = {s for s, o in out.items() if o.face_bboxes is not None}
+        else:
+            self._cv2_face_bboxes = set(data.get("cv2_face_bboxes", ())) & out.keys()
         return out
 
     def _persist(self) -> None:
@@ -221,8 +268,34 @@ class ImageClassifier:
             observations_dict[sha1] = obs_dict
 
         payload = {
-            "version": 1,
+            "version": _DB_VERSION,
             "observations": observations_dict,
+            "cv2_face_bboxes": sorted(self._cv2_face_bboxes & self._cache.keys()),
         }
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(self._db_path, payload)
+
+
+def _norm_orientation(value: object) -> int:
+    """An Orientation tag as exif_transpose treats it: 2-8 transform, anything else is 1."""
+    return value if isinstance(value, int) and 2 <= value <= 8 else 1
+
+
+def _cv2_saw_render_frame(path: Path) -> bool:
+    """Would the pre-v2 cv2.imread loader have decoded *path* in the render's frame?
+
+    Header only. False for anything cv2 couldn't read, so a cached "no face"
+    for a HEIC/AVIF/JXL/SVG is re-detected too.
+    """
+    try:
+        with Image.open(path) as img:
+            if img.format == "TIFF":
+                return _norm_orientation(exif_orientation(img)) not in AXIS_SWAPPING
+            if img.format not in _CV2_EXIF_FORMATS:
+                return False
+            cv2_exif = Image.Exif()
+            cv2_exif.load(img.info.get("exif") or b"")
+            cv2_o = _norm_orientation(cv2_exif.get(ExifTags.Base.Orientation))
+            return cv2_o == _norm_orientation(exif_orientation(img))
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
+        return False

@@ -25,4 +25,11 @@ done
 
 echo "hokku-wifi-watchdog: WiFi never connected after $((90 + MAX_WAIT))s — reverting to installer mode"
 rm -f "$SENTINEL"
+
+# Back to setup mode means back to the USB serial console — this is the path
+# that makes an unreachable appliance diagnosable over a cable again.
+# Best-effort: a failure here must not stop the revert reboot.
+/usr/lib/hokku-installer/usb-mode.sh peripheral || \
+    echo "hokku-wifi-watchdog: WARNING: could not restore the USB serial console"
+
 systemctl reboot

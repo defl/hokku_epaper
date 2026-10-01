@@ -22,7 +22,17 @@ typedef struct {
     int     *out_http_status;     /* HTTP status code */
     char    *out_fw_update;       /* X-Firmware-Update version string (empty if none) */
     size_t   fw_update_buflen;    /* size of out_fw_update */
+    /* Server calibration seed (see sleep_cal). The server sends both on every
+     * response; *out_cal_seed_n is set to >= 0 only when received (caller inits
+     * it to a negative sentinel), so the board can decide whether to adopt. */
+    int32_t *out_cal_seed_ppm;    /* X-Sleep-Cal-PPM (server's pinned long-term mean) */
+    int     *out_cal_seed_n;      /* X-Sleep-Cal-N (measurements behind the mean) */
 } hokku_fetch_out_t;
+
+/* Format this device's WiFi STA MAC as lowercase "aa:bb:cc:dd:ee:ff" into out
+ * (needs >= 18 bytes). Empty string on failure. This is the server's durable
+ * per-device key; the screen name is only a mutable label. */
+void hokku_screen_mac_str(char *out, size_t len);
 
 /* Fetch the screen image into buf (capacity = expect_bytes; caller owns it).
  * frame_state is the caller-built X-Frame-State JSON. fw_build is the compile

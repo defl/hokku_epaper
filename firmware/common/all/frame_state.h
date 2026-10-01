@@ -26,6 +26,8 @@ typedef struct {
     long long   next_ep;      /* scheduled next-refresh epoch, 0 if unscheduled */
     bool        sleep_err_known;  /* whether sleep_err_s carries a value */
     int         sleep_err_s;      /* actual-vs-expected sleep error, seconds */
+    bool        cal_known;        /* whether cal_ppm carries a value */
+    int         cal_ppm;          /* deep-sleep drift correction, ppm; OMITTED when !cal_known */
     bool        wifi_cached;      /* last connect used the fast-reconnect cache */
 } frame_state_t;
 

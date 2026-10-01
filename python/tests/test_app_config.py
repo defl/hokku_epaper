@@ -5,23 +5,162 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 
-from hokku.webserver.app_config import _CURRENT_VERSION, AppConfig, _migrate
-from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
+from hokku.webserver.app_config import _CURRENT_VERSION, _MIGRATIONS, AppConfig, _migrate
+from hokku.webserver.presets import (
+    DEFAULT_BW_IMAGE_CONFIG,
+    DEFAULT_FACE_IMAGE_CONFIG,
+    DEFAULT_IMAGE_CONFIG,
+    PRESET_IMAGE_CONFIGS,
+    PRESET_META,
+)
 
 
 def test_defaults():
     cfg = AppConfig()
     assert cfg.port == 8080
     assert cfg.version == _CURRENT_VERSION
-    assert cfg.image_config_default == PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
-    assert cfg.image_config_bw == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
-    assert cfg.image_config_face == PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
+    assert cfg.image_config_default == DEFAULT_IMAGE_CONFIG
+    assert cfg.image_config_bw == DEFAULT_BW_IMAGE_CONFIG
+    assert cfg.image_config_face == DEFAULT_FACE_IMAGE_CONFIG
     assert cfg.classifier_bw_detect_enabled is True
     assert not hasattr(cfg, "orientation")
+
+
+def test_pipeline_defaults_are_actually_different():
+    """The three pipelines must not collapse onto one another.
+
+    They did: every install ran the colour pipeline for B&W and face photos
+    because a missing field reset each of them to the fallback preset.
+    """
+    cfg = AppConfig()
+    assert cfg.image_config_default != cfg.image_config_bw
+    assert cfg.image_config_default != cfg.image_config_face
+    assert cfg.image_config_bw != cfg.image_config_face
+
+
+def test_face_default_is_tuned_for_skin():
+    """Face pipeline: no chroma boost reaches skin, and local contrast is not raised.
+
+    This used to also require a stronger, wider unsharp mask than the general
+    default, on the reasoning that sharpening features beats equalising local
+    contrast on skin. The blind rating campaign did not support that trade and
+    the shipped preset no longer makes it, so the assertion would now only be
+    pinning a belief that lost. What it pins instead is the part that did
+    survive: nothing in this pipeline boosts chroma, and skin gets no more
+    local contrast than an ordinary photograph.
+    """
+    cfg = AppConfig()
+    face, default = cfg.image_config_face, cfg.image_config_default
+    assert face.clahe_clip_limit <= default.clahe_clip_limit
+    assert face.dither.algorithm == "atkinson"
+
+    # Both adaptive boosters off — measured as a two-thirds cut in blue ink
+    # landing on saturated lips.
+    assert face.adaptive_saturate_space == "off"
+    assert face.adaptive_vivid is False
+
+    # And the trap that follows from the line above: `color_enhance` is applied
+    # only when adaptive saturation is off (image_abc.py), so faces are the one
+    # shipped pipeline where it actually bites. A value above 1.0 here is a real
+    # chroma boost on skin, however neutral it looks beside the other two.
+    assert face.color_enhance == 1.0
+
+
+def test_dropdown_presets_unchanged_by_pipeline_defaults():
+    """The face tuning must not leak into the general-purpose Atkinson preset."""
+    assert DEFAULT_FACE_IMAGE_CONFIG != PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
+    assert PRESET_IMAGE_CONFIGS["atkinson_hue_aware"].clahe_clip_limit == 0.0
+
+
+@pytest.mark.parametrize(
+    "pipeline", ["image_config_default", "image_config_bw", "image_config_face"]
+)
+def test_no_shipped_pipeline_boosts_chroma(pipeline: str):
+    """Every chroma amplifier is at its identity value, in all three pipelines.
+
+    This was the single largest measured win of the colour campaign -- better on
+    17 photographs and worse on 1, p < 0.001, judged blind off the glass -- and
+    it is easy to undo by accident, because the four knobs live in different
+    stages and three of them look harmless at 1.25.
+
+    They are asserted together rather than per preset because which ones *bite*
+    depends on another field: `color_enhance` applies only when adaptive
+    saturation is off, and `saturate_max_enhance` only when it is on. Pinning
+    the whole set means the invariant survives someone changing the saturation
+    space, which is exactly the edit that would otherwise quietly re-enable a
+    boost. See docs/screens/huessen_epf1301/rendering_campaign.md.
+    """
+    cfg = getattr(AppConfig(), pipeline)
+    assert cfg.color_enhance == 1.0
+    assert cfg.saturate_max_enhance == 1.0
+    assert cfg.adaptive_vivid is False
+    assert cfg.scale_chroma is False
+
+
+# ── the shipped defaults are named presets ───────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("preset_key", "default_config"),
+    [
+        ("default_general", DEFAULT_IMAGE_CONFIG),
+        ("default_bw", DEFAULT_BW_IMAGE_CONFIG),
+        ("default_face", DEFAULT_FACE_IMAGE_CONFIG),
+    ],
+)
+def test_shipped_default_is_a_named_preset(preset_key: str, default_config):
+    """Each pipeline default has to BE a catalog entry, not merely resemble one."""
+    assert PRESET_IMAGE_CONFIGS[preset_key] is default_config
+
+
+@pytest.mark.parametrize(
+    ("preset_key", "field"),
+    [
+        ("default_general", "image_config_default"),
+        ("default_bw", "image_config_bw"),
+        ("default_face", "image_config_face"),
+    ],
+)
+def test_stock_config_serialises_identically_to_its_preset(preset_key: str, field: str):
+    """A fresh install must show a preset name, not "Custom (your edits)".
+
+    The web UI decides which preset is selected by comparing JSON.stringify() of
+    the config against JSON.stringify() of each catalog entry, so equality is not
+    enough — the serialisation has to match byte for byte, key order included.
+    Both sides come from asdict() on the same dataclass, which is what makes
+    that safe; this test is what stops it quietly ceasing to be true.
+    """
+    stock = json.dumps(asdict(getattr(AppConfig(), field)))
+    preset = json.dumps(asdict(PRESET_IMAGE_CONFIGS[preset_key]))
+    assert stock == preset
+
+
+def test_every_preset_has_a_label_and_description():
+    """A catalog entry with no metadata shows its raw key in the dropdown."""
+    assert set(PRESET_META) == set(PRESET_IMAGE_CONFIGS)
+    for key, meta in PRESET_META.items():
+        assert meta.get("label"), f"{key} has no label"
+        assert meta.get("description"), f"{key} has no description"
+
+
+def test_presets_are_all_distinct():
+    """Two entries rendering identically would make the dropdown ambiguous.
+
+    selectPresetMatching() returns the first match, so a duplicate would be
+    unreachable and the UI would flip between two names for one config.
+    """
+    slugs = {key: cfg.cache_slug() for key, cfg in PRESET_IMAGE_CONFIGS.items()}
+    assert len(set(slugs.values())) == len(slugs), slugs
+
+
+def test_defaults_are_listed_before_the_alternatives():
+    """Insertion order is dropdown order; the shipped choices come first."""
+    assert list(PRESET_IMAGE_CONFIGS)[:3] == ["default_general", "default_bw", "default_face"]
 
 
 def test_cache_slug_invariant_to_port():
@@ -108,8 +247,15 @@ def test_image_configs_roundtrip(tmp_path: Path):
     assert loaded.classifier_bw_detect_enabled is True
 
 
-def test_image_field_with_partial_blob_falls_back_to_default(tmp_path: Path):
-    """A corrupt image_config_default blob (partial dither) falls back to the default preset."""
+def test_partial_image_blob_at_the_current_version_is_rejected(tmp_path: Path):
+    """A config claiming to be current must actually be current.
+
+    It used to be merged onto the pipeline default on every load, which meant a
+    half-written blob looked fine forever and a misspelled knob was ignored
+    silently. Bringing an old config up to date is the migration chain's job
+    now, so anything still incomplete at the current version is a real fault
+    and is reported.
+    """
     p = tmp_path / "c.json"
     p.write_text(
         json.dumps(
@@ -119,8 +265,61 @@ def test_image_field_with_partial_blob_falls_back_to_default(tmp_path: Path):
             }
         )
     )
+    with pytest.raises(SystemExit):
+        AppConfig.load(p)
+
+
+def test_absent_image_blob_takes_the_pipeline_default(tmp_path: Path):
+    """Absent is not the same as wrong: an unconfigured pipeline is fine.
+
+    Every other field behaves this way, and a hand-edited config that simply
+    omits a section must not stop the server from booting.
+    """
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"version": _CURRENT_VERSION, "port": 8080}))
+
     cfg = AppConfig.load(p)
-    assert cfg.image_config_default == PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
+
+    assert cfg.image_config_default == DEFAULT_IMAGE_CONFIG
+    assert cfg.image_config_bw == DEFAULT_BW_IMAGE_CONFIG
+    assert cfg.image_config_face == DEFAULT_FACE_IMAGE_CONFIG
+
+
+def test_config_from_a_newer_version_is_refused(tmp_path: Path):
+    """There is no downgrade path, so say so plainly.
+
+    Without this the strict parser would reject a field it has never heard of
+    and report a confusing validation error instead of the actual problem.
+    """
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"version": _CURRENT_VERSION + 1}))
+    with pytest.raises(SystemExit):
+        AppConfig.load(p)
+
+
+def test_migration_completes_a_sparse_image_blob(tmp_path: Path):
+    """The upgrade path an older config actually takes.
+
+    v9 stored blobs that could be missing fields; v10 fills them in once so the
+    parser can be strict from then on.
+    """
+    p = tmp_path / "c.json"
+    p.write_text(
+        json.dumps(
+            {
+                "version": 9,
+                "image_config_default": {"prepare_gamma": 0.55},
+            }
+        )
+    )
+
+    cfg = AppConfig.load(p)
+
+    assert cfg.image_config_default.prepare_gamma == pytest.approx(0.55)  # kept
+    assert (
+        cfg.image_config_default.clahe_keepout_feather
+        == DEFAULT_IMAGE_CONFIG.clahe_keepout_feather  # filled
+    )
 
 
 def test_v1_migrates_to_current():
@@ -190,6 +389,11 @@ def test_old_config_gets_default_server_threads(tmp_path: Path):
     p = tmp_path / "config.json"
     p.write_text(json.dumps({"version": _CURRENT_VERSION, "port": 8080}))
     assert AppConfig.load(p).server_threads == AppConfig().server_threads
+
+
+def test_every_version_below_current_has_a_migration():
+    """A gap in the chain would raise KeyError mid-upgrade."""
+    assert set(_MIGRATIONS) == set(range(1, _CURRENT_VERSION))
 
 
 def test_cache_slug_invariant_to_server_threads():

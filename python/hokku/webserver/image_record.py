@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import enum
+import logging
 from dataclasses import asdict, dataclass, field
 
+from hokku.webserver.image_config import (
+    ImageConfig,
+    ImageConfigError,
+    image_config_from_dict_strict,
+    parse_crop_to_fill_threshold,
+)
 from hokku.webserver.orientation import Orientation
+
+logger = logging.getLogger(__name__)
 
 # Default model used to migrate pre-v4 records (which only had a single
 # implicit screen model) into the model-keyed ``slugs`` dict.
@@ -34,6 +43,23 @@ class ImageRecord:
     last_conversion_seconds: float | None = None  # wall-clock time of last successful render
     image_width: int | None = None  # pixel dimensions of the source image
     image_height: int | None = None
+
+    # ── per-picture overrides ────────────────────────────────────────────────
+    # User-authored, and the only fields here that are not derived from the
+    # source file: everything else can be recomputed, these cannot. Set = this
+    # picture ignores the corresponding automatic choice; None = automatic.
+    # The two are independent — overriding the pipeline says nothing about the
+    # crop, and vice versa.
+    #
+    # Both feed ScreenImageConfig.cache_slug(), so setting one changes the slug
+    # and the picture re-renders on its own; nothing else has to invalidate it.
+    #
+    # Additive and optional, so _DB_VERSION does not move: a v4 row without them
+    # loads fine. An older binary reading a newer file ignores what it doesn't
+    # know, so downgrading drops overrides silently — the pictures revert to
+    # automatic rather than breaking.
+    image_config: ImageConfig | None = None  # None = the classifier picks
+    crop_to_fill_threshold: float | None = None  # None = AppConfig's global value
 
     def slug_for(self, model: str, orientation: Orientation) -> str | None:
         """Return the cached slug for (model, orientation), or None if not rendered."""
@@ -64,6 +90,36 @@ class ImageRecord:
     def to_dict(self) -> dict:
         return asdict(self)
 
+    @staticmethod
+    def _overrides_from_dict(d: dict) -> tuple[ImageConfig | None, float | None]:
+        """Parse the two override fields, dropping either one if it is corrupt.
+
+        Errors are swallowed on purpose. _load_db() skips any record whose
+        from_dict() raises, so letting a malformed override propagate would
+        cost the whole image — its dimensions, its render slugs, its status —
+        and force a needless re-render. Losing just the override is the
+        smaller, more recoverable failure, and it is logged.
+        """
+        image_config: ImageConfig | None = None
+        raw_cfg = d.get("image_config")
+        if raw_cfg is not None:
+            try:
+                image_config = image_config_from_dict_strict(
+                    raw_cfg, field_path="image_config override"
+                )
+            except ImageConfigError as e:
+                logger.warning("Dropping malformed dither override for %r: %s", d.get("name"), e)
+
+        crop: float | None = None
+        raw_crop = d.get("crop_to_fill_threshold")
+        if raw_crop is not None:
+            try:
+                crop = parse_crop_to_fill_threshold(raw_crop)
+            except ImageConfigError as e:
+                logger.warning("Dropping malformed crop override for %r: %s", d.get("name"), e)
+
+        return image_config, crop
+
     @classmethod
     def from_dict(cls, d: dict) -> ImageRecord:
         raw_t = d.get("last_conversion_seconds")
@@ -80,6 +136,7 @@ class ImageRecord:
                 slugs[f"{_LEGACY_MODEL}.{Orientation.LANDSCAPE.value}"] = ls
             if ps:
                 slugs[f"{_LEGACY_MODEL}.{Orientation.PORTRAIT.value}"] = ps
+        image_config, crop_to_fill_threshold = cls._overrides_from_dict(d)
         return cls(
             name=d["name"],
             name_hash=d["name_hash"],
@@ -93,6 +150,8 @@ class ImageRecord:
             last_conversion_seconds=float(raw_t) if raw_t is not None else None,
             image_width=int(raw_w) if raw_w is not None else None,
             image_height=int(raw_h) if raw_h is not None else None,
+            image_config=image_config,
+            crop_to_fill_threshold=crop_to_fill_threshold,
         )
 
 

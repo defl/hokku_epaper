@@ -7,7 +7,7 @@ import json
 from dataclasses import asdict, dataclass
 
 from hokku.webserver.bounding_box import BoundingBox
-from hokku.webserver.image_config import ImageConfig, _image_config_from_dict
+from hokku.webserver.image_config import ImageConfig, image_config_from_dict_strict
 from hokku.webserver.orientation import Orientation
 
 
@@ -62,7 +62,7 @@ class ScreenImageConfig:
 
 def _screen_image_config_from_dict(d: dict) -> ScreenImageConfig:
     """Round-trip helper: dict → ScreenImageConfig."""
-    image_config = _image_config_from_dict(d.get("image_config"), field_path="image_config")
+    image_config = image_config_from_dict_strict(d.get("image_config"), field_path="image_config")
     orientation = Orientation(d["orientation"])
     crop_to_fill_threshold = float(d.get("crop_to_fill_threshold", 0.0))
     raw = d.get("clahe_keepout_bboxes")

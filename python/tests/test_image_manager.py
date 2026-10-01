@@ -10,16 +10,22 @@ is a no-op.
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from PIL import Image as _Image
 
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.app_config import AppConfig
+from hokku.webserver.bounding_box import BoundingBox
+from hokku.webserver.image_classifier import ImageClassifierDecision
 from hokku.webserver.image_manager_abstract import AbstractImageManager
 from hokku.webserver.orientation import Orientation
+from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 from hokku.webserver.screen_image_config import ScreenImageConfig
 from tests._helpers import make_declared_size_png
 
@@ -168,6 +174,389 @@ def test_db_survives_restart(app_config: AppConfig, image_manager_factory, make_
     mgr2 = image_manager_factory(app_config)
     rec2 = mgr2.status("a.png")
     assert rec2 == rec
+
+
+def _synced(app_config: AppConfig, image_manager_factory, make_test_image, name: str = "a.png"):
+    """A manager with one converted image, ready to be overridden."""
+    make_test_image(Path(app_config.upload_dir) / name)
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    return mgr
+
+
+def test_set_overrides_queues_a_rerender(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    before = mgr.status("a.png")
+    assert before is not None and before.convert_status == "ok"
+    assert before.slugs  # a render happened
+
+    assert mgr.set_overrides("a.png", image_config=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"])
+
+    rec = mgr.status("a.png")
+    assert rec is not None
+    assert rec.image_config == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+    # Pending is the trigger — _reconcile_with_disk() only slug-checks "ok"
+    # records, so it is the backstop, not what queues the work.
+    assert rec.convert_status == "pending"
+    # Cleared slugs stop a polling screen being served the pre-override render.
+    assert rec.slugs == {}
+
+
+def test_override_changes_the_render(app_config: AppConfig, image_manager_factory, make_test_image):
+    """End to end: the new slug is different and the picture re-renders under it."""
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    old_slug = mgr.status("a.png").slug_for("huessen_epf1301", Orientation.LANDSCAPE)
+
+    mgr.set_overrides("a.png", image_config=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"])
+    mgr.sync()
+    mgr.wait_for_idle()
+
+    rec = mgr.status("a.png")
+    assert rec is not None
+    assert rec.convert_status == "ok"
+    new_slug = rec.slug_for("huessen_epf1301", Orientation.LANDSCAPE)
+    assert new_slug is not None and new_slug != old_slug
+    assert mgr.panel_bytes_for_orientation("a.png", Orientation.LANDSCAPE) is not None
+
+
+def test_crop_only_override_changes_the_slug(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """The crop override has to reach the cache key, not just the renderer."""
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    old_slug = mgr.status("a.png").slug_for("huessen_epf1301", Orientation.LANDSCAPE)
+
+    assert mgr.set_overrides("a.png", crop_to_fill_threshold=0.42)
+    mgr.sync()
+    mgr.wait_for_idle()
+
+    rec = mgr.status("a.png")
+    assert rec is not None
+    assert rec.image_config is None  # pipeline still automatic
+    assert rec.slug_for("huessen_epf1301", Orientation.LANDSCAPE) != old_slug
+
+
+def test_clearing_an_override_restores_the_automatic_render(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """Going back to automatic must land on the original slug again."""
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    auto_slug = mgr.status("a.png").slug_for("huessen_epf1301", Orientation.LANDSCAPE)
+
+    mgr.set_overrides("a.png", image_config=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"])
+    mgr.sync()
+    mgr.wait_for_idle()
+    assert mgr.status("a.png").slug_for("huessen_epf1301", Orientation.LANDSCAPE) != auto_slug
+
+    assert mgr.set_overrides("a.png", image_config=None)
+    mgr.sync()
+    mgr.wait_for_idle()
+
+    assert mgr.status("a.png").slug_for("huessen_epf1301", Orientation.LANDSCAPE) == auto_slug
+
+
+def test_set_overrides_leaves_unmentioned_fields_alone(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """Three-valued arguments: absent means leave, None means clear."""
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    mgr.set_overrides(
+        "a.png",
+        image_config=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"],
+        crop_to_fill_threshold=0.3,
+    )
+
+    mgr.set_overrides("a.png", crop_to_fill_threshold=None)  # clear only the crop
+
+    rec = mgr.status("a.png")
+    assert rec is not None
+    assert rec.crop_to_fill_threshold is None
+    assert rec.image_config == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+
+
+def test_set_overrides_is_a_noop_when_nothing_changes(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """A redundant clear must not throw away a perfectly good render."""
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+
+    assert mgr.set_overrides("a.png", image_config=None) is False
+
+    rec = mgr.status("a.png")
+    assert rec is not None
+    assert rec.convert_status == "ok"
+    assert rec.slugs  # untouched
+
+
+def test_set_overrides_unknown_image_raises(app_config: AppConfig, image_manager_factory):
+    mgr = image_manager_factory(app_config)
+    with pytest.raises(FileNotFoundError):
+        mgr.set_overrides("nope.png", crop_to_fill_threshold=0.5)
+
+
+def test_effective_decision_reports_the_override(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    assert mgr.effective_decision("nope.png") is None
+
+    auto = mgr.effective_decision("a.png")
+    assert auto is not None
+
+    mgr.set_overrides("a.png", image_config=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"])
+    after = mgr.effective_decision("a.png")
+
+    assert after is not None
+    assert after.image_config == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+    assert auto.image_config != after.image_config
+
+
+def test_overrides_survive_clear_caches(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    mgr.set_overrides(
+        "a.png", image_config=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"], crop_to_fill_threshold=0.2
+    )
+
+    mgr.clear_caches()
+
+    rec = mgr.status("a.png")
+    assert rec is not None
+    assert rec.image_config == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+    assert rec.crop_to_fill_threshold == pytest.approx(0.2)
+
+
+def test_overrides_survive_a_content_change(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """Re-saving a picture keeps the tuning done for it — it is the same picture."""
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png", color=(255, 0, 0))
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    mgr.set_overrides("a.png", image_config=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"])
+
+    make_test_image(upload / "a.png", color=(0, 0, 255))
+    mgr.sync()
+    mgr.wait_for_idle()
+
+    rec = mgr.status("a.png")
+    assert rec is not None
+    assert rec.image_config == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+
+
+def test_overrides_survive_a_restart(app_config: AppConfig, image_manager_factory, make_test_image):
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    mgr.set_overrides("a.png", crop_to_fill_threshold=0.35)
+    mgr.shutdown()
+
+    mgr2 = image_manager_factory(app_config)
+
+    rec = mgr2.status("a.png")
+    assert rec is not None
+    assert rec.crop_to_fill_threshold == pytest.approx(0.35)
+
+
+def test_deleting_the_image_drops_the_override(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    upload = Path(app_config.upload_dir)
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    mgr.set_overrides("a.png", image_config=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"])
+
+    mgr.remove("a.png")
+    make_test_image(upload / "a.png")
+    mgr.sync()
+    mgr.wait_for_idle()
+
+    rec = mgr.status("a.png")
+    assert rec is not None
+    assert rec.image_config is None
+
+
+def test_overrides_are_salvaged_across_a_db_version_wipe(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """A future _DB_VERSION bump must cost a re-render, not the user's tuning.
+
+    Everything derived is meant to be discarded by the wipe; the overrides are
+    the only thing in that file nothing can reconstruct.
+    """
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    mgr.set_overrides(
+        "a.png", image_config=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"], crop_to_fill_threshold=0.2
+    )
+    mgr.shutdown()
+
+    db_path = Path(app_config.cache_dir) / "image_manager.json"
+    db = json.loads(db_path.read_text())
+    db["version"] = 99  # a version this build does not understand
+    db_path.write_text(json.dumps(db))
+
+    mgr2 = image_manager_factory(app_config)
+    mgr2.sync()
+    mgr2.wait_for_idle()
+
+    rec = mgr2.status("a.png")
+    assert rec is not None
+    assert rec.image_config == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+    assert rec.crop_to_fill_threshold == pytest.approx(0.2)
+
+
+def test_salvaged_override_for_a_deleted_file_is_forgotten(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """An override belongs to its file. No file, no override to restore."""
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    mgr.set_overrides("a.png", crop_to_fill_threshold=0.2)
+    mgr.shutdown()
+
+    db_path = Path(app_config.cache_dir) / "image_manager.json"
+    db = json.loads(db_path.read_text())
+    db["version"] = 99
+    db_path.write_text(json.dumps(db))
+    (Path(app_config.upload_dir) / "a.png").unlink()
+
+    mgr2 = image_manager_factory(app_config)
+    mgr2.sync()
+    mgr2.wait_for_idle()
+
+    assert mgr2.status("a.png") is None
+    assert mgr2._salvaged_overrides == {}
+
+
+def test_override_replaces_the_classifier_choice(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    rec = mgr.status("a.png")
+    assert rec is not None
+
+    chosen = PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+    overridden = replace(rec, image_config=chosen)
+    decision = mgr._decision_for_record(upload / "a.png", overridden)
+
+    assert decision.image_config == chosen
+
+
+def test_crop_override_is_independent_of_the_pipeline_override(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """Each override applies on its own; neither implies the other."""
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    rec = mgr.status("a.png")
+    assert rec is not None
+
+    auto = mgr._decision_for_record(upload / "a.png", rec)
+    crop_only = mgr._decision_for_record(
+        upload / "a.png", replace(rec, crop_to_fill_threshold=0.42)
+    )
+
+    assert crop_only.crop_to_fill_threshold == pytest.approx(0.42)
+    assert crop_only.image_config == auto.image_config  # pipeline untouched
+
+
+def test_override_keeps_the_classifier_observations(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """An override replaces the pipeline choice, not the detection results.
+
+    The face keep-out boxes and face-aware crop anchors come from detection, so
+    they have to survive an override or a portrait would lose its skin-tone
+    protection the moment someone hand-picked a dither for it.
+    """
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    rec = mgr.status("a.png")
+    assert rec is not None
+
+    bboxes = (BoundingBox(x=0.1, y=0.2, w=0.3, h=0.4),)
+    stub = ImageClassifierDecision(
+        image_config=PRESET_IMAGE_CONFIGS["atkinson_hue_aware"],
+        crop_to_fill_threshold=0.1,
+        clahe_keepout_bboxes=bboxes,
+        face_crop_bboxes=bboxes,
+    )
+    with patch.object(mgr._classifier, "decision_for", return_value=stub):
+        decision = mgr._decision_for_record(
+            upload / "a.png",
+            replace(rec, image_config=PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]),
+        )
+
+    assert decision.image_config == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+    assert decision.clahe_keepout_bboxes == bboxes
+    assert decision.face_crop_bboxes == bboxes
+
+
+def test_no_override_leaves_the_decision_untouched(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    rec = mgr.status("a.png")
+    assert rec is not None
+
+    direct = mgr._classifier.decision_for(upload / "a.png", rec.original_sha1)
+    assert mgr._decision_for_record(upload / "a.png", rec) == direct
+
+
+def test_retire_does_not_flush(app_config: AppConfig, image_manager_factory, make_test_image):
+    """retire() leaves the DB file alone — its successor already owns it.
+
+    Diverging _records first proves the file is untouched rather than merely
+    rewritten with identical content.
+    """
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    db_path = Path(app_config.cache_dir) / "image_manager.json"
+
+    mgr._records.clear()
+    mgr.retire()
+
+    assert "a.png" in json.loads(db_path.read_text())["images"]
+
+
+def test_writes_frozen_after_retire(app_config: AppConfig, image_manager_factory, make_test_image):
+    """A retired manager cannot write, even when asked directly.
+
+    This is what stops a hot-reload's outgoing manager — whose render callbacks
+    keep firing after the swap — from reverting the live manager's file.
+    """
+    upload = Path(app_config.upload_dir)
+    make_test_image(upload / "a.png")
+    mgr = image_manager_factory(app_config)
+    mgr.sync()
+    mgr.wait_for_idle()
+    db_path = Path(app_config.cache_dir) / "image_manager.json"
+
+    mgr.retire()
+    mgr._records.clear()
+    mgr._save_db()  # a late render callback
+    mgr.shutdown()  # and an explicit teardown afterwards
+
+    assert "a.png" in json.loads(db_path.read_text())["images"]
 
 
 def test_disk_change_detected(app_config: AppConfig, image_manager_factory, make_test_image):

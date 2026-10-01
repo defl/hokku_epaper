@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from packaging.version import InvalidVersion, Version
+
 # python/hokku/common/firmware_paths.py -> repo root is parents[3]
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -28,14 +30,26 @@ BUNDLED_FIRMWARE_DIRS: tuple[Path, ...] = (
 
 
 def version_key(version: str) -> tuple:
-    """A sort key that orders firmware versions numerically, not lexicographically.
+    """A sort key that orders firmware versions by version semantics, not by string.
 
-    ``"1.2.10"`` must rank above ``"1.2.9"`` (a plain string sort gets this wrong
-    and would silently pick the older build). Each dotted component sorts as an
-    int when numeric; any non-numeric component sorts after all numeric ones in
-    that slot so a malformed name can never outrank a real version.
+    ``"1.2.10"`` must rank above ``"1.2.9"`` — a plain string sort gets this
+    backwards and would silently pick the older build, which is exactly the class
+    of bug this exists to prevent.
+
+    Ordering is delegated to :class:`packaging.version.Version` (PEP 440) rather
+    than hand-rolled, so it also gets the cases a per-component integer compare
+    quietly mishandles: differing component counts (``1.3`` vs ``1.3.0``), and
+    pre-releases, which must rank *below* their own final release
+    (``1.2.10-beta`` < ``1.2.10``) or a beta would be served as if it superseded
+    the real thing.
+
+    Anything unparseable (a truncated download, a hand-renamed file, the empty
+    string returned when a filename doesn't match the release convention) sorts
+    **below every valid version**, so a malformed name can never outrank a real
+    release. Unparseable names are ordered among themselves as plain strings,
+    which is arbitrary but stable.
     """
-    key: list = []
-    for part in version.split("."):
-        key.append((0, int(part)) if part.isdigit() else (1, part))
-    return tuple(key)
+    try:
+        return (1, Version(version))
+    except InvalidVersion:
+        return (0, version)

@@ -26,6 +26,12 @@ its 1200 × 1600 pixels can be exactly one of:
 | 4 | Blue   | (5, 64, 158)       | (29.83,  22.18, −55.47) | −68°      | 59.7   |
 | 5 | Green  | (39, 102, 60)      | (38.30, −30.62, 17.87)  | 150°      | 35.5   |
 
+These values, and the equivalents for the other screen models, come from
+`palette_measured_rgb` in each model's `display.py`. Their provenance is
+weak — see [color_calibration.md](color_calibration.md) for how to re-measure
+them on real glass with a colorimeter, and how to check whether the panel
+mixes inks the way the error diffusion below assumes.
+
 Two key properties:
 
 - **The palette is sparse.** Six anchors in a 3D colour space leave huge gaps.
@@ -154,22 +160,67 @@ per image.
 
 ## 4. Presets
 
-Three curated presets cover the common cases. They're the only entries shown
-in the main preset dropdown; everything else (algorithm variants, alternative
-LUTs, OKLAB/CAM16-UCS spaces) is reachable via the **Custom…** advanced panel.
+`PRESET_IMAGE_CONFIGS` is the dropdown catalog. Everything outside it
+(algorithm variants, alternative LUTs, OKLAB/CAM16-UCS spaces) is reachable via
+the **Custom…** advanced panel.
 
-| Preset key                  | Algorithm       | LUT       | Adaptive sat | Adaptive vivid | Used for     |
-|-----------------------------|-----------------|-----------|:------------:|:--------------:|:------------:|
-| `floyd_steinberg_hue_aware` | Floyd-Steinberg | hue_aware | CIELAB       | ✓              | General      |
-| `floyd_steinberg_bw`        | Floyd-Steinberg | bw        | Off          |                | B&W detected |
-| `atkinson_hue_aware`        | Atkinson        | hue_aware | CIELAB       | ✓              | Face detected |
+The three shipped defaults come first and are the **same objects** as
+`DEFAULT_IMAGE_CONFIG` / `DEFAULT_BW_IMAGE_CONFIG` / `DEFAULT_FACE_IMAGE_CONFIG`,
+so a fresh install matches a named entry exactly. That matters: the UI picks the
+selected preset by comparing the serialised config against each catalog entry,
+so while the defaults sat outside the catalog a stock install displayed
+"Custom (your edits)" — as though someone had already been editing it.
 
-The default pipeline uses `floyd_steinberg_hue_aware`; the auto-classifier
-swaps to `floyd_steinberg_bw` for near-greyscale photos and to
-`atkinson_hue_aware` when faces are detected (see §6).  All three presets
-enable hue-aware palette mapping; the B&W preset additionally turns off
-chroma boosting since there's no meaningful colour to enhance in a
-monochrome image.
+| Preset key                  | Algorithm       | LUT       | Serpentine | Adaptive sat | Adaptive vivid | DRC space |
+|-----------------------------|-----------------|-----------|:----------:|:------------:|:--------------:|-----------|
+| `default_general`           | Atkinson        | hue_aware | ✓          | **OKLAB**    | ✓              | **OKLAB** |
+| `default_bw`                | Atkinson        | bw        | ✓          | Off          |                | **OKLAB** |
+| `default_face`              | Atkinson        | hue_aware | ✓          | **Off**      |                | CIELAB    |
+| `floyd_steinberg_hue_aware` | Floyd-Steinberg | hue_aware |            | CIELAB       | ✓              | CIELAB    |
+| `floyd_steinberg_bw`        | Floyd-Steinberg | bw        | ✓          | Off          |                | CIELAB    |
+| `atkinson_hue_aware`        | Atkinson        | hue_aware |            | CIELAB       | ✓              | CIELAB    |
+
+The bottom three are hand-picked alternatives and are not redundant with the
+defaults: `atkinson_hue_aware` differs from `default_general` in serpentine scan
+and in doing saturation and DRC in CIELAB rather than OKLAB.
+
+`default_face` is deliberately gentle — it is the right pipeline for skin and a
+poor general-purpose choice, which is why its description says so. Keeping it
+out of the catalog for that reason was the earlier design; describing it
+accurately is better than hiding a setting the server actually ships with.
+
+### Per-pipeline defaults
+
+The default rows above are **measured** rather than chosen — see
+[dither_search.md](dither_search.md) for the method, the numbers, and the
+things that did not work.
+
+Each row is the best-scoring combination of algorithm × LUT × saturation space
+× DRC space × adaptive-vivid × serpentine over the test corpus for that
+pipeline. Only those six dimensions were swept by that search; the tonal
+chain (CLAHE, unsharp, gamma) was hand-tuned at the time.
+
+The tonal chain has since been settled on real glass instead — measured,
+photographed off the panel and judged blind. The face pipeline no longer keeps
+a gentler CLAHE and a stronger unsharp mask: that trade did not survive being
+rated, and faces now match the general default on both. See
+[the rendering campaign](screens/huessen_epf1301/rendering_campaign.md).
+
+Three things are worth knowing about that table:
+
+- **The DRC space differs per pipeline.** OKLAB won for general and B&W and
+  scored *worse* on faces, so it is set per pipeline rather than globally.
+- **Faces turn both chroma boosters off.** That measured best by a clear margin
+  and cut blue ink in saturated lips by roughly two thirds.
+- **No OKLAB or CAM16-UCS *LUT* survived.** On flat colour swatches those look
+  6× better for warm tones, but on photographs they leak markedly more colour
+  into neutrals and score worse overall. `dither_search.md` §4d/§4e has the
+  numbers; it is the clearest example in this codebase of a synthetic test
+  signal giving a confidently wrong answer.
+
+The auto-classifier picks between the three per image (see §6). All enable
+hue-aware palette mapping; the B&W pipeline additionally turns off chroma
+boosting since there's no meaningful colour to enhance in a monochrome image.
 
 Presets live in `presets.py` as `PRESET_IMAGE_CONFIGS`, a plain
 `dict[str, ImageConfig]`. There are no partials; every field is spelled out so
@@ -294,17 +345,29 @@ gets picked. Red's residual shoves everything around it cool again — but the
 single Red pixel is visible against otherwise-white fabric, and the surrounding
 correction produces pink-noise speckle.
 
-**Fix: `adaptive_vivid=True` in `compress_dynamic_range()`.**
+**Mechanism: `adaptive_vivid` in `compress_dynamic_range()`.**
 
-The Spectra 6 panel's white ink is measured at L\*≈80, not 100. Without
-remapping, source pixels at L\*=100 and L\*=80 both end up at the White
-palette entry, and the dither has no room to represent them differently.
-`compress_dynamic_range()` linearly maps source L\* into the panel's range:
+Described here because the mechanism is worth understanding, but note it is
+**off in all three shipped pipelines**: every arm that raised chroma lost when
+the renderings were rated blind off the glass. The field remains available.
 
-```
-L'_pixel = black_L + (L_source / 100.0) × (white_L − black_L)
-         ≈ 0.55 + L_source × 0.79
-```
+The panel's white ink cannot reach L\*=100. Without remapping, source
+pixels at the top of the range all end up at the White palette entry and the
+dither has no room to represent them differently.
+
+The numbers here used to read L\*≈80 for white and 0.55 for black, taken from
+the palette table. A 1733-reading spectrophotometer campaign measured the real
+glass at **white L\* 66.94, black L\* 10.86** — a reachable range about 20 L\*
+narrower than the table claimed, and on the Bigme F7 the same mismatch was
+collapsing half a test portrait into flat black. Each panel now supplies its
+own `drc_anchor_l`; see
+[the colour campaign findings](screens/huessen_epf1301/measurements/findings.md).
+
+The map is also no longer linear. A single slope cannot serve both a correct
+(narrow) range and the old range's punch, so `compress_dynamic_range()` applies
+a bounded logistic S-curve to normalised source lightness before mapping into
+the anchors — steeper through the midtones, tapering to zero slope at both ends
+so it can never overshoot them. Its steepness (k = 7) was swept on real glass.
 
 Without any chroma treatment, compressing L by 0.79× also shifts the
 chroma-to-lightness ratio, making already-dim near-white pixels look
@@ -353,7 +416,9 @@ amplifies that noise into visible colour. There are two complementary fixes.
 **Fix 1: detect near-grayscale images and route them to a conservative
 `ImageConfig`.** The `ImageClassifier` (see §6) runs B&W detection and, if
 enabled, selects `AppConfig.image_config_bw` instead of the default. The B&W
-config uses `use_adaptive_saturate=False`, `color_enhance=1.05` (very mild),
+config uses `use_adaptive_saturate=False`, `color_enhance=1.0` (the 1.05 it
+used to carry was a 5 % chroma boost in the one preset that promises not to
+boost colour),
 `adaptive_vivid=False`, and a Euclidean LUT — because there is no meaningful
 hue in a grey image to protect.
 
@@ -369,17 +434,51 @@ landing on a monochrome image, at the cost of pure two-tone rendering
 ## 6. Image classifier — per-image config dispatch
 
 ```
-ImageClassifier.decision_for(path, sha1)
+AbstractImageManager._decision_for_record(src_path, rec)
   │
-  ├─ B&W detection enabled? → is_grayscale(path)?
-  │      → yes → use AppConfig.image_config_bw
+  ├─ ImageClassifier.decision_for(path, sha1)
+  │    │
+  │    ├─ B&W detection enabled? → is_grayscale(path)?
+  │    │      → yes → use AppConfig.image_config_bw
+  │    │
+  │    ├─ Face detection enabled? → has_faces(path)?
+  │    │      → yes → use AppConfig.image_config_face
+  │    │               clahe_keepout_bboxes = all detected face bboxes
+  │    │
+  │    └─ otherwise → use AppConfig.image_config_default
   │
-  ├─ Face detection enabled? → has_faces(path)?
-  │      → yes → use AppConfig.image_config_face
-  │               clahe_keepout_bboxes = all detected face bboxes
-  │
-  └─ otherwise → use AppConfig.image_config_default
+  └─ per-picture overrides on the ImageRecord, applied on top:
+         rec.image_config            → replaces the pipeline chosen above
+         rec.crop_to_fill_threshold  → replaces AppConfig's global value
+       (each is independent; None means "leave this one automatic")
 ```
+
+### Per-picture overrides
+
+Two nullable fields on `ImageRecord`, stored in `<cache_dir>/image_manager.json`
+and set from the image's Details panel in the web UI. They are the only
+user-authored data in that file — everything else is derived from the source
+image and can be recomputed.
+
+They are applied by the **manager**, not the classifier, and deliberately so:
+
+* `ImageClassifier` observes image *content* and is wired to `AppConfig`. It has
+  no handle on the record store, and it is rebuilt on every config reload while
+  overrides live in the manager's DB — the wrong lifetime.
+* Overlaying on the finished `ImageClassifierDecision` keeps
+  `clahe_keepout_bboxes` and `face_crop_bboxes` **by construction**. An override
+  replaces the *choice of pipeline*, never the observations, so hand-picking a
+  dither for a portrait cannot cost it its skin-tone protection.
+* Every path that needs a decision goes through `_decision_for_record()`, so the
+  invalidation check in `_reconcile_with_disk()` and the render dispatch in
+  `_submit_one()` cannot disagree. That agreement is what makes setting an
+  override re-render exactly one picture and leave every other cached render
+  valid: both fields feed `ScreenImageConfig.cache_slug()`, so the slug changes
+  on its own and nothing else has to invalidate anything.
+
+An override survives Clear Cache & Re-convert, a content change to the source
+file, and a `_DB_VERSION` wipe (`_salvage_overrides()` rescues them; everything
+derived is discarded as intended). It is dropped when the image is deleted.
 
 Orientation is not part of the classifier's output — the image manager
 combines the decision with each render target's orientation
@@ -748,14 +847,56 @@ Called per 100-row batch, returning float32 data ready for the dither loop.
 
 The web UI's preset dropdown populates from `PRESET_META` (labels +
 descriptions) in `presets.py`. Selecting a preset loads the full
-`ImageConfig` into all the Advanced panel knobs via the JS `ditherState`
-object. Touching any knob flips the preset label to "Custom (your edits)"
-without changing values. Saving writes the complete nested config to
-`config.json`.
+`ImageConfig` into all the Advanced panel knobs. Touching any knob flips the
+preset label to "Custom (your edits)" without changing values. Saving writes
+the complete nested config to `config.json`.
 
-The config round-trips through `_image_config_from_dict()` in `image_config.py`
-which validates every field and raises on any missing key — no silent
-defaults inside the serialised form.
+### One editor, four mounts
+
+The pipeline editor is a component: `mountDitherEditor(panelId, mountEl, opts)`
+generates its markup and wires its handlers. It is mounted four times — the
+`default` / `bw` / `face` pipelines in the Config tab, and `imgcfg`, the
+per-picture editor inside the image Details modal. Each instance's working
+`ImageConfig` lives in `ditherStates[panelId]`, and DOM ids are prefixed by
+`_pfx(panelId)` (`default` keeps the historical `dither-` prefix).
+
+It was previously written out three times by hand, which is how the B&W panel
+came to be missing the face keep-out overlay the other two had. Adding a
+per-picture editor as a fourth copy would have made that worse, so anything
+that only one instance needs is an `opts` flag rather than a separate copy —
+`pinnedImage`, for example, hides the "Preview on:" picker and pins it to the
+one picture, so `runDitherPreview()` needs no special case.
+
+The per-picture editor additionally offers **Automatic** (hand the picture back
+to the classifier), an independent letterbox-fill override, and **Compare
+presets**, which renders several candidates for that one picture into a
+clickable grid. The grid sweeps the palette LUT as well as the named presets:
+all three presets share `lut_name="hue_aware"`, so a picture that comes out the
+wrong colour cannot be fixed by choosing a different preset — the fix is a LUT
+change, which is otherwise buried in the advanced knobs. Tiles render strictly
+one at a time; the source decode dominates their cost and the server serialises
+it anyway (`_DECODE_LOCK`), and `/hokku/api/dither/preview` caps concurrency
+with its own semaphore.
+
+### Parsing
+
+`image_config_from_dict_strict()` in `image_config.py` is the only
+`ImageConfig` parser. Every field must be present, every enum value must be
+one of the `Literal`'s members, and an unrecognised key is an error — it
+reports all the problems at once so the UI can list them.
+
+Nothing is lenient, because nothing has to cope with an old shape: a stored
+config is brought up to the current shape once, by the migration on
+`AppConfig`'s chain that introduced the change, via
+`complete_image_config_blob()`. Any future change to `ImageConfig`'s fields
+needs a migration for the same reason.
+
+> This replaced a parser that merged whatever was stored onto the defaults on
+> every load. That kept old configs working but meant a config could stay
+> incomplete forever, a misspelled knob was silently ignored rather than
+> reported, and an invalid `lut_name` was accepted here and only rejected later
+> inside a render worker — surfacing to the user as a failed conversion instead
+> of a bad setting.
 
 ---
 
@@ -842,8 +983,11 @@ webserver/hokku_server/
   dither_streaming_numba.py JIT-compiled wrapper: NumbaStreamingDither (default)
   dither_unconstrained.py   Reference full-canvas dither (~60 MB dither peak):
                               dither() — quality comparison / regression baseline only
-  image_config.py           ImageConfig dataclass + _image_config_from_dict()
-  presets.py                PRESET_IMAGE_CONFIGS, DEFAULT_PRESET, PRESET_META
+  image_config.py           ImageConfig dataclass, image_config_from_dict_strict(),
+                              complete_image_config_blob() (migration only)
+  presets.py                PRESET_IMAGE_CONFIGS (dropdown catalog), PRESET_META,
+                              DEFAULT_{,BW_,FACE_}IMAGE_CONFIG (shipped defaults,
+                              also the first three catalog entries)
   image_abc.py              AbstractImageRenderer + _apply_prepare_enhancements()
   image_renderer.py         ImageRenderer: open_image_for_render(),
                               render_indices(), render_panel_bytes(),

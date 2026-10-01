@@ -10,6 +10,7 @@ a registry entry — nothing else changes.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
@@ -49,6 +50,36 @@ class Display(ABC):
 
     palette_measured_rgb: NDArray
     """Shape (N, 3) float32 — measured RGB of each ink colour on-panel."""
+
+    drc_anchor_l: tuple[float, float] | None = None
+    """(black L\\*, white L\\*) the dynamic-range compressor should target, or None.
+
+    This is the panel's *reachable* lightness range, and it is deliberately
+    separate from ``palette_measured_rgb``. The palette drives ink SELECTION,
+    where being a few ΔE out barely matters because the gamut dominates. The DRC
+    instead decides what range the whole image is squeezed into, and being wrong
+    there clips everything past the end — measured at 50 % of one test portrait
+    collapsing into flat black.
+
+    ``None`` derives the range from rows 0 and 1 of ``palette_measured_rgb``,
+    which is right whenever that table reflects the real panel. Set it explicitly
+    when the panel has been measured and the palette has not been re-derived from
+    those measurements.
+    """
+
+    correction_lut_path: Path | None = None
+    """Path to a checked-in 3-D RGB->RGB gamut-correction LUT (.npy, shape
+    (N, N, N, 3) float32), or None if this panel has none built yet.
+
+    Built by tools/color_lut_build.py from the gamut_dense measurement phase
+    (see docs/screens/<model>/measurements/findings.md). Maps a requested RGB
+    (already DRC-compressed, see ImageRenderer._prep_stripe) to a corrected RGB
+    that, fed through the shipped dither pipeline, more closely reproduces the
+    requested colour's Lab appearance on THIS glass — correcting for gamut/hue
+    drift the palette-selection LUT doesn't know about, complementing
+    drc_anchor_l (which corrects lightness only). None-safe: renders unchanged
+    when unset, same as drc_anchor_l.
+    """
 
     palette_preview_rgb: NDArray
     """Shape (N, 3) uint8 — punchy RGB used for browser preview rendering."""

@@ -1,9 +1,123 @@
 # Changelog
 
-## Unreleased
+## 4.0.0 beta 3
+
+The beta where the colour stopped being guesswork. Two measurement campaigns
+replaced a tonal chain that had been tuned by eye: 1733 spectrophotometer
+readings taken off the glass, then 443 blind ratings of photographs
+photographed back off the panel with a calibrated camera rig. Photographs
+should look calmer and more like themselves — skin especially. You can also now
+change the settings for a single picture without changing them for everything.
 
 ### Added
 
+- **Per-picture settings.** A photograph that renders badly no longer forces you
+  to retune the defaults for the whole library. Each picture can carry its own
+  dither and crop settings, set from the same editor the defaults use, and they
+  survive a database rebuild. Also available over the HTTP API.
+- **The three shipped defaults are now named presets.** The preset dropdown
+  shows "General (default)", "Black & white (default)" and "Faces (default)"
+  and lists them first. A fresh install used to read "Custom (your edits)" for
+  all three, which looked as though someone had already been fiddling.
+- **Frames accept a whole panel image over USB.** A `frame` command on the
+  serial console uploads a full-resolution image straight to the glass, with no
+  server and no network in between — how the panel gets measured. It comes with
+  an interactive mode that stops a screen going to sleep or refreshing on its
+  own schedule while a cable is driving it.
+- **The Bigme F7 can be flashed into either A/B slot over USB**, guarded by
+  which slot is actually active.
+
+### Changed
+
+- **Photographs are rendered from a measured model of the panel.** The palette
+  table said the panel's white was L\* 79.9 and its black L\* 0.55. Measured on
+  real glass, they are **66.9 and 10.9** — a usable range about 20 points
+  narrower than the code believed. Every photograph was being squeezed into a
+  range the panel does not have, which clipped both ends. Each screen now
+  supplies its own measured anchors.
+- **Tone mapping is no longer a straight line.** A single slope cannot serve
+  both a correct, narrow range and a punchy-looking picture, so lightness now
+  goes through a bounded S-curve — steeper through the midtones, easing off at
+  both ends so it can never overshoot what the panel can print. Its steepness
+  was chosen by comparing renders on the glass, not by modelling.
+- **Colour is calmer, and skin looks like skin.** The old pipeline stretched
+  red, green and blue independently before anything else ran, which is an
+  accidental white balance: on a test set of 30 photographs it moved colour by
+  up to 13 units toward yellow — which is what the rating notes kept calling
+  yellow skin on a baby. It is off by default now, and still selectable if you
+  want it back. The saturation and "vivid" boosts are off too: of every change
+  tried, turning those off was the single biggest improvement, better on 17
+  photographs and worse on 1.
+- **Out-of-gamut colours are mapped with a correction built from the
+  measurements**, applied at half strength with a chroma trim, both settled by
+  looking at real prints rather than at a number.
+- **Faces** get the same local contrast and sharpening as everything else now.
+  The gentler-CLAHE, stronger-sharpening trade sounded right and did not survive
+  being rated.
+- **Black-and-white photographs** no longer get a 5 % colour boost from the one
+  preset that promises not to boost colour.
+- **Better dither defaults, measured rather than chosen.** All three pipelines
+  move to Atkinson error diffusion with dynamic-range compression in OKLAB,
+  picked by scoring every combination over a test corpus.
+
+### Fixed
+
+- **A configuration reload could quietly revert the image database**, losing
+  recent changes.
+- **The crop preview did not match what was rendered.**
+- **The face keep-out overlay was offered on pictures where keep-out cannot
+  happen**, which implied a setting that would do nothing.
+
+### Upgrading from beta 2
+
+Two things deliberately do not change by themselves:
+
+- **Your settings are kept, including the old per-channel autocontrast.** A new
+  install gets it switched off; an existing one keeps what it has, so an
+  upgrade cannot silently restyle your library. To get the skin improvement
+  described above, set *Autocontrast* to `off` — or to `preserve tone`, which
+  keeps the contrast without the colour shift.
+- **Photographs already converted stay as they are.** The cache is keyed on
+  your settings, and your settings have not changed, so existing renders are
+  reused and only newly added pictures go through the new tone mapping. Clear
+  the cache to re-render the library.
+
+### Firmware
+
+- `huessen_epf1301` **1.2.21 → 1.2.25** — USB frame upload, interactive mode,
+  and three protocol bugs found bringing it up on real hardware.
+- `seeedstudio_e1004` 1.2.5 (unchanged).
+
+### For the curious
+
+The whole investigation is written up, including the parts that were wrong:
+four claims made and later retracted, a metric that scored a greyscale
+photograph at 639 on a scale that tops out near 1, and a cache that silently
+handed two different renderings each other's measurements. See
+`docs/screens/huessen_epf1301/rendering_campaign.md`.
+
+## 4.0.0 beta 2
+
+The second beta of the 4.0 appliance line. Beta 1 shipped an appliance that
+could freeze instead of rebooting, could not flash a frame over USB, and
+quietly collapsed its three image pipelines into one — all three are fixed
+here. Frames also learn to correct their own sleep-timer drift, and firmware
+can now be downloaded and pinned per screen model from GitHub.
+
+### Added
+
+- **Frames now wake up on time.** An ESP32's deep-sleep timer runs off an RC
+  oscillator that drifts with temperature and from chip to chip, so a screen
+  asked to sleep for an hour could wake noticeably early — and a screen that
+  wakes early refreshes again, burning battery and showing the same photo
+  twice. Each frame now measures its own drift against the server's clock,
+  learns a correction, and applies it to the next sleep. The learned value
+  survives a reboot and a battery swap, and the server keeps a long-term
+  average per device so a freshly flashed frame starts from a good estimate
+  instead of learning from scratch. Screens are now tracked by a stable
+  internal id with their MAC address as a secondary key, so calibration
+  survives both renaming a screen and reflashing it. Firmware 1.2.21
+  (Hokku/Huessen), 1.2.5 (Seeed), 1.2.10 (Bigme F7).
 - **Firmware library — download newer firmware from GitHub and pin it per model.**
   The Admin tab has a new *Firmware library* panel. The server still ships bundled
   firmware and works fully offline, but you can now press *Check GitHub for
@@ -16,7 +130,83 @@
   images for their model before being admitted. New config keys:
   `firmware_github_repo`, `firmware_dir`.
 
+### Changed
+
+- **The appliance can flash a frame over USB again.** The Pi Zero 2 W's single
+  data port can only be one thing per boot, and the image hard-wired it to the
+  USB gadget serial console — so **Flash a screen** on the appliance had no port
+  to drive. The port role now follows the appliance's mode: setup mode keeps the
+  serial console, and the wizard hands the port over to USB host on the reboot
+  that ends setup, where it stays. Both routes back to setup mode — the manual
+  `reset.sh` and the automatic WiFi watchdog — restore the console, so an
+  appliance that can't reach the network still puts a login prompt on a cable.
+  (Earlier attempts at dual-role OTG, which made a frame plugged in at boot wedge
+  startup, are not coming back.) See
+  [`docs/os_pi_usb_console.md`](docs/os_pi_usb_console.md).
+
+- **The Bigme F7 bootstrap form now remembers the Wi-Fi credentials**, like the
+  ESP32 flash form already did — every screen you provision joins the same
+  network, so the SSID and password now pre-fill from the last flash of *either*
+  kind instead of being retyped per screen. The F7 has no fallback network, so
+  bootstrapping one leaves a remembered second network untouched.
+
 ### Fixed
+
+- **The appliance could freeze instead of rebooting, and the more normal your
+  setup the more likely it was.** Finishing the setup wizard reboots the Pi —
+  and that reboot could wedge partway through, with a frozen screen, nothing in
+  the log, and a board that still answered ping but served nothing. It looked
+  bricked; the only way out was pulling the power, or waiting ten minutes for
+  the watchdog. The cause was the USB serial console: the login prompt sitting
+  on that port makes the system itself touch the port while shutting down, and
+  doing that with **nothing plugged into the USB cable** blocks forever. So the
+  failure needed no unusual setup at all — it needed the *absence* of one, which
+  is why it never showed up in testing, where a cable was always attached for
+  the console. This is a long-standing Raspberry Pi issue
+  ([raspberrypi/linux#1929](https://github.com/raspberrypi/linux/issues/1929)),
+  now fixed in the image. A shutdown that wedges for any other reason now
+  recovers by itself after a minute rather than ten.
+
+- **The appliance could hang instead of rebooting, and its documented
+  last-resort swap was never actually there.** The image's memory policy has
+  three layers — compressed RAM swap (zram), a small on-SD swapfile as a
+  last resort, and a kernel tuning knob — but the package providing the
+  swapfile was never installed, and the two steps that were supposed to set it
+  up both failed silently. Every image so far has run with zram as its only
+  swap. That matters most at shutdown: releasing zram means pulling every
+  compressed page back into a 464 MB board's RAM, and with nowhere to put the
+  overflow a reboot can freeze with no message on screen and nothing in the
+  log — seen on real hardware, needing a power cycle. The swapfile is now
+  installed and sized as documented, zram is ordered so the swapfile is still
+  available while zram is being released, and the image build now fails loudly
+  if either layer can't be configured rather than shipping an appliance that is
+  quietly missing one.
+
+- **Black-and-white and portrait photos were being processed exactly like every
+  other photo.** The server keeps three image pipelines — default, B&W, and
+  faces — but on every install all three were collapsing into the default one,
+  so the B&W pipeline's neutral palette and the face pipeline's gentler local
+  contrast never applied. The cause was a config loader that discarded an
+  entire pipeline's settings if a single field was missing from the stored
+  config, combined with a shipped example config that was missing one. Stored
+  settings are now merged over the defaults instead of replacing them
+  wholesale, so a config written before a setting existed keeps everything else
+  it specifies — which also means upgrading no longer quietly resets tuning you
+  had adjusted. The face pipeline is tuned for skin again (softer local
+  contrast, a wider and stronger sharpening pass), and the B&W pipeline gets
+  its stronger local contrast back. The example config is now generated from
+  the code, with a test that fails if the two drift apart.
+
+- **A Bigme F7 firmware release numbered 1.2.10 would have been ignored in
+  favour of 1.2.9.** The bundled-image lookup picked the newest build by sorting
+  release *filenames* as text, and `hokku-bigme_f7-1.2.9.img` sorts above
+  `...-1.2.10.img` — so the first time a minor version reached double digits the
+  server would have quietly served, flashed and offered over-the-air the older
+  firmware, with nothing in the logs to say so. Version comparison across the
+  server now goes through `packaging.version` (PEP 440), which also fixes a
+  second case: a file whose name didn't parse as a version — a truncated
+  download, a hand-renamed file — used to outrank every genuine release.
+  Pre-releases now correctly rank below the final release of the same version.
 
 - **Scanning for a screen to flash no longer kicks it into a refresh.** The scan
   used to leave the screen running, and since a screen repaints on boot, the act

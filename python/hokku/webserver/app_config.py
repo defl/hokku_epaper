@@ -18,13 +18,18 @@ from typing import Any, Callable
 from hokku.webserver.filesystem import atomic_write_json
 from hokku.webserver.image_config import (
     ImageConfig,
-    _image_config_from_dict,
+    complete_image_config_blob,
+    image_config_from_dict_strict,
 )
-from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
+from hokku.webserver.presets import (
+    DEFAULT_BW_IMAGE_CONFIG,
+    DEFAULT_FACE_IMAGE_CONFIG,
+    DEFAULT_IMAGE_CONFIG,
+)
 
 logger = logging.getLogger(__name__)
 
-_CURRENT_VERSION = 9
+_CURRENT_VERSION = 11
 
 
 def _migrate_v1_to_v2(d: dict) -> dict:
@@ -94,6 +99,55 @@ def _migrate_v8_to_v9(d: dict) -> dict:
     return d
 
 
+def _migrate_v9_to_v10(d: dict) -> dict:
+    """Complete the three image_config blobs so they can be parsed strictly.
+
+    The ImageConfig parser used to merge whatever was stored onto the pipeline
+    defaults on every single load. That kept old configs working, but it also
+    meant a config could stay incomplete forever and a misspelled knob was
+    silently ignored on every load instead of being reported once. Filling the
+    gaps here — and dropping keys that are no longer fields — means the parser
+    can be strict from now on, which is what makes a bad value in the UI or the
+    API an error the user actually sees.
+
+    Any future change to ImageConfig's shape gets its own migration, for the
+    same reason: the upgrade knowledge belongs on this chain, not in the parser.
+    """
+    for key, default in (
+        ("image_config_default", DEFAULT_IMAGE_CONFIG),
+        ("image_config_bw", DEFAULT_BW_IMAGE_CONFIG),
+        ("image_config_face", DEFAULT_FACE_IMAGE_CONFIG),
+    ):
+        blob = d.get(key)
+        if isinstance(blob, dict):
+            # Completion fills a missing field from TODAY's preset, which is
+            # right for a field that has always had one value and wrong for one
+            # whose default later changed. `prepare_autocontrast` is the second
+            # kind: the presets ship it off, but a config written before it
+            # existed was rendering per-channel and must keep doing so until
+            # someone chooses otherwise (see _migrate_v10_to_v11).
+            blob.setdefault("prepare_autocontrast", "per_channel")
+        d[key] = complete_image_config_blob(blob, default=default, field_path=key)
+    return d
+
+
+def _migrate_v10_to_v11(d: dict) -> dict:
+    """Add `prepare_autocontrast`, keeping every existing config as it renders.
+
+    The shipped presets now switch autocontrast off — per-channel stretching is
+    an automatic white balance that casts photographs yellow, and off rated
+    better on glass. An upgrade must not change what a running server produces
+    without being asked, though, so a stored pipeline that predates the field
+    takes ``per_channel``, which is exactly what it has been doing. Changing it
+    is one dropdown in the config editor.
+    """
+    for key in ("image_config_default", "image_config_bw", "image_config_face"):
+        blob = d.get(key)
+        if isinstance(blob, dict):
+            blob.setdefault("prepare_autocontrast", "per_channel")
+    return d
+
+
 # v(N) → v(N+1) upgrade functions. Populated as the schema evolves.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     1: _migrate_v1_to_v2,
@@ -104,12 +158,26 @@ _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     6: _migrate_v6_to_v7,
     7: _migrate_v7_to_v8,
     8: _migrate_v8_to_v9,
+    9: _migrate_v9_to_v10,
+    10: _migrate_v10_to_v11,
 }
 
 
 def _migrate(data: dict) -> dict:
-    """Walk the migration chain to the current version."""
+    """Walk the migration chain to the current version.
+
+    Raises:
+        ValueError: if the config comes from a newer version than this build
+            understands. There is no downgrade path — the parser is strict, so
+            a field this build has never heard of would otherwise surface as a
+            baffling validation error rather than as what it is.
+    """
     ver = int(data["version"])
+    if ver > _CURRENT_VERSION:
+        raise ValueError(
+            f"config is version {ver}, but this server understands up to "
+            f"{_CURRENT_VERSION} — it was written by a newer version of hokku-server"
+        )
     while ver < _CURRENT_VERSION:
         data = _MIGRATIONS[ver](data)
         ver += 1
@@ -150,22 +218,16 @@ class AppConfig:
     memory_budget_mb: int = 0
 
     # Image pipeline: default, B&W, and face presets.
-    image_config_default: ImageConfig = field(
-        default_factory=lambda: PRESET_IMAGE_CONFIGS["floyd_steinberg_hue_aware"]
-    )
+    image_config_default: ImageConfig = field(default_factory=lambda: DEFAULT_IMAGE_CONFIG)
     classifier_bw_detect_enabled: bool = True
-    image_config_bw: ImageConfig = field(
-        default_factory=lambda: PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
-    )
+    image_config_bw: ImageConfig = field(default_factory=lambda: DEFAULT_BW_IMAGE_CONFIG)
     classifier_face_detect_enabled: bool = True
     classifier_face_detect_clahe_keepout: bool = True
     #: When a photo has detected face(s), center the crop-to-fill window on
     #: them instead of the image center ("face-aware cropping") so an
     #: aggressive crop doesn't cut off heads. Opt-in — off by default.
     classifier_face_aware_crop_enabled: bool = False
-    image_config_face: ImageConfig = field(
-        default_factory=lambda: PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
-    )
+    image_config_face: ImageConfig = field(default_factory=lambda: DEFAULT_FACE_IMAGE_CONFIG)
 
     #: mDNS / Bonjour hostname (the part before ``.local``).
     #: The server advertises itself as ``<mdns_hostname>.local`` on the LAN.
@@ -215,15 +277,19 @@ class AppConfig:
 
         data = _migrate(data)
 
-        image_config_default = _image_config_from_dict(
-            data.get("image_config_default"), field_path="image_config_default"
-        )
-        image_config_bw = _image_config_from_dict(
-            data.get("image_config_bw"), field_path="image_config_bw"
-        )
-        image_config_face = _image_config_from_dict(
-            data.get("image_config_face"), field_path="image_config_face"
-        )
+        # An absent key means "not configured" and takes the pipeline default,
+        # exactly like every other field below. A key that IS present must be
+        # complete and valid: migration has already brought every stored blob up
+        # to the current shape, so anything still wrong here is a real mistake
+        # and is reported rather than papered over.
+        def _pipeline(key: str, default: ImageConfig) -> ImageConfig:
+            if key not in data:
+                return default
+            return image_config_from_dict_strict(data[key], field_path=key)
+
+        image_config_default = _pipeline("image_config_default", DEFAULT_IMAGE_CONFIG)
+        image_config_bw = _pipeline("image_config_bw", DEFAULT_BW_IMAGE_CONFIG)
+        image_config_face = _pipeline("image_config_face", DEFAULT_FACE_IMAGE_CONFIG)
 
         _image_fields = {"image_config_default", "image_config_bw", "image_config_face"}
 

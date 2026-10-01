@@ -4,39 +4,17 @@
 # GPU memory: minimum (16 MB) — server is headless. disable-bt turns off the
 # unused Bluetooth radio (smaller attack surface, one less background daemon).
 #
-# dwc2/dr_mode=peripheral: the single USB data port is a rock-solid USB gadget
-# serial console (/dev/ttyGS0 — see below and the cmdline stanza). We tried
-# dr_mode=otg to make the same port ALSO able to host a screen for "Flash a
-# screen", but it was a bad trade: OTG's peripheral role only appears after host
-# negotiation, so the console enumerated unreliably on Windows ("Device
-# Descriptor Request Failed"), AND merely inserting the (even empty) OTG adapter
-# grounds the ID pin → the port comes up as a host at boot → USB host-init wedges
-# the whole boot. A reliable console beats host-flashing from the appliance
-# (flash screens from a laptop instead). So: hard-wired peripheral.
-# See docs/os_pi_usb_console.md for the console; the hardening notes in this
-# stage cover the rest.
+# The USB data port's role (dwc2 dr_mode, the g_serial gadget and its getty) is
+# NOT set here — it is set in the on_chroot block below by hokku-installer's
+# usb-mode.sh, the same script the wizard and the recovery paths call at
+# runtime. The image ships in "peripheral": a USB gadget serial console on
+# /dev/ttyGS0, which is what setup mode wants. See docs/os_pi_usb_console.md.
 for cfg in \
     "${ROOTFS_DIR}/boot/firmware/config.txt" \
     "${ROOTFS_DIR}/boot/config.txt"; do
     if [ -f "$cfg" ]; then
         echo "gpu_mem=16" >> "$cfg"
-        echo "dtoverlay=dwc2,dr_mode=peripheral" >> "$cfg"
         echo "dtoverlay=disable-bt" >> "$cfg"
-        break
-    fi
-done
-
-# USB gadget serial console: load dwc2 + g_serial at boot so /dev/ttyGS0
-# exists. Idempotent — strip any pre-existing modules-load= token first.
-# See docs/os_pi_usb_console.md for the full mechanism and the traps to
-# avoid (serial-getty@ vs getty@, host-side DTR gotchas).
-for cmdline in \
-    "${ROOTFS_DIR}/boot/firmware/cmdline.txt" \
-    "${ROOTFS_DIR}/boot/cmdline.txt"; do
-    if [ -f "$cmdline" ]; then
-        line="$(cat "$cmdline")"
-        line="$(echo "$line" | sed -E 's/(^| )modules-load=[^ ]*//')"
-        echo "${line} modules-load=dwc2,g_serial" > "$cmdline"
         break
     fi
 done
@@ -171,17 +149,55 @@ ALGO=zstd
 PERCENT=100
 PRIORITY=100
 ZRAM
-systemctl enable zramswap.service 2>/dev/null || \
-    echo "WARNING: zramswap.service missing (zram-tools not installed?)"
+systemctl enable zramswap.service || {
+    echo "ERROR: could not enable zramswap.service (zram-tools not installed?)" >&2
+    exit 1
+}
 
 # Last-resort on-SD swapfile via dphys-swapfile: 512 MB, created on first boot
 # (not baked into the image, so the .img stays small). Its default swap
 # priority is negative — well below zram's 100 — so it is only ever used once
 # zram is exhausted, keeping SD writes to genuine emergencies.
-if [ -f /etc/dphys-swapfile ]; then
-    sed -i 's/^#\?CONF_SWAPSIZE=.*/CONF_SWAPSIZE=512/' /etc/dphys-swapfile
+#
+# This layer did not exist on any image before now. dphys-swapfile was never in
+# 00-packages and is not part of pi-gen's stage2 either, so /etc/dphys-swapfile
+# was absent, the `if [ -f ]` below skipped the sizing, `systemctl enable`
+# failed into `|| true`, and the build said nothing. Appliances shipped with
+# zram as their ONLY swap. Both steps are now loud: if the package is missing
+# the build fails here rather than producing an image quietly missing a layer
+# of its memory policy.
+if [ ! -f /etc/dphys-swapfile ]; then
+    echo "ERROR: /etc/dphys-swapfile missing — is dphys-swapfile in 00-packages?" >&2
+    exit 1
 fi
-systemctl enable dphys-swapfile 2>/dev/null || true
+sed -i 's/^#\?CONF_SWAPSIZE=.*/CONF_SWAPSIZE=512/' /etc/dphys-swapfile
+grep -q '^CONF_SWAPSIZE=512$' /etc/dphys-swapfile || {
+    echo "ERROR: could not set CONF_SWAPSIZE in /etc/dphys-swapfile" >&2
+    exit 1
+}
+systemctl enable dphys-swapfile || {
+    echo "ERROR: could not enable dphys-swapfile.service" >&2
+    exit 1
+}
+
+# Order zram AFTER the swapfile so that, on shutdown, it is torn down BEFORE
+# it — systemd stops units in reverse start order. This is the difference
+# between a clean reboot and a hang: `swapoff` on zram has to pull every
+# compressed page back into RAM, and on a 464 MB board that can be more than
+# will fit. With the SD swapfile still active at that moment the kernel has
+# somewhere to put the overflow; without it there is nowhere to go and the
+# shutdown wedges with no console message and no journal (observed on real
+# hardware, 2026-07-30 — the appliance froze mid-reboot after the setup wizard
+# and had to be power-cycled).
+mkdir -p /etc/systemd/system/zramswap.service.d
+cat > /etc/systemd/system/zramswap.service.d/10-after-swapfile.conf <<'ZRAMORDER'
+# Managed by the Hokku appliance image (os/pi/stage-hokku/01-pi-tweaks).
+# Start after the on-SD swapfile => stop before it. Keeps the last-resort swap
+# available while zram is being swapped off during shutdown.
+[Unit]
+After=dphys-swapfile.service
+Wants=dphys-swapfile.service
+ZRAMORDER
 
 # Prefer swapping cold anon pages to zram over dropping/re-reading page cache.
 cat > /etc/sysctl.d/99-hokku-vm.conf <<'SYSCTL'
@@ -198,12 +214,64 @@ chmod +x /usr/local/sbin/hokku-resize-rootfs
 systemctl enable hokku-resize-rootfs.service 2>/dev/null || \
     echo "WARNING: could not enable hokku-resize-rootfs.service"
 
-# USB gadget serial console login. Use the generic getty@.service template —
-# NOT serial-getty@ttyGS0, which BindsTo=dev-ttyGS0.device and gets torn
-# down because the late-loading USB gadget tty never fires a proper udev
-# device-active event. (Confirmed the hard way against real hardware —
-# see docs/os_pi_usb_console.md.)
-systemctl enable getty@ttyGS0
+# USB data port: ship the image in peripheral mode — the gadget serial console
+# on /dev/ttyGS0 (dwc2 overlay + g_serial + a getty). That is the state setup
+# mode wants, and the image always boots into setup mode first.
+#
+# Delegated to hokku-installer's usb-mode.sh (installed by the .deb in the 00-
+# install stage, which runs before this one) rather than written out here, so
+# the build-time default and the runtime switches — the wizard flipping the port
+# to host mode on the way into hokku mode, reset.sh and the WiFi watchdog
+# flipping it back — are all the same code. The script carries the full
+# rationale, including why dr_mode=otg was tried and rejected.
+usb_mode_script=/usr/lib/hokku-installer/usb-mode.sh
+if [ ! -x "$usb_mode_script" ]; then
+    echo "ERROR: $usb_mode_script missing — is hokku-installer installed" >&2
+    echo "       before this stage? (os/pi/stage-hokku/00-install)" >&2
+    exit 1
+fi
+"$usb_mode_script" peripheral
+
+# Keep PID 1 away from the gadget tty, or the appliance cannot reboot.
+#
+# getty@.service defaults have systemd ITSELF open /dev/ttyGS0 around service
+# stop (TTYReset / TTYVHangup / TTYVTDisallocate). Opening a USB gadget tty with
+# no host attached blocks in an uninterruptible open() — so PID 1 wedges, and
+# because the thing that is stuck is the thing that prints progress, there is no
+# "A stop job is running" message, no timeout, and nothing in the journal. The
+# board sits there answering ping until the hardware watchdog fires ten minutes
+# later. An appliance normally has NO cable attached, so this is the DEFAULT
+# case, not an edge case: reproduced here 2026-07-31, cable out it hangs every
+# time, cable in it reboots every time.
+#
+# Long known upstream — raspberrypi/linux#1929 and the Pi forum thread
+# "Pi Zero gadget serial hangs on shutdown" (t=178917); same symptom reported on
+# systemd-devel back in 2015. Note the widely copy-pasted forum snippet spells
+# it TTYVDisallocate, which is not a real directive and is silently ignored;
+# the correct name is TTYVTDisallocate.
+#
+# Applies to the unit, so it is harmless in host mode where the getty is off.
+mkdir -p /etc/systemd/system/getty@ttyGS0.service.d
+cat > /etc/systemd/system/getty@ttyGS0.service.d/10-no-tty-reset.conf <<'GETTYEOF'
+# Managed by the Hokku appliance image (os/pi/stage-hokku/01-pi-tweaks).
+# Without this the board cannot reboot with no USB host attached — see the
+# comment in 01-pi-tweaks and docs/os_pi_usb_console.md.
+[Service]
+TTYReset=no
+TTYVHangup=no
+TTYVTDisallocate=no
+GETTYEOF
+
+# Bound the damage of ANY wedged shutdown, not just this one. systemd already
+# arms the BCM2835 hardware watchdog while shutting down, but at its 10-minute
+# default — long enough that a headless appliance looks bricked and gets its
+# power pulled. A minute is plenty for a board whose clean reboot takes ~30s.
+mkdir -p /etc/systemd/system.conf.d
+cat > /etc/systemd/system.conf.d/10-hokku-reboot-watchdog.conf <<'WDEOF'
+# Managed by the Hokku appliance image (os/pi/stage-hokku/01-pi-tweaks).
+[Manager]
+RebootWatchdogSec=60
+WDEOF
 
 # Bluetooth radio unused by this appliance — disabled at the hardware level
 # above (dtoverlay=disable-bt); also stop the services so nothing lingers.

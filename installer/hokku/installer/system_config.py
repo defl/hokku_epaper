@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 _HOKKU_USER = "hokku"
 _DEFAULT_HOKKU_SERVER_CONFIG = Path("/usr/share/hokku-server/config.json.example")
 _HOKKU_SERVER_CONFIG = Path("/var/lib/hokku/config.json")
+_USB_MODE_SCRIPT = "/usr/lib/hokku-installer/usb-mode.sh"
 
 
 def _run(cmd: list[str], *, input: str | None = None) -> None:
@@ -71,6 +72,18 @@ def set_samba(enabled: bool) -> None:
     action = "enable" if enabled else "disable"
     logger.info("%s Samba", action)
     _run(["systemctl", action, "--now", "smbd", "nmbd"])
+
+
+def set_usb_mode(mode: str) -> None:
+    """Set the role of the Pi's single USB data port for the next boot.
+
+    "peripheral" is the gadget serial console (setup mode); "host" lets the
+    appliance drive a frame for "Flash a screen" (hokku mode). One port, one
+    role per boot — the shell script carries the full rationale and is shared
+    with reset.sh, wifi-watchdog.sh and the image build.
+    """
+    logger.info("Setting USB data-port mode to %r (next boot)", mode)
+    _run([_USB_MODE_SCRIPT, mode])
 
 
 def set_user_password(password: str) -> None:

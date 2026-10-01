@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from hokku.common.firmware_paths import BUNDLED_FIRMWARE_DIRS
+from hokku.common.firmware_paths import BUNDLED_FIRMWARE_DIRS, version_key
 
 # Bundled-artifact search dirs (shared with every screen family). Kept as
 # module-level names so tests can monkeypatch them per case.
@@ -30,12 +30,15 @@ _IMG_RE = re.compile(r"^hokku-bigme_f7-(.+)\.img$")
 def firmware_image_file() -> Path | None:
     """Return the bundled ``hokku-bigme_f7-<version>.img`` path, or None.
 
-    Picks the highest version by filename sort when several are present."""
+    Picks the highest version when several are present, compared as versions and
+    not as filenames: a plain ``sorted()`` over the names ranks
+    ``hokku-bigme_f7-1.2.9.img`` above ``...-1.2.10.img`` (``'9' > '1'`` at the
+    first differing character), which would silently serve and flash the older
+    build the moment a minor version reached double digits."""
     for d in (_DEV_FIRMWARE_DIR, _INSTALLED_FIRMWARE_DIR):
-        if d.exists():
-            matches = sorted(d.glob(_IMG_GLOB))
-            if matches:
-                return matches[-1]
+        candidates = list_firmware_files(d)
+        if candidates:
+            return max(candidates, key=lambda vp: version_key(vp[0]))[1]
     return None
 
 

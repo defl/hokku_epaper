@@ -12,6 +12,7 @@ pillow-jxl-plugin    # JPEG XL support
 
 # Web server
 Flask
+waitress             # WSGI server with a bounded request-thread pool
 zeroconf
 zstd                 # panel cache compression
 
@@ -38,3 +39,15 @@ defusedxml           # safe XML/SVG parsing (replaces xml.etree in user-upload p
 pre-commit
 ruff
 pyright
+
+# Colour-analysis tooling (tools/ only — deliberately NOT in pyproject runtime
+# dependencies, so the wheel and .deb stay unchanged). scipy in particular is
+# load-bearing beyond its own API: colour-science installs a MagicMock as
+# sys.modules["scipy"] when scipy is absent, and numba then dies importing it
+# (AttributeError: __version__). The server survives only because it imports
+# colour lazily inside the CAM16 LUT builders, so numba always wins the race —
+# a tool that imports colour at top level would break the production dither.
+scipy                # optimisation, ndimage, stats
+scikit-learn         # preference-model fitting, cross-validation, regularisation
+matplotlib           # charts (cam_figures draws with OpenCV primitives without it)
+pandas               # per-image measurement tables

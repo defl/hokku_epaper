@@ -58,7 +58,12 @@ python tools/f7_initial_flasher.py --port COM7
    cfg save                        # server URL + name default from the compiled-in config
    ```
    (`cfg server <url>` / `cfg name <n>` / `cfg dhcp` / `cfg ip <ip> <gw> <nm>` to
-   override the compiled-in defaults.) `cfg show` verifies the running firmware.
+   override the compiled-in defaults: **DHCP** and `http://hokku.local:8080/hokku/screen/`
+   — no hard-coded addresses.) `cfg show` verifies the running firmware. Firmware
+   before 1.2.13 defaulted to a static `192.168.6.199` / gw `192.168.6.254` (the
+   developer's LAN), which strands a unit on any other network (issue #44); a
+   saved config still holding exactly that pair is now treated as unset and moved
+   to DHCP, both at boot and when the web flasher re-provisions it.
 5. **Done — OTA from here.** The unit associates, fetches an image, redraws, reports
    to the server, and takes all future firmware updates over-the-air. See
    [`ota.md`](ota.md).
@@ -101,7 +106,11 @@ Entry is two-phase, so the physical dance is usually unnecessary:
 So a stock unit needs the replug+press; a unit already on our firmware doesn't.
 
 After the write, if you supplied Wi-Fi/config the log asks you to **power-cycle** the
-unit (needed to boot on this chip regardless). The server then waits for the console
+unit (needed to boot on this chip regardless) — a **long-press** until the LED goes
+out, never a USB replug (see step 3 above; a replug-only prompt is what stranded a
+unit in the BROM in issue #44). Re-confirmed on 6000135 on 2026-09-27: a fast replug
+left it in the BROM; a long-press until the LED went out booted it, with the unit
+powering back on by itself (USB connected) — no second press needed. The server then waits for the console
 to come up and writes `cfg server`/`cfg name`/`cfg save` + `wifi <ssid> <psk>`
 (password never logged), and briefly watches for the join + first server POST.
 

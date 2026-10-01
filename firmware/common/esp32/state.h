@@ -68,6 +68,19 @@ extern int64_t  pre_sleep_server_epoch;
 extern int32_t  last_sleep_err_s;
 extern bool     last_sleep_err_known;
 
+/* Deep-sleep oscillator-drift calibration (see common/all/sleep_cal.h).
+ *   cal_ppm            — learned correction, ppm deviation from nominal.
+ *   cal_samples        — accepted measurements; doubles as the EMA warmup weight
+ *                        and the "is this device calibrated yet" test (== 0 → no).
+ *   last_armed_sleep_s — timer value actually armed last sleep; needed to compute
+ *                        the observed drift ratio on the next wake.
+ * cal_ppm/cal_samples are mirrored to NVS so they survive power loss; the RTC copy
+ * is authoritative across deep sleep / restart and is only re-hydrated from NVS on
+ * a cold POR (see hokku_state_validate). */
+extern int32_t  cal_ppm;
+extern uint16_t cal_samples;
+extern int32_t  last_armed_sleep_s;
+
 extern uint8_t  consecutive_spurious_resets;
 
 /* Count of consecutive failed refreshes because the server was unreachable
@@ -91,5 +104,10 @@ extern const char *current_regime;
 /* Validate RTC memory for this boot chain. On POR (magic mismatch) zero every
  * global above and reset the wall clock to 0; then stamp the magic valid.
  * Idempotent across deep-sleep / esp_restart (magic already valid → no zeroing).
- * Call once at the very top of app_main, before any state is read. */
-void hokku_state_validate(void);
+ * Call once at the very top of app_main, before any state is read.
+ *
+ * Returns true on a cold POR (state was just zeroed). The caller uses this to
+ * decide whether to re-hydrate the calibration (cal_ppm/cal_samples) from NVS:
+ * on POR the RTC copy is garbage-then-zeroed, so NVS is authoritative; on a
+ * deep-sleep/restart wake the RTC copy is newer and must be kept. */
+bool hokku_state_validate(void);

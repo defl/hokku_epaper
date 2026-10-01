@@ -1,10 +1,231 @@
+hokku-server (4.0.1~dev.91-1) unstable; urgency=medium
+
+  * docs(agents): derive the dev-version N from the highest dev number in
+    python/debian/changelog on main rather than a commit count. The old
+    rev-list formula regressed as soon as PRs were squash-merged, and again
+    after every prerelease tag, so apt could stop seeing an upgrade.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 30 Sep 2026 21:27:32 -0500
+
+hokku-server (4.0.0~beta3-1) unstable; urgency=medium
+
+  * Release v4.0.0-beta3
+  * Bundled huessen_epf1301 firmware 1.2.21 -> 1.2.25.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 27 Sep 2026 21:15:33 +0000
+
+hokku-server (4.0.1~dev.90-1) unstable; urgency=medium
+
+  * The colour campaign closes. Twenty-one alternative renderings were
+    photographed off real glass and rated blind against what the server
+    actually runs; none of them won. The three shipped pipeline defaults are
+    reconciled onto that judged configuration -- CLAHE back on at 1.75 for the
+    general and face pipelines, and every chroma boost at neutral. Existing
+    installs are unaffected: these values seed a fresh install only.
+  * The black-and-white preset no longer applies a 5 % chroma boost it promised
+    not to apply.
+  * Full method, results and retractions:
+    docs/screens/huessen_epf1301/rendering_campaign.md
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 27 Sep 2026 20:55:05 +0000
+
+hokku-server (4.0.1~dev.15-1) unstable; urgency=medium
+
+  * The preset dropdown now follows the catalog's own order (shipped defaults
+    first) rather than whatever order the JSON encoder produced, which was
+    alphabetical.
+  * The three shipped pipeline defaults are now named presets ("General
+    (default)", "Black & white (default)", "Faces (default)") and lead the
+    dropdown. A fresh install previously displayed "Custom (your edits)" for all
+    three, because the UI names the selected entry by matching against the
+    preset catalog and the defaults were deliberately kept out of it — so
+    nothing ever matched, and untouched settings looked edited.
+  * Per-picture conversion overrides. Any image's details view can now pin its
+    own dither pipeline and/or its own letterbox-fill limit, independently of
+    the library-wide settings, and "Compare presets" renders several candidates
+    for that one picture side by side to choose from. The comparison sweeps the
+    palette LUT as well as the presets, because all three built-in presets share
+    one LUT — so a picture that converts to the wrong colours cannot be fixed by
+    picking a different preset. Setting an override re-converts only that
+    picture. Overrides survive Clear Cache & Re-convert and a re-upload of the
+    same filename.
+  * The dither editor is now one component mounted four times rather than three
+    hand-written copies plus a new one; the copies had already drifted (the B&W
+    panel was missing the face keep-out overlay).
+  * ImageConfig is parsed strictly everywhere: every field required, enum values
+    checked, unknown keys rejected. Config-shape changes move to the AppConfig
+    migration chain (v10), which completes older stored blobs once. Previously a
+    misspelled knob was silently ignored on every load and an invalid lut_name
+    was only caught inside a render worker, as a failed conversion.
+  * Fixes a hot-reload race that let a retiring image manager write its stale
+    snapshot over the live one's database. It cost only recomputable fields
+    before; it would have cost the new per-picture settings.
+  * Fixes dither previews ignoring the crop-to-fill setting: the preview always
+    letterboxed while its face-box overlay was computed for a cropped canvas.
+    Previews are also now bounded in concurrency.
+  * Declares waitress in requirements.txt — recreating the venv as documented
+    produced an environment where the server could not start.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 02 Aug 2026 12:00:00 -0500
+
+hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
+
+  * Per-pipeline dither defaults are now measured rather than chosen. General
+    and B&W move to Atkinson; general gains OKLAB adaptive-saturation and OKLAB
+    dynamic-range compression; B&W gains OKLAB DRC; faces turn both chroma
+    boosters off. Each is the best-scoring combination of algorithm x LUT x
+    saturation space x DRC space x adaptive-vivid x serpentine over the test
+    corpus for that pipeline. Existing installs keep their stored settings —
+    this changes defaults only. See docs/dither_search.md.
+  * Adds tools/dither_search.py (the search harness) and two freely-licensed
+    lipstick portraits to images/test/, without which the artifact that
+    motivated this could not be measured on photographs at all.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 01 Aug 2026 22:30:00 -0500
+
+hokku-server (4.0.0~beta2-1) unstable; urgency=medium
+
+  * Release v4.0.0-beta2. Second beta of the 4.0 appliance line: fixes the
+    reboot hang, restores USB flashing on the appliance, and stops the three
+    image pipelines collapsing into one. Adds deep-sleep drift calibration and
+    the GitHub firmware library. Bundled firmware: huessen_epf1301 1.2.21,
+    seeedstudio_e1004 1.2.5, bigme_f7 1.2.10.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 01 Aug 2026 20:15:00 +0000
+
+hokku-server (4.0.1~dev.24-1) unstable; urgency=medium
+
+  * No server code changes. Firmware lint fix: reduce the scope of 'ppm' in
+    common/esp32/net.c, which failed CI's cppcheck (variableScope) and so
+    blocked the release build. Behaviour is unchanged; firmware N bumped on
+    the two boards that compile that file - huessen_epf1301 1.2.21,
+    seeedstudio_e1004 1.2.5. bigme_f7 is xr872 and unaffected at 1.2.10.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 01 Aug 2026 16:05:00 -0500
+
+hokku-server (4.0.1~dev.23-1) unstable; urgency=medium
+
+  * No server code changes. Appliance image fix: the board could not reboot
+    with no USB cable attached. getty@.service has PID 1 itself open
+    /dev/ttyGS0 around service stop (TTYReset/TTYVHangup/TTYVTDisallocate);
+    opening a gadget tty with no host attached blocks uninterruptibly, so
+    systemd wedged mid-shutdown with no message, no timeout and no journal
+    until the hardware watchdog fired ten minutes later. Since a deployed
+    appliance has no cable attached, this was the default case. Adds a drop-in
+    disabling those three, and lowers RebootWatchdogSec from 10min to 60s so
+    any wedged shutdown self-recovers. Known upstream: raspberrypi/linux#1929.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 01 Aug 2026 10:16:02 -0500
+
+hokku-server (4.0.1~dev.22-1) unstable; urgency=medium
+
+  * No server code changes. Appliance image fix: the last-resort on-SD swapfile
+    documented in the image's memory policy was never actually present.
+    dphys-swapfile was missing from 00-packages (and is not in pi-gen stage2),
+    so the config step skipped itself and `systemctl enable` failed into
+    `|| true` — every image shipped with zram as its only swap. Adds the
+    package, makes both swap layers fail the build loudly if they cannot be
+    configured, and orders zram after the swapfile so the swapfile is still
+    available while zram is swapped off during shutdown.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 30 Jul 2026 23:24:12 -0500
+
+hokku-server (4.0.1~dev.21-1) unstable; urgency=medium
+
+  * Deep-sleep oscillator-drift calibration. Screens learn their RC-oscillator
+    error from the existing sleep-error signal and correct the armed timer, so
+    they land on the scheduled slot instead of waking early and refreshing
+    twice. Screen records are keyed by a stable server-assigned sid with name
+    and MAC as secondary indexes, so calibration survives both rename and
+    reflash; legacy name-keyed databases migrate on load. Responses carry
+    X-Sleep-Cal-PPM / X-Sleep-Cal-N and screens send X-Screen-Mac.
+    Firmware: huessen 1.2.20, seeed 1.2.4, bigme_f7 1.2.10.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 30 Jul 2026 22:02:49 -0500
+
+hokku-server (4.0.1~dev.20-1) unstable; urgency=medium
+
+  * Fix: the B&W and face image pipelines were silently collapsing onto the
+    default pipeline on every load, so all three behaved identically. A config
+    blob missing any single field reset that pipeline to the fallback preset,
+    and the shipped config.json.example was missing clahe_keepout_feather —
+    so every install ran the colour pipeline for B&W and face photos.
+  * Config blobs now MERGE onto their pipeline's defaults instead of being
+    reset wholesale, so a config predating a field keeps the tuning it does
+    carry. Removes the _LENIENT_DEFAULTS table this made unnecessary.
+  * The face pipeline default is tuned for skin again (gentler CLAHE 1.25,
+    stronger/wider unsharp 130/1.2, Atkinson); the B&W default regains its
+    harder CLAHE 2.25 and neutral saturation ceiling.
+  * config.json.example is now generated from the code
+    (python -m hokku.webserver.gen_example_config) with a test that fails if
+    the checked-in file drifts.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 30 Jul 2026 21:39:10 -0500
+
+hokku-server (4.0.1~dev.19-1) unstable; urgency=medium
+
+  * No server code changes. Build fix: the stale-pi-gen-clone check added in
+    dev.18 tested for a carriage return with grep, which MSYS grep can never
+    match because it opens files in text mode and strips CR first — so the
+    guard never fired on Windows, the one platform it exists for. It now
+    compares byte counts before and after stripping CR.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 23:55:39 -0500
+
+hokku-server (4.0.1~dev.18-1) unstable; urgency=medium
+
+  * No server code changes. Build fix: os/pi/build-image.sh now clones pi-gen
+    with core.autocrlf=false, and re-clones an existing CRLF clone. Inheriting
+    this repo's core.autocrlf=true corrupted pi-gen's own shebangs, so the
+    image build died with "/bin/bash: -: invalid option" on Windows.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 23:52:50 -0500
+
+hokku-server (4.0.1~dev.17-1) unstable; urgency=medium
+
+  * No server code changes. Build fix: the appliance image's pre-baked arm64
+    wheel download asked pip for the "linux_aarch64" platform tag, which no
+    project publishes, so it silently fetched nothing and every image needed
+    internet on first boot to pip-install numba/opencv/scipy/pillow-heif.
+    Now asks for the manylinux aarch64 tags that actually exist.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 23:42:52 -0500
+
+hokku-server (4.0.1~dev.16-1) unstable; urgency=medium
+
+  * No server code changes. Build fix: .gitattributes now pins the installer
+    package's debian/ files and the pi-gen inputs (os/pi/config, 00-packages)
+    to LF, so the .deb and the appliance image can be built from a Windows
+    checkout. Version bumped to keep one dev version per pushed change.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 23:33:12 -0500
+
+hokku-server (4.0.1~dev.15-1) unstable; urgency=medium
+
+  * Firmware version ordering now uses packaging.version (PEP 440) instead of
+    a hand-rolled key. Fixes the Bigme F7 bundled-image lookup, which sorted
+    release filenames as strings and so would serve 1.2.9 over a future
+    1.2.10, and stops an unparseable version from outranking a real release.
+    New dependency: python3-packaging.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 23:14:33 -0500
+
+hokku-server (4.0.1~dev.14-1) unstable; urgency=medium
+
+  * No server changes. Version bumped alongside hokku-installer, which now
+    switches the Pi's USB data port between gadget serial console (setup mode)
+    and USB host (hokku mode, so "Flash a screen" has a port to drive).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 23:04:22 -0500
+
 hokku-server (4.0.1~dev.13-1) unstable; urgency=medium
 
-  * docs(agents): derive the dev-version N from main's declared version rather
-    than a commit count. The old rev-list formula regressed as soon as PRs were
-    squash-merged, so apt could stop seeing an upgrade.
+  * feat(webserver): remember the flash Wi-Fi credentials for the Bigme F7
+    bootstrap form too. The persist step is now shared by both flash routes,
+    so the SSID/password pre-fill from the last flash of either kind; the F7
+    has no fallback network, so it leaves a remembered second one untouched.
 
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 22:27:13 -0500
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Tue, 28 Jul 2026 22:39:55 -0500
 
 hokku-server (4.0.1~dev.12-1) unstable; urgency=medium
 

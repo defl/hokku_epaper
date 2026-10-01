@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 
 _DB_FILENAME = "serve_scheduler.json"
 
+# Long-term calibration mean: EMA weight for each new per-device report. Kept
+# small so the pinned mean is stable — it exists to SEED cold-start devices; the
+# device's own on-board EMA is the responsive control loop.
+_CAL_MEAN_ALPHA = 0.1
+
 
 @dataclass(frozen=True)
 class ServeStats:
@@ -52,6 +57,11 @@ class ServeStats:
 
 @dataclass(frozen=True)
 class ScreenTelemetryEntry:
+    # Human-readable, user-set screen name (required + unique). It is the
+    # dashboard/API handle, but NOT the storage key — records are keyed by a
+    # server-assigned sid so identity survives a rename, and the MAC (below)
+    # pins it across a reflash.
+    name: str
     ip: str
     request_count: int
     last_seen_at: float
@@ -65,6 +75,17 @@ class ScreenTelemetryEntry:
     last_log_at: float
     firmware_version: str | None
     firmware_build: str | None
+    # WiFi MAC (lowercase aa:bb:cc:dd:ee:ff), the durable per-device key. None
+    # until the device runs firmware new enough to send X-Screen-Mac.
+    mac: str | None = None
+    # Deep-sleep oscillator-drift calibration, pinned to this record.
+    #   cal_ppm      — the device's most recently reported correction.
+    #   cal_mean_ppm — the server's long-term mean, handed back as a cold-start
+    #                  seed (a reflashed device re-adopts it, keyed by MAC).
+    #   cal_samples  — measurements behind the mean (the seed's trust weight).
+    cal_ppm: int | None = None
+    cal_mean_ppm: float | None = None
+    cal_samples: int = 0
     # Last OTA config-migration failure for this screen. A non-None value signals
     # a should-never-happen bug (the server could not build a config for the new
     # firmware schema); surfaced prominently in the dashboard. Cleared once the
@@ -81,6 +102,7 @@ class ScreenTelemetryEntry:
     @classmethod
     def from_dict(cls, d: dict) -> ScreenTelemetryEntry:
         return cls(
+            name=d.get("name", ""),
             ip=d.get("ip", ""),
             request_count=int(d.get("request_count", 0)),
             last_seen_at=float(d.get("last_seen_at", 0.0)),
@@ -94,6 +116,10 @@ class ScreenTelemetryEntry:
             last_log_at=float(d.get("last_log_at", 0.0)),
             firmware_version=d.get("firmware_version"),
             firmware_build=d.get("firmware_build"),
+            mac=d.get("mac"),
+            cal_ppm=d.get("cal_ppm"),
+            cal_mean_ppm=d.get("cal_mean_ppm"),
+            cal_samples=int(d.get("cal_samples", 0)),
             ota_error=d.get("ota_error"),
             ota_error_at=d.get("ota_error_at"),
             screen_model=d.get("screen_model"),
@@ -107,9 +133,15 @@ class ServeScheduler:
         self._manager = manager
         self._db_path = Path(manager.config.cache_dir) / _DB_FILENAME
         self._lock = threading.RLock()
-        self._stats: dict[str, ServeStats] = {}
+        self._stats: dict[str, ServeStats] = {}  # keyed by IMAGE name (rotation)
+        # Screen records are keyed by a server-assigned stable sid; name and MAC
+        # are unique secondary indexes so a record is findable by either and its
+        # identity (and calibration) survives a rename or a reflash.
         self._screens: dict[str, ScreenTelemetryEntry] = {}
         self._screen_configs: dict[str, ScreenConfig] = {}
+        self._by_name: dict[str, str] = {}  # name -> sid
+        self._by_mac: dict[str, str] = {}  # mac  -> sid
+        self._sid_seq: int = 0
         # Screens whose user has toggled "update firmware on next refresh" ON.
         # For a version UPGRADE we keep signalling until the device reports the
         # target version (bounded auto-retry, so a dropped download self-heals);
@@ -219,6 +251,80 @@ class ServeScheduler:
                 self._next_for[o] = name
             self._save()
 
+    # ── Screen identity (sid keyed by name + MAC) ────────────────
+
+    def _resolve_sid_locked(self, name: str | None, mac: str | None) -> str | None:
+        """Find an existing record's sid by MAC (preferred) or name. None if unknown."""
+        if mac and mac in self._by_mac:
+            return self._by_mac[mac]
+        if name and name in self._by_name:
+            sid = self._by_name[name]
+            # If that record is already bound to a DIFFERENT MAC, the caller's
+            # device merely shares the (supposedly unique) name — don't let it
+            # hijack the other device's record (and its calibration).
+            existing = self._screens.get(sid)
+            if mac and existing is not None and existing.mac and existing.mac != mac:
+                return None
+            return sid
+        return None
+
+    def _resolve_or_create_sid_locked(self, name: str, mac: str | None) -> str:
+        """Return the sid for (name, MAC), creating a record and reconciling the
+        name/MAC indexes as needed. MAC is authoritative: a device that reappears
+        with a known MAC keeps its sid even if its name changed (rename), and a
+        record first seen by name adopts a MAC the moment the device reports one."""
+        sid = self._resolve_sid_locked(name, mac)
+        if sid is None:
+            self._sid_seq += 1
+            sid = str(self._sid_seq)
+            self._screens[sid] = ScreenTelemetryEntry(
+                name=name,
+                ip="",
+                request_count=0,
+                last_seen_at=0.0,
+                last_sleep_seconds=None,
+                last_served=None,
+                battery_mv=None,
+                battery_percent=None,
+                battery_seen_at=None,
+                frame_state=None,
+                last_log="",
+                last_log_at=0.0,
+                firmware_version=None,
+                firmware_build=None,
+                mac=mac,
+            )
+        # Reconcile indexes for this sid — a rename repoints name->sid; a
+        # first-seen MAC attaches mac->sid; both stay unique.
+        entry = self._screens[sid]
+        if entry.name != name or entry.mac != (mac or entry.mac):
+            self._screens[sid] = replace(entry, name=name, mac=mac or entry.mac)
+        # Drop any stale name index entries that used to point here.
+        for n in [n for n, s in self._by_name.items() if s == sid and n != name]:
+            del self._by_name[n]
+        self._by_name[name] = sid
+        if mac:
+            self._by_mac[mac] = sid
+        return sid
+
+    def resolve(self, name: str | None = None, mac: str | None = None) -> str | None:
+        """Public lookup: the sid for a screen addressed by name or MAC, or None."""
+        with self._lock:
+            return self._resolve_sid_locked(name, mac)
+
+    def cal_seed_for(self, name: str | None = None, mac: str | None = None) -> tuple[int, int]:
+        """The (mean_ppm, sample_count) drift seed pinned to this device, resolved
+        by name or MAC. (0, 0) when the device is unknown or has no mean yet — the
+        firmware treats a zero sample count as 'nothing to adopt'."""
+        with self._lock:
+            sid = self._resolve_sid_locked(name, mac)
+            if sid is None:
+                return (0, 0)
+            e = self._screens[sid]
+            if e.cal_mean_ppm is None or e.cal_samples <= 0:
+                return (0, 0)
+            return (round(e.cal_mean_ppm), e.cal_samples)
+
     # ── Screen telemetry ─────────────────────────────────────────
 
     def record_screen_call(
@@ -233,11 +339,32 @@ class ServeScheduler:
         firmware_version: str | None = None,
         firmware_build: str | None = None,
         screen_model: str | None = None,
-    ) -> None:
+        mac: str | None = None,
+        cal_ppm: int | None = None,
+    ) -> str:
+        """Record one screen check-in. Resolves (or creates) the record by MAC or
+        name, folds any reported cal_ppm into the pinned long-term mean, and
+        returns the record's sid."""
         with self._lock:
             now = time.time()
-            existing = self._screens.get(screen_name)
+            sid = self._resolve_or_create_sid_locked(screen_name, mac)
+            existing = self._screens.get(sid)
             req_count = (existing.request_count + 1) if existing else 1
+
+            # Fold a reported correction into the long-term mean (the cold-start
+            # seed). cal_ppm is emitted only by a calibrated device, so every
+            # value here is a real measurement, never a placeholder 0.
+            cal_mean = existing.cal_mean_ppm if existing else None
+            cal_n = existing.cal_samples if existing else 0
+            if cal_ppm is not None:
+                if cal_mean is None:
+                    cal_mean = float(cal_ppm)
+                else:
+                    cal_mean = (1.0 - _CAL_MEAN_ALPHA) * cal_mean + _CAL_MEAN_ALPHA * cal_ppm
+                cal_n += 1
+            last_cal_ppm = (
+                cal_ppm if cal_ppm is not None else (existing.cal_ppm if existing else None)
+            )
 
             # Frame-state may carry a more reliable battery reading.
             if frame_state and isinstance(frame_state.get("bat_mv"), (int, float)):
@@ -269,7 +396,8 @@ class ServeScheduler:
                 last_log = log
                 last_log_at = now
 
-            self._screens[screen_name] = ScreenTelemetryEntry(
+            self._screens[sid] = ScreenTelemetryEntry(
+                name=screen_name,
                 ip=screen_ip,
                 request_count=req_count,
                 last_seen_at=now,
@@ -288,6 +416,10 @@ class ServeScheduler:
                 firmware_version=firmware_version
                 or (existing.firmware_version if existing else None),
                 firmware_build=firmware_build or (existing.firmware_build if existing else None),
+                mac=(mac or (existing.mac if existing else None)),
+                cal_ppm=last_cal_ppm,
+                cal_mean_ppm=cal_mean,
+                cal_samples=cal_n,
                 # OTA error is sticky across normal polls; cleared explicitly via
                 # clear_ota_error (e.g. once the screen reports the new version).
                 ota_error=existing.ota_error if existing else None,
@@ -295,10 +427,13 @@ class ServeScheduler:
                 screen_model=screen_model or (existing.screen_model if existing else None),
             )
             self._save()
+            return sid
 
     def screens(self) -> dict[str, ScreenTelemetryEntry]:
+        """Telemetry keyed by screen NAME (the display handle). Storage is
+        sid-keyed internally; this projects to the name view callers expect."""
         with self._lock:
-            return dict(self._screens)
+            return {e.name: e for e in self._screens.values()}
 
     def known_models(self) -> set[str]:
         """Set of distinct hardware models across all screens seen so far.
@@ -313,7 +448,8 @@ class ServeScheduler:
     def get_screen_model(self, name: str) -> str | None:
         """The hardware model a screen last self-identified as, or None if unseen."""
         with self._lock:
-            t = self._screens.get(name)
+            sid = self._resolve_sid_locked(name, None)
+            t = self._screens.get(sid) if sid else None
             return t.screen_model if t else None
 
     # ── OTA: per-screen update request + migration errors ─────────
@@ -329,61 +465,70 @@ class ServeScheduler:
         logger.info("OTA pending for %r -> %s (reflash=%s)", name, enabled, reflash)
         with self._lock:
             if enabled:
-                self._ota_pending.add(name)
+                sid = self._resolve_or_create_sid_locked(name, None)
+                self._ota_pending.add(sid)
                 if reflash:
-                    self._ota_reflash.add(name)
+                    self._ota_reflash.add(sid)
                 else:
-                    self._ota_reflash.discard(name)
-                self._ota_attempts[name] = 0
+                    self._ota_reflash.discard(sid)
+                self._ota_attempts[sid] = 0
             else:
-                self._clear_ota_pending_locked(name)
+                sid = self._resolve_sid_locked(name, None)
+                if sid is not None:
+                    self._clear_ota_pending_locked(sid)
             self._save()
 
     def is_ota_pending(self, name: str) -> bool:
         """Whether the screen is flagged to update on its next refresh (no consume)."""
         with self._lock:
-            return name in self._ota_pending
+            sid = self._resolve_sid_locked(name, None)
+            return sid is not None and sid in self._ota_pending
 
     def is_ota_reflash(self, name: str) -> bool:
         """Whether the pending update is a same-version re-flash (one-shot)."""
         with self._lock:
-            return name in self._ota_reflash
+            sid = self._resolve_sid_locked(name, None)
+            return sid is not None and sid in self._ota_reflash
 
     def note_ota_signal(self, name: str) -> int:
         """Record that an upgrade was signalled; return the running attempt count."""
         with self._lock:
-            n = self._ota_attempts.get(name, 0) + 1
-            self._ota_attempts[name] = n
+            sid = self._resolve_or_create_sid_locked(name, None)
+            n = self._ota_attempts.get(sid, 0) + 1
+            self._ota_attempts[sid] = n
             self._save()
             return n
 
     def clear_ota_pending(self, name: str) -> None:
         """Clear the pending flag + retry state (on confirmed success or give-up)."""
         with self._lock:
-            if name in self._ota_pending or name in self._ota_attempts:
-                self._clear_ota_pending_locked(name)
+            sid = self._resolve_sid_locked(name, None)
+            if sid is not None and (sid in self._ota_pending or sid in self._ota_attempts):
+                self._clear_ota_pending_locked(sid)
                 self._save()
 
     def take_ota_pending(self, name: str) -> bool:
         """Consume the pending flag: returns True once, then clears it (one-shot)."""
         with self._lock:
-            if name in self._ota_pending:
-                self._clear_ota_pending_locked(name)
+            sid = self._resolve_sid_locked(name, None)
+            if sid is not None and sid in self._ota_pending:
+                self._clear_ota_pending_locked(sid)
                 self._save()
                 return True
             return False
 
-    def _clear_ota_pending_locked(self, name: str) -> None:
-        self._ota_pending.discard(name)
-        self._ota_reflash.discard(name)
-        self._ota_attempts.pop(name, None)
+    def _clear_ota_pending_locked(self, sid: str) -> None:
+        self._ota_pending.discard(sid)
+        self._ota_reflash.discard(sid)
+        self._ota_attempts.pop(sid, None)
 
     def get_screen_firmware_version(self, name: str) -> str | None:
         """The screen's currently-running firmware version. Prefers the value from
         the X-Firmware-Version header (same source serve_binary compares against),
         falling back to the frame-state fw field."""
         with self._lock:
-            t = self._screens.get(name)
+            sid = self._resolve_sid_locked(name, None)
+            t = self._screens.get(sid) if sid else None
             if t is None:
                 return None
             if t.firmware_version:
@@ -401,51 +546,37 @@ class ServeScheduler:
         logger.error("OTA config migration failed for %r: %s", name, msg)
         with self._lock:
             now = time.time()
-            existing = self._screens.get(name)
-            if existing is not None:
-                self._screens[name] = replace(existing, ota_error=msg, ota_error_at=now)
-            else:
-                self._screens[name] = ScreenTelemetryEntry(
-                    ip="unknown",
-                    request_count=0,
-                    last_seen_at=now,
-                    last_sleep_seconds=None,
-                    last_served=None,
-                    battery_mv=None,
-                    battery_percent=None,
-                    battery_seen_at=None,
-                    frame_state=None,
-                    last_log="",
-                    last_log_at=0.0,
-                    firmware_version=None,
-                    firmware_build=None,
-                    ota_error=msg,
-                    ota_error_at=now,
-                )
+            sid = self._resolve_or_create_sid_locked(name, None)
+            self._screens[sid] = replace(self._screens[sid], ota_error=msg, ota_error_at=now)
             self._save()
 
     def clear_ota_error(self, name: str) -> None:
         """Clear any recorded OTA error for the screen (idempotent)."""
         with self._lock:
-            existing = self._screens.get(name)
+            sid = self._resolve_sid_locked(name, None)
+            if sid is None:
+                return
+            existing = self._screens.get(sid)
             if existing is not None and existing.ota_error is not None:
-                self._screens[name] = replace(existing, ota_error=None, ota_error_at=None)
+                self._screens[sid] = replace(existing, ota_error=None, ota_error_at=None)
                 self._save()
 
     def remove_screen(self, name: str) -> None:
-        """Remove a screen's telemetry, serve-stats, and config records.
+        """Remove a screen's telemetry, config, OTA state, and name/MAC indexes.
 
         Idempotent — silently does nothing if the name is not known.
         The screen can re-register itself the next time it connects.
         """
         logger.info("Removing screen telemetry: %r", name)
         with self._lock:
-            self._screens.pop(name, None)
-            self._stats.pop(name, None)
-            self._screen_configs.pop(name, None)
-            self._clear_ota_pending_locked(name)
-            if self._last_served and self._last_served[0] == name:
-                self._last_served = None
+            sid = self._resolve_sid_locked(name, None)
+            if sid is None:
+                return
+            self._screens.pop(sid, None)
+            self._screen_configs.pop(sid, None)
+            self._clear_ota_pending_locked(sid)
+            self._by_name = {n: s for n, s in self._by_name.items() if s != sid}
+            self._by_mac = {m: s for m, s in self._by_mac.items() if s != sid}
             self._save()
 
     # ── Per-screen config ─────────────────────────────────────────
@@ -453,12 +584,16 @@ class ServeScheduler:
     def get_screen_config(self, name: str) -> ScreenConfig:
         """Return the full config for a screen (default ScreenConfig if not set)."""
         with self._lock:
-            return self._screen_configs.get(name, ScreenConfig())
+            sid = self._resolve_sid_locked(name, None)
+            if sid is None:
+                return ScreenConfig()
+            return self._screen_configs.get(sid, ScreenConfig())
 
     def set_screen_config(self, name: str, config: ScreenConfig) -> None:
         """Persist the full config for a screen."""
         with self._lock:
-            self._screen_configs[name] = config
+            sid = self._resolve_or_create_sid_locked(name, None)
+            self._screen_configs[sid] = config
             self._save()
 
     # ── Internals ────────────────────────────────────────────────
@@ -546,27 +681,16 @@ class ServeScheduler:
                 self._stats[name] = ServeStats.from_dict(blob)
             except (KeyError, TypeError, ValueError) as e:
                 logger.warning("Skipping malformed serve stats for %r: %s", name, e)
-        for name, blob in data.get("screens", {}).items():
-            try:
-                self._screens[name] = ScreenTelemetryEntry.from_dict(blob)
-            except (KeyError, TypeError, ValueError) as e:
-                logger.warning("Skipping malformed telemetry entry %r: %s", name, e)
-        for name, blob in data.get("screen_configs", {}).items():
-            try:
-                self._screen_configs[name] = ScreenConfig.from_dict(blob)
-            except (KeyError, TypeError, ValueError) as e:
-                logger.warning("Skipping malformed screen config for %r: %s", name, e)
-        pending = data.get("ota_pending")
-        if isinstance(pending, list):
-            self._ota_pending = {n for n in pending if isinstance(n, str)}
-        reflash = data.get("ota_reflash")
-        if isinstance(reflash, list):
-            self._ota_reflash = {n for n in reflash if isinstance(n, str)} & self._ota_pending
-        attempts = data.get("ota_attempts")
-        if isinstance(attempts, dict):
-            self._ota_attempts = {
-                n: v for n, v in attempts.items() if isinstance(n, str) and isinstance(v, int)
-            }
+
+        # Screen records are sid-keyed in schema >= 2. Schema 1 (or missing) is
+        # the legacy name-keyed layout: assign a sid to each name on load so old
+        # deployments migrate transparently on first read.
+        schema = int(data.get("schema", 1))
+        if schema >= 2:
+            self._load_screens_v2(data)
+        else:
+            self._load_screens_legacy(data)
+
         ls = data.get("last_served")
         if isinstance(ls, dict) and "name" in ls and "served_at" in ls:
             try:
@@ -584,9 +708,86 @@ class ServeScheduler:
             if isinstance(old_next, str):
                 self._next_for[Orientation.NEUTRAL] = old_next
 
+    def _rebuild_indexes_locked(self) -> None:
+        """Rebuild name->sid and mac->sid from the loaded records, and set the
+        sid sequence past the highest numeric sid seen."""
+        self._by_name = {}
+        self._by_mac = {}
+        max_sid = 0
+        for sid, e in self._screens.items():
+            if e.name:
+                self._by_name[e.name] = sid
+            if e.mac:
+                self._by_mac[e.mac] = sid
+            if sid.isdigit():
+                max_sid = max(max_sid, int(sid))
+        self._sid_seq = max(self._sid_seq, max_sid)
+
+    def _load_screens_v2(self, data: dict) -> None:
+        self._sid_seq = int(data.get("sid_seq", 0))
+        for sid, blob in data.get("screens", {}).items():
+            try:
+                self._screens[sid] = ScreenTelemetryEntry.from_dict(blob)
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning("Skipping malformed telemetry entry %r: %s", sid, e)
+        for sid, blob in data.get("screen_configs", {}).items():
+            try:
+                self._screen_configs[sid] = ScreenConfig.from_dict(blob)
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning("Skipping malformed screen config for %r: %s", sid, e)
+        pending = data.get("ota_pending")
+        if isinstance(pending, list):
+            self._ota_pending = {s for s in pending if isinstance(s, str)}
+        reflash = data.get("ota_reflash")
+        if isinstance(reflash, list):
+            self._ota_reflash = {s for s in reflash if isinstance(s, str)} & self._ota_pending
+        attempts = data.get("ota_attempts")
+        if isinstance(attempts, dict):
+            self._ota_attempts = {
+                s: v for s, v in attempts.items() if isinstance(s, str) and isinstance(v, int)
+            }
+        self._rebuild_indexes_locked()
+
+    def _load_screens_legacy(self, data: dict) -> None:
+        """Migrate the old name-keyed layout: assign each screen name a sid."""
+        for name, blob in data.get("screens", {}).items():
+            try:
+                entry = ScreenTelemetryEntry.from_dict(blob)
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning("Skipping malformed telemetry entry %r: %s", name, e)
+                continue
+            sid = self._resolve_or_create_sid_locked(name, entry.mac)
+            self._screens[sid] = replace(entry, name=name)
+        for name, blob in data.get("screen_configs", {}).items():
+            try:
+                cfg = ScreenConfig.from_dict(blob)
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning("Skipping malformed screen config for %r: %s", name, e)
+                continue
+            self._screen_configs[self._resolve_or_create_sid_locked(name, None)] = cfg
+        pending = data.get("ota_pending")
+        if isinstance(pending, list):
+            self._ota_pending = {
+                self._resolve_or_create_sid_locked(n, None) for n in pending if isinstance(n, str)
+            }
+        reflash = data.get("ota_reflash")
+        if isinstance(reflash, list):
+            self._ota_reflash = {
+                self._resolve_or_create_sid_locked(n, None) for n in reflash if isinstance(n, str)
+            } & self._ota_pending
+        attempts = data.get("ota_attempts")
+        if isinstance(attempts, dict):
+            self._ota_attempts = {
+                self._resolve_or_create_sid_locked(n, None): v
+                for n, v in attempts.items()
+                if isinstance(n, str) and isinstance(v, int)
+            }
+
     def _save(self) -> None:
         payload = {
             "version": 1,
+            "schema": 2,
+            "sid_seq": self._sid_seq,
             "next_for": {o.value: self._next_for.get(o) for o in Orientation},
             "last_served": (
                 {"name": self._last_served[0], "served_at": self._last_served[1]}
@@ -594,8 +795,8 @@ class ServeScheduler:
                 else None
             ),
             "by_name": {n: s.to_dict() for n, s in self._stats.items()},
-            "screens": {n: t.to_dict() for n, t in self._screens.items()},
-            "screen_configs": {n: c.to_dict() for n, c in self._screen_configs.items()},
+            "screens": {sid: t.to_dict() for sid, t in self._screens.items()},
+            "screen_configs": {sid: c.to_dict() for sid, c in self._screen_configs.items()},
             "ota_pending": sorted(self._ota_pending),
             "ota_reflash": sorted(self._ota_reflash),
             "ota_attempts": dict(self._ota_attempts),

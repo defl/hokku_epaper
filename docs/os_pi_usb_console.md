@@ -1,10 +1,14 @@
 # Pi OS image: USB serial console
 
-The appliance image (`os/pi/`) bakes in a USB gadget serial console: the
+The appliance image (`os/pi/`) ships with a USB gadget serial console: the
 Pi's single micro-USB data port carries both power and a login shell over
 one cable. No keyboard, no monitor, no HDMI needed — just a USB cable to a
 PC. This is the console of last resort for a headless appliance whose only
 other interface is its own web UI.
+
+**It is available in setup mode, not in normal operation.** The same port
+is what the appliance uses to flash a frame, so the two roles alternate —
+see [When the console is available](#when-the-console-is-available) below.
 
 ## Why this exists
 
@@ -16,8 +20,11 @@ prompt, regardless of network state.
 
 ## The exact configuration
 
-Baked into the image at build time by
-[`os/pi/stage-hokku/01-pi-tweaks/00-run.sh`](../os/pi/stage-hokku/01-pi-tweaks/00-run.sh):
+Applied by [`installer/files/usb-mode.sh`](../installer/files/usb-mode.sh)
+— once at image build time (from
+[`os/pi/stage-hokku/01-pi-tweaks/00-run.sh`](../os/pi/stage-hokku/01-pi-tweaks/00-run.sh),
+which is why the image boots with the console on) and again at every mode
+transition afterwards:
 
 1. **`config.txt`**: `dtoverlay=dwc2,dr_mode=peripheral`
 2. **`cmdline.txt`**: append `modules-load=dwc2,g_serial`
@@ -26,6 +33,39 @@ Baked into the image at build time by
 That's the whole thing. It was arrived at the hard way, live, against a
 real Pi Zero 2 W — the two traps below cost real debugging time and are
 easy to reintroduce if this ever gets "cleaned up" without this context.
+
+## When the console is available
+
+One port, one role per boot. `dr_mode=otg` (both at once) was tried and
+rejected: the console enumerated unreliably on Windows ("Device Descriptor
+Request Failed"), and merely inserting an *empty* OTG adapter grounds the
+ID pin, so the port came up as a host at boot and USB host-init wedged the
+whole boot. So the role is switched at the mode transitions, each of which
+already ends in a reboot:
+
+| Mode | `dr_mode` | Console | Set by |
+|---|---|---|---|
+| Setup (`Hokku Setup` AP is up) | `peripheral` | **yes**, `/dev/ttyGS0` | the image build, and both revert paths below |
+| Hokku (normal operation) | `host` | no — the port can flash a frame instead | the wizard, on the reboot out of setup |
+
+Getting the console back on a configured appliance means sending it back to
+setup mode, which any of these do:
+
+- `sudo /usr/lib/hokku-installer/reset.sh` (over SSH, or from the web UI)
+- the WiFi watchdog, **automatically**, on any boot where WiFi doesn't
+  connect within ~3.5 minutes — so an appliance that falls off the network
+  restores its own console without anyone touching it
+- rewriting the SD card
+
+Each clears the setup sentinel, flips the port back to `peripheral`, and
+reboots. If you only need to *flip the port* and can already get a shell,
+`sudo /usr/lib/hokku-installer/usb-mode.sh peripheral && sudo reboot` does
+just that part, leaving the appliance configured.
+
+The practical consequence to design around: **on a working appliance the
+console is not the console of last resort — SSH is.** Enable SSH in the
+wizard on anything you expect to debug. The console covers the case the
+watchdog covers, which is the case that actually strands the device.
 
 ## Trap 1: `serial-getty@ttyGS0` looks right but isn't
 
@@ -44,7 +84,50 @@ Use the **plain, generic `getty@.service` template** instead
 binding, retries on its own, and is what every working guide for gadget
 serial actually uses.
 
-## Trap 2: the host-side library matters as much as the Pi-side config
+## Trap 2: a getty on this tty stops the board rebooting — with no cable
+
+This one costs a power cycle every time and gives you nothing to debug with.
+
+`getty@.service` defaults make **systemd itself** open `/dev/ttyGS0` around
+service stop — that's what `TTYReset`, `TTYVHangup` and `TTYVTDisallocate` do.
+Opening a USB gadget tty with **no host attached** blocks in an uninterruptible
+`open()`. So PID 1 wedges mid-shutdown, and because the process that's stuck is
+the one that prints progress, you get:
+
+- no `A stop job is running for …` countdown,
+- no further console output at all — the screen freezes mid-shutdown,
+- nothing in the journal (journald is already stopped),
+- a board that still answers ping, because the kernel is fine,
+- recovery only when the hardware watchdog fires — ten minutes, by default.
+
+The trap is that **the failing case is the normal one**. A deployed appliance
+has no USB cable attached. Every test that had a cable plugged in for the
+console rebooted perfectly, which is exactly why this survived so long:
+reproduced here 2026-07-31, cable out it hung every time, cable in it rebooted
+every time.
+
+The image fixes it in
+[`01-pi-tweaks`](../os/pi/stage-hokku/01-pi-tweaks/00-run.sh) with a drop-in:
+
+```ini
+# /etc/systemd/system/getty@ttyGS0.service.d/10-no-tty-reset.conf
+[Service]
+TTYReset=no
+TTYVHangup=no
+TTYVTDisallocate=no
+```
+
+Known upstream for years — [raspberrypi/linux#1929](https://github.com/raspberrypi/linux/issues/1929),
+the Pi forum thread [*Pi Zero gadget serial hangs on shutdown*](https://forums.raspberrypi.com/viewtopic.php?t=178917),
+and the same symptom on [systemd-devel in 2015](https://lists.freedesktop.org/archives/systemd-devel/2015-March/029540.html).
+**Watch the spelling**: the forum snippet everyone copies says
+`TTYVDisallocate`, which is not a real directive and is silently ignored. It is
+`TTYVTDisallocate`.
+
+The image also lowers `RebootWatchdogSec` to 60s, so a shutdown wedged by
+anything at all recovers in a minute instead of ten.
+
+## Trap 3: the host-side library matters as much as the Pi-side config
 
 Once the Pi side is correct, connecting from Windows still isn't
 guaranteed to work with an arbitrary serial library. `pyserial` and .NET's

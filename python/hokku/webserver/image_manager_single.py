@@ -22,6 +22,9 @@ class SingleThreadedImageManager(AbstractImageManager):
     def resolved_worker_count(self) -> int:
         return 1
 
+    def _stop_workers(self) -> None:
+        """Nothing to stop — renders run inline and are already finished."""
+
     def _dispatch_render(
         self,
         name: str,

@@ -21,6 +21,10 @@ RTC_NOINIT_ATTR int64_t  pre_sleep_server_epoch;
 RTC_NOINIT_ATTR int32_t  last_sleep_err_s;
 RTC_NOINIT_ATTR bool     last_sleep_err_known;
 
+RTC_NOINIT_ATTR int32_t  cal_ppm;
+RTC_NOINIT_ATTR uint16_t cal_samples;
+RTC_NOINIT_ATTR int32_t  last_armed_sleep_s;
+
 RTC_NOINIT_ATTR uint8_t  consecutive_spurious_resets;
 RTC_NOINIT_ATTR uint8_t  consecutive_refresh_failures;
 RTC_NOINIT_ATTR uint8_t  last_sleep_mode;
@@ -32,7 +36,7 @@ RTC_NOINIT_ATTR uint16_t s_log_ring_used;
 
 const char *current_regime = "boot";
 
-void hokku_state_validate(void)
+bool hokku_state_validate(void)
 {
     if (rtc_magic != RTC_MAGIC) {
         rtc_magic = 0;
@@ -47,6 +51,9 @@ void hokku_state_validate(void)
         pre_sleep_server_epoch = 0;
         last_sleep_err_s = 0;
         last_sleep_err_known = false;
+        cal_ppm = 0;
+        cal_samples = 0;
+        last_armed_sleep_s = 0;
         consecutive_spurious_resets = 0;
         consecutive_refresh_failures = 0;
         last_sleep_mode = LAST_SLEEP_MODE_NONE;
@@ -55,6 +62,9 @@ void hokku_state_validate(void)
         s_log_ring_used = 0;
         struct timeval tv = {0, 0};
         settimeofday(&tv, NULL);
+        rtc_magic = RTC_MAGIC;  /* validate for the rest of this boot chain */
+        return true;            /* cold POR: caller hydrates cal_ppm from NVS */
     }
     rtc_magic = RTC_MAGIC;  /* validate for the rest of this boot chain */
+    return false;
 }

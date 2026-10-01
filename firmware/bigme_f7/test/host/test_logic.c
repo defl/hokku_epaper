@@ -53,6 +53,7 @@
 #include "mocks/net/HTTPClient/API/HTTPClientCommon.h"
 #include "mocks/lwip/netif.h"
 #include "mocks/lwip/dhcp.h"
+#include "mocks/lwip/netifapi.h"
 #include "mocks/lwip/ip_addr.h"
 #include "mocks/image/image.h"
 #include "mocks/image/fdcm.h"
@@ -76,6 +77,8 @@
 #include "../../../common/all/firmware_url.c"  /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/backoff.c"       /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/frame_state.c"   /* SoC-agnostic (shared with ESP32) */
+#include "../../../common/all/frame_proto.c"   /* SoC-agnostic (shared with ESP32) */
+#include "../../../common/all/interactive.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/logbuf.c"        /* SoC-agnostic (shared with ESP32) */
 /* Shared XR872 code (firmware/common/xr872) — included before main.c so its
  * (now non-static) symbols are defined when main.c references them. */
@@ -133,6 +136,10 @@ static void reset_all_mocks(void)
     _mock_os_time_s = 1000;
     _mock_thread_created = 0;
     memset(&g_refresh_thread, 0, sizeof(g_refresh_thread));
+    memset(&g_refresh_kick, 0, sizeof(g_refresh_kick));
+    _mock_sem_count = 0;
+    _mock_sem_release_calls = 0;
+    _mock_sem_last_wait_ms = 0;
 
     _mock_http_header_present = 0;
     _mock_http_header_value = "";
@@ -151,6 +158,13 @@ static void reset_all_mocks(void)
     _mock_fdcm_open_fail = 1;
     _mock_fdcm_read_size = 0;
     _mock_fdcm_write_call_count = 0;
+
+    _mock_uart_avail = 0;
+    _mock_uart_delivered = 0;
+    _mock_uart_polls = 0;
+    _mock_console_disable_called = 0;
+    _mock_console_enable_called = 0;
+    _mock_console_written_len = 0;
 
     _mock_ota_init_called = 0;
     _mock_ota_get_image_called = 0;
@@ -174,6 +188,11 @@ static void reset_all_mocks(void)
     _mock_wlan_sta_ap_rssi = 0;
     _mock_wlan_sta_config_result = 0;
     _mock_wlan_sta_enable_result = 0;
+    memset(_mock_wlan_calls, 0, sizeof(_mock_wlan_calls));
+    _mock_wlan_call_count = 0;
+    memset(_mock_wlan_config_ssid, 0, sizeof(_mock_wlan_config_ssid));
+    g_wlan_netif = NULL;
+    _mock_net_ip4_valid = 0;
 
     memset(&_mock_sysinfo_state, 0, sizeof(_mock_sysinfo_state));
     _mock_sysinfo_get_null = 0;
@@ -234,6 +253,46 @@ static void test_should_sleep_auto_stays_awake_on_usb(void)
     hokku_config_get()->power_mode = HOKKU_PWR_AUTO;
     _mock_gpio[GPIO_PORT_A][GPIO_PIN_20] = GPIO_PIN_LOW; /* PA20 LOW = USB present */
     CHECK(!hokku_should_sleep(), "should_sleep: AUTO stays awake on USB");
+}
+
+/* USB-interactive mode outranks the configured power mode, because it is an
+ * instruction about right now rather than a standing preference. Hibernating
+ * closes the console, which is precisely what the host asked us not to do. */
+static void test_should_sleep_interactive_overrides_pwr_sleep(void)
+{
+    reset_all_mocks();
+    hokku_config_get()->power_mode = HOKKU_PWR_SLEEP;
+    _mock_gpio[GPIO_PORT_A][GPIO_PIN_20] = GPIO_PIN_LOW; /* USB present */
+    hokku_interactive_set(true);
+    CHECK(!hokku_should_sleep(),
+          "should_sleep: interactive beats PWR_SLEEP while on USB");
+    hokku_interactive_set(false);
+}
+
+/* The safety rule, at the point where it actually protects something: the mode
+ * is set and the cable is pulled. If interactive still suppressed sleep here the
+ * screen would sit awake on battery until it was flat. */
+static void test_should_sleep_interactive_inert_on_battery(void)
+{
+    reset_all_mocks();
+    hokku_config_get()->power_mode = HOKKU_PWR_SLEEP;
+    _mock_gpio[GPIO_PORT_A][GPIO_PIN_20] = GPIO_PIN_HIGH; /* no USB */
+    hokku_interactive_set(true);
+    CHECK(hokku_should_sleep(),
+          "should_sleep: interactive is inert on battery — sleeps as configured");
+    hokku_interactive_set(false);
+}
+
+/* And it must not leak: clearing the mode restores the configured behaviour
+ * exactly, or a campaign would leave the screen permanently awake. */
+static void test_should_sleep_interactive_cleared_restores_config(void)
+{
+    reset_all_mocks();
+    hokku_config_get()->power_mode = HOKKU_PWR_SLEEP;
+    _mock_gpio[GPIO_PORT_A][GPIO_PIN_20] = GPIO_PIN_LOW; /* USB present */
+    hokku_interactive_set(true);
+    hokku_interactive_set(false);
+    CHECK(hokku_should_sleep(), "should_sleep: config honoured again once cleared");
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -560,6 +619,63 @@ static void test_wifi_provision_persists_creds_on_success(void)
     CHECK(_mock_sysinfo_save_call_count == 1,
           "wifi_provision: calls sysinfo_save() exactly once");
 }
+/* Issue #44 regression: `wifi <ssid> <pw>` while already associated must
+ * disable the station before reconfiguring it, then re-enable. Config-then-
+ * enable on a running station left the unit on the old AP, no longer checking in. */
+static void test_wifi_provision_live_switch_disables_config_enables(void)
+{
+    reset_all_mocks();
+    static struct netif live_netif;
+    memcpy(_mock_sysinfo_state.wlan_sta_param.ssid, "MMIOT", 5); /* currently joined */
+    _mock_sysinfo_state.wlan_sta_param.ssid_len = 5;
+    g_wlan_netif = &live_netif;
+    _mock_net_ip4_valid = 1;                                      /* holding a lease */
+
+    CHECK(hokku_wifi_provision("McMansion", "password1") == 0,
+          "wifi_provision: live switch succeeds");
+    /* Without the address drop the SDK reconnects with "netif is already up":
+     * no DHCP, no NETWORK_UP (seen on hardware with 1.2.14 before this). */
+    CHECK(_mock_wlan_call_count == 5 &&
+          _mock_wlan_calls[0] == MOCK_NET_CONFIG_DOWN &&
+          _mock_wlan_calls[1] == MOCK_NETIF_CLEAR_ADDR &&
+          _mock_wlan_calls[2] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[3] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[4] == MOCK_WLAN_ENABLE,
+          "wifi_provision: drops the address, then disable -> config -> enable");
+    CHECK(strcmp((const char *)_mock_wlan_config_ssid, "McMansion") == 0,
+          "wifi_provision: configures the NEW ssid");
+}
+static void test_wifi_provision_config_failure_reenables_station(void)
+{
+    reset_all_mocks();
+    _mock_wlan_sta_config_result = -1;
+    CHECK(hokku_wifi_provision("McMansion", "password1") == -1,
+          "wifi_provision: reports a wlan_sta_config failure");
+    CHECK(_mock_wlan_call_count == 3 &&
+          _mock_wlan_calls[0] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[1] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[2] == MOCK_WLAN_ENABLE,
+          "wifi_provision: a failed config still re-enables the station (radio not left off)");
+}
+static void test_wifi_connect_saved_uses_same_sequence(void)
+{
+    reset_all_mocks();
+    memcpy(_mock_sysinfo_state.wlan_sta_param.ssid, "McMansion", 9);
+    _mock_sysinfo_state.wlan_sta_param.ssid_len = 9;
+    hokku_wifi_connect_saved();
+    CHECK(_mock_wlan_call_count == 3 &&
+          _mock_wlan_calls[0] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[1] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[2] == MOCK_WLAN_ENABLE,
+          "wifi_connect_saved: boot connect uses disable -> config -> enable");
+}
+static void test_wifi_provision_rejected_input_leaves_station_alone(void)
+{
+    reset_all_mocks();
+    hokku_wifi_provision("", "password1");
+    CHECK(_mock_wlan_call_count == 0,
+          "wifi_provision: rejected input never touches the running station");
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
  *  hokku_hibernate — sleep_s clamping (5..60000)
@@ -650,11 +766,92 @@ static void test_net_cb_network_up_starts_refresh_thread_once(void)
     CHECK(_mock_thread_created == 1,
           "net_cb: a second NETWORK_UP does not start a duplicate thread");
 }
+/* Issue #44: after a `wifi` switch the refresh thread was mid-way through a
+ * server-given sleep (can be ~9 h overnight) and did not check in until it ended. */
+static void test_net_cb_network_up_kicks_running_refresh_thread(void)
+{
+    reset_all_mocks();
+    OS_SemaphoreCreateBinary(&g_refresh_kick);
+    net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL);   /* first up: starts the thread */
+    CHECK(_mock_sem_release_calls == 0,
+          "net_cb: first NETWORK_UP starts the thread, no kick needed");
+    net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL);   /* up again after a switch */
+    CHECK(_mock_sem_release_calls == 1,
+          "net_cb: NETWORK_UP with the thread running kicks the refresh wait");
+}
+static void test_refresh_wait_returns_early_when_kicked(void)
+{
+    reset_all_mocks();
+    OS_SemaphoreCreateBinary(&g_refresh_kick);
+    OS_SemaphoreRelease(&g_refresh_kick);
+    hokku_refresh_wait(33092U * 1000U);
+    CHECK(_mock_sem_last_wait_ms == 33092U * 1000U,
+          "refresh_wait: waits on the kick with the server-given sleep as timeout");
+    CHECK(_mock_sem_count == 0, "refresh_wait: consumes the kick");
+}
+static void test_refresh_wait_without_semaphore_falls_back_to_sleep(void)
+{
+    reset_all_mocks();   /* g_refresh_kick invalid */
+    hokku_refresh_wait(1000);
+    CHECK(_mock_sem_last_wait_ms == 0,
+          "refresh_wait: no semaphore -> plain sleep, never waits on an invalid handle");
+}
 static void test_net_cb_network_down_does_not_crash(void)
 {
     reset_all_mocks();
     net_cb(NET_CTRL_MSG_NETWORK_DOWN, 0, NULL); /* just logs; nothing to assert beyond no crash */
     CHECK(1, "net_cb: NETWORK_DOWN handled without crashing");
+}
+
+/* ── hokku_frame_receive: the console handover ────────────────────────────
+ *
+ * The frame upload borrows the UART from the console for the length of a
+ * transfer. The property worth pinning is that the borrow is always balanced:
+ * every path out of hokku_frame_receive() must re-enable the console. If one
+ * does not, the device is left with no console — and on real hardware that
+ * means no way back in short of a USB replug, during a routine that exists to
+ * be run repeatedly during colour measurement. */
+
+static void test_frame_receive_acks_every_chunk(void)
+{
+    uint32_t expect_chunks = (EPD_IMAGE_BYTES + FRAME_PROTO_CHUNK_BYTES - 1)
+                             / FRAME_PROTO_CHUNK_BYTES;
+
+    reset_all_mocks();
+    OS_MutexCreate(&g_ota_lock);
+    _mock_uart_avail = EPD_IMAGE_BYTES;
+
+    CHECK(hokku_frame_receive() == 0, "frame: complete transfer succeeds");
+    CHECK(_mock_uart_delivered == EPD_IMAGE_BYTES, "frame: consumes the whole image");
+    CHECK(_mock_console_written_len == expect_chunks,
+          "frame: one ACK per chunk");
+    CHECK(_mock_console_written[0] == FRAME_PROTO_ACK, "frame: ACK byte is 'K'");
+    CHECK(_mock_console_disable_called == 1 && _mock_console_enable_called == 1,
+          "frame: console handover is balanced on success");
+}
+
+static void test_frame_receive_restores_console_when_host_dies(void)
+{
+    reset_all_mocks();
+    OS_MutexCreate(&g_ota_lock);
+    _mock_uart_avail = FRAME_PROTO_CHUNK_BYTES + 10; /* one chunk, then silence */
+
+    CHECK(hokku_frame_receive() != 0, "frame: truncated transfer reports failure");
+    CHECK(_mock_console_enable_called == 1,
+          "frame: console restored even when the host vanishes mid-transfer");
+    CHECK(_mock_console_disable_called == 1, "frame: console disabled exactly once");
+}
+
+static void test_frame_receive_refuses_while_ota_lock_held(void)
+{
+    reset_all_mocks();
+    memset(&g_ota_lock, 0, sizeof(g_ota_lock)); /* invalid: never created */
+    _mock_uart_avail = EPD_IMAGE_BYTES;
+
+    CHECK(hokku_frame_receive() != 0, "frame: refused when the OTA lock is unavailable");
+    CHECK(_mock_console_disable_called == 0,
+          "frame: console untouched when the transfer never starts");
+    CHECK(_mock_uart_polls == 0, "frame: UART untouched when the transfer never starts");
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -672,6 +869,9 @@ int main(void)
     test_should_sleep_pwr_awake_always_false();
     test_should_sleep_auto_sleeps_on_battery();
     test_should_sleep_auto_stays_awake_on_usb();
+    test_should_sleep_interactive_overrides_pwr_sleep();
+    test_should_sleep_interactive_inert_on_battery();
+    test_should_sleep_interactive_cleared_restores_config();
 
     test_read_header_uint_parses_value();
     test_read_header_uint_absent_returns_zero();
@@ -708,6 +908,10 @@ int main(void)
     test_wifi_provision_rejects_empty_ssid();
     test_wifi_provision_rejects_oversized_psk();
     test_wifi_provision_persists_creds_on_success();
+    test_wifi_provision_live_switch_disables_config_enables();
+    test_wifi_provision_config_failure_reenables_station();
+    test_wifi_connect_saved_uses_same_sequence();
+    test_wifi_provision_rejected_input_leaves_station_alone();
 
     test_hibernate_clamps_low_sleep();
     test_hibernate_clamps_high_sleep();
@@ -718,7 +922,14 @@ int main(void)
     test_net_cb_wlan_connected_static_ip_sets_address();
     test_net_cb_wlan_connected_bad_static_ip_leaves_dhcp();
     test_net_cb_network_up_starts_refresh_thread_once();
+    test_net_cb_network_up_kicks_running_refresh_thread();
+    test_refresh_wait_returns_early_when_kicked();
+    test_refresh_wait_without_semaphore_falls_back_to_sleep();
     test_net_cb_network_down_does_not_crash();
+
+    test_frame_receive_acks_every_chunk();
+    test_frame_receive_restores_console_when_host_dies();
+    test_frame_receive_refuses_while_ota_lock_held();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

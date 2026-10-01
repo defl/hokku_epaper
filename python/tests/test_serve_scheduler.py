@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 from dataclasses import replace
 from pathlib import Path
@@ -149,6 +150,93 @@ def test_telemetry_record(app_config: AppConfig):
     assert s.request_count == 1
     assert s.battery_mv == 3800
     assert s.battery_percent is not None and 0 <= s.battery_percent <= 100
+
+
+def test_cal_mean_accumulates_and_seeds(app_config: AppConfig):
+    """Reported cal_ppm folds into a MAC-pinned mean; cal_seed_for returns it."""
+    mgr = SingleThreadedImageManager(app_config)
+    sched = ServeScheduler(mgr)
+    mac = "aa:bb:cc:dd:ee:ff"
+    # First report seeds the mean directly; later reports EMA toward them.
+    sched.record_screen_call("frame-1", "1.1.1.1", 300, None, None, None, mac=mac, cal_ppm=10000)
+    mean, n = sched.cal_seed_for("frame-1")
+    assert mean == 10000 and n == 1
+    for _ in range(20):
+        sched.record_screen_call(
+            "frame-1", "1.1.1.1", 300, None, None, None, mac=mac, cal_ppm=12000
+        )
+    mean, n = sched.cal_seed_for("frame-1")
+    assert 10000 < mean <= 12000 and n == 21
+    # Resolvable by MAC as well as by name.
+    assert sched.cal_seed_for(mac=mac) == sched.cal_seed_for("frame-1")
+
+
+def test_cal_seed_unknown_is_zero(app_config: AppConfig):
+    mgr = SingleThreadedImageManager(app_config)
+    sched = ServeScheduler(mgr)
+    assert sched.cal_seed_for("nobody") == (0, 0)
+    # A device that never reported cal_ppm has no mean to seed with.
+    sched.record_screen_call("frame-1", "1.1.1.1", 300, None, None, None, mac="a1:a1:a1:a1:a1:a1")
+    assert sched.cal_seed_for("frame-1") == (0, 0)
+
+
+def test_calibration_survives_rename_via_mac(app_config: AppConfig):
+    """Renaming a device (same MAC) keeps its record + calibration."""
+    mgr = SingleThreadedImageManager(app_config)
+    sched = ServeScheduler(mgr)
+    mac = "de:ad:be:ef:00:01"
+    sched.record_screen_call("old-name", "1.1.1.1", 300, None, None, None, mac=mac, cal_ppm=8000)
+    sched.record_screen_call("new-name", "1.1.1.1", 300, None, None, None, mac=mac, cal_ppm=8000)
+    screens = sched.screens()
+    assert "new-name" in screens and "old-name" not in screens
+    mean, n = sched.cal_seed_for("new-name")
+    assert mean == 8000 and n == 2  # both samples kept across the rename
+
+
+def test_calibration_reattaches_when_mac_appears(app_config: AppConfig):
+    """A device first seen by name only (pre-update FW) keeps its record when a
+    later check-in brings a MAC."""
+    mgr = SingleThreadedImageManager(app_config)
+    sched = ServeScheduler(mgr)
+    sched.record_screen_call("frame-1", "1.1.1.1", 300, None, None, None)  # no MAC yet
+    sched.record_screen_call("frame-1", "1.1.1.1", 300, None, None, None, mac="ab:cd:ef:01:02:03")
+    assert len(sched.screens()) == 1
+    assert sched.resolve(mac="ab:cd:ef:01:02:03") == sched.resolve(name="frame-1")
+
+
+def test_same_name_different_mac_does_not_hijack(app_config: AppConfig):
+    """Two devices sharing a name but with different MACs stay distinct records
+    (calibration is never cross-contaminated)."""
+    mgr = SingleThreadedImageManager(app_config)
+    sched = ServeScheduler(mgr)
+    sched.record_screen_call(
+        "dup", "1.1.1.1", 300, None, None, None, mac="11:11:11:11:11:11", cal_ppm=5000
+    )
+    sched.record_screen_call(
+        "dup", "1.1.1.2", 300, None, None, None, mac="22:22:22:22:22:22", cal_ppm=9000
+    )
+    assert sched.cal_seed_for(mac="11:11:11:11:11:11") == (5000, 1)
+    assert sched.cal_seed_for(mac="22:22:22:22:22:22") == (9000, 1)
+
+
+def test_legacy_name_keyed_db_migrates(app_config: AppConfig, make_test_image):
+    """An old name-keyed serve_scheduler.json loads into the sid-keyed model."""
+    mgr, sched = _setup(app_config, make_test_image, ["a.png"])
+    sched.record_screen_call("frame-1", "1.1.1.1", 300, None, 3800, None)
+    sched.set_screen_config("frame-1", ScreenConfig(orientation=Orientation.PORTRAIT))
+    # Rewrite the DB in the legacy (schema 1, name-keyed) shape.
+    db = Path(app_config.cache_dir) / "serve_scheduler.json"
+    data = json.loads(db.read_text())
+    data.pop("schema", None)
+    data.pop("sid_seq", None)
+    data["screens"] = {"frame-1": next(iter(data["screens"].values()))}
+    data["screen_configs"] = {"frame-1": next(iter(data["screen_configs"].values()))}
+    db.write_text(json.dumps(data))
+
+    sched2 = ServeScheduler(mgr)
+    screens = sched2.screens()
+    assert "frame-1" in screens
+    assert sched2.get_screen_config("frame-1").orientation == Orientation.PORTRAIT
 
 
 def test_orphan_dropped_on_pick(app_config: AppConfig, make_test_image):

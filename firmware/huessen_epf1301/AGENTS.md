@@ -50,6 +50,40 @@ Examples:
 - `USB_AWAKE`: never deep-sleeps while USB plugged in
 - `BATTERY_IDLE`: 5 s awake window per refresh — plug USB first to enter `USB_AWAKE` for reflash
 
+### A/B reflash of a working unit (does NOT touch the bootloader)
+
+**Never assume which slot is active.** Read `otadata` (0x610000, 0x2000) first.
+Two 32-byte entries at offsets 0 and 4096: `ota_seq` u32 @+0, `ota_state` u32
+@+24, `crc` u32 @+28 where `crc = crc32(pack('<I', seq), 0xFFFFFFFF)`. The
+bootloader takes the copy with the highest *valid* seq, and `slot = (seq-1) % 2`.
+One unit here was found running `ota_1` — flashing the "obvious" `ota_0`… the
+other way round would have overwritten the running image and destroyed the
+recovery hatch in a single step.
+
+1. `esptool ... write_flash <inactive slot offset> build/hokku_epaper.bin`
+   (`ota_0` @0x010000, `ota_1` @0x310000). Bootloader @0x0 and partition table
+   @0x8000 are never written.
+2. Patch **only otadata sector 0**: lowest `seq` that is both higher than the
+   other copy and maps to the target slot, recompute the CRC, leave `ota_state`
+   alone; write those 4096 bytes to 0x610000. The other copy stays valid
+   throughout, so even an interrupted write still boots the old slot.
+3. Power-cycle, then `ping` on the console to confirm.
+
+**Rollback trap.** `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` and the app only
+calls `esp_ota_mark_app_valid_cancel_rollback()` after a *successful network
+refresh*. An image left `PENDING_VERIFY` reverts on the next reset — which during
+colour calibration (poll URL parked, no server) would never be cleared. Writing
+only `seq`+CRC and leaving `ota_state` at `VALID` arms no rollback timer.
+
+**Do NOT put `components/esptool_py/esptool` on `PYTHONPATH`.** That directory's
+`esptool.py` is a shim whose whole body re-invokes `python -m esptool`; putting it
+ahead of site-packages makes `-m esptool` resolve back to the shim, which spawns
+another, forever. It presents as a process hung on serial I/O at ~0 % CPU, and
+killing the root PID does nothing because every child spawns its own. This took a
+workstation down on 2026-08-12 (~20k processes in 28 minutes, reboot required).
+If `parttool`/`otatool` report `No module named 'parttool'`, add **only**
+`components/partition_table` — or use the plain-esptool recipe above instead.
+
 ## Coding / compiling
 - Always `git commit` firmware code before building and flashing
 - Never use ESP32 USB pins (leave in original state)

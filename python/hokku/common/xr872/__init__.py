@@ -9,5 +9,5 @@ caller rather than being pulled in at package import.
 
 Safety (slot 0 + its A/B cfg sector only, bootloader and OEM slot 1 never
 touched, cfg flip written last, verify-or-abort) lives in
-:func:`hokku.common.xr872.slot0.flash_slot0` and is unchanged by the move.
+:func:`hokku.common.xr872.slots.flash_slot` and is unchanged by the move.
 """

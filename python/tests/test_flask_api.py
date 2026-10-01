@@ -28,13 +28,15 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
-from hokku.webserver.flask_app import create_app
+from hokku.webserver.flask_app import PREVIEW_MAX_CONCURRENT, _preview_slots, create_app
 from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 from hokku.webserver.serve_scheduler import ServeScheduler
+from tests._orientation_fixtures import UPRIGHT_SIZE, upright_mismatch, write_fixture
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
@@ -416,6 +418,36 @@ def test_dither_preview_face_bboxes_header_present(synced_client):
     assert isinstance(bboxes, list)
 
 
+def test_phone_portrait_is_portrait_through_the_api(bare_client, tmp_path: Path):
+    """Issue #40 end to end: a phone portrait (landscape sensor pixels + EXIF
+    Orientation=6) uploaded over HTTP is reported portrait by /status and
+    previewed upright in a portrait frame by /dither/preview."""
+    client, state = bare_client
+    portrait = (UPRIGHT_SIZE[1], UPRIGHT_SIZE[0])
+    phone = write_fixture("jpeg", 6, tmp_path, size=portrait)
+    plain = write_fixture("jpeg", 1, tmp_path, size=portrait)  # colour reference
+    with Image.open(phone) as img:
+        assert img.size[0] > img.size[1], "fixture must be landscape on the sensor"
+    for f in (phone, plain):
+        assert _upload_bytes(client, f.read_bytes(), f.name).get_json()["saved"] == [f.name]
+    state.manager.sync()
+    state.manager.wait_for_idle()
+
+    entries = {e["name"]: e for e in client.get("/hokku/api/status").get_json()["upload_files"]}
+    entry = entries[phone.name]
+    assert (entry["image_width"], entry["image_height"]) == portrait
+    assert entry["native_orientation"] == "portrait"
+
+    img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])
+    previews = {}
+    for f in (phone, plain):
+        resp = client.post("/hokku/api/dither/preview", json={"name": f.name, "image": img_cfg})
+        assert resp.status_code == 200
+        previews[f.name] = Image.open(io.BytesIO(resp.data))
+    got = upright_mismatch(previews[phone.name], portrait, reference=previews[plain.name])
+    assert got is None, got
+
+
 def test_dither_preview_missing_image_returns_404(bare_client):
     client, _ = bare_client
     resp = client.post(
@@ -439,6 +471,113 @@ def test_dither_preview_non_json_body_returns_400(bare_client):
         content_type="text/plain",
     )
     assert resp.status_code == 400
+
+
+def test_dither_preview_rejects_a_malformed_config(synced_client):
+    """Previewing something other than what the user typed is worse than failing.
+
+    The lenient parser this used to call kept a default for an unreadable knob
+    and rendered anyway, so the preview silently disagreed with the form.
+    """
+    client, _, name = synced_client
+    img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])
+    img_cfg["dither"]["lut_name"] = "not_a_lut"
+
+    resp = client.post("/hokku/api/dither/preview", json={"name": name, "image": img_cfg})
+
+    assert resp.status_code == 400
+    assert any("lut_name" in e for e in resp.get_json()["errors"])
+
+
+def test_dither_preview_honours_a_crop_threshold(synced_client):
+    """The rendered PNG has to follow the requested crop.
+
+    It did not: render_preview_png was called positionally, so the threshold
+    took its 0.0 default and every preview letterboxed, while the face-box
+    overlay was computed for a cover-cropped canvas the PNG never had.
+    """
+    client, _, name = synced_client
+    img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])
+
+    letterboxed = client.post(
+        "/hokku/api/dither/preview",
+        json={"name": name, "image": img_cfg, "crop_to_fill_threshold": 0.0},
+    )
+    cropped = client.post(
+        "/hokku/api/dither/preview",
+        json={"name": name, "image": img_cfg, "crop_to_fill_threshold": 1.0},
+    )
+
+    assert letterboxed.status_code == cropped.status_code == 200
+    # The fixture is a 1200x300 bar against a 4:3 panel, so cover-cropping it
+    # produces a visibly different image from letterboxing it.
+    assert letterboxed.data != cropped.data
+
+
+def test_dither_preview_rejects_a_bad_crop_threshold(synced_client):
+    client, _, name = synced_client
+    resp = client.post(
+        "/hokku/api/dither/preview",
+        json={
+            "name": name,
+            "image": asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]),
+            "crop_to_fill_threshold": 5,
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_dither_preview_max_side_px_shrinks_the_png(synced_client):
+    """The compare grid asks for smaller tiles."""
+    client, _, name = synced_client
+    img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])
+
+    big = client.post("/hokku/api/dither/preview", json={"name": name, "image": img_cfg})
+    small = client.post(
+        "/hokku/api/dither/preview",
+        json={"name": name, "image": img_cfg, "max_side_px": 200},
+    )
+
+    assert big.status_code == small.status_code == 200
+    assert len(small.data) < len(big.data)
+
+
+def test_dither_preview_rejects_a_non_integer_max_side(synced_client):
+    client, _, name = synced_client
+    resp = client.post(
+        "/hokku/api/dither/preview",
+        json={
+            "name": name,
+            "image": asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]),
+            "max_side_px": "big",
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_dither_preview_refuses_when_all_slots_are_busy(synced_client):
+    """Previews are decode-bound; unbounded they would starve the screen path."""
+    client, _, name = synced_client
+    acquired = [_preview_slots.acquire(blocking=False) for _ in range(PREVIEW_MAX_CONCURRENT)]
+    try:
+        assert all(acquired)
+        resp = client.post(
+            "/hokku/api/dither/preview",
+            json={"name": name, "image": asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])},
+        )
+        assert resp.status_code == 503
+    finally:
+        for _ in acquired:
+            _preview_slots.release()
+
+
+def test_dither_preview_releases_its_slot(synced_client):
+    """Two sequential previews must both succeed."""
+    client, _, name = synced_client
+    img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])
+    for _ in range(PREVIEW_MAX_CONCURRENT + 1):
+        resp = client.post("/hokku/api/dither/preview", json={"name": name, "image": img_cfg})
+        assert resp.status_code == 200
 
 
 # ── /hokku/api/thumbnail/<name> GET ──────────────────────────────────────────
@@ -546,7 +685,288 @@ def test_screen_delete_removes_from_telemetry(bare_client):
     assert "frame-1" not in state.scheduler.screens()
 
 
+def test_screen_response_carries_cal_seed(bare_client):
+    """Every /hokku/screen/ response carries the MAC-pinned drift seed headers,
+    and a reported cal_ppm updates the pinned mean."""
+    client, state = bare_client
+    mac = "aa:bb:cc:dd:ee:ff"
+    # First check-in: no history yet -> seed is (0, 0).
+    r1 = client.get(
+        "/hokku/screen/",
+        headers={
+            "X-Screen-Name": "frame-1",
+            "X-Screen-Model": "huessen_epf1301",
+            "X-Screen-Mac": mac,
+            "X-Frame-State": '{"cal_ppm": 9000}',
+        },
+    )
+    assert r1.headers["X-Sleep-Cal-N"] == "1"
+    assert r1.headers["X-Sleep-Cal-PPM"] == "9000"
+    # The MAC is stored and the mean is resolvable by MAC.
+    assert state.scheduler.cal_seed_for(mac=mac) == (9000, 1)
+
+    # A brand-new device (unknown MAC) gets a zero-sample seed and ignores it.
+    r2 = client.get(
+        "/hokku/screen/",
+        headers={
+            "X-Screen-Name": "frame-2",
+            "X-Screen-Model": "huessen_epf1301",
+            "X-Screen-Mac": "00:11:22:33:44:55",
+        },
+    )
+    assert r2.headers["X-Sleep-Cal-N"] == "0"
+
+
+def test_screen_mac_is_durable_key_across_rename(bare_client):
+    """A rename (same MAC) does not create a second screen record."""
+    client, state = bare_client
+    mac = "de:ad:be:ef:00:09"
+    client.get(
+        "/hokku/screen/",
+        headers={"X-Screen-Name": "old", "X-Screen-Model": "huessen_epf1301", "X-Screen-Mac": mac},
+    )
+    client.get(
+        "/hokku/screen/",
+        headers={"X-Screen-Name": "new", "X-Screen-Model": "huessen_epf1301", "X-Screen-Mac": mac},
+    )
+    screens = state.scheduler.screens()
+    assert "new" in screens and "old" not in screens
+
+
 # ── navigation ────────────────────────────────────────────────────────────────
+
+
+def test_stock_config_matches_a_named_preset_in_the_api_payload(tmp_path: Path):
+    """A fresh install must not show "Custom (your edits)" in the dropdown.
+
+    Reproduces exactly what selectPresetMatching() does in the browser: take
+    each catalog entry from /api/config, strip the two UI-only keys, and compare
+    the serialised remainder against the serialised pipeline config. Asserting
+    it here rather than only on the dataclasses covers the endpoint's own dict
+    merge — it is the ordering of THAT payload the browser actually sees.
+
+    Builds its own AppConfig rather than using the shared fixture, which swaps
+    in a noop-kernel pipeline for speed and so is not a stock install.
+    """
+    upload, cache = tmp_path / "up", tmp_path / "ca"
+    upload.mkdir()
+    cache.mkdir()
+    stock = AppConfig(upload_dir=str(upload), cache_dir=str(cache))
+    app = create_app(_make_state(stock), config_path=tmp_path / "cfg.json", template_folder=None)
+    app.config["TESTING"] = True
+
+    data = app.test_client().get("/hokku/api/config").get_json()
+    presets = data["dither_presets"]
+
+    def matched(pipeline_key: str) -> str | None:
+        target = json.dumps(data["config"][pipeline_key])
+        for key, preset in presets.items():
+            fields = {k: v for k, v in preset.items() if k not in ("label", "description")}
+            if json.dumps(fields) == target:
+                return key
+        return None
+
+    assert matched("image_config_default") == "default_general"
+    assert matched("image_config_bw") == "default_bw"
+    assert matched("image_config_face") == "default_face"
+
+
+def test_api_config_presets_all_carry_ui_metadata(bare_client):
+    client, _ = bare_client
+    presets = client.get("/hokku/api/config").get_json()["dither_presets"]
+    assert len(presets) >= 6
+    for key, preset in presets.items():
+        assert preset["label"], f"{key} has no label"
+        assert preset["description"], f"{key} has no description"
+
+
+def test_api_config_carries_an_explicit_preset_order(bare_client):
+    """The dropdown order cannot be read off the presets object.
+
+    jsonify sorts object keys, so the catalog's own order does not survive the
+    wire — relying on it put "Atkinson (hue-aware)" at the top of the list and
+    scattered the three shipped defaults through it alphabetically.
+    """
+    client, _ = bare_client
+    data = client.get("/hokku/api/config").get_json()
+    order = data["dither_preset_order"]
+
+    assert set(order) == set(data["dither_presets"])
+    assert order[:3] == ["default_general", "default_bw", "default_face"]
+
+
+# ── /hokku/api/image/<name>/config — per-picture overrides ────────────────────
+
+
+def _override_body(**kwargs) -> dict:
+    return kwargs
+
+
+def test_image_config_get_reports_automatic(synced_client):
+    """With nothing overridden: no overrides, but a usable effective config."""
+    client, _, name = synced_client
+    resp = client.get(f"/hokku/api/image/{name}/config")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["overrides"] == {"image_config": None, "crop_to_fill_threshold": None}
+    assert body["effective"]["image_config"]["dither"]["algorithm"]
+    assert body["pipeline"] in ("default", "bw", "face")
+
+
+def test_image_config_get_unknown_image_404(bare_client):
+    client, _ = bare_client
+    assert client.get("/hokku/api/image/ghost.jpg/config").status_code == 404
+
+
+def test_patch_sets_the_pipeline_override(synced_client):
+    client, state, name = synced_client
+    cfg = asdict(PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"])
+
+    resp = client.patch(f"/hokku/api/image/{name}/config", json=_override_body(image_config=cfg))
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "queued": True}
+    rec = state.manager.status(name)
+    assert rec.image_config == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+    assert rec.crop_to_fill_threshold is None  # untouched
+    assert rec.convert_status == "pending"
+
+
+def test_patch_sets_the_crop_override_alone(synced_client):
+    client, state, name = synced_client
+
+    resp = client.patch(
+        f"/hokku/api/image/{name}/config", json=_override_body(crop_to_fill_threshold=0.3)
+    )
+
+    assert resp.status_code == 200
+    rec = state.manager.status(name)
+    assert rec.crop_to_fill_threshold == pytest.approx(0.3)
+    assert rec.image_config is None  # pipeline still automatic
+
+
+def test_patch_clears_one_override_with_an_explicit_null(synced_client):
+    """Absent means leave alone; null means clear. Both in one route."""
+    client, state, name = synced_client
+    client.patch(
+        f"/hokku/api/image/{name}/config",
+        json=_override_body(
+            image_config=asdict(PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]),
+            crop_to_fill_threshold=0.3,
+        ),
+    )
+
+    resp = client.patch(
+        f"/hokku/api/image/{name}/config", json=_override_body(crop_to_fill_threshold=None)
+    )
+
+    assert resp.status_code == 200
+    rec = state.manager.status(name)
+    assert rec.crop_to_fill_threshold is None
+    assert rec.image_config == PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]
+
+
+def test_patch_reports_a_noop_as_not_queued(synced_client):
+    client, _, name = synced_client
+    resp = client.patch(f"/hokku/api/image/{name}/config", json=_override_body(image_config=None))
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "queued": False}
+
+
+def test_patch_with_a_bad_lut_leaves_the_record_untouched(synced_client):
+    """A rejected request must change nothing at all.
+
+    Half-applying an override would leave the picture rendering with settings
+    the user never approved, and there is no undo for that.
+    """
+    client, state, name = synced_client
+    before = state.manager.status(name)
+    cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])
+    cfg["dither"]["lut_name"] = "not_a_lut"
+
+    resp = client.patch(f"/hokku/api/image/{name}/config", json=_override_body(image_config=cfg))
+
+    assert resp.status_code == 400
+    assert any("lut_name" in e for e in resp.get_json()["errors"])
+    assert state.manager.status(name) == before
+
+
+def test_patch_rejects_a_typo_field(synced_client):
+    client, state, name = synced_client
+    before = state.manager.status(name)
+    cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])
+    cfg["prepare_gama"] = 0.9
+
+    resp = client.patch(f"/hokku/api/image/{name}/config", json=_override_body(image_config=cfg))
+
+    assert resp.status_code == 400
+    assert state.manager.status(name) == before
+
+
+def test_patch_rejects_unknown_top_level_fields(synced_client):
+    client, _, name = synced_client
+    resp = client.patch(f"/hokku/api/image/{name}/config", json={"orientation": "landscape"})
+    assert resp.status_code == 400
+
+
+def test_patch_rejects_an_out_of_range_crop(synced_client):
+    client, state, name = synced_client
+    before = state.manager.status(name)
+
+    resp = client.patch(
+        f"/hokku/api/image/{name}/config", json=_override_body(crop_to_fill_threshold=2.0)
+    )
+
+    assert resp.status_code == 400
+    assert state.manager.status(name) == before
+
+
+def test_patch_unknown_image_404(bare_client):
+    client, _ = bare_client
+    resp = client.patch("/hokku/api/image/ghost.jpg/config", json={"crop_to_fill_threshold": 0.1})
+    assert resp.status_code == 404
+
+
+def test_patch_non_object_body_400(synced_client):
+    client, _, name = synced_client
+    resp = client.patch(
+        f"/hokku/api/image/{name}/config", data="nope", content_type="application/json"
+    )
+    assert resp.status_code == 400
+
+
+def test_get_reports_the_override_after_a_patch(synced_client):
+    client, _, name = synced_client
+    cfg = asdict(PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"])
+    client.patch(f"/hokku/api/image/{name}/config", json=_override_body(image_config=cfg))
+
+    body = client.get(f"/hokku/api/image/{name}/config").get_json()
+
+    assert body["overrides"]["image_config"] == cfg
+    assert body["effective"]["image_config"] == cfg
+    assert body["pipeline"] == "override"
+
+
+def test_status_exposes_the_override_summary(synced_client):
+    """Cheap fields only — the blob itself is fetched per picture on demand."""
+    client, _, name = synced_client
+    client.patch(
+        f"/hokku/api/image/{name}/config",
+        json=_override_body(
+            image_config=asdict(PRESET_IMAGE_CONFIGS["floyd_steinberg_bw"]),
+            crop_to_fill_threshold=0.25,
+        ),
+    )
+
+    entry = next(
+        e for e in client.get("/hokku/api/status").get_json()["upload_files"] if e["name"] == name
+    )
+
+    assert entry["has_image_config_override"] is True
+    assert entry["crop_to_fill_threshold"] == pytest.approx(0.25)
+    assert entry["pipeline"] == "override"
+    assert "image_config" not in entry  # the 24-field blob must stay out of the poll
 
 
 def test_root_redirects_to_ui(bare_client):

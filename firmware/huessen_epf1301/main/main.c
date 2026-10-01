@@ -162,7 +162,8 @@ static spi_device_handle_t spi_handle;
 #include "config.h"
 #include "text_render.h"
 #include "state.h"          /* RTC-persistent state + validation (shared) */
-#include "scheduler.h"      /* next-refresh scheduling math (shared) */
+#include "scheduler.h"      /* next-refresh scheduling math + drift cal (shared) */
+#include "nvs_cal.h"        /* drift-calibration NVS persistence (shared) */
 #include "log.h"            /* diagnostic log ring + level gating (shared) */
 #include "wifi.h"           /* WiFi connect + fast-reconnect cache (shared) */
 #include "net.h"            /* HTTP image fetch + header capture (shared) */
@@ -171,6 +172,9 @@ static spi_device_handle_t spi_handle;
 #include "firmware_url.h"   /* firmware endpoint derivation (SoC-agnostic) */
 #include "backoff.h"        /* shared exponential-retry-backoff policy (SoC-agnostic) */
 #include "json_util.h"      /* json_escape (SoC-agnostic) */
+#include "frame_proto.h"    /* serial frame-upload protocol (SoC-agnostic) */
+#include "console.h"        /* USB Serial/JTAG console + `frame` dispatch */
+#include "interactive.h"    /* USB-interactive mode (SoC-agnostic policy) */
 
 /* Display a text message on the e-ink screen.
  * Buffer layout is identical to an image: first 480K = panel 1 (600 wide),
@@ -735,6 +739,8 @@ static void build_frame_state_json(char *buf, size_t buflen,
         .next_ep  = (long long)(next_refresh_epoch > 0 ? next_refresh_epoch : 0LL),
         .sleep_err_known = last_sleep_err_known,
         .sleep_err_s     = (int)last_sleep_err_s,
+        .cal_known       = (cal_samples > 0),
+        .cal_ppm         = (int)cal_ppm,
         .wifi_cached     = last_wifi_used_cache,
     };
     frame_state_build(buf, buflen, &fs);
@@ -749,6 +755,7 @@ static void build_frame_state_json(char *buf, size_t buflen,
 static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_epoch,
                                int *out_http_status,
                                char *out_fw_update, size_t fw_update_buflen,
+                               int32_t *out_cal_seed_ppm, int *out_cal_seed_n,
                                const char *wake_label,
                                int64_t boot_time_us)
 {
@@ -772,6 +779,8 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
         .out_http_status   = out_http_status,
         .out_fw_update     = out_fw_update,
         .fw_update_buflen  = fw_update_buflen,
+        .out_cal_seed_ppm  = out_cal_seed_ppm,
+        .out_cal_seed_n    = out_cal_seed_n,
     };
     if (!hokku_http_fetch_image(buf, TOTAL_IMAGE_SIZE, config.image_url,
                                 config.screen_name, SCREEN_MODEL, frame_state,
@@ -787,6 +796,115 @@ static uint8_t *download_image(int32_t *out_sleep_seconds, int64_t *out_server_e
 static void split_and_display(const uint8_t *img)
 {
     epaper_display_dual(img, img + PANEL_SIZE);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  `frame` — receive an exact panel buffer over USB and display it
+ *
+ * Colour measurement needs a known raster on the glass with nothing between the
+ * host and the ink: no render pipeline, no dithering decided on-device, no
+ * server. The protocol is in firmware/common/all/frame_proto.h and is shared
+ * byte-for-byte with the Bigme F7, so one host tool drives both.
+ *
+ * Two board-specific notes:
+ *
+ * The whole 960 KB lands in PSRAM before any of it reaches the panel. The F7
+ * streams straight to its controller because it has no room to do otherwise;
+ * here there is 8 MB of PSRAM, and buffering is strictly better — the CRC can be
+ * checked BEFORE the panel is touched, so a corrupted transfer displays nothing
+ * at all rather than leaving a half-written picture on the glass.
+ *
+ * Logging is silenced for the duration. ESP_LOG shares this exact peripheral
+ * with the protocol, so one stray log line lands in the middle of the host's
+ * payload and desynchronises the stream. The suppression is restored on every
+ * path out, including the failures.
+ * ═══════════════════════════════════════════════════════════════════ */
+/* Kept across calls: a measurement run is hundreds of frames, and re-allocating
+ * 960 KB each time invites PSRAM fragmentation.
+ *
+ * FILE scope, deliberately, and it must stay that way. The host tests compile
+ * this file with `static` #defined away, which turns a function-local `static`
+ * into an ordinary uninitialised local — so the `if (!buf)` guard below would
+ * read indeterminate stack, usually skip the allocation, and write 960 KB
+ * through a garbage pointer. At file scope the variable still has static storage
+ * duration and is zero-initialised with or without the keyword. */
+static uint8_t *g_frame_buf;
+
+int hokku_frame_receive(void)
+{
+    char line[64];
+    uint32_t received = 0;
+    uint32_t crc = 0;
+    uint32_t chunks;
+    uint32_t i;
+    int ok = 1;
+
+    if (hokku_console_busy()) {
+        hokku_console_printf_line("ERR frame already in progress");
+        return -1;
+    }
+
+    if (!g_frame_buf) {
+        g_frame_buf = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
+        if (!g_frame_buf) {
+            hokku_console_printf_line("ERR no PSRAM for frame buffer");
+            return -1;
+        }
+    }
+
+    hokku_console_frame_begin();
+    snprintf(line, sizeof(line), "%s %u %u", FRAME_PROTO_READY,
+             (unsigned)TOTAL_IMAGE_SIZE, (unsigned)FRAME_PROTO_CHUNK_BYTES);
+    hokku_console_printf_line(line);
+
+    /* From here the wire carries raw payload. Do not log, and do not return
+     * early — every exit below goes through the restore at the bottom. */
+    log_level_apply(false);
+    esp_log_level_set("*", ESP_LOG_NONE);
+
+    chunks = frame_proto_chunk_count(TOTAL_IMAGE_SIZE, FRAME_PROTO_CHUNK_BYTES);
+    for (i = 0; i < chunks; i++) {
+        uint32_t want = frame_proto_chunk_size(TOTAL_IMAGE_SIZE,
+                                               FRAME_PROTO_CHUNK_BYTES, i);
+        int n = hokku_console_read(g_frame_buf + received, want,
+                                   FRAME_PROTO_RX_TIMEOUT_MS);
+        if (n != (int)want) {
+            ok = 0;                 /* timeout or short read: host gone */
+            break;
+        }
+        crc = frame_proto_crc32(crc, g_frame_buf + received, want);
+        received += want;
+
+        /* Per-chunk ACK is the flow control; the host sends the next chunk
+         * only after seeing it. */
+        const uint8_t ack = FRAME_PROTO_ACK;
+        hokku_console_write(&ack, 1);
+    }
+
+    esp_log_level_set("*", ESP_LOG_INFO);
+    log_level_apply(true);
+
+    if (!ok) {
+        hokku_console_frame_end();
+        snprintf(line, sizeof(line), "ERR short read at %u/%u",
+                 (unsigned)received, (unsigned)TOTAL_IMAGE_SIZE);
+        hokku_console_printf_line(line);
+        return -1;                  /* panel untouched — nothing was displayed */
+    }
+
+    /* Hex, matching the F7's reference implementation and the host tool's
+     * parser (send_frame.py: int(line.split()[1], 16)). Printed as decimal
+     * here originally, silently accepted by ArgyllCMS-adjacent nothing — the
+     * mismatch only ever surfaces as a CRC "failure" against a perfectly good
+     * upload, on the very first real transfer this code ever received. */
+    snprintf(line, sizeof(line), "%s %08x", FRAME_PROTO_DONE, (unsigned)crc);
+    hokku_console_printf_line(line);
+
+    split_and_display(g_frame_buf);   /* ~30 s: power up, write, refresh, power down */
+
+    hokku_console_printf_line(FRAME_PROTO_REFRESHED);
+    hokku_console_frame_end();
+    return 0;
 }
 static int read_battery_mv(void)
 {
@@ -1084,6 +1202,8 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
     int64_t server_epoch = 0;
     int      http_status = 0;
     int64_t local_time_at_download_us = 0;
+    int32_t cal_seed_ppm = 0;
+    int     cal_seed_n = -1;   /* < 0 until the server's seed headers arrive */
     uint8_t *img = NULL;
 
     if (!wifi_connect()) {
@@ -1110,7 +1230,8 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 
     char fw_update_ver[48] = {0};
     img = download_image(&sleep_seconds, &server_epoch, &http_status,
-                         fw_update_ver, sizeof(fw_update_ver), wake_label, boot_time_us);
+                         fw_update_ver, sizeof(fw_update_ver),
+                         &cal_seed_ppm, &cal_seed_n, wake_label, boot_time_us);
     local_time_at_download_us = esp_timer_get_time();
 
     /* OTA path: the server asked this screen to update. The image body (if any)
@@ -1139,10 +1260,7 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
      * If server_epoch is bad (<=0) or sleep_seconds is nonsense (<=0 —
      * malformed response, misconfigured server), fall through to the
      * retry-in-60s helper below so we don't hot-loop. */
-    if (server_epoch > 0 && sleep_seconds > 0) {
-        next_refresh_epoch = server_epoch + sleep_seconds;
-        last_sleep_seconds = sleep_seconds;
-        save_pre_sleep_epoch(server_epoch, local_time_at_download_us);
+    if (scheduler_set_after_refresh(server_epoch, sleep_seconds, local_time_at_download_us)) {
         ESP_LOGI(TAG, "Next refresh scheduled for epoch %lld (in %d s)",
                  (long long)next_refresh_epoch, (int)sleep_seconds);
     } else if (img) {
@@ -1201,6 +1319,12 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
     /* Got an image — server reached and healthy; clear any outage streak. */
     consecutive_refresh_failures = 0;
 
+    /* Cold-start seed: an uncalibrated device (fresh flash / wiped NVS) adopts
+     * the server's MAC-pinned mean so it doesn't re-converge from scratch. */
+    if (cal_seed_n >= 0 && scheduler_adopt_cal_seed(cal_seed_ppm, cal_seed_n)) {
+        hokku_cal_save_if_changed();
+    }
+
     ESP_LOGI(TAG, "Displaying image...");
     split_and_display(img);
     heap_caps_free(img);
@@ -1240,6 +1364,10 @@ static void regime_usb_awake(int64_t boot_time_us)
     log_level_apply(true);
     ESP_LOGI(TAG, "Entering USB_AWAKE regime");
 
+    /* Only here: a console reader is useful exactly when a host is plugged in,
+     * and on battery it would be a wakeup source that buys nothing. */
+    hokku_console_start();
+
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
 
@@ -1249,6 +1377,24 @@ static void regime_usb_awake(int64_t boot_time_us)
             /* regime_battery_idle terminates in deep sleep; never returns */
             return;
         }
+
+        /* Two reasons to leave the device alone, both ending in the same skip.
+         *
+         * A frame upload owns the device until it finishes: both branches below
+         * call esp_restart(), which partway through a 960 KB transfer would drop
+         * the host mid-stream and reboot into a half-painted panel.
+         *
+         * USB-interactive mode is the standing version of the same request — a
+         * host is driving this screen and does not want it deciding to repaint or
+         * reboot between uploads. Without it the console is a race: a refresh
+         * falling due mid-run takes the USB device away entirely, and a host can
+         * only poll and hope to land between reboots.
+         *
+         * Skipped, not queued. A refresh that came due during a measurement is
+         * precisely the repaint we do not want; the next poll re-evaluates, and
+         * whatever was due is simply due again once the host is finished. */
+        if (hokku_console_busy() || hokku_interactive_engaged(usb_host_present()))
+            continue;
 
         if (button1_pressed_debounced()) {
             trigger_restart(ACTION_REFRESH, LAST_SLEEP_MODE_BUTTON_USB);
@@ -1300,19 +1446,12 @@ static void regime_battery_idle(int64_t boot_time_us)
      *
      * perform_refresh always sets next_refresh_epoch to a future value
      * on this boot (either from the server's schedule or via
-     * schedule_retry_in on failure). So the common case is a future
-     * next_refresh_epoch; the SLEEP_FALLBACK_3H_US branch only fires
-     * when we have no clock at all (never successfully synced from
-     * server). There is no "past-due + future-sleep" branch because
-     * it's unreachable under the retry-helper invariant. */
-    time_t now = now_epoch();
-    int64_t sleep_us;
-    if (next_refresh_epoch > 0 && now > 0 && next_refresh_epoch > now) {
-        sleep_us = (int64_t)(next_refresh_epoch - now) * 1000000LL;
-    } else {
-        /* No valid / future schedule: wake in 3 h and retry. */
-        sleep_us = SLEEP_FALLBACK_3H_US;
-    }
+     * schedule_retry_in on failure). The shared scheduler derives the
+     * interval from the anchor (all three states), pre-distorts it by the
+     * learned oscillator drift so the wake lands on the slot, and records
+     * what it armed for the next cycle's measurement. SLEEP_FALLBACK_3H_US
+     * is the no-schedule fallback (never successfully synced). */
+    int64_t sleep_us = scheduler_next_sleep_us(SLEEP_FALLBACK_3H_US);
     enter_deep_sleep(sleep_us);
     /* Never returns */
 }
@@ -1334,8 +1473,10 @@ void app_main(void)
      *
      * rtc_magic lives in RTC_NOINIT memory — garbage on POR, intact
      * across deep sleep + esp_restart. On the first mismatch this zeroes
-     * everything including the wallclock offset, then stamps the magic. */
-    hokku_state_validate();
+     * everything including the wallclock offset, then stamps the magic.
+     * A true POR means the RTC calibration is gone too — hydrate it from NVS
+     * once the flash is up (below). */
+    bool cold_por = hokku_state_validate();
 
     /* Install dual-output log hook: serial + RTC ring buffer. Done here,
      * after RTC validation but before any log output, so every message
@@ -1409,6 +1550,11 @@ void app_main(void)
         nvs_flash_init();
     }
     config_load();
+
+    /* On a cold POR the RTC calibration was just zeroed; restore the durable
+     * copy from NVS so a battery swap doesn't discard days of learning. On a
+     * deep-sleep/restart wake the RTC copy is authoritative — leave it. */
+    if (cold_por) hokku_cal_load();
 
     /* ── Step 4: hardware init ──────────────────────────────────────
      *
@@ -1484,16 +1630,13 @@ void app_main(void)
 
         current_regime = usb_host_present() ? "usb_awake" : "battery_idle";
 
-        /* Snapshot the PREVIOUS sleep's anchor BEFORE perform_refresh
-         * overwrites pre_sleep_server_epoch and last_sleep_seconds with
-         * THIS boot's response. Without this snapshot the sleep-error
-         * check compares "time since this boot's download" against
-         * "this boot's requested sleep duration" — two unrelated
-         * numbers that always yield a meaningless value near
-         * -last_sleep_seconds (observed 2026-04-20: sleep_err_s=-157s
-         * on a clean timer wake where the real error was ~3 s). */
-        int64_t prior_sleep_entry_epoch = pre_sleep_server_epoch;
-        int32_t prior_sleep_duration    = last_sleep_seconds;
+        /* Measure the previous sleep's drift and update the calibration BEFORE
+         * perform_refresh overwrites the schedule anchor. Runs on timer wakes
+         * only (gated inside); records last_sleep_err_s and, when a clean
+         * sample, refines cal_ppm. The RTC-backed clock and anchor survive the
+         * esp_restart done on wake, so the prior-cycle values are still live. */
+        scheduler_observe_sleep();
+        hokku_cal_save_if_changed();
 
         bool refreshed = perform_refresh(label, boot_time);
         /* A successful refresh proves a freshly-OTA'd app can reach the server
@@ -1516,20 +1659,6 @@ void app_main(void)
         }
         if (refreshed) {
             ota_mark_valid_if_pending();
-        }
-
-        /* Sleep-error diagnostic: only meaningful on timer wakes. */
-        if (last_sleep_mode == LAST_SLEEP_MODE_TIMER_WAKE &&
-            prior_sleep_entry_epoch > 0 && prior_sleep_duration > 0) {
-            time_t now = now_epoch();
-            if (now > 0) {
-                int64_t actual_slept_s = (int64_t)now - prior_sleep_entry_epoch;
-                int64_t err            = actual_slept_s - prior_sleep_duration;
-                if (err > INT32_MAX) err = INT32_MAX;
-                if (err < INT32_MIN) err = INT32_MIN;
-                last_sleep_err_s     = (int32_t)err;
-                last_sleep_err_known = true;
-            }
         }
 
         /* Restart so the next boot enters its regime from clean state. */

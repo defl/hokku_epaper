@@ -16,7 +16,13 @@
 #ifndef LED_H
 #define LED_H
 
+/* Claim PA12/PB3 as LED outputs, both dark. MUST run after platform_init(): the
+ * SDK's flash pinmux grabs PB3 as FLASH_HOLD at XIP enable and leaves it driven
+ * HIGH. Whether that is what lights the green LED is unconfirmed — see led.c. */
 void led_init(void);
+
+/* Park both LED pins as input + pull-down before hibernation, as the OEM does. */
+void led_park_for_sleep(void);
 
 /* Turn both LEDs off (default after init). */
 void led_set_off(void);

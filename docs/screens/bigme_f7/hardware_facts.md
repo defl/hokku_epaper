@@ -185,6 +185,58 @@ Our firmware's `hokku_battery_mv()` uses exactly this. `HAL_ADC_Conv_Polling(
 ADC_CHANNEL_4, …)` auto-configures the PA14→CH4 pinmux via the `xr872_evb_ai`
 board config. Verified on-device: reads ~4170–4200 mV / 100 % on USB.
 
+## LEDs
+
+Source: disassembly of the OEM boot partition `01_boot_payload.bin` (SRAM base
+`0x00201000`), 2026-07-27. ROM call targets resolved against `gcc/rom_symbol.ld`
+(`0xbb91 HAL_GPIO_Init`, `0xbd99 HAL_GPIO_WritePin`, `0xbdc9 HAL_GPIO_ReadPin`).
+
+- **PA12** and **PB3** are the only two pins the OEM LED code touches, both
+  **active HIGH** (its "off" state writes LOW to both).
+- The OEM registers them as an SDK power-management device (`dev_leds` @
+  `0x0020C5AC`, driver `drv_leds` @ `0x00209598`):
+
+| VA | Role |
+|----|------|
+| `0x00203FA0` | `leds_resume` — both pins OUTPUT, driving 1, `PULL_DOWN`, then written LOW |
+| `0x00203FD2` | `leds_suspend` — both pins **INPUT + `PULL_DOWN`** before sleep |
+| `0x00203FF0` | `leds_set(state)` — 8-case `tbb` switch; states: 0 alternating, 1 PA12 solid, 2 PB3 solid, 3 both off, 4 PB3 blink, 5 both on, 6 PA12 blink, 7 PA12 off |
+
+Call-site semantics put PB3 on the ready/connected role (`wlan_event == 0x13` →
+state 2 solid; "enter wifi_sta" → state 4 blink) and PA12 on the busy/OTA role
+(`ota mUrl=%s` → state 1), i.e. **PB3 = green, PA12 = red**.
+
+### PB3 conflicts with the stock board config's flash pinmux
+
+The SDK's `xr872_evb_ai` `g_pinmux_flashc[]` maps, under `#if (!BOARD_SWD_EN)` —
+and we build with `PRJCONF_SWD_EN 0`:
+
+```c
+{ GPIO_PORT_B, GPIO_PIN_2, { GPIOB_P2_F5_FLASH_WP,   GPIO_DRIVING_LEVEL_3, GPIO_PULL_UP } },
+{ GPIO_PORT_B, GPIO_PIN_3, { GPIOB_P3_F5_FLASH_HOLD, GPIO_DRIVING_LEVEL_3, GPIO_PULL_UP } },
+```
+
+`HAL_Flashc_Xip_Enable()` applies that pinmux at XIP enable, leaving PB3 driven
+HIGH. The Bigme board does not wire PB3 to the flash: the OEM drives it as an LED,
+and the flash runs `FLASH_READ_DUAL_O_MODE`, which never uses HOLD#.
+
+**This is not confirmed as the cause of the always-on green LED.** Firmware 1.2.9
+claims PA12/PB3 back via `led_init()` right after `platform_init()` and parks them
+(input + pull-down, as the OEM's `leds_suspend`) before hibernation — and the green
+LED behaved exactly as before: lit for the whole awake window, dark in hibernation.
+Observed on hardware 2026-07-28/29. So either PB3 is not the green LED, or it is not
+active HIGH, or the LED is not MCU-driven at all. Note the pinmux is applied **once**:
+`HAL_Flashc_PinInit()` is refcounted (`pin_inited++ == 0`), so later flash access
+does not re-apply it and cannot be undoing `led_init()`.
+
+Since the LED is dark throughout hibernation, the practical drain is bounded by the
+awake window (~1–2 min/hour on battery), not continuous.
+
+PB2 is claimed by the same block as FLASH_WP; the OEM instead uses **PA6 and PB2**,
+both INPUT + `PULL_UP`, as charge/status inputs (read at `0x002014F0` / `0x002014F8`,
+debounced at `0x00201500`) — so our build drives a pin the OEM treats as an input.
+Not yet changed; what PB2 is wired to on this board is unknown.
+
 ## Display
 
 Source: product description + E Ink Spectra 6 spec + disassembly of boot partition (2026-06-06).

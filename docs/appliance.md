@@ -82,26 +82,31 @@ use `http://<ip>:8080` instead.
 ## Flashing a frame from the appliance
 
 The appliance can flash a frame over USB itself — open **Flash a screen** in
-the web app, no separate setup machine needed. But the Pi Zero 2 W has only a
-**single USB data port**, and the appliance runs it in dual-role (OTG) mode: a
-normal cable to a PC is the serial console (peripheral), while a frame on a
-micro-USB→USB-A OTG adapter turns the port into a host that can flash it.
+the web app, no separate setup machine needed.
 
-Because it's one shared port, the order matters:
+The Pi Zero 2 W has only a **single USB data port**, and it can be exactly one
+thing per boot: a USB *host* (which is what flashing a frame needs) or a USB
+*peripheral* (the [serial console](os_pi_usb_console.md)). The appliance
+switches it for you at setup time — the wizard hands the port over to host mode
+on the reboot that ends setup, so a configured appliance is always ready to
+flash. Setup mode keeps the serial console; normal operation gets the frame
+port.
 
-1. **Boot the appliance with nothing plugged into the data port.** A frame
-   attached *at boot* puts the port into host mode while the system is still
-   starting, and the appliance never finishes coming up (no web app, no SSH).
-   This is the most common mistake — always boot bare.
-2. Power the Pi from its **PWR** port, so the data port is free to host.
-3. Once the appliance is up, **hot-plug the frame** into the data port through
-   the OTG adapter. The port flips to host mode, the frame enumerates, and it
-   appears in **Flash a screen**.
-4. Flash it, then unplug the frame. (While a frame is attached the USB serial
-   console is unavailable — the port can't be host and console at once.)
+What you need to do:
 
-If a frame you plug in doesn't show up, check the OTG adapter — host mode needs
-the adapter's ID pin grounded; a plain charging cable won't switch the port.
+1. Power the Pi from its **PWR** port, leaving the data port free.
+2. Connect the frame to the data port through a **micro-USB→USB-A OTG adapter**
+   (a plain charging cable carries no data). It appears in **Flash a screen**.
+3. Flash it, then unplug the frame.
+
+Plugging a frame in before boot is fine on a configured appliance — the port is
+already a host, so there is nothing to negotiate. (This was *not* true of an
+earlier build that ran the port in dual-role OTG mode, where a frame attached at
+boot could wedge startup outright. That mode was dropped.)
+
+While the appliance is in **setup mode** the port is the serial console instead,
+so **Flash a screen** can't drive a frame — which costs nothing in practice,
+since the web app isn't running during setup anyway.
 
 ## If something goes wrong
 
@@ -113,10 +118,9 @@ password, network out of range, typo in the SSID — it **automatically reverts 
 setup mode and raises the `Hokku Setup` network again**. Rejoin it and correct
 the details.
 
-If it pings but the web app and SSH never come up, check you don't have a
-**frame plugged into the USB data port** — a frame attached at boot wedges
-startup. Unplug it and power-cycle; see [Flashing a frame from the
-appliance](#flashing-a-frame-from-the-appliance).
+When it reverts, the USB data port goes back to being a
+[serial console](os_pi_usb_console.md) as well, so a Pi that keeps failing to
+join your network can always be inspected over a cable.
 
 ### `Hokku Setup` never appears
 
@@ -137,7 +141,9 @@ sudo /usr/lib/hokku-installer/reset.sh
 ```
 
 It clears the setup marker and reboots, and the `Hokku Setup` network comes back.
-Your photos and settings are left alone.
+Your photos and settings are left alone. The USB data port returns to serial-
+console duty for the duration of setup, and goes back to being a frame port when
+you finish the wizard again.
 
 ## Default credentials
 

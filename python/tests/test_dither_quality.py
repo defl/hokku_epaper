@@ -229,9 +229,15 @@ def test_bw_image_renders_without_error():
 
 
 def test_preset_output_is_deterministic():
-    """Same inputs always produce identical bytes (no randomness in pipeline)."""
+    """Same inputs always produce identical bytes (no randomness in pipeline).
+
+    dither_noise is deliberately random per render (grain to break up
+    error-diffusion "worm" patterns, see its help text in index.html) — it is
+    disabled here so this test targets the pipeline's own reproducibility,
+    not that intentionally-varying feature.
+    """
     img = _make_rgb(30, 20)
-    cfg = PRESET_IMAGE_CONFIGS["atkinson_hue_aware"]
+    cfg = replace(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"], dither_noise=0.0)
     p1 = render_preview_png(img, cfg, "landscape", max_side_px=100)
     p2 = render_preview_png(img, cfg, "landscape", max_side_px=100)
     assert p1 == p2

@@ -25,10 +25,13 @@
 #include "net/HTTPClient/API/HTTPClientCommon.h"
 #include "lwip/netif.h"
 #include "lwip/dhcp.h"
+#include "lwip/netifapi.h"
 #include "lwip/ip_addr.h"
 
 #include "image/image.h"
 #include "ota/ota.h"
+#include "console/console.h"
+#include "driver/chip/hal_uart.h"
 #include "driver/chip/hal_wdg.h"
 #include "driver/chip/hal_adc.h"
 #include "driver/chip/hal_wakeup.h"
@@ -45,6 +48,8 @@
 #include "frame_state.h"
 #include "backoff.h"
 #include "logbuf.h"
+#include "frame_proto.h"
+#include "interactive.h"
 
 /* SoC-shared XR872 code (firmware/common/xr872 — usable by any XR872/XR872AT
  * screen): activity log, software clock, HTTP-header helpers, hibernation. */
@@ -53,15 +58,9 @@
 #include "http_util.h"
 #include "pm.h"
 
-/* Static IP config — used when DHCP is unavailable on the network */
-#define STATIC_IP_ADDR   "192.168.6.199"
-#define STATIC_GW_ADDR   "192.168.6.254"
-#define STATIC_NM_ADDR   "255.255.255.0"
-
-#define HOKKU_SERVER_URL        "http://192.168.6.111:8080/hokku/screen/"
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.5"
+#define FIRMWARE_VERSION        "1.2.14"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -86,6 +85,16 @@ static int         g_epd_ready = 0;
  * itself does NOT lock — its callers already hold the lock (no recursive lock).
  */
 static OS_Mutex_t  g_ota_lock;
+
+/*
+ * Wakes the awake-mode refresh wait early. The server can hand out a sleep of
+ * many hours (overnight), and the refresh thread used to OS_MSleep() through it,
+ * so a `wifi` switch (or any reconnect) was not followed by a check-in until that
+ * sleep ended — it looked like the unit had stopped checking in. net_cb releases
+ * this on NETWORK_UP once the refresh thread exists, so the unit checks in on the
+ * new network straight away. Binary: repeated releases collapse into one wake.
+ */
+static OS_Semaphore_t g_refresh_kick;
 
 /* --------------------------------------------------------------------------
  * Reporting: wake reason, battery, and frame-state telemetry. The activity log
@@ -326,6 +335,92 @@ void hokku_ota_manual(void)
 }
 
 /*
+ * Console-triggered raw frame upload (`frame` command). Receives one ready-made
+ * panel buffer over the console UART and streams it to the EPD — no server, no
+ * WiFi, no render pipeline. Used for bring-up and for colour measurement, where
+ * an exact known raster has to reach the glass on demand.
+ *
+ * The device stays a dumb pipe: the host decides what to send, so new test
+ * images never need a rebuild. See firmware/common/all/frame_proto.h for the
+ * wire exchange and tools/f7_send_frame.py for the host side.
+ *
+ * Console recovery is the load-bearing property here. Taking the UART means
+ * detaching the console's RX callback, so EVERY exit path must put it back or
+ * the unit loses its command interface (and with it the `upgrade` route into
+ * BROM). Hence: one exit, no early returns, and a bounded per-chunk timeout so a
+ * host that dies mid-transfer cannot wedge us. Belt and braces, console_disable
+ * state is pure RAM — any reboot restores it, and the mask-BROM replug+press
+ * catch works regardless of what the app is doing.
+ *
+ * The rollback watchdog is already stopped by hokku_rollback_commit() before any
+ * console command can run, so the ~17 s transfer cannot trigger a reset.
+ */
+static uint8_t g_frame_buf[FRAME_PROTO_CHUNK_BYTES];
+
+int hokku_frame_receive(void)
+{
+    UART_ID  uart;
+    uint32_t received = 0;
+    uint32_t crc = 0;
+    uint8_t  ack = FRAME_PROTO_ACK;
+    int      ok = 1;
+
+    if (!OS_MutexIsValid(&g_ota_lock) || OS_MutexLock(&g_ota_lock, 0) != OS_OK) {
+        hlog("hokku: frame busy (refresh/OTA in progress) — retry shortly\n");
+        return -1;
+    }
+
+    uart = console_get_uart_id();
+    printf("%s %u %u\r\n", FRAME_PROTO_READY,
+           (unsigned)EPD_IMAGE_BYTES, (unsigned)FRAME_PROTO_CHUNK_BYTES);
+
+    /* From here the console does not own the UART. Do not return early. */
+    console_disable();
+
+    epd_send_cmd(0x10);                     /* DTM: data start transmission */
+
+    while (received < EPD_IMAGE_BYTES) {
+        uint32_t want = frame_proto_chunk_size(EPD_IMAGE_BYTES,
+                                               FRAME_PROTO_CHUNK_BYTES,
+                                               received / FRAME_PROTO_CHUNK_BYTES);
+        int32_t  n = HAL_UART_Receive_Poll(uart, g_frame_buf, (int32_t)want,
+                                           FRAME_PROTO_RX_TIMEOUT_MS);
+        uint32_t i;
+
+        if (n != (int32_t)want) {           /* timeout or short read: host gone */
+            ok = 0;
+            break;
+        }
+        crc = frame_proto_crc32(crc, g_frame_buf, want);
+        for (i = 0; i < want; i++)
+            epd_send_data(g_frame_buf[i]);
+        received += want;
+        console_write(&ack, 1);             /* flow control: host may send more */
+    }
+
+    console_enable();                       /* single restore point */
+
+    if (!ok) {
+        /* The panel is left mid-DTM; a later `frame` re-issues 0x10 and starts
+         * over. Deliberately NOT refreshing — showing a half-received picture
+         * during colour measurement is worse than showing nothing. */
+        hlog("hokku: frame ABORTED at %u/%u bytes — not refreshing\n",
+             (unsigned)received, (unsigned)EPD_IMAGE_BYTES);
+        OS_MutexUnlock(&g_ota_lock);
+        return -1;
+    }
+
+    printf("%s %08x\r\n", FRAME_PROTO_DONE, (unsigned)crc);
+    hlog("hokku: frame received (%u B, crc %08x) — refreshing\n",
+         (unsigned)received, (unsigned)crc);
+    epd_refresh();                          /* ~30 s */
+    printf("%s\r\n", FRAME_PROTO_REFRESHED);
+
+    OS_MutexUnlock(&g_ota_lock);
+    return 0;
+}
+
+/*
  * Fetch one image from the server and stream it byte-by-byte to the EPD.
  * Returns the number of seconds to sleep before the next refresh, or -1 on
  * any error (caller should retry after a short backoff).
@@ -455,11 +550,33 @@ static int do_refresh(void)
 /* True when the device should deep-sleep (vs stay awake) between refreshes. */
 static int hokku_should_sleep(void)
 {
+    /* A host driving this screen over USB needs the console to still be there
+     * next time it looks. Hibernating closes it, so interactive mode outranks
+     * the configured power mode — including an explicit `power sleep`, which is
+     * a standing preference rather than an instruction about right now.
+     *
+     * Gated on USB inside hokku_interactive_engaged(): if the cable is pulled
+     * while the mode is set, this falls straight back to the configured
+     * behaviour instead of sitting awake until the battery is flat. */
+    if (hokku_interactive_engaged(led_usb_present()))
+        return 0;
+
     switch (hokku_config_get()->power_mode) {
     case HOKKU_PWR_SLEEP: return 1;
     case HOKKU_PWR_AWAKE: return 0;
     default:              return !led_usb_present();   /* AUTO: sleep only on battery */
     }
+}
+
+/* Awake-mode wait between refreshes: `ms`, or less if net_cb kicks it. */
+static void hokku_refresh_wait(uint32_t ms)
+{
+    if (!OS_SemaphoreIsValid(&g_refresh_kick)) {
+        OS_MSleep(ms);
+        return;
+    }
+    if (OS_SemaphoreWait(&g_refresh_kick, ms) == OS_OK)
+        hlog("hokku: network came (back) up — refreshing now\n");
 }
 
 static void refresh_thread_fn(void *arg)
@@ -480,6 +597,18 @@ static void refresh_thread_fn(void *arg)
     unsigned refresh_failures = 0;
 
     while (1) {
+        /* USB-interactive mode: a host owns the screen, so do not fetch and do
+         * not repaint. Checked before taking the lock — do_refresh() holds it for
+         * the length of a network round trip, and a `frame` upload waiting behind
+         * that would stall for seconds with the host already mid-protocol.
+         *
+         * Polled rather than event-driven because the thread has to keep
+         * re-testing anyway: the mode is plain RAM and the USB cable can move. */
+        if (hokku_interactive_engaged(led_usb_present())) {
+            OS_MSleep(500);
+            continue;
+        }
+
         /* Hold the OTA/flash lock across the whole refresh (which may itself run
          * an OTA on X-Firmware-Update) so a console `ota` can't run concurrently. */
         OS_MutexLock(&g_ota_lock, OS_WAIT_FOREVER);
@@ -494,10 +623,12 @@ static void refresh_thread_fn(void *arg)
             refresh_failures = 0;              /* reached the server — reset streak */
         }
 
-        if (hokku_should_sleep())
+        if (hokku_should_sleep()) {
+            led_park_for_sleep();                   /* nothing driving the LEDs while asleep */
             hokku_hibernate((uint32_t)sleep_sec);   /* battery: deep sleep, restarts on wake */
-        else
-            OS_MSleep((uint32_t)sleep_sec * 1000);  /* USB/awake: keep looping */
+        } else {
+            hokku_refresh_wait((uint32_t)sleep_sec * 1000);  /* USB/awake: keep looping */
+        }
     }
 }
 
@@ -550,6 +681,9 @@ static void net_cb(uint32_t event, uint32_t data, void *arg)
                             NULL,
                             REFRESH_THREAD_PRIO,
                             REFRESH_THREAD_STACK);
+        } else if (OS_SemaphoreIsValid(&g_refresh_kick)) {
+            /* Reconnect / network switch: check in now, don't sleep it out. */
+            OS_SemaphoreRelease(&g_refresh_kick);
         }
         break;
     }
@@ -795,12 +929,36 @@ void platform_init_level0(void)
  *
  * WLAN_STA_CONF_FLAG_WPA3 advertises WPA3 support but negotiates down to WPA2-PSK,
  * which is what a WPA2/WPA3-mixed AP actually associates with.
+ *
+ * The station is disabled BEFORE it is reconfigured, matching every SDK path that
+ * re-points a live station (at_demo join, sc_assistant_port.c). Without it, a
+ * `wifi` switch while associated replaced the supplicant config under a running
+ * connection, and wlan_sta_enable() on an already-enabled station is a no-op: the
+ * unit never left the old AP and stopped checking in until a reboot (issue #44).
+ * Disabling an idle station at boot is harmless (the SDK paths do it unconditionally).
+ *
+ * The IPv4 address is dropped first, as the SDK's net_switch_mode() does. On a
+ * plain disconnect the SDK keeps a BOUND lease (roaming), so on reconnect it
+ * logs "netif is already up", never restarts DHCP and never sends NETWORK_UP:
+ * a unit moved to another subnet would keep a stale address, and net_cb would
+ * never kick the refresh thread. net_config(nif, 0) releases the DHCP lease; the
+ * explicit clear also covers a static address (lwIP's release leaves those in
+ * place). With no address, the reconnect runs DHCP (or net_cb's static set) and
+ * the address change fires NETWORK_UP. Seen on hardware 2026-09-29 (1.2.14 test).
  */
 static int hokku_wifi_connect(const uint8_t *ssid, uint8_t ssid_len, const uint8_t *psk)
 {
+    struct netif *nif = g_wlan_netif;
+
+    if (nif != NULL && NET_IS_IP4_VALID(nif)) {
+        net_config(nif, 0);                                /* release the lease */
+        netifapi_netif_set_addr(nif, NULL, NULL, NULL);   /* and any static address */
+    }
+    wlan_sta_disable();
     if (wlan_sta_config((uint8_t *)ssid, ssid_len, (uint8_t *)psk,
                         WLAN_STA_CONF_FLAG_WPA3) != 0) {
         hlog("hokku: wlan_sta_config failed\n");
+        wlan_sta_enable();   /* don't leave the radio off: retry whatever config remains */
         return -1;
     }
     return wlan_sta_enable();
@@ -859,8 +1017,15 @@ int main(void)
     /* Create the OTA/refresh lock before platform_init() (which brings up the
      * console) so a `ota` command can never reference an uninitialised mutex. */
     OS_MutexCreate(&g_ota_lock);
+    OS_SemaphoreCreateBinary(&g_refresh_kick);   /* before net_cb can release it */
 
     platform_init();
+
+    /* Immediately after platform_init(), which enables XIP and with it the flash
+     * pinmux that parks PB3 as FLASH_HOLD, driven HIGH. Claiming the pins here
+     * takes them back and leaves both dark. (Whether that pinmux is what lights
+     * the green LED is unconfirmed — see led.c.) */
+    led_init();
 
     printf("\nhokku bigme-f7 firmware\n");
 

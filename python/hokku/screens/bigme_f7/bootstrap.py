@@ -1,16 +1,17 @@
 """Drive a fresh/stock Bigme F7 into Hokku firmware from the web "Flash a screen" UI.
 
-Wraps the proven pure-Python mask-BROM catch + safe slot-0 write (the flashers in
+Wraps the proven pure-Python mask-BROM catch + safe A/B slot write (the flashers in
 :mod:`hokku.common.xr872`) in a callback-streamed, cancellable routine the web flash
 job can run. The catch waits for the operator to power-cycle the unit with a **USB
 replug + power press** (the replug brings the CH340 port up first, so we hammer
 ``0x55`` straight through the BROM sync window — a plain long-press drops the port
 and misses it).
 
-Safety is inherited unchanged from ``flash_slot0``: only slot 0 + its A/B cfg sector
-are written, the bootloader and OEM slot 1 are never touched, the cfg flip is the
-last write, and any header/verify failure aborts via ``die()`` (which we surface as
-an error) leaving slot 1 bootable. Nothing here relaxes those checks.
+Safety is inherited unchanged from ``flash_slot``: only the INACTIVE slot + the A/B
+cfg sector are written, the bootloader and the slot the unit boots today are never
+touched, the cfg flip is the last write, and any header/verify failure aborts via
+``die()`` (which we surface as an error) leaving the running slot bootable. The
+active slot is never written (no ``allow_active_slot``).
 
 The flash primitives live in the packaged :mod:`hokku.common.xr872`, so this feature
 ships with the server (including the appliance .deb); :func:`tooling_available` now
@@ -30,6 +31,16 @@ from hokku.screens.bigme_f7.config import write_config_via_brom
 
 CATCH_TIMEOUT_S = 300.0
 
+# How to boot the unit after a write. sys_reboot only re-enters the BROM on this
+# chip, and with a charged battery a USB unplug/replug is NOT a power cycle — the
+# SoC keeps running off the pack and drops straight back into the BROM (issue #44).
+# Only a long-press actually removes power.
+POWER_CYCLE_HOW = (
+    "LONG-PRESS the power button until the LED goes out; the unit then restarts on "
+    "its own (if it stays off, short-press power). Unplugging/replugging USB does "
+    "NOT reboot it while the battery is charged."
+)
+
 
 def tooling_available() -> bool:
     """True if the XR872 flash primitives (and pyserial) can be imported.
@@ -41,7 +52,7 @@ def tooling_available() -> bool:
     try:
         import serial  # noqa: F401, PLC0415
 
-        from hokku.common.xr872 import catch, flasher, slot0  # noqa: F401, PLC0415
+        from hokku.common.xr872 import catch, flasher, slots  # noqa: F401, PLC0415
     except ImportError:
         return False
     return True
@@ -111,9 +122,9 @@ def _import_tools():
 
     from hokku.common.xr872.catch import hammer_sync, open_stable  # noqa: PLC0415
     from hokku.common.xr872.flasher import XR872Flasher, send_upgrade_command  # noqa: PLC0415
-    from hokku.common.xr872.slot0 import flash_slot0  # noqa: PLC0415
+    from hokku.common.xr872.slots import flash_slot  # noqa: PLC0415
 
-    return flash_slot0, hammer_sync, open_stable, XR872Flasher, send_upgrade_command, serial
+    return flash_slot, hammer_sync, open_stable, XR872Flasher, send_upgrade_command, serial
 
 
 def _software_entry(port, writer, should_cancel, XR872Flasher, send_upgrade_command, attempts):
@@ -192,10 +203,23 @@ PROVISION_BOOT_TIMEOUT_S = 150.0
 
 def _open_console(port, serial):
     """Open the F7 console; return the serial handle if the firmware answers, else None."""
+    # DTR/RTS set on an unopened Serial object, not after Serial(...) has already
+    # opened the port. Confirmed on the huessen board that the latter is too
+    # late — Windows' serial driver asserts the control lines as part of its own
+    # port-open sequence, before any Python attribute assignment runs, so a
+    # chip wired to reset on RTS (as esptool's own "hard reset" relies on) has
+    # already been reset by the time `s.dtr = False` executes. Not confirmed to
+    # cause a problem on THIS board specifically — applied here for correctness
+    # and consistency with tools/send_frame.py's open_device(), not because a
+    # fault was reproduced here.
+    s = serial.Serial()
+    s.port = port
+    s.baudrate = 115200
+    s.timeout = 0.3
+    s.dtr = False
+    s.rts = False
     try:
-        s = serial.Serial(port, 115200, timeout=0.3)
-        s.dtr = False
-        s.rts = False
+        s.open()
     except (serial.SerialException, OSError):
         return None
     try:
@@ -225,7 +249,7 @@ def _provision_over_console(port, prov, on_line, should_cancel, serial):
     """After the firmware is written, wait for the operator to power-cycle, then write
     Wi-Fi + config over the booted firmware's console. Never logs the password."""
     on_line("")
-    on_line("POWER-CYCLE the unit now (unplug/replug USB, or long-press) to boot it —")
+    on_line(f"Boot the unit now: {POWER_CYCLE_HOW}")
     on_line("Wi-Fi and config are then written over the console automatically. Waiting...")
     deadline = time.monotonic() + PROVISION_BOOT_TIMEOUT_S
     last = 0.0
@@ -237,11 +261,15 @@ def _provision_over_console(port, prov, on_line, should_cancel, serial):
         if s is not None:
             break
         if time.monotonic() - last > 5:
-            on_line("  waiting for the unit to boot... (power-cycle it if you haven't)")
+            on_line(
+                "  waiting for the unit to boot... (long-press power until the LED goes out, if you haven't)"
+            )
             last = time.monotonic()
         time.sleep(1.0)
     if s is None:
-        raise RuntimeError("console never came up — power-cycle the unit and re-run to provision")
+        raise RuntimeError(
+            "console never came up — long-press power until the LED goes out, then re-run to provision"
+        )
 
     try:
         on_line("Console up — writing configuration...")
@@ -288,7 +316,8 @@ def bootstrap_device(
     timeout_s: float = CATCH_TIMEOUT_S,
     provision: dict | None = None,
 ) -> dict:
-    """Enter the BROM and write slot 0. Tries the no-touch ``upgrade`` entry first
+    """Enter the BROM and write the inactive A/B slot (slot 0 on a unit with no
+    readable A/B cfg). Tries the no-touch ``upgrade`` entry first
     (works when the unit already runs Hokku firmware), then falls back to the manual
     replug+press catch for a stock unit.
 
@@ -298,18 +327,19 @@ def bootstrap_device(
 
     Streams progress line-by-line via ``on_line``; polls ``should_cancel`` between
     attempts. Returns ``{"ok": True}`` on success. Raises ``RuntimeError`` on
-    timeout, cancel, or a safety abort — never leaves the unit unbootable (slot 1
-    stays intact throughout)."""
+    timeout, cancel, or a safety abort — never leaves the unit unbootable (the slot
+    it boots today stays intact throughout)."""
     if not tooling_available():
         raise RuntimeError("Bigme F7 flash tooling (tools/) is not present on this install")
     (
-        flash_slot0,
+        flash_slot,
         hammer_sync,
         open_stable,
         XR872Flasher,
         send_upgrade_command,
         serial,
     ) = _import_tools()
+    from hokku.common.xr872.slots import inactive_slot, read_active_slot  # noqa: PLC0415
 
     img = Path(image_path).read_bytes()
     if img[:4] != b"AWIH":
@@ -317,8 +347,8 @@ def bootstrap_device(
 
     on_line(f"Bootstrapping Bigme F7 on {port}.")
     on_line(
-        f"Firmware: {Path(image_path).name} ({len(img):,} bytes) -> slot 0 and its A/B cfg "
-        "sector [slot 1 (OEM) is left untouched]"
+        f"Firmware: {Path(image_path).name} ({len(img):,} bytes) -> the inactive A/B slot "
+        "and its cfg sector [the slot the unit boots today is left untouched]"
     )
     writer = _LineWriter(on_line)
 
@@ -341,15 +371,23 @@ def bootstrap_device(
     else:
         on_line("*** BROM entered via `upgrade` — writing firmware (do NOT unplug now) ***")
 
-    # Write. flash_slot0 prints its own progress and raises SystemExit via die() on
-    # ANY safety-check failure, which leaves slot 1 (OEM) bootable. reboot=False:
+    # Write. flash_slot prints its own progress and raises SystemExit via die() on
+    # ANY safety-check failure, which leaves the other slot bootable. reboot=False:
     # sys_reboot only re-enters BROM on this chip, so the operator power-cycles.
     had_existing_cfg = False
     try:
+        # Target the slot the unit is NOT running from, so whatever boots today
+        # (OEM on a stock unit, Hokku on an updated one) stays as the fallback —
+        # never the active slot (issue #44: an `upgrade`-entered unit on slot 0 had
+        # its only known-good image overwritten).
+        active = read_active_slot(f)
+        slot = inactive_slot(active)
+        running = "nothing readable" if active is None else f"slot {active}"
+        on_line(f"A/B: unit boots {running} -> writing slot {slot}, the other slot is kept.")
         try:
-            on_line(f"Writing {Path(image_path).name} -> slot 0 (do NOT unplug now)...")
+            on_line(f"Writing {Path(image_path).name} -> slot {slot} (do NOT unplug now)...")
             with contextlib.redirect_stdout(writer):
-                flash_slot0(f, img, reboot=False)
+                flash_slot(f, img, slot=slot, reboot=False)
             writer.flush()
         except SystemExit as e:
             writer.flush()
@@ -372,7 +410,7 @@ def bootstrap_device(
             f.close()
 
     on_line("")
-    on_line("DONE — Hokku firmware in slot 0 (bootloader + OEM slot untouched).")
+    on_line(f"DONE — Hokku firmware in slot {slot} (bootloader + slot {1 - slot} untouched).")
 
     # Wi-Fi is only needed for a genuinely FRESH unit. A unit we entered via
     # `upgrade` (already running Hokku firmware) or that already had a config blob
@@ -389,10 +427,10 @@ def bootstrap_device(
             on_line(f"NOTE: Wi-Fi not set over console ({e}).")
             on_line("Set it after boot over the console (115200): `wifi <ssid> <pw>`.")
     elif provision:
-        on_line("Config provisioned to flash. POWER-CYCLE the unit (unplug/replug) to boot it.")
+        on_line(f"Config provisioned to flash. Boot the unit: {POWER_CYCLE_HOW}")
         on_line("It keeps its existing Wi-Fi and comes straight back online under the new name.")
     else:
-        on_line("POWER-CYCLE the unit (unplug/replug, or long-press) to boot it.")
+        on_line(f"Boot the unit: {POWER_CYCLE_HOW}")
         on_line("A fresh unit needs Wi-Fi + server set over the console (115200):")
         on_line("`wifi <ssid> <pw>`, then `cfg save`. Details: docs/screens/bigme_f7/bootstrap.md")
     return {"ok": True}

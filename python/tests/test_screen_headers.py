@@ -9,9 +9,53 @@ from hokku.webserver.screen_headers import (
     BATTERY_MV_FULL,
     battery_percent,
     parse_battery_header,
+    parse_cal_ppm,
     parse_frame_state,
+    parse_mac_header,
     parse_screen_model,
 )
+
+# ── parse_mac_header ──────────────────────────────────────────────────────────
+
+
+def test_mac_normalises_to_lowercase():
+    assert parse_mac_header("AA:BB:CC:DD:EE:FF") == "aa:bb:cc:dd:ee:ff"
+
+
+def test_mac_passthrough_lowercase():
+    assert parse_mac_header("a1:b2:c3:d4:e5:f6") == "a1:b2:c3:d4:e5:f6"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        None,
+        "",
+        "not-a-mac",
+        "aa:bb:cc:dd:ee",
+        "aa:bb:cc:dd:ee:ff:00",
+        "aabbccddeeff",
+        "gg:bb:cc:dd:ee:ff",
+        "00:00:00:00:00:00",
+    ],
+)
+def test_mac_rejects_malformed(raw):
+    assert parse_mac_header(raw) is None
+
+
+# ── parse_cal_ppm ─────────────────────────────────────────────────────────────
+
+
+def test_cal_ppm_valid():
+    assert parse_cal_ppm(12000) == 12000
+    assert parse_cal_ppm(-8000) == -8000
+    assert parse_cal_ppm(0) == 0
+
+
+@pytest.mark.parametrize("raw", [None, "x", True, 200000, -200000])
+def test_cal_ppm_rejects_bad(raw):
+    assert parse_cal_ppm(raw) is None
+
 
 # ── battery_percent ───────────────────────────────────────────────────────────
 

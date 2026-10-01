@@ -17,8 +17,8 @@ All pin assignments below are XR872AT SDK defaults. The device vendor may use an
 |------|------------------|-------|
 | PB0 | UART0_TX | SDK default (primary) |
 | PB1 | UART0_RX | SDK default (primary) |
-| PA12 | RED LED output | Boot partition disassembly 2026-06-07: 8-case switch at 0x002FF0 drives PA12 HIGH/LOW; init at 0x002FA0 sets output+LOW |
-| PB3 | GREEN LED output (SWD_SWDCLK repurposed) | Same switch; driven alongside PA12; both active HIGH |
+| PA12 | RED LED output | Confirmed — see [`hardware_facts.md`](hardware_facts.md#leds) (colour assignment still inferred) |
+| PB3 | GREEN LED output (SWD_SWDCLK repurposed) | Confirmed — see [`hardware_facts.md`](hardware_facts.md#leds) (colour assignment still inferred) |
 | PA20 | USB/charge detect input | Polled with compare-to-zero at 0x002CD0; HIGH = USB present (unconfirmed polarity) |
 | PB2 | SWD_SWDIO (possibly repurposed) | SDK default (secondary SWD — preferred to avoid UART conflict) |
 | PB4 | FLASH_MOSI | XR872AT hardware-fixed |
@@ -71,14 +71,19 @@ Source: disassembly of `01_boot_payload.bin` (SRAM-loaded, OEM app code), 2026-0
 
 ### LED pins
 
-An 8-case switch-statement at boot payload offset 0x002FF0 drives exactly two GPIO pins: PA12 and PB3. The init function at 0x002FA0 configures both as outputs (driving level 2) and immediately drives them LOW.
+**Moved to [`hardware_facts.md`](hardware_facts.md#leds)** (2026-07-28): PA12 and
+PB3, both active HIGH, and the OEM's resume/suspend/set functions.
 
-- **PA12** (GPIOA pin 12) — RED LED, active HIGH
-- **PB3** (GPIOB pin 3) — GREEN LED, active HIGH
+Still inferred, not measured:
+- the **colour assignment**. PB3 carries the ready/connected role and PA12 the
+  busy/OTA role in the OEM call sites, which is where green/red comes from.
+  Swapping is a one-line change in `led.c`.
+- **what actually lights the green LED.** The stock board config's flash pinmux
+  leaves PB3 driven HIGH, which looked like the cause; claiming the pin back in
+  firmware 1.2.9 changed nothing observable (lit while awake, dark in hibernation,
+  before and after). See the facts entry for the full reasoning.
 
 PB3 is also the SDK-default SWD_SWDCLK pin (PB3 = SWDCLK). The OEM repurposes it as LED; SWD is presumably non-functional in production firmware.
-
-**Color assignment** is inferred from the Huessen screen pattern (work LED = red). The hardware may have them swapped — confirm on first flash. Swapping is a one-line change in `led.c`.
 
 ### Charge detection
 

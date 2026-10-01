@@ -21,6 +21,16 @@ def _hue_aware(algorithm: AlgorithmName, serpentine: bool = False) -> ImageConfi
             hue_cutoff_deg=95.0,
             neutral_chroma=8.0,
         ),
+        # Off. PIL's autocontrast stretches R, G and B independently, which is an
+        # automatic white balance: measured over 30 library photographs rendered
+        # as the server renders them, it moved mean b* by up to +13 (yellow) and
+        # a* by -17, and the photographs it hit hardest were the ones whose
+        # ratings read "skin of baby is nearly all yellow" and "all 3 have yellow
+        # skin". Switching it off beat leaving it on on glass (+0.45 of a
+        # five-point rating, better on 9 photographs and worse on 3), and its
+        # biggest gains were exactly the photographs with the largest measured
+        # cast. The cutoff below is kept for anyone who turns the stage back on.
+        prepare_autocontrast="off",
         prepare_autocontrast_cutoff=0.5,
         prepare_gamma=0.88,
         prepare_brightness=1.0,
@@ -41,7 +51,23 @@ def _hue_aware(algorithm: AlgorithmName, serpentine: bool = False) -> ImageConfi
         drc_l_space="cielab",
         drc_chroma_space="cielab",
         prepare_midtone=1.02,
-        clahe_clip_limit=1.75,
+        # Was 1.75. Real-glass A/B (both panels, portrait) found CLAHE actively
+        # fighting the rest of the tonal chain: it equalises LOCAL contrast per
+        # 8x8 tile, which on a smooth region (background, skin, an unbroken
+        # gradient) renormalises away much of the global contrast the earlier
+        # Contrast(1.1) stage had just added — confirmed by tracing L* through
+        # every pre-DRC stage on a flat gradient wedge (build/tools/clahe_ab.py,
+        # tools/drc_scurve_ab.py). With CLAHE on, the panel showed measurably
+        # weaker background/shadow contrast than with it off; judged clearly
+        # better off ("left is better by a lot").
+        #
+        # LATER, AND CONTRADICTED FOR THE SHIPPED DEFAULTS. That A/B compared a
+        # handful of photographs. The blind rating campaign put CLAHE off in
+        # front of 20 photographs and it lost -- worse on 11, better on 6, mean
+        # -0.30 of a five-point rating. All three `*_default()` builders below
+        # therefore set 1.75 again. This lineage keeps 0.0, so the dropdown
+        # alternates still behave as their descriptions say.
+        clahe_clip_limit=0.0,
         clahe_keepout_feather=0.015,
         prepare_usm_radius=1.0,
         prepare_usm_amount=120,
@@ -58,21 +84,267 @@ def _bw(algorithm: AlgorithmName, serpentine: bool = False) -> ImageConfig:
         color_enhance=1.05,
         adaptive_saturate_space="off",
         adaptive_vivid=False,
+        # A monochrome image carries all its structure in luminance, so it can
+        # take a harder local-contrast push than a colour photo before the
+        # result looks processed.
+        clahe_clip_limit=2.25,
+        # Saturation boosting is off above; leave the ceiling at neutral so the
+        # value doesn't read as if a boost were configured.
+        saturate_max_enhance=1.0,
     )
 
 
+def _face(algorithm: AlgorithmName = "atkinson", serpentine: bool = False) -> ImageConfig:
+    """Tuning for photos with detected faces.
+
+    Skin is the least forgiving subject on a 6-colour panel: aggressive local
+    contrast turns cheeks blotchy and a hard unsharp halo reads as a bad
+    print. Skin is also exactly the kind of smooth, low-local-detail region
+    where CLAHE was found to fight the rest of the tonal chain (see
+    ``_hue_aware``'s ``clahe_clip_limit``) — so CLAHE is off here too, same as
+    default, traded for a slightly wider, stronger unsharp mask, which
+    sharpens features (eyes, hairline) without amplifying skin texture.
+
+    That trade did not survive the rating campaign, and ``_face_default()``
+    reverses both halves of it. This builder is kept as written because it is
+    the hand-tuned lineage the argument above belongs to; the shipped preset is
+    the one below it.
+    """
+    return replace(
+        _hue_aware(algorithm, serpentine),
+        clahe_clip_limit=0.0,
+        prepare_usm_amount=130,
+        prepare_usm_radius=1.2,
+    )
+
+
+def _calibration_raw() -> ImageConfig:
+    """Pixel-exact passthrough: every tonal and chromatic stage neutralised.
+
+    Intended for images that are already authored in the panel's own inks at
+    exact canvas dimensions — the colour-calibration target from
+    ``tools/color_target.py`` above all. Every knob here is set to its
+    identity value and the dither is ``noop`` (nearest ink, no error
+    diffusion), so each source pixel maps to one panel pixel and lands on the
+    ink it was painted in. Error diffusion would smear the flat patches; the
+    tonal chain would shift them off their anchors.
+
+    Dynamic-range compression still runs — it has no off switch — but it maps
+    L\\* onto the panel's own black/white anchors, so pixels already sitting
+    on a palette entry quantise straight back to it. ``test_color_target``
+    pins that behaviour.
+    """
+    return ImageConfig(
+        dither=DitherConfig(
+            algorithm="noop",
+            lut_name="euclidean",
+            serpentine=False,
+            hue_cutoff_deg=95.0,
+            neutral_chroma=8.0,
+        ),
+        # Off, and this preset is why the setting had to exist rather than being
+        # a cutoff of 0: at cutoff 0 autocontrast still stretches each channel's
+        # own darkest and brightest pixel to 0 and 255, so a target authored in
+        # the panel's inks came out moved off its anchors unless it happened to
+        # contain a pure black and a pure white in every channel. "Pixel-exact
+        # passthrough" now really is one.
+        prepare_autocontrast="off",
+        prepare_autocontrast_cutoff=0.0,
+        prepare_gamma=1.0,
+        prepare_brightness=1.0,
+        prepare_contrast=1.0,
+        color_enhance=1.0,
+        adaptive_saturate_space="off",
+        saturate_max_enhance=1.0,
+        saturate_low_chroma_thresh=5.0,
+        saturate_high_chroma_thresh=15.0,
+        saturate_low_chroma_thresh_oklab=0.025,
+        saturate_high_chroma_thresh_oklab=0.075,
+        scale_chroma=False,
+        adaptive_vivid=False,
+        vivid_chroma_low=5.0,
+        vivid_chroma_high=15.0,
+        vivid_chroma_low_oklab=0.025,
+        vivid_chroma_high_oklab=0.075,
+        drc_l_space="cielab",
+        drc_chroma_space="cielab",
+        prepare_midtone=1.0,
+        clahe_clip_limit=0.0,
+        clahe_keepout_feather=0.015,
+        prepare_usm_radius=1.0,
+        prepare_usm_amount=0,
+        dither_noise=0.0,
+    )
+
+
+# Per-pipeline defaults for a fresh install: what the classifier dispatches to
+# for an ordinary photo, a black-and-white one, and one with faces in it.
+#
+# The dither settings below are measured, not chosen: each is the best scoring
+# combination of algorithm x LUT x saturation space x DRC space x adaptive-vivid
+# x serpentine over the test corpus, per pipeline. Method, numbers and the
+# things that did NOT work are in docs/dither_search.md. Only those six
+# dimensions were swept — the tonal chain (CLAHE, unsharp, gamma) is unchanged
+# and still hand-tuned.
+
+
+# What four evenings of blind rating on real glass endorsed.
+#
+# 443 ratings over 62 photographs and 21 alternative renderings, each rendered,
+# pushed to the bench panel, photographed with the calibrated camera rig and
+# judged blind against the settings the Foyer server actually runs. Nothing beat
+# those settings: every alternative scored a negative mean and three were
+# significantly worse. Over months of tuning in the UI the server had drifted
+# away from this file, so it was this file that was wrong, not the server.
+#
+# The deltas below move the general and face defaults onto that judged
+# configuration exactly. The black-and-white default is deliberately NOT moved
+# onto the server's values: not one judged photograph was near-greyscale, so
+# that pipeline has no evidence behind it either way -- see `_bw_default`.
+#
+# The dropdown alternates further down keep the older hand-tuned lineage
+# untouched: the campaign says nothing about them, and changing them would
+# silently invalidate their descriptions in PRESET_META and alter the rendering
+# for anyone who has deliberately selected one.
+#
+# Method, numbers and what did not work:
+# docs/screens/huessen_epf1301/rendering_campaign.md
+
+
+def _general_default() -> ImageConfig:
+    """Ordinary photos: Atkinson, with saturation and DRC in OKLAB.
+
+    Atkinson over Floyd-Steinberg is the larger part of the win; moving the
+    adaptive-saturation and dynamic-range-compression stages into OKLAB is the
+    rest, and shows up mainly as less colour bleeding into near-neutral areas
+    (measured neutral_leak 19.6 -> 16.4).
+    """
+    return replace(
+        _hue_aware("atkinson", serpentine=True),
+        adaptive_saturate_space="oklab",
+        drc_l_space="oklab",
+        drc_chroma_space="oklab",
+        # Judged settings. CLAHE back on: the glass A/B behind _hue_aware's 0.0
+        # tested a handful of photographs, and the campaign's 20-photograph
+        # blind arm disagreed with it (`clahe_off` -0.30, worse on 11 of 20).
+        # The larger, blind evidence wins. Both chroma boosts sit at neutral --
+        # every arm that raised them lost, and `color_enhance` is inert here
+        # anyway because adaptive saturation runs (see image_abc.py).
+        clahe_clip_limit=1.75,
+        adaptive_vivid=False,
+        color_enhance=1.0,
+        saturate_max_enhance=1.0,
+    )
+
+
+def _bw_default() -> ImageConfig:
+    """Black-and-white photos: Atkinson, DRC in OKLAB.
+
+    Saturation stays off, as _bw() sets it: with the two-ink LUT the saturation
+    space cannot change which ink is picked, so the top scorers differed by
+    less than 0.01 and "off" is the honest description of what happens.
+    """
+    return replace(
+        _bw("atkinson", serpentine=True),
+        drc_l_space="oklab",
+        drc_chroma_space="oklab",
+        # NOT a campaign result: not one of the 62 photographs judged on glass
+        # was near-greyscale, so this pipeline was never in front of anyone.
+        # The server runs CIELAB saturation and CLAHE 1.75 here; those are left
+        # alone above, because "off" is the honest description of a saturation
+        # space that cannot change which of two inks is picked, and the harder
+        # local-contrast push has a stated reason in `_bw`.
+        #
+        # This one line is a fix on its own merits. `color_enhance` applies only
+        # when adaptive saturation is off (image_abc.py) -- which, in this
+        # pipeline, it is. So 1.05 was a live 5 % chroma boost on photographs
+        # selected for having no colour, in the one preset whose description
+        # promises "colour boosting off, so JPEG noise and film grain cannot be
+        # amplified into a pink or yellow cast". It now does what it says.
+        color_enhance=1.0,
+    )
+
+
+def _face_default() -> ImageConfig:
+    """Faces: Atkinson, and both chroma boosters off.
+
+    Skin and lips are where boosting hurts. Turning adaptive saturation and
+    adaptive vivid off measured best by a clear margin and cut blue ink in
+    saturated lips by about two thirds (lips_blue 2.9 % -> 0.9 %). DRC stays in
+    CIELAB here — OKLAB won for the other two pipelines but scored worse on
+    faces, which is why the spaces are set per pipeline rather than globally.
+    """
+    return replace(
+        _face("atkinson", serpentine=True),
+        adaptive_saturate_space="off",
+        adaptive_vivid=False,
+        # Judged settings, and this is the pipeline that matters most: 79 of the
+        # 100 photographs sampled from the library classify as faces. CLAHE on,
+        # the milder unsharp mask of the other two pipelines, and colour enhance
+        # at neutral -- which DOES bite here, because adaptive saturation is off
+        # above, so this was a real 1.25x chroma boost on skin that the server
+        # had long since turned down and the ratings never asked for back.
+        clahe_clip_limit=1.75,
+        prepare_usm_amount=120,
+        prepare_usm_radius=1.0,
+        color_enhance=1.0,
+        saturate_max_enhance=1.0,
+    )
+
+
+DEFAULT_IMAGE_CONFIG: ImageConfig = _general_default()
+DEFAULT_BW_IMAGE_CONFIG: ImageConfig = _bw_default()
+DEFAULT_FACE_IMAGE_CONFIG: ImageConfig = _face_default()
+
+
+# The dropdown catalog. The three shipped defaults come first and are the SAME
+# objects as the DEFAULT_* constants above, not copies — so a fresh install
+# matches a named entry exactly and the UI says "General (default)" instead of
+# "Custom (your edits)", which is what it used to do and which read as though
+# someone had already been fiddling.
+#
+# Keeping them out of here was a deliberate choice originally, on the grounds
+# that the face tuning is wrong as a general-purpose starting point. That is
+# still true — but it is a reason to describe them accurately, not to hide the
+# settings the server actually ships with.
+#
+# The three hand-picked entries below them remain as alternatives. They are not
+# redundant: "Atkinson (hue-aware)" differs from the general default in
+# serpentine scan and in doing saturation and DRC in CIELAB rather than OKLAB.
+#
+# "calibration_raw" is last and is a service preset, not a starting point: it
+# neutralises every stage so an image already authored in the panel's own inks
+# survives to the glass unchanged. Photos rendered with it band badly.
 PRESET_IMAGE_CONFIGS: dict[str, ImageConfig] = {
+    "default_general": DEFAULT_IMAGE_CONFIG,
+    "default_bw": DEFAULT_BW_IMAGE_CONFIG,
+    "default_face": DEFAULT_FACE_IMAGE_CONFIG,
     "floyd_steinberg_hue_aware": _hue_aware("floyd_steinberg", serpentine=True),
     "floyd_steinberg_bw": _bw("floyd_steinberg", serpentine=True),
     "atkinson_hue_aware": _hue_aware("atkinson"),
+    "calibration_raw": _calibration_raw(),
 }
 
-FALLBACK_PRESET = "floyd_steinberg_hue_aware"
+# No production code falls back to this any more — the strict parser removed the
+# last caller. Kept as the canonical "ordinary photo" starting point for tests.
+FALLBACK_PRESET = "default_general"
 
 
 # UI-only metadata. Kept out of the dataclass so cache_slug() stays stable
 # across copy edits and so dataclass equality isn't perturbed by labels.
 PRESET_META: dict[str, dict[str, str]] = {
+    "default_general": {
+        "label": "General (default)",
+        "description": "What the server ships with for ordinary photos. Atkinson with a hue-constrained palette LUT, serpentine scan, and both adaptive saturation and dynamic-range compression in OKLAB. Not hand-picked: this scored best of every algorithm × LUT × colour-space combination over the test corpus. See docs/dither_search.md.",
+    },
+    "default_bw": {
+        "label": "Black & white (default)",
+        "description": "What the server ships with for photos it detects as black-and-white. Restricted to the two neutral inks with colour boosting off, so JPEG noise and film grain cannot be amplified into a pink or yellow cast, plus dynamic-range compression in OKLAB.",
+    },
+    "default_face": {
+        "label": "Faces (default)",
+        "description": "What the server ships with for photos containing faces, and what most of a typical library gets. Both chroma boosters are off, which measured a two-thirds cut in blue ink landing on saturated lips, and colour enhance sits at neutral rather than boosting skin. Local contrast and sharpening match the general default. These are the settings that came through four evenings of blind rating on glass unbeaten.",
+    },
     "floyd_steinberg_hue_aware": {
         "label": "Floyd-Steinberg (hue-aware)",
         "description": "Floyd-Steinberg with a hue-constrained palette LUT, adaptive saturation + adaptive vivid. Punchier reds/blues without bleeding into other inks.",
@@ -84,5 +356,9 @@ PRESET_META: dict[str, dict[str, str]] = {
     "atkinson_hue_aware": {
         "label": "Atkinson (hue-aware)",
         "description": "Default. Atkinson with hue-constrained LUT and adaptive saturation/vivid. Bold output with believable colours.",
+    },
+    "calibration_raw": {
+        "label": "Calibration (raw passthrough)",
+        "description": "Service preset. No dithering, no tonal or colour processing — each pixel maps straight to its nearest ink. For the colour-calibration target (tools/color_target.py) and other art already authored in the panel's inks at exact panel size. Photos rendered with this will band badly.",
     },
 }

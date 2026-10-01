@@ -48,9 +48,11 @@
 #include "../../all/json_util.c"
 #include "../../all/firmware_url.c"
 #include "../../all/frame_state.c"
+#include "../../all/sleep_cal.c"
 #include "config.c"
 #include "state.c"
 #include "scheduler.c"
+#include "nvs_cal.c"
 #include "log.c"
 #include "wifi.c"
 #include "net.c"
@@ -99,6 +101,113 @@ static void test_save_pre_sleep_epoch(void)
     save_pre_sleep_epoch(1700000000LL, esp_timer_get_time());
     CHECK(pre_sleep_server_epoch >= 1700000000LL,
           "scheduler: save_pre_sleep_epoch stores a server-anchored epoch");
+}
+
+/* ═══ scheduler.c — consolidated schedule + drift calibration ═══ */
+static void test_set_after_refresh(void)
+{
+    next_refresh_epoch = 42;   /* sentinel to prove the reject path changes nothing */
+    bool ok = scheduler_set_after_refresh(1700000000LL, 3600, esp_timer_get_time());
+    CHECK(ok && next_refresh_epoch == 1700003600LL && last_sleep_seconds == 3600 &&
+          pre_sleep_server_epoch >= 1700000000LL,
+          "scheduler: set_after_refresh anchors next_ep = server_epoch + sleep");
+
+    next_refresh_epoch = 42;
+    ok = scheduler_set_after_refresh(0, 3600, esp_timer_get_time());
+    CHECK(!ok && next_refresh_epoch == 42,
+          "scheduler: set_after_refresh rejects server_epoch<=0, leaves state for caller fallback");
+}
+
+static void test_observe_sleep_learns_drift(void)
+{
+    /* Slept ~1% long (slow oscillator). intended=armed=43200; actual=+432. */
+    const int64_t armed = 43200, actual = 43200 + 432;
+    last_sleep_mode = LAST_SLEEP_MODE_TIMER_WAKE;
+    last_sleep_seconds = (int32_t)armed;
+    last_armed_sleep_s = (int32_t)armed;
+    pre_sleep_server_epoch = (int64_t)time(NULL) - actual;
+    cal_ppm = 0; cal_samples = 0; last_sleep_err_known = false;
+
+    scheduler_observe_sleep();
+
+    CHECK(last_sleep_err_known && last_sleep_err_s >= 430 && last_sleep_err_s <= 435,
+          "scheduler: observe_sleep records the slot error (~+432 s)");
+    CHECK(cal_ppm >= 9900 && cal_ppm <= 10100 && cal_samples == 1,
+          "scheduler: observe_sleep learns +1% drift (~+10000 ppm) on first sample");
+}
+
+static void test_observe_sleep_skips_non_timer(void)
+{
+    last_sleep_mode = LAST_SLEEP_MODE_BUTTON_WAKE;
+    last_sleep_seconds = 43200; last_armed_sleep_s = 43200;
+    pre_sleep_server_epoch = (int64_t)time(NULL) - 43600;
+    cal_ppm = 1234; cal_samples = 5; last_sleep_err_known = false;
+
+    scheduler_observe_sleep();
+
+    CHECK(cal_ppm == 1234 && cal_samples == 5 && !last_sleep_err_known,
+          "scheduler: observe_sleep is a no-op on a non-timer wake");
+}
+
+static void test_observe_sleep_skips_without_armed(void)
+{
+    /* Retry/fallback sleeps leave last_armed_sleep_s == 0: err is still recorded
+     * but no drift sample is taken. */
+    last_sleep_mode = LAST_SLEEP_MODE_TIMER_WAKE;
+    last_sleep_seconds = 43200; last_armed_sleep_s = 0;
+    pre_sleep_server_epoch = (int64_t)time(NULL) - 43600;
+    cal_ppm = 1234; cal_samples = 5; last_sleep_err_known = false;
+
+    scheduler_observe_sleep();
+
+    CHECK(last_sleep_err_known && cal_ppm == 1234 && cal_samples == 5,
+          "scheduler: observe_sleep records err but skips calibration without an armed value");
+}
+
+static void test_next_sleep_us_calibrated(void)
+{
+    /* No drift: arms ~the desired interval and records it. */
+    cal_ppm = 0; cal_samples = 0;
+    next_refresh_epoch = (int64_t)time(NULL) + 3600;
+    int64_t us = scheduler_next_sleep_us(9999000000LL);
+    CHECK(us >= 3590000000LL && us <= 3600000000LL && last_armed_sleep_s >= 3590 &&
+          last_armed_sleep_s <= 3600,
+          "scheduler: next_sleep_us arms ~desired and records last_armed_sleep_s");
+
+    /* Slow oscillator (+10000 ppm) -> arm LESS than desired. */
+    cal_ppm = 10000;
+    next_refresh_epoch = (int64_t)time(NULL) + 3600;
+    us = scheduler_next_sleep_us(9999000000LL);
+    CHECK(us >= 3554000000LL && us <= 3566000000LL,
+          "scheduler: next_sleep_us arms less for a slow clock");
+
+    /* Tick-deadline (negative) -> not calibrated, last_armed cleared. */
+    cal_ppm = 10000;
+    next_refresh_epoch = -(esp_timer_get_time() + 5000000LL);
+    us = scheduler_next_sleep_us(9999000000LL);
+    CHECK(us > 0 && us <= 5000000LL && last_armed_sleep_s == 0,
+          "scheduler: next_sleep_us honours a tick deadline without calibrating");
+
+    /* Unscheduled (zero) -> board fallback, last_armed cleared. */
+    next_refresh_epoch = 0;
+    us = scheduler_next_sleep_us(7200000000LL);
+    CHECK(us == 7200000000LL && last_armed_sleep_s == 0,
+          "scheduler: next_sleep_us returns the board fallback when unscheduled");
+}
+
+static void test_adopt_cal_seed(void)
+{
+    cal_ppm = 0; cal_samples = 0;
+    CHECK(scheduler_adopt_cal_seed(8000, 5) && cal_ppm == 8000 && cal_samples == 1,
+          "scheduler: uncalibrated device adopts a well-backed server seed");
+
+    cal_ppm = 3000; cal_samples = 4;   /* already calibrated */
+    CHECK(!scheduler_adopt_cal_seed(8000, 5) && cal_ppm == 3000,
+          "scheduler: a calibrated device ignores the seed");
+
+    cal_ppm = 0; cal_samples = 0;
+    CHECK(!scheduler_adopt_cal_seed(8000, 2) && cal_ppm == 0,
+          "scheduler: seed rejected when server sample count is too low");
 }
 
 /* ═══ log.c (single crash-safe RTC ring) ═══ */
@@ -150,6 +259,12 @@ int main(void)
     test_refresh_due();
     test_schedule_retry_in();
     test_save_pre_sleep_epoch();
+    test_set_after_refresh();
+    test_observe_sleep_learns_drift();
+    test_observe_sleep_skips_non_timer();
+    test_observe_sleep_skips_without_armed();
+    test_next_sleep_us_calibrated();
+    test_adopt_cal_seed();
     test_log_ring_lifecycle();
     test_config_valid();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);

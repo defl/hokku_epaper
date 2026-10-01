@@ -22,8 +22,8 @@ from hokku.common.firmware_paths import BUNDLED_FIRMWARE_DIRS, version_key
 # module-level names so tests can monkeypatch them per case.
 _DEV_FIRMWARE_DIR, _INSTALLED_FIRMWARE_DIR = BUNDLED_FIRMWARE_DIRS
 
-# Numeric version ordering lives in ``firmware_paths``; alias it under the
-# historical private name used throughout this module.
+# Version ordering lives in ``firmware_paths``; alias it under the historical
+# private name used throughout this module.
 _version_key = version_key
 
 
@@ -39,7 +39,7 @@ def merged_firmware_file(spec: Esp32Spec, directory: Path | None = None) -> Path
     """Return the merged ``hokku-<model>-<version>.bin`` in *directory*, or None.
 
     With no argument, searches the resolved firmware dir. Picks the highest
-    version (compared numerically, so 1.2.10 > 1.2.9) when several are present —
+    version (compared as a version, so 1.2.10 > 1.2.9) when several are present —
     ``firmware/release/`` is not pruned between builds, so multiple versions of a
     model can coexist there.
     """
