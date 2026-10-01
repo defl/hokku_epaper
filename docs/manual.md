@@ -53,6 +53,8 @@ Pictures using something other than the plain default show a small badge on thei
 
 **Queue control** — each thumbnail has a "Show next" button that immediately queues that photo to be shown on the frame at its next refresh. Use this when you want a specific photo on the wall without waiting for normal rotation. The server uses a fair rotation algorithm — each image gets equal screen time over the long run, with newly uploaded photos jumping to the front of the queue. The "Show next" button effectively sets an image's priority to maximum.
 
+**Labels** — a label is a short free-form tag on a picture ("hall", "summer", "kids' drawings"); a picture can carry any number of them and they show as small chips on its thumbnail. Add or remove labels for one picture from its Details dialog. To label many at once press **Select pictures**, tick the thumbnails (or **Select all**), type a label and press **Add label** or **Remove label**. The **Show** menu above the grid narrows it to the pictures carrying one label, or to those without any; **Select all** then picks only what is shown, which is also how you rename a label: show it, select all, add the new name, remove the old one. There is nothing to create first: the set of labels is simply whatever the pictures currently carry, and a label vanishes when the last picture drops it. Labelling never re-converts a picture. On their own labels change nothing about what is shown — they become useful when a frame filters on them (see [Screens](#12-screens)).
+
 **Deleting** — the trash button on each thumbnail deletes the original and all cached conversions. The frame will never show that image again.
 
 ### 1.2 Screens
@@ -74,6 +76,8 @@ The Screens tab shows every frame that has ever connected to this server. Each e
 **Multiple frames** — every frame that connects is tracked independently. You can run as many frames as you like from a single server, and they don't have to be the same model: a 13.3" frame and a 7.3" Bigme F7 can run side by side off the same library, each served images converted for its own panel. Give each one a distinct name so you can tell them apart in the dashboard. All frames share the same refresh schedule and image pool.
 
 **Per-screen orientation** — each frame carries its own orientation, set in the Screens tab. A frame mounted in portrait can show portrait-rendered images while another in landscape shows landscape ones, both served from the same library. A brand-new frame defaults to landscape until you change it.
+
+**Per-screen labels** — in a frame's Config dialog, under *Show only pictures labelled*, tick one or more labels and that frame only rotates through pictures carrying **any** of the ticked labels (a picture labelled both "hall" and "summer" matches either). Leave everything unticked — the default, and what every frame starts with — and the frame shows the whole library exactly as before. Each frame keeps its own selection, so one frame can show the holiday pictures while another shows the children's drawings from the same library. Rotation stays fair within the filtered set. If no ready picture carries a ticked label the frame keeps its current image and checks again at its normal interval (press the frame's button to make it check sooner); the Screens table shows each frame's label filter under its name and warns when it matches nothing.
 
 **Firmware version** — each frame reports the firmware it's running, shown in the
 dashboard. If the server is carrying a newer build for that model, the frame is

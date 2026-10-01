@@ -604,6 +604,45 @@
     cursor: default; user-select: none;
   }
 
+  /* ── Labels ───────────────────────────────────────────────── */
+  .label-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .label-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px;
+    font-size: 0.75em; font-weight: 500;
+    color: var(--indigo);
+    background: rgba(46, 79, 110, 0.08);
+    border: 1px solid rgba(46, 79, 110, 0.35);
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .label-chip button {
+    border: 0; background: none; padding: 0; margin: 0 -2px 0 2px;
+    color: inherit; cursor: pointer; font-size: 1.1em; line-height: 1;
+  }
+  .label-chip button:hover { color: var(--vermilion); }
+  .label-empty-warning { margin-top: 4px; font-size: 0.8em; color: var(--vermilion); }
+  .label-filter select { font-size: 0.9em; padding: 4px 8px; }
+  .image-card .label-chips { margin: -2px 0 6px; }
+  .image-card .select-box {
+    position: absolute; top: 8px; left: 8px; z-index: 2;
+    width: 18px; height: 18px; accent-color: var(--indigo); cursor: pointer;
+  }
+  .image-card.selected { outline: 2px solid var(--indigo); outline-offset: -2px; }
+  .label-bulk-bar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 12px; margin-bottom: 14px;
+    background: rgba(46, 79, 110, 0.06); border: 1px solid rgba(46, 79, 110, 0.25);
+    border-radius: 6px; font-size: 0.9em;
+  }
+  .label-bulk-bar[hidden] { display: none; }
+  .label-bulk-bar input[type="text"], .label-bulk-bar select { font-size: 0.9em; padding: 4px 8px; }
+  .label-editor { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .label-editor input[type="text"] { font-size: 0.9em; padding: 4px 8px; width: 160px; }
+  .label-picker { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+  .label-picker label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9em; }
+  .label-picker input[type="checkbox"] { accent-color: var(--indigo); }
+
   /* ── Confirmation modal ───────────────────────────────────── */
   .modal-backdrop {
     position: fixed; inset: 0;
@@ -881,7 +920,26 @@
     <div class="stat">Images: <strong id="stat-pool-size">0</strong></div>
     <div class="stat">Last served: <strong id="stat-last-served">-</strong></div>
     <div id="processing-indicator" class="processing-indicator idle">Idle</div>
+    <label class="label-filter" style="margin-left:auto" title="Show only the pictures carrying this label">
+      Show
+      <select id="label-filter-select">
+        <option value="">All pictures</option>
+      </select>
+    </label>
+    <button type="button" class="btn btn-secondary btn-small" id="label-select-btn" title="Select several pictures to label them at once">Select pictures</button>
   </div>
+
+  <!-- Bulk labelling. Shown while selecting; acts on every checked card. -->
+  <div class="label-bulk-bar" id="label-bulk-bar" hidden>
+    <strong id="label-bulk-count">0 selected</strong>
+    <button type="button" class="btn btn-secondary btn-small" id="label-bulk-all">Select all</button>
+    <span style="flex:1"></span>
+    <input type="text" id="label-bulk-input" list="label-datalist" placeholder="Label…" maxlength="40">
+    <button type="button" class="btn btn-primary btn-small" id="label-bulk-add">Add label</button>
+    <button type="button" class="btn btn-secondary btn-small" id="label-bulk-remove">Remove label</button>
+    <button type="button" class="btn btn-secondary btn-small" id="label-bulk-done">Done</button>
+  </div>
+  <datalist id="label-datalist"></datalist>
 
   <div class="upload-progress" id="upload-progress"></div>
   <div class="image-grid" id="image-grid"></div>
@@ -1279,6 +1337,17 @@
     </div>
     <table id="img-detail-table"></table>
     <div class="detail-actions" id="img-detail-actions"></div>
+
+    <!-- Labels: free-form tags; screens can filter on them (Screens → Config). -->
+    <div class="img-detail-override">
+      <p class="config-section-label">Labels</p>
+      <div class="label-chips" id="img-detail-labels"></div>
+      <div class="label-editor">
+        <input type="text" id="img-detail-label-input" list="label-datalist" placeholder="Add a label…" maxlength="40">
+        <button type="button" class="btn btn-secondary btn-small" id="img-detail-label-add">Add</button>
+        <span class="info" id="img-detail-label-status"></span>
+      </div>
+    </div>
 
     <!-- Per-picture conversion. Both halves are independent overrides on the
          image's record: either can be set without the other, and "Use
@@ -3082,8 +3151,12 @@ function renderScreens(screens, bundledFirmwareVersions) {
     else if (s.ota_pending) nameBadges += ' <span title="Firmware update scheduled for next refresh" style="color:var(--accent,#2a6);font-weight:700">⟳</span>';    const modelCell = s.screen_model
       ? `<span style="font-family:var(--font-mono);font-size:0.85em">${escapeHtml(s.screen_model)}</span>`
       : '<span style="color:var(--bamboo)">—</span>';
+    const labelRow = (s.labels && s.labels.length)
+      ? `<div class="label-chips" title="Only pictures carrying one of these labels are shown">${s.labels.map(l => `<span class="label-chip">${escapeHtml(l)}</span>`).join('')}</div>` +
+        (s.labels_match_nothing ? '<div class="label-empty-warning">No picture matches: keeping the current one</div>' : '')
+      : '';
     html += `<tr${rowClass}>
-      <td>${name}${nameBadges}</td>
+      <td>${name}${nameBadges}${labelRow}</td>
       <td>${modelCell}</td>
       <td>${s.ip || '-'}</td>
       <td>${formatBattery(s)}</td>
@@ -3150,6 +3223,28 @@ async function setScreenFilterByOrientation(name, value) {
   } catch (e) {
     alert('Failed to set orientation filter: ' + e.message);
     renderScreens(lastScreens, lastBundledFirmwareVersions);
+  }
+}
+
+function screenLabelHint(count) {
+  return count ? 'Pictures carrying any ticked label are shown.' : 'Nothing ticked: the whole library is shown.';
+}
+
+async function setScreenLabelsFromPicker(name) {
+  const labels = [...document.querySelectorAll('#screen-label-picker input:checked')].map(i => i.value);
+  try {
+    const r = await fetch(`/hokku/api/screens/${encodeURIComponent(name)}/config`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({labels}),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    if (lastScreens[name]) lastScreens[name].labels = labels;
+    const hint = document.getElementById('screen-label-hint');
+    if (hint) hint.textContent = screenLabelHint(labels.length);
+  } catch (e) {
+    alert('Failed to set label filter: ' + e.message);
+    showScreenConfig(name);
   }
 }
 
@@ -3306,6 +3401,28 @@ function showScreenConfig(name) {
       <label>Match orientation</label>
       <input type="checkbox" ${filterChecked} onchange="setScreenFilterByOrientation('${safeName}', this.checked)">
     </div>`;
+
+  // Label filter: one checkbox per label the library carries. A label a
+  // screen still filters on but no picture has any more is kept in the list
+  // (unticking it is the only way to drop it), so the user can see why the
+  // screen has nothing to show.
+  const screenLabels = s.labels || [];
+  const pickable = [...new Set([...lastAllLabels, ...screenLabels])].sort();
+  body += `<div class="fw-section">`;
+  body += `<h4>Show only pictures labelled</h4>`;
+  if (pickable.length === 0) {
+    body += `<div style="font-size:0.85em;color:var(--stone)">No labels yet — add some from a picture's Details, then pick them here.</div>`;
+  } else {
+    body += `<div class="label-picker" id="screen-label-picker">`;
+    pickable.forEach(l => {
+      const checked = screenLabels.includes(l) ? 'checked' : '';
+      const gone = !lastAllLabels.includes(l) ? ' title="No picture carries this label any more"' : '';
+      body += `<label${gone}><input type="checkbox" value="${escapeHtml(l)}" ${checked} onchange="setScreenLabelsFromPicker('${safeName}')"><span>${escapeHtml(l)}${gone ? ' ⚠' : ''}</span></label>`;
+    });
+    body += `</div>`;
+    body += `<div id="screen-label-hint" style="font-size:0.85em;color:var(--stone);margin-top:6px">${screenLabelHint(screenLabels.length)}</div>`;
+  }
+  body += `</div>`;
 
   const urlOverride = s.server_url_override || '';
   const thisServerUrl = document.getElementById('flash-url')?.value || '';
@@ -3530,6 +3647,7 @@ async function deleteAllFailed(failed) {
 // Keep the last upload+serve snapshot so Details can read it without a round-trip.
 let lastUploadFiles = [];
 let lastServeData = {};
+let lastNextImages = {};
 
 // A small chip on the card saying which pipeline converted this picture. Only
 // shown when it isn't the plain default, so an ordinary library stays quiet.
@@ -3546,11 +3664,13 @@ function pipelineChip(entry) {
 function renderImageGrid(uploadFiles, serveData, nextImages) {
   lastUploadFiles = uploadFiles;
   lastServeData   = serveData;
+  lastNextImages  = nextImages || {};
   const grid = document.getElementById('image-grid');
   grid.innerHTML = '';
   uploadFiles.forEach(entry => {
     // Failed images are shown only in the "Failed conversions" list, not the grid.
     if (entry.status === 'failed') return;
+    if (!passesLabelFilter(entry)) return;
     const fname    = entry.name;
     const dithered = entry.dithered;
     const imgs = nextImages || {};
@@ -3563,7 +3683,11 @@ function renderImageGrid(uploadFiles, serveData, nextImages) {
     }
     const isNext = dithered && nextLabels.length > 0;
     const card = document.createElement('div');
-    card.className = 'image-card' + (dithered ? '' : ' pending');
+    const selected = labelSelectMode && labelSelection.has(fname);
+    card.className = 'image-card' + (dithered ? '' : ' pending') + (selected ? ' selected' : '');
+    const selectBox = labelSelectMode
+      ? `<input type="checkbox" class="select-box" ${selected ? 'checked' : ''} title="Select for labelling">`
+      : '';
     const pendingBadge = dithered ? '' :
       '<div class="pending-badge" title="Dithered version for the e-ink display is still being generated">Dithering…</div>';
     const thumbHtml = `<img src="/hokku/api/thumbnail/${encodeURIComponent(fname)}" alt="${escapeHtml(fname)}"
@@ -3575,10 +3699,12 @@ function renderImageGrid(uploadFiles, serveData, nextImages) {
       : '<button class="btn btn-secondary btn-small shownext-btn" data-name="">Show Next</button>';
     card.innerHTML = `
       <button class="delete-btn" data-name="" title="Delete this image">&#x1F5D1;</button>
+      ${selectBox}
       ${pendingBadge}
       ${thumbHtml}
       <div class="card-body">
         <div class="filename">${escapeHtml(fname)}${pipelineChip(entry)}</div>
+        ${labelChips(entry.labels)}
         <div class="card-actions">
           ${rotationHtml}
           <button class="btn btn-secondary btn-small details-btn" data-name="">Details</button>
@@ -3599,8 +3725,167 @@ function renderImageGrid(uploadFiles, serveData, nextImages) {
       snBtn.dataset.name = fname;
       snBtn.addEventListener('click', () => showNext(fname));
     }
+    const box = card.querySelector('.select-box');
+    if (box) {
+      box.addEventListener('change', () => {
+        if (box.checked) labelSelection.add(fname); else labelSelection.delete(fname);
+        card.classList.toggle('selected', box.checked);
+        updateLabelBulkBar();
+      });
+    }
     grid.appendChild(card);
   });
+  updateLabelBulkBar();
+}
+
+// ── Labels ────────────────────────────────────────────────────────
+//
+// A label is just a string on the picture's record; the vocabulary shown in
+// pickers is whatever the library currently carries (status `labels`). Screens
+// filter on them from their Config modal.
+
+let lastAllLabels = [];           // union across the library, from /status
+let labelSelectMode = false;      // grid shows checkboxes + the bulk bar
+const labelSelection = new Set(); // names checked in select mode
+
+function labelChips(labels, onRemove) {
+  if (!labels || !labels.length) return onRemove ? '<span class="info">No labels yet.</span>' : '';
+  const chips = labels.map(l => {
+    const x = onRemove ? `<button type="button" data-label="${escapeHtml(l)}" title="Remove label" aria-label="Remove ${escapeHtml(l)}">×</button>` : '';
+    return `<span class="label-chip">${escapeHtml(l)}${x}</span>`;
+  }).join('');
+  return onRemove ? chips : `<div class="label-chips">${chips}</div>`;
+}
+
+// Grid filter: '' = every picture, LABEL_FILTER_NONE = pictures without any
+// label, anything else = pictures carrying that label. A single space can
+// never be a real label (labels are trimmed and non-blank).
+const LABEL_FILTER_NONE = ' ';
+let labelFilter = '';
+
+function passesLabelFilter(entry) {
+  const labels = entry.labels || [];
+  if (labelFilter === '') return true;
+  if (labelFilter === LABEL_FILTER_NONE) return labels.length === 0;
+  return labels.includes(labelFilter);
+}
+
+function refreshLabelDatalist() {
+  const dl = document.getElementById('label-datalist');
+  if (dl) dl.innerHTML = lastAllLabels.map(l => `<option value="${escapeHtml(l)}">`).join('');
+  // A label that vanished (last picture dropped it) falls back to "All".
+  if (labelFilter !== '' && labelFilter !== LABEL_FILTER_NONE && !lastAllLabels.includes(labelFilter)) {
+    labelFilter = '';
+  }
+  const sel = document.getElementById('label-filter-select');
+  if (sel) {
+    sel.innerHTML = '<option value="">All pictures</option>'
+      + lastAllLabels.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`).join('')
+      + `<option value="${LABEL_FILTER_NONE}">Without a label</option>`;
+    sel.value = labelFilter;
+  }
+}
+
+// One route for both editors. `body` is either {labels:[...]} (replace) or
+// {add:[...], remove:[...]} (adjust). Throws with the server's message.
+async function patchLabels(names, body) {
+  const r = await fetch('/hokku/api/labels', {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({names, ...body}),
+  });
+  if (!r.ok) {
+    let msg = r.statusText;
+    try { msg = (await r.json()).error || msg; } catch (_) {}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
+function setLabelSelectMode(on) {
+  labelSelectMode = on;
+  if (!on) labelSelection.clear();
+  document.getElementById('label-bulk-bar').hidden = !on;
+  document.getElementById('label-select-btn').textContent = on ? 'Cancel selection' : 'Select pictures';
+  renderImageGrid(lastUploadFiles, lastServeData, lastNextImages);
+}
+
+function updateLabelBulkBar() {
+  const n = labelSelection.size;
+  document.getElementById('label-bulk-count').textContent = `${n} selected`;
+  const busy = n === 0;
+  document.getElementById('label-bulk-add').disabled = busy;
+  document.getElementById('label-bulk-remove').disabled = busy;
+}
+
+async function applyBulkLabel(action) {
+  const input = document.getElementById('label-bulk-input');
+  const label = input.value.trim();
+  if (!label || labelSelection.size === 0) return;
+  try {
+    await patchLabels([...labelSelection], {[action]: [label]});
+    input.value = '';
+    showToast(`${action === 'add' ? 'Added' : 'Removed'} “${label}” on ${labelSelection.size} picture${labelSelection.size === 1 ? '' : 's'}`);
+    refreshStatus();
+  } catch (e) {
+    showToast('Label change failed: ' + e.message);
+  }
+}
+
+document.getElementById('label-select-btn').addEventListener('click', () => setLabelSelectMode(!labelSelectMode));
+document.getElementById('label-bulk-done').addEventListener('click', () => setLabelSelectMode(false));
+document.getElementById('label-bulk-all').addEventListener('click', () => {
+  // "All" means all that are visible, so filter-then-select-all works.
+  lastUploadFiles.forEach(e => { if (e.status !== 'failed' && passesLabelFilter(e)) labelSelection.add(e.name); });
+  renderImageGrid(lastUploadFiles, lastServeData, lastNextImages);
+});
+document.getElementById('label-filter-select').addEventListener('change', e => {
+  labelFilter = e.target.value;
+  renderImageGrid(lastUploadFiles, lastServeData, lastNextImages);
+});
+document.getElementById('label-bulk-add').addEventListener('click', () => applyBulkLabel('add'));
+document.getElementById('label-bulk-remove').addEventListener('click', () => applyBulkLabel('remove'));
+document.getElementById('label-bulk-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); applyBulkLabel('add'); }
+});
+
+// The details modal edits one picture's labels in place: the chips re-render
+// from the entry after every save, so the poll does not have to come round.
+function setupImageLabelEditor(fname, entry) {
+  const chips  = document.getElementById('img-detail-labels');
+  const input  = document.getElementById('img-detail-label-input');
+  const addBtn = document.getElementById('img-detail-label-add');
+  const status = document.getElementById('img-detail-label-status');
+  input.value = '';
+  status.textContent = '';
+
+  const render = () => {
+    chips.innerHTML = labelChips(entry.labels || [], true);
+    chips.querySelectorAll('button[data-label]').forEach(b =>
+      b.addEventListener('click', () => save((entry.labels || []).filter(l => l !== b.dataset.label))));
+  };
+  const save = async (labels) => {
+    status.textContent = 'Saving…';
+    try {
+      await patchLabels([fname], {labels});
+      entry.labels = labels.slice().sort();
+      status.textContent = '';
+      render();
+      refreshStatus();
+    } catch (e) {
+      status.textContent = e.message;
+    }
+  };
+  const add = () => {
+    const label = input.value.trim();
+    if (!label) return;
+    input.value = '';
+    if ((entry.labels || []).includes(label)) return;
+    save([...(entry.labels || []), label]);
+  };
+  addBtn.onclick = add;
+  input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); add(); } };
+  render();
 }
 
 function showImageDetails(fname) {
@@ -3692,6 +3977,7 @@ function showImageDetails(fname) {
     actions.innerHTML = '<span style="color:#92400e;font-size:0.85em">Dithered version not ready yet</span>';
   }
 
+  setupImageLabelEditor(fname, entry);
   setupImageOverrideEditor(fname, entry);
 
   modal.classList.add('show');
@@ -4269,6 +4555,8 @@ async function refreshStatus() {
 
     // Image grid — render every uploaded file (dithered or pending)
     const uploadList = data.upload_files || data.pool_files.map(n => ({name: n, dithered: true}));
+    lastAllLabels = data.labels || [];
+    refreshLabelDatalist();
     renderImageGrid(uploadList, data.serve_data, data.next_images || {});
     renderFailedList(data.failed_files || []);
     updatePreviewImageOptions(uploadList);

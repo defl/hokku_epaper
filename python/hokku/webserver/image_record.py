@@ -12,6 +12,7 @@ from hokku.webserver.image_config import (
     image_config_from_dict_strict,
     parse_crop_to_fill_threshold,
 )
+from hokku.webserver.labels import LabelError, parse_labels
 from hokku.webserver.orientation import Orientation
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,12 @@ class ImageRecord:
     # automatic rather than breaking.
     image_config: ImageConfig | None = None  # None = the classifier picks
     crop_to_fill_threshold: float | None = None  # None = AppConfig's global value
+
+    # User-authored tags, normalised and sorted by labels.parse_labels(). Read
+    # by ScreenConfig.labels to decide which pictures a screen may show. Not
+    # part of the cache slug: relabelling never re-renders. Same additive
+    # story as the overrides — a row without the field loads as untagged.
+    labels: tuple[str, ...] = ()
 
     def slug_for(self, model: str, orientation: Orientation) -> str | None:
         """Return the cached slug for (model, orientation), or None if not rendered."""
@@ -120,6 +127,17 @@ class ImageRecord:
 
         return image_config, crop
 
+    @staticmethod
+    def _labels_from_dict(d: dict) -> tuple[str, ...]:
+        raw = d.get("labels")
+        if raw is None:
+            return ()
+        try:
+            return parse_labels(raw)
+        except LabelError as e:
+            logger.warning("Dropping malformed labels for %r: %s", d.get("name"), e)
+            return ()
+
     @classmethod
     def from_dict(cls, d: dict) -> ImageRecord:
         raw_t = d.get("last_conversion_seconds")
@@ -152,6 +170,7 @@ class ImageRecord:
             image_height=int(raw_h) if raw_h is not None else None,
             image_config=image_config,
             crop_to_fill_threshold=crop_to_fill_threshold,
+            labels=cls._labels_from_dict(d),
         )
 
 

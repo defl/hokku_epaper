@@ -1051,3 +1051,130 @@ def test_ui_returns_html(bare_client):
     resp = client.get("/hokku/ui")
     assert resp.status_code == 200
     assert b"<!DOCTYPE html>" in resp.data or b"<html" in resp.data
+
+
+# ── /hokku/api/labels + per-screen label filter ──────────────────────────────
+
+
+def _labels_of(client, name: str) -> list[str]:
+    files = client.get("/hokku/api/status").get_json()["upload_files"]
+    return next(e for e in files if e["name"] == name)["labels"]
+
+
+def test_labels_replace_and_status(synced_client):
+    client, _, name = synced_client
+    assert _labels_of(client, name) == []
+
+    resp = client.patch("/hokku/api/labels", json={"names": [name], "labels": [" Hall ", "summer"]})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "missing": []}
+
+    status = client.get("/hokku/api/status").get_json()
+    assert _labels_of(client, name) == ["Hall", "summer"]
+    assert status["labels"] == ["Hall", "summer"]
+
+
+def test_labels_bulk_add_remove_reports_missing(synced_client):
+    client, _, name = synced_client
+    resp = client.patch(
+        "/hokku/api/labels", json={"names": [name, "ghost.png"], "add": ["hall", "summer"]}
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["missing"] == ["ghost.png"]
+    assert _labels_of(client, name) == ["hall", "summer"]
+
+    resp = client.patch("/hokku/api/labels", json={"names": [name], "remove": ["hall"]})
+    assert resp.status_code == 200
+    assert _labels_of(client, name) == ["summer"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"names": []},
+        {"names": "a.png", "labels": ["x"]},
+        {"names": ["a.png"], "labels": "x"},
+        {"names": ["a.png"], "labels": [""]},
+        {"names": ["a.png"], "labels": ["x"], "add": ["y"]},
+        {"names": ["a.png"], "bogus": 1},
+    ],
+    ids=["empty", "no names", "names not list", "labels not list", "blank", "mixed", "unknown key"],
+)
+def test_labels_rejects_malformed(bare_client, body):
+    client, _ = bare_client
+    resp = client.patch("/hokku/api/labels", json=body)
+    assert resp.status_code == 400
+    assert "error" in resp.get_json()
+
+
+def test_labels_do_not_rerender(synced_client):
+    """Tagging is metadata only — the dithered output must stay as it was."""
+    client, state, name = synced_client
+    before = state.manager.status(name)
+    assert before is not None
+    client.patch("/hokku/api/labels", json={"names": [name], "labels": ["hall"]})
+    state.manager.wait_for_idle()
+    after = state.manager.status(name)
+    assert after is not None
+    assert after.slugs == before.slugs
+
+
+def test_screen_label_filter_round_trip(synced_client):
+    client, state, _ = synced_client
+    resp = client.patch("/hokku/api/screens/frame-1/config", json={"labels": ["b", "a", "a"]})
+    assert resp.status_code == 200
+    assert state.scheduler.get_screen_config("frame-1").labels == ("a", "b")
+    assert client.get("/hokku/api/status").get_json()["screens"]["frame-1"]["labels"] == ["a", "b"]
+
+    resp = client.patch("/hokku/api/screens/frame-1/config", json={"labels": "a"})
+    assert resp.status_code == 400
+
+    resp = client.patch("/hokku/api/screens/frame-1/config", json={"labels": []})
+    assert resp.status_code == 200
+    assert state.scheduler.get_screen_config("frame-1").labels == ()
+
+
+def test_screen_label_filter_gates_what_is_served(synced_client):
+    """A screen filtering on a label nothing carries gets a 404, not the picture."""
+    client, _, name = synced_client
+    headers = {"X-Screen-Name": "frame-1", "X-Screen-Model": "huessen_epf1301"}
+
+    assert client.get("/hokku/screen/", headers=headers).status_code == 200
+
+    client.patch("/hokku/api/screens/frame-1/config", json={"labels": ["winter"]})
+    resp = client.get("/hokku/screen/", headers=headers)
+    assert resp.status_code == 404
+    assert b"labels" in resp.data
+
+    client.patch("/hokku/api/labels", json={"names": [name], "add": ["winter"]})
+    assert client.get("/hokku/screen/", headers=headers).status_code == 200
+
+
+def test_screen_label_filter_no_match_sleeps_the_normal_interval(synced_client, monkeypatch):
+    """No match will not fix itself, so the frame must not fast-retry and drain."""
+    monkeypatch.setattr("hokku.webserver.flask_app.calculate_sleep_seconds", lambda _config: 3600)
+    client, _, _ = synced_client
+    headers = {"X-Screen-Name": "frame-1", "X-Screen-Model": "huessen_epf1301"}
+    client.patch("/hokku/api/screens/frame-1/config", json={"labels": ["winter"]})
+
+    resp = client.get("/hokku/screen/", headers=headers)
+    assert resp.status_code == 404
+    assert resp.headers["X-Sleep-Seconds"] == "3600"
+
+
+def test_status_flags_a_label_filter_that_matches_nothing(synced_client):
+    client, _, name = synced_client
+    headers = {"X-Screen-Name": "frame-1", "X-Screen-Model": "huessen_epf1301"}
+    client.get("/hokku/screen/", headers=headers)  # register the screen
+
+    def flagged() -> bool:
+        return client.get("/hokku/api/status").get_json()["screens"]["frame-1"][
+            "labels_match_nothing"
+        ]
+
+    assert flagged() is False  # no filter at all
+    client.patch("/hokku/api/screens/frame-1/config", json={"labels": ["winter"]})
+    assert flagged() is True
+    client.patch("/hokku/api/labels", json={"names": [name], "add": ["winter"]})
+    assert flagged() is False

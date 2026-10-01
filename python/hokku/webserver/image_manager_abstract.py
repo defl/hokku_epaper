@@ -115,7 +115,9 @@ class AbstractImageManager(ABC):
         # Overrides rescued from a DB that failed its version check, keyed by
         # image name. Drained by _register_new() as each file is rediscovered.
         # Populated by _load_db(), so it has to exist before that runs.
-        self._salvaged_overrides: dict[str, tuple[ImageConfig | None, float | None]] = {}
+        self._salvaged_overrides: dict[
+            str, tuple[ImageConfig | None, float | None, tuple[str, ...]]
+        ] = {}
 
         # Set by shutdown(); silences every later _save_db(). AppState.reload()
         # builds the replacement manager (which loads the DB) *before* shutting
@@ -412,6 +414,44 @@ class AbstractImageManager(ABC):
             )
             self._save_db()
             return True
+
+    def set_labels(
+        self,
+        names: list[str],
+        *,
+        add: tuple[str, ...] = (),
+        remove: tuple[str, ...] = (),
+        replace_with: tuple[str, ...] | None = None,
+    ) -> list[str]:
+        """Edit labels on one or more pictures in a single write.
+
+        ``replace_with`` sets the exact list; otherwise ``add`` and ``remove``
+        are applied on top of what each picture already carries. Labels do not
+        feed the cache slug, so nothing re-renders. Returns the names that
+        were not registered; the rest are updated.
+        """
+        with self._db_lock:
+            missing = [n for n in names if n not in self._records]
+            changed = False
+            for name in names:
+                rec = self._records.get(name)
+                if rec is None:
+                    continue
+                if replace_with is not None:
+                    new = tuple(sorted(replace_with))
+                else:
+                    new = tuple(sorted((set(rec.labels) | set(add)) - set(remove)))
+                if new != rec.labels:
+                    self._records[name] = replace(rec, labels=new)
+                    changed = True
+            if changed:
+                self._save_db()
+            return missing
+
+    def all_labels(self) -> list[str]:
+        """Every label currently carried by at least one picture, sorted."""
+        with self._db_lock:
+            return sorted({lb for rec in self._records.values() for lb in rec.labels})
 
     def effective_decision(self, name: str) -> ImageClassifierDecision | None:
         """What *name* renders with right now, overrides included.
@@ -819,8 +859,8 @@ class AbstractImageManager(ABC):
 
         Wiping on a version mismatch is the right call for everything derived —
         slugs, status, timings, dimensions all come back from the source files.
-        The two override fields do not: nothing can reconstruct a dither someone
-        tuned by hand. They are picked out here and handed back to
+        The two override fields and the labels do not: nothing can reconstruct
+        a dither someone tuned by hand. They are picked out here and handed back to
         _register_new() as each file is rediscovered on disk, so an override for
         a picture that has since been deleted is correctly forgotten.
 
@@ -830,9 +870,10 @@ class AbstractImageManager(ABC):
         for name, rec_dict in (data.get("images") or {}).items():
             if not isinstance(rec_dict, dict):
                 continue
-            overrides = ImageRecord._overrides_from_dict(rec_dict)
-            if any(v is not None for v in overrides):
-                self._salvaged_overrides[name] = overrides
+            image_config, crop = ImageRecord._overrides_from_dict(rec_dict)
+            labels = ImageRecord._labels_from_dict(rec_dict)
+            if image_config is not None or crop is not None or labels:
+                self._salvaged_overrides[name] = (image_config, crop, labels)
         if self._salvaged_overrides:
             logger.info(
                 "Salvaged per-picture overrides for %d image(s) across the DB wipe",
@@ -907,7 +948,9 @@ class AbstractImageManager(ABC):
         w, h, dim_err = self._try_read_image_dims(src_path)
         # pop, not get: an override survives only the file it belongs to. One
         # left over for a picture no longer on disk is simply dropped.
-        image_config, crop_to_fill_threshold = self._salvaged_overrides.pop(name, (None, None))
+        image_config, crop_to_fill_threshold, labels = self._salvaged_overrides.pop(
+            name, (None, None, ())
+        )
         self._records[name] = ImageRecord(
             name=name,
             name_hash=self._hash_name(name),
@@ -921,6 +964,7 @@ class AbstractImageManager(ABC):
             image_height=h,
             image_config=image_config,
             crop_to_fill_threshold=crop_to_fill_threshold,
+            labels=labels,
         )
 
     def _reconcile_with_disk(self) -> None:
