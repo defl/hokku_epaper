@@ -55,10 +55,10 @@ def build_config_blob(
     server_url: str,
     screen_name: str,
     *,
-    use_dhcp: int = 0,
+    use_dhcp: int = 1,
     power_mode: int = PWR_AUTO,
-    ip: str = "192.168.6.199",
-    gw: str = "192.168.6.254",
+    ip: str = "",
+    gw: str = "",
     nm: str = "255.255.255.0",
     default_sleep_s: int = 300,
 ) -> bytes:
@@ -145,18 +145,32 @@ def config_from_blob(blob: bytes) -> dict | None:
     }
 
 
-# Compile-time defaults from firmware/bigme_f7/hokku_config.c (hokku_config_defaults).
-# Used when a fresh unit has no valid config blob yet.
+# Compile-time defaults from firmware/common/xr872/hokku_config.c
+# (hokku_config_defaults). Used when a fresh unit has no valid config blob yet.
+# DHCP, and no hard-coded addresses.
 FIRMWARE_DEFAULTS = {
-    "server_url": "http://192.168.6.111:8080/hokku/screen/",
+    "server_url": "http://hokku.local:8080/hokku/screen/",
     "screen_name": "bigme-f7",
-    "use_dhcp": 0,
+    "use_dhcp": 1,
     "power_mode": PWR_AUTO,
-    "ip": "192.168.6.199",
-    "gw": "192.168.6.254",
+    "ip": "",
+    "gw": "",
     "nm": "255.255.255.0",
     "default_sleep_s": 300,
 }
+
+# The (ip, gw) that early firmware wrote as its compiled-in static default — the
+# developer's LAN, never a user choice. A saved config still holding exactly this
+# pair (with DHCP off) joins WiFi elsewhere and then reaches nothing (issue #44),
+# so it is treated as unconfigured and moved to DHCP. Keep in sync with
+# HOKKU_LEGACY_DEFAULT_IP/GW in firmware/common/xr872/hokku_config.c.
+LEGACY_DEFAULT_STATIC = ("192.168.6.199", "192.168.6.254")
+
+
+def is_legacy_static(cfg: dict) -> bool:
+    """True for a config still carrying the legacy compiled-in static address."""
+    return not cfg["use_dhcp"] and (cfg["ip"], cfg["gw"]) == LEGACY_DEFAULT_STATIC
+
 
 # xr872_flasher.ERASE_TYPE_4K (kept local so this module stays tooling-agnostic
 # and unit-testable without the dev-tree tools/ on the path).
@@ -191,6 +205,13 @@ def write_config_via_brom(f, on_line, *, server_url=None, screen_name=None) -> t
                 on_line("  found existing config — preserving IP/power settings.")
     except Exception:  # noqa: S110 — a bad/absent blob just means "use defaults"
         pass
+
+    if is_legacy_static(base):
+        on_line(
+            f"  config has the old built-in static IP {base['ip']} (not user-set) — "
+            "switching to DHCP."
+        )
+        base.update(use_dhcp=1, ip="", gw="")
 
     if server_url:
         base["server_url"] = server_url

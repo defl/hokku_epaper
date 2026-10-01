@@ -53,6 +53,7 @@
 #include "mocks/net/HTTPClient/API/HTTPClientCommon.h"
 #include "mocks/lwip/netif.h"
 #include "mocks/lwip/dhcp.h"
+#include "mocks/lwip/netifapi.h"
 #include "mocks/lwip/ip_addr.h"
 #include "mocks/image/image.h"
 #include "mocks/image/fdcm.h"
@@ -135,6 +136,10 @@ static void reset_all_mocks(void)
     _mock_os_time_s = 1000;
     _mock_thread_created = 0;
     memset(&g_refresh_thread, 0, sizeof(g_refresh_thread));
+    memset(&g_refresh_kick, 0, sizeof(g_refresh_kick));
+    _mock_sem_count = 0;
+    _mock_sem_release_calls = 0;
+    _mock_sem_last_wait_ms = 0;
 
     _mock_http_header_present = 0;
     _mock_http_header_value = "";
@@ -183,6 +188,11 @@ static void reset_all_mocks(void)
     _mock_wlan_sta_ap_rssi = 0;
     _mock_wlan_sta_config_result = 0;
     _mock_wlan_sta_enable_result = 0;
+    memset(_mock_wlan_calls, 0, sizeof(_mock_wlan_calls));
+    _mock_wlan_call_count = 0;
+    memset(_mock_wlan_config_ssid, 0, sizeof(_mock_wlan_config_ssid));
+    g_wlan_netif = NULL;
+    _mock_net_ip4_valid = 0;
 
     memset(&_mock_sysinfo_state, 0, sizeof(_mock_sysinfo_state));
     _mock_sysinfo_get_null = 0;
@@ -609,6 +619,63 @@ static void test_wifi_provision_persists_creds_on_success(void)
     CHECK(_mock_sysinfo_save_call_count == 1,
           "wifi_provision: calls sysinfo_save() exactly once");
 }
+/* Issue #44 regression: `wifi <ssid> <pw>` while already associated must
+ * disable the station before reconfiguring it, then re-enable. Config-then-
+ * enable on a running station left the unit on the old AP, no longer checking in. */
+static void test_wifi_provision_live_switch_disables_config_enables(void)
+{
+    reset_all_mocks();
+    static struct netif live_netif;
+    memcpy(_mock_sysinfo_state.wlan_sta_param.ssid, "MMIOT", 5); /* currently joined */
+    _mock_sysinfo_state.wlan_sta_param.ssid_len = 5;
+    g_wlan_netif = &live_netif;
+    _mock_net_ip4_valid = 1;                                      /* holding a lease */
+
+    CHECK(hokku_wifi_provision("McMansion", "password1") == 0,
+          "wifi_provision: live switch succeeds");
+    /* Without the address drop the SDK reconnects with "netif is already up":
+     * no DHCP, no NETWORK_UP (seen on hardware with 1.2.14 before this). */
+    CHECK(_mock_wlan_call_count == 5 &&
+          _mock_wlan_calls[0] == MOCK_NET_CONFIG_DOWN &&
+          _mock_wlan_calls[1] == MOCK_NETIF_CLEAR_ADDR &&
+          _mock_wlan_calls[2] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[3] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[4] == MOCK_WLAN_ENABLE,
+          "wifi_provision: drops the address, then disable -> config -> enable");
+    CHECK(strcmp((const char *)_mock_wlan_config_ssid, "McMansion") == 0,
+          "wifi_provision: configures the NEW ssid");
+}
+static void test_wifi_provision_config_failure_reenables_station(void)
+{
+    reset_all_mocks();
+    _mock_wlan_sta_config_result = -1;
+    CHECK(hokku_wifi_provision("McMansion", "password1") == -1,
+          "wifi_provision: reports a wlan_sta_config failure");
+    CHECK(_mock_wlan_call_count == 3 &&
+          _mock_wlan_calls[0] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[1] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[2] == MOCK_WLAN_ENABLE,
+          "wifi_provision: a failed config still re-enables the station (radio not left off)");
+}
+static void test_wifi_connect_saved_uses_same_sequence(void)
+{
+    reset_all_mocks();
+    memcpy(_mock_sysinfo_state.wlan_sta_param.ssid, "McMansion", 9);
+    _mock_sysinfo_state.wlan_sta_param.ssid_len = 9;
+    hokku_wifi_connect_saved();
+    CHECK(_mock_wlan_call_count == 3 &&
+          _mock_wlan_calls[0] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[1] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[2] == MOCK_WLAN_ENABLE,
+          "wifi_connect_saved: boot connect uses disable -> config -> enable");
+}
+static void test_wifi_provision_rejected_input_leaves_station_alone(void)
+{
+    reset_all_mocks();
+    hokku_wifi_provision("", "password1");
+    CHECK(_mock_wlan_call_count == 0,
+          "wifi_provision: rejected input never touches the running station");
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
  *  hokku_hibernate — sleep_s clamping (5..60000)
@@ -698,6 +765,36 @@ static void test_net_cb_network_up_starts_refresh_thread_once(void)
     net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL); /* a second NETWORK_UP (e.g. reconnect) */
     CHECK(_mock_thread_created == 1,
           "net_cb: a second NETWORK_UP does not start a duplicate thread");
+}
+/* Issue #44: after a `wifi` switch the refresh thread was mid-way through a
+ * server-given sleep (can be ~9 h overnight) and did not check in until it ended. */
+static void test_net_cb_network_up_kicks_running_refresh_thread(void)
+{
+    reset_all_mocks();
+    OS_SemaphoreCreateBinary(&g_refresh_kick);
+    net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL);   /* first up: starts the thread */
+    CHECK(_mock_sem_release_calls == 0,
+          "net_cb: first NETWORK_UP starts the thread, no kick needed");
+    net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL);   /* up again after a switch */
+    CHECK(_mock_sem_release_calls == 1,
+          "net_cb: NETWORK_UP with the thread running kicks the refresh wait");
+}
+static void test_refresh_wait_returns_early_when_kicked(void)
+{
+    reset_all_mocks();
+    OS_SemaphoreCreateBinary(&g_refresh_kick);
+    OS_SemaphoreRelease(&g_refresh_kick);
+    hokku_refresh_wait(33092U * 1000U);
+    CHECK(_mock_sem_last_wait_ms == 33092U * 1000U,
+          "refresh_wait: waits on the kick with the server-given sleep as timeout");
+    CHECK(_mock_sem_count == 0, "refresh_wait: consumes the kick");
+}
+static void test_refresh_wait_without_semaphore_falls_back_to_sleep(void)
+{
+    reset_all_mocks();   /* g_refresh_kick invalid */
+    hokku_refresh_wait(1000);
+    CHECK(_mock_sem_last_wait_ms == 0,
+          "refresh_wait: no semaphore -> plain sleep, never waits on an invalid handle");
 }
 static void test_net_cb_network_down_does_not_crash(void)
 {
@@ -811,6 +908,10 @@ int main(void)
     test_wifi_provision_rejects_empty_ssid();
     test_wifi_provision_rejects_oversized_psk();
     test_wifi_provision_persists_creds_on_success();
+    test_wifi_provision_live_switch_disables_config_enables();
+    test_wifi_provision_config_failure_reenables_station();
+    test_wifi_connect_saved_uses_same_sequence();
+    test_wifi_provision_rejected_input_leaves_station_alone();
 
     test_hibernate_clamps_low_sleep();
     test_hibernate_clamps_high_sleep();
@@ -821,6 +922,9 @@ int main(void)
     test_net_cb_wlan_connected_static_ip_sets_address();
     test_net_cb_wlan_connected_bad_static_ip_leaves_dhcp();
     test_net_cb_network_up_starts_refresh_thread_once();
+    test_net_cb_network_up_kicks_running_refresh_thread();
+    test_refresh_wait_returns_early_when_kicked();
+    test_refresh_wait_without_semaphore_falls_back_to_sleep();
     test_net_cb_network_down_does_not_crash();
 
     test_frame_receive_acks_every_chunk();

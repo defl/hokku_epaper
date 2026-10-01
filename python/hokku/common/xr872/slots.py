@@ -111,6 +111,21 @@ def parse_cfg(sector: bytes):
     return seq, verified
 
 
+def read_active_slot(f) -> int | None:
+    """The slot the bootloader would launch (0/1), read from the A/B cfg over an
+    already-synced BROM handle — or None when the cfg is absent/unreadable."""
+    sector = f.read_sector(OTA_ADDR, OTA_SIZE)
+    parsed = parse_cfg(sector) if sector else None
+    return parsed[0] if parsed else None
+
+
+def inactive_slot(active: int | None) -> int:
+    """The slot to write: the one the device is NOT running from, so the running
+    image stays as the A/B fallback. With no readable cfg (None) there is no
+    known-good image to protect and slot 0 is the bootstrap default."""
+    return 1 - active if active in SLOT_APP else 0
+
+
 def die(msg) -> NoReturn:
     print(f"ABORT: {msg}")
     sys.exit(1)
@@ -148,9 +163,7 @@ def flash_slot(f, img, slot=0, reboot=False, allow_active_slot=False):
         die("BROM sync but GetFlashId failed")
 
     # --- A/B pre-flight: which slot would the bootloader launch right now? ---
-    cfg_before = f.read_sector(OTA_ADDR, OTA_SIZE)
-    active = parse_cfg(cfg_before) if cfg_before else None
-    active_seq = active[0] if active else None
+    active_seq = read_active_slot(f)
     print(f"  A/B cfg says active slot = {active_seq}; target slot = {slot}")
     if active_seq == slot:
         msg = (
