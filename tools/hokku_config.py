@@ -5,8 +5,9 @@ Generates an NVS partition binary with WiFi credentials and server URL,
 then flashes it to the ESP32's NVS partition via esptool. Works any time
 the device is connected over USB — no special timing or boot mode needed.
 
-esptool automatically resets the ESP32-S3 into download mode via the
-USB-Serial/JTAG interface, flashes the NVS partition, and resets back.
+esptool automatically resets the ESP32-S3 into download mode over USB (native
+USB-Serial/JTAG on huessen, the CH340K bridge on the E1004), flashes the NVS
+partition, and resets back.
 
 Usage:
     hokku-config set --ssid MyWifi --password secret --url http://hokku.local:8080/hokku/
@@ -40,12 +41,13 @@ except ImportError:
 
 # Constants + NVS read/build come from the shared huessen_epf1301 library (single source
 # of truth, no ESP-IDF dependency). CONFIG_VERSION is re-exported for esp32_setup.
+from hokku.common.esp32.device import usb_spec
+from hokku.screens import huessen_epf1301
+from hokku.screens.flasher_registry import esp32_specs
 from hokku.screens.huessen_epf1301 import build_nvs_binary as _build_nvs_binary
 from hokku.screens.huessen_epf1301 import read_nvs as _read_nvs
 from hokku.screens.huessen_epf1301.constants import (
     CONFIG_VERSION,  # noqa: F401 — re-exported for esp32_setup.py
-    ESP32S3_PID,
-    ESP32S3_VID,
     NVS_OFFSET,
     NVS_SIZE,
     PAGE_ACTIVE,  # noqa: F401 — re-exported for tools tests
@@ -53,12 +55,37 @@ from hokku.screens.huessen_epf1301.constants import (
 
 
 def find_esp32_port():
-    """Auto-detect ESP32-S3 USB Serial/JTAG port."""
-    ports = serial.tools.list_ports.comports()
-    for port in ports:
-        if port.vid == ESP32S3_VID and port.pid == ESP32S3_PID:
+    """Auto-detect the port of any ESP32-S3 hokku screen, by its USB VID:PID.
+
+    Each board has its own id (huessen: native USB Serial/JTAG, E1004: CH340K
+    bridge); their NVS layout is identical, so the model does not matter here."""
+    specs = esp32_specs()
+    for port in serial.tools.list_ports.comports():
+        if usb_spec(specs, port.vid, port.pid) is not None:
             return port.device
     return None
+
+
+def port_baud(port):
+    """esptool baud for *port*: that screen's spec baud, found by its USB id.
+
+    Falls back to the huessen spec's when the port is not a recognised screen
+    (e.g. an explicit --port on an unlisted adapter)."""
+    specs = esp32_specs()
+    for p in serial.tools.list_ports.comports():
+        if p.device == port:
+            spec = usb_spec(specs, p.vid, p.pid)
+            if spec is not None:
+                return spec.baud
+    return huessen_epf1301.SPEC.baud
+
+
+# Set from --baud by main(); None means "use the screen's own spec baud".
+BAUD_OVERRIDE = None
+
+
+def _baud(port):
+    return BAUD_OVERRIDE or port_baud(port)
 
 
 # ── esptool integration ────────────────────────────────────────────
@@ -81,7 +108,7 @@ def _flash_nvs(port, nvs_binary):
             "--port",
             port,
             "--baud",
-            "921600",
+            _baud(port),
             "write-flash",
             "--flash-mode",
             "dio",
@@ -111,7 +138,7 @@ def _read_nvs_from_device(port):
             "--port",
             port,
             "--baud",
-            "921600",
+            _baud(port),
             "read-flash",
             hex(NVS_OFFSET),
             hex(NVS_SIZE),
@@ -173,8 +200,13 @@ def cmd_set(args):
     try:
         nvs_data = _read_nvs_from_device(port)
         existing = _read_nvs(nvs_data)
-    except Exception:
-        existing = {}
+    except Exception as e:
+        # Carrying on would write a partition holding only the flags given here,
+        # silently dropping the device's other settings. A blank device reads
+        # fine (empty config), so a failure here is the link, not the device.
+        print(f"Error: could not read the current configuration from {port}: {e}")
+        print("Nothing was written. Check the USB cable/port, or retry with a lower --baud.")
+        sys.exit(1)
 
     # Auto-backup before writing
     if existing:
@@ -297,6 +329,10 @@ def main():
         description="Configure Hokku e-paper frame via USB (flashes NVS partition)",
     )
     parser.add_argument("--port", "-p", help="Serial port (auto-detected if omitted)")
+    parser.add_argument(
+        "--baud",
+        help="esptool baud rate (default: the screen's own, 921600); lower it on a flaky USB link",
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -332,6 +368,8 @@ def main():
     erase_parser.set_defaults(func=cmd_erase)
 
     args = parser.parse_args()
+    global BAUD_OVERRIDE
+    BAUD_OVERRIDE = args.baud
     args.func(args)
 
 

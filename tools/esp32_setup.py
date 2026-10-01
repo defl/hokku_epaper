@@ -5,6 +5,7 @@ the Pi-install phase and the ESP32 phase as separate stages.
 """
 
 import logging
+import re
 import socket
 import struct
 import sys
@@ -34,9 +35,10 @@ from hokku.screens.flasher_registry import esp32_screen
 logger = logging.getLogger(__name__)
 
 # The active ESP32-S3 screen. Defaults to the huessen reference model; set_model()
-# switches it. The two boards share a USB VID:PID, so the model is an explicit
-# choice (not auto-detected) — all device/NVS/flash ops delegate to SCREEN and its
-# Esp32Spec (flash size, offsets, artifact name).
+# switches it. The model is an explicit choice, and a scan only recognises a port
+# whose USB id is that model's (huessen: native USB 303A:1001, E1004: CH340K
+# 1A86:7522), so one board's firmware is never offered to the other. All
+# device/NVS/flash ops delegate to SCREEN and its Esp32Spec.
 SCREEN = huessen_epf1301
 MODEL_ID = "huessen_epf1301"
 
@@ -158,6 +160,7 @@ def scan_devices():
             "port": port.device,
             "description": port.description or port.device,
             "is_esp32": is_esp32,
+            "flash_read_ok": None,
             "config": None,
             "has_hokku_firmware": False,
             "config_version_ok": False,
@@ -189,11 +192,18 @@ def parse_device_state(nvs_data, app_header):
 
 # -------- device selection UI --------
 
+# Shown instead of any firmware verdict when the flash read failed: the device's
+# state is unknown, so it must not read as "no Hokku firmware" (see
+# hokku.common.esp32.device.parse_device_state).
+FLASH_READ_FAILED = "could not read its flash; check the USB cable/port and rescan"
+
 
 def format_device_line(idx, device):
     parts = [f"  [{idx}] {device['port']}"]
     if device["is_esp32"]:
-        if device["has_hokku_firmware"] and device["config_version_ok"]:
+        if device.get("flash_read_ok") is False:
+            parts.append(f"ESP32-S3 ({FLASH_READ_FAILED})")
+        elif device["has_hokku_firmware"] and device["config_version_ok"]:
             cfg = device["config"]
             detail = "Hokku firmware"
             if cfg.get("screen_name"):
@@ -220,7 +230,9 @@ def select_device(devices):
     if len(esp32_devices) == 1:
         dev = esp32_devices[0]
         print(f"  Found device: {dev['port']}", end="")
-        if dev["has_hokku_firmware"]:
+        if dev.get("flash_read_ok") is False:
+            print(f" ({FLASH_READ_FAILED})")
+        elif dev["has_hokku_firmware"]:
             cfg = dev.get("config") or {}
             name = cfg.get("screen_name", "")
             if dev["config_version_ok"] and name:
@@ -613,7 +625,11 @@ def flash_firmware(port):
 # -------- post-flash boot check --------
 
 BOOT_CHECK_SECS = 10
-BOOT_OK_MARKERS = [b"hokku_epaper", b"Charger enabled", b"SPI bus init", b"Entering "]
+# The IDF app_init banner names the project, and every hokku ESP32 app's starts
+# ``hokku_`` (huessen: hokku_epaper, E1004: hokku_seeedstudio_e1004); the rest
+# are huessen-only log lines, kept as a fallback if the banner is missed.
+BOOT_OK_RE = re.compile(rb"Project name:\s+hokku_")
+BOOT_OK_MARKERS = [b"Charger enabled", b"SPI bus init", b"Entering "]
 BOOT_FAIL_MARKERS = [b"Guru Meditation", b"abort()", b"rst:0x10", b"assert failed"]
 
 
@@ -639,7 +655,7 @@ def check_boot(port):
                 if any(m in buf for m in BOOT_FAIL_MARKERS):
                     saw_fail = True
                     break
-                if any(m in buf for m in BOOT_OK_MARKERS):
+                if BOOT_OK_RE.search(buf) or any(m in buf for m in BOOT_OK_MARKERS):
                     saw_ok = True
     finally:
         try:

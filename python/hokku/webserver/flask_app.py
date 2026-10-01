@@ -42,7 +42,7 @@ from werkzeug.utils import secure_filename
 from hokku.screens import firmware_registry, huessen_epf1301
 from hokku.screens.bigme_f7 import bootstrap as bigme_bootstrap
 from hokku.screens.bigme_f7 import firmware as bigme_firmware
-from hokku.screens.flasher_registry import esp32_screen, esp32_screens
+from hokku.screens.flasher_registry import esp32_screen, esp32_screens, esp32_specs
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver import firmware_github
 from hokku.webserver.app_config import AppConfig
@@ -1455,10 +1455,10 @@ def create_app(
         holds the single serial slot for its whole duration so a flash cannot
         start mid-scan.
 
-        The optional ``?model=`` selects which ESP32 screen's release the device's
-        "up to date?" freshness is judged against (the two boards enumerate
-        identically; only the version/config comparison is model-specific). It
-        defaults to the huessen reference model.
+        Every ESP32 screen is recognised by its own USB VID:PID (huessen as native
+        USB Serial/JTAG, the E1004 as its CH340K bridge), and each device's
+        ``model`` is the one its id matched; its "up to date?" freshness is
+        judged against that model's release.
         """
         if not any(s.merged_firmware_file() for s in esp32_screens()):
             logger.error("Flash scan requested but no bundled ESP32 firmware available")
@@ -1467,21 +1467,21 @@ def create_app(
             logger.warning("Flash scan rejected: the serial port is busy")
             return jsonify({"error": "a flash is in progress", "busy": True}), 409
         try:
-            screen = esp32_screen(request.args.get("model")) or huessen_epf1301
             # Leave the scanned screens in the bootloader. Booting one starts a
             # full panel repaint (~30-60s), and a scan is nearly always the step
             # right before a flash — which would then interrupt that paint
             # mid-refresh and wedge the panel controller. The panel keeps showing
             # its last image meanwhile (e-paper holds without power), and
             # arm_deferred_boot puts it back to work if no flash follows.
-            devices = screen.scan_devices(boot_after=False)
+            devices = huessen_epf1301.scan_devices(boot_after=False, specs=esp32_specs())
         finally:
             state.flash_jobs.end_scan()
-        state.flash_jobs.arm_deferred_boot(
-            screen, [d["port"] for d in devices if d.get("is_esp32")]
-        )
-        # Classify non-ESP32 ports the UI knows how to guide: a CH340 bridge is a
-        # Bigme F7 (XR872), which is USB-flashed by a different (vendor-tool)
+        for d in devices:
+            if d.get("is_esp32"):
+                screen = esp32_screen(d.get("model")) or huessen_epf1301
+                state.flash_jobs.arm_deferred_boot(screen, [d["port"]])
+        # Classify non-ESP32 ports the UI knows how to guide: a CH340 bridge
+        # (1A86:7523, not the E1004's CH340K 1A86:7522) is a Bigme F7 (XR872), which is USB-flashed by a different (vendor-tool)
         # procedure, not esptool — so the UI shows F7 guidance instead of the
         # generic "not an ESP32-S3" warning.
         #

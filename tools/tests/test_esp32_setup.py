@@ -1,12 +1,13 @@
 """Tests for the model-aware ESP32 provisioning CLIs (esp32_setup + hokku_setup).
 
-The two ESP32-S3 boards share a USB VID:PID, so the model is an explicit choice.
-These cover that the CLI honours it: set_model switches the delegated screen, the
+The model is an explicit choice. These cover that the CLI honours it: set_model
+switches the delegated screen, the scan only recognises that model's USB id, the
 release-asset matcher + tag parser are model-scoped, and --model is parsed.
 """
 
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -52,10 +53,39 @@ def test_is_merged_firmware_asset_is_model_scoped():
     assert not esp32_setup._is_merged_firmware_asset("hokku-huessen_epf1301-1.2.9.bin")
 
 
-def test_scan_uses_active_model_vid_pid():
+def _port(device, vid, pid):
+    return SimpleNamespace(device=device, description=device, vid=vid, pid=pid)
+
+
+def test_scan_uses_active_model_vid_pid(monkeypatch):
+    # huessen is native USB Serial/JTAG; the E1004 enumerates as its CH340K (#45).
+    ports = [_port("COM3", 0x303A, 0x1001), _port("COM12", 0x1A86, 0x7522)]
+    monkeypatch.setattr(esp32_setup.serial.tools.list_ports, "comports", lambda: ports)
+    monkeypatch.setattr(esp32_setup, "read_device_flash", lambda port: (None, None))
+
     esp32_setup.set_model("seeedstudio_e1004")
-    assert esp32_setup.SCREEN.SPEC.vid == 0x303A
-    assert esp32_setup.SCREEN.SPEC.pid == 0x1001
+    assert (esp32_setup.SCREEN.SPEC.vid, esp32_setup.SCREEN.SPEC.pid) == (0x1A86, 0x7522)
+    found = {d["port"]: d["is_esp32"] for d in esp32_setup.scan_devices()}
+    assert found == {"COM3": False, "COM12": True}
+
+    esp32_setup.set_model("huessen_epf1301")
+    found = {d["port"]: d["is_esp32"] for d in esp32_setup.scan_devices()}
+    assert found == {"COM3": True, "COM12": False}
+
+
+@pytest.mark.parametrize(
+    "log",
+    [
+        b"I (312) app_init: Project name:     hokku_epaper\r\n",
+        b"I (298) app_init: Project name:     hokku_seeedstudio_e1004\r\n",
+    ],
+)
+def test_boot_ok_marker_matches_both_esp32_apps(log):
+    assert esp32_setup.BOOT_OK_RE.search(log)
+
+
+def test_boot_ok_marker_ignores_foreign_app():
+    assert not esp32_setup.BOOT_OK_RE.search(b"I (312) app_init: Project name:     E_Frame\r\n")
 
 
 def test_parse_firmware_tag_is_model_aware():
@@ -74,3 +104,28 @@ def test_parse_model_arg():
         hokku_setup._parse_model_arg(["prog", "--model=seeedstudio_e1004"]) == "seeedstudio_e1004"
     )
     assert hokku_setup._parse_model_arg(["prog"]) is None
+
+
+def test_failed_flash_read_is_not_reported_as_no_firmware(capsys):
+    # A failed read leaves the state unknown: it must not print "will be
+    # overwritten" or default the menu to a full reflash (#45 follow-up).
+    dev = {
+        "port": "COM12",
+        "is_esp32": True,
+        "flash_read_ok": False,
+        "has_hokku_firmware": False,
+        "config_version_ok": False,
+        "config": None,
+    }
+    status = {"device": dev}
+    assert hokku_setup._menu_default(status) == "8"
+    hokku_setup._print_device_status(status)
+    out = capsys.readouterr().out
+    assert "could not read its flash" in out
+    assert "overwritten" not in out
+    assert "could not read its flash" in esp32_setup.format_device_line(1, dev)
+
+
+def test_readable_blank_device_still_defaults_to_flash():
+    dev = {"port": "COM12", "is_esp32": True, "flash_read_ok": True, "has_hokku_firmware": False}
+    assert hokku_setup._menu_default({"device": dev}) == "4"

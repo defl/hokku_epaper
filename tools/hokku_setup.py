@@ -10,8 +10,8 @@ Usage:
     python hokku_setup.py [--model <screen_model>]
 
     --model selects the ESP32-S3 screen to flash/configure (default
-    huessen_epf1301). The two ESP32 boards share a USB VID:PID, so the model is an
-    explicit choice, not auto-detected.
+    huessen_epf1301). The model is an explicit choice, and only a device with that
+    model's USB id (huessen 303A:1001, E1004 CH340K 1A86:7522) is offered.
 """
 
 import shutil
@@ -90,6 +90,10 @@ def _print_device_status(status):
     dev = status["device"]
     cfg = dev.get("config") or {}
     print(f"  Port:      {dev['port']}")
+    if dev.get("flash_read_ok") is False:
+        print(f"  Firmware:  unknown — {esp32_setup.FLASH_READ_FAILED}")
+        print("  Config:    unknown")
+        return
     if dev.get("has_hokku_firmware"):
         dv = dev.get("device_version") or "(unknown)"
         rv = dev.get("release_version")
@@ -299,6 +303,10 @@ def _menu_default(status):
     if status is None or "device" not in status:
         return "1"  # no device → appliance image is the most common starting point
     dev = status["device"]
+    if dev.get("flash_read_ok") is False:
+        # State unknown: never default to a full reflash of what may be a
+        # working frame. Exit so the operator fixes the link and reruns.
+        return "8"
     if not dev.get("has_hokku_firmware"):
         return "4"  # configure + flash ESP32
     if not dev.get("config_version_ok"):
