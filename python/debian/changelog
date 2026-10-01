@@ -1,3 +1,15 @@
+hokku-server (4.0.1~dev.92-1) unstable; urgency=medium
+
+  * Rename a screen from the web UI. The server owns the name of every screen
+    it knows (by MAC) and sends it back as X-Screen-Name; the screen saves it
+    when it differs. History, settings and calibration are kept. A new screen
+    reporting a name already in use gets a unique one. The Bigme F7 now sends
+    X-Screen-Mac too.
+  * Firmware versions: huessen_epf1301 1.2.26, seeedstudio_e1004 1.2.6,
+    bigme_f7 1.2.15 (a screen adopts its new name from these on).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 01 Oct 2026 02:36:50 +0000
+
 hokku-server (4.0.1~dev.91-1) unstable; urgency=medium
 
   * docs(agents): derive the dev-version N from the highest dev number in

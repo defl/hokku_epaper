@@ -3,6 +3,7 @@
 #include "json_util.h"     /* json_escape */
 #include "firmware_url.h"  /* firmware_url_build */
 #include "net.h"           /* HTTP_TIMEOUT_MS */
+#include "screen_ident.h"  /* HOKKU_MAC_STR_LEN */
 
 #include <string.h>
 #include <stdlib.h>
@@ -83,7 +84,7 @@ static bool ota_fetch_config(const char *base_url, const char *screen_name,
         esp_http_client_set_header(client, "X-Screen-Name", screen_name);
     if (screen_model && screen_model[0] != '\0')
         esp_http_client_set_header(client, "X-Screen-Model", screen_model);
-    char mac_str[18];
+    char mac_str[HOKKU_MAC_STR_LEN];
     hokku_screen_mac_str(mac_str, sizeof(mac_str));
     if (mac_str[0] != '\0')
         esp_http_client_set_header(client, "X-Screen-Mac", mac_str);

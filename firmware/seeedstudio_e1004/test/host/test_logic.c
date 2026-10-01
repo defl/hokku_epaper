@@ -54,6 +54,7 @@
 #include "../../../common/all/frame_state.c"
 #include "../../../common/all/sleep_cal.c"
 #include "../../../common/all/json_util.c"
+#include "../../../common/all/screen_ident.c"
 #include "../../../common/all/logbuf.c"
 #include "../../main/main.c"
 

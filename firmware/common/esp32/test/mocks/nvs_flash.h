@@ -69,6 +69,18 @@ static inline int nvs_set_i32(nvs_handle_t h, const char *k, int32_t v) {
 static inline int nvs_set_u16(nvs_handle_t h, const char *k, uint16_t v) {
     (void)h; (void)k; (void)v; return 0;
 }
+/* Records the last screen_name written, so tests can check a rename persisted. */
+static int  _mock_nvs_set_str_fail = 0;
+static char _mock_nvs_set_screen_name[65] = {0};
+static inline int nvs_set_str(nvs_handle_t h, const char *k, const char *v) {
+    (void)h;
+    if (_mock_nvs_set_str_fail) return -1;
+    if (strcmp(k, "screen_name") == 0) {
+        strncpy(_mock_nvs_set_screen_name, v, sizeof(_mock_nvs_set_screen_name) - 1);
+        _mock_nvs_set_screen_name[sizeof(_mock_nvs_set_screen_name) - 1] = '\0';
+    }
+    return 0;
+}
 static inline int nvs_commit(nvs_handle_t h) { (void)h; return 0; }
 
 static inline void nvs_close(nvs_handle_t h) { (void)h; }

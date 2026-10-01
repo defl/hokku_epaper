@@ -3063,8 +3063,7 @@ function renderScreens(screens, bundledFirmwareVersions) {
       : '<span style="color:var(--bamboo)">—</span>';
     let nameBadges = '';
     if (s.ota_error) nameBadges += ' <span title="Firmware update error" style="color:#a33;font-weight:700">⛔</span>';
-    else if (s.ota_pending) nameBadges += ' <span title="Firmware update scheduled for next refresh" style="color:var(--accent,#2a6);font-weight:700">⟳</span>';
-    const modelCell = s.screen_model
+    else if (s.ota_pending) nameBadges += ' <span title="Firmware update scheduled for next refresh" style="color:var(--accent,#2a6);font-weight:700">⟳</span>';    const modelCell = s.screen_model
       ? `<span style="font-family:var(--font-mono);font-size:0.85em">${escapeHtml(s.screen_model)}</span>`
       : '<span style="color:var(--bamboo)">—</span>';
     html += `<tr${rowClass}>
@@ -3149,6 +3148,32 @@ async function setScreenUrlOverride(name, value) {
     if (lastScreens[name]) lastScreens[name].server_url_override = value.trim();
   } catch (e) {
     alert('Failed to set URL override: ' + e.message);
+  }
+}
+
+// Rename a screen. The server's name wins: the screen picks it up from its
+// next response and saves it.
+async function setScreenRename(name, newName) {
+  const statusEl = document.getElementById('rename-status');
+  try {
+    const r = await fetch(`/hokku/api/screens/${encodeURIComponent(name)}/rename`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: newName}),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    if (data.name !== name && lastScreens[name]) {
+      lastScreens[data.name] = lastScreens[name];
+      delete lastScreens[name];
+    }
+    renderScreens(lastScreens, lastBundledFirmwareVersions);
+    showScreenConfig(data.name);
+  } catch (e) {
+    if (statusEl) {
+      statusEl.textContent = e.message;
+      statusEl.style.color = '#a33';
+    }
   }
 }
 
@@ -3239,7 +3264,22 @@ function showScreenConfig(name) {
   const orientPortrait  = s.orientation === 'portrait'  ? 'selected' : '';
   const filterChecked   = s.filter_by_orientation ? 'checked' : '';
 
-  let body = `<div class="config-row">
+  let body = `<div class="fw-section" style="margin-top:0">`;
+  body += `<h4>Name</h4>`;
+  if (s.renamable) {
+    body += `<div style="display:flex;gap:6px">
+        <input type="text" id="rename-input" value="${escapeHtml(name)}" maxlength="63"
+          style="flex:1;font-size:0.9em"
+          onkeydown="if (event.key === 'Enter') setScreenRename('${safeName}', this.value)">
+        <button class="btn btn-secondary" onclick="setScreenRename('${safeName}', document.getElementById('rename-input').value)">Rename</button>
+      </div>`;
+    body += `<div id="rename-status" style="font-size:0.85em;color:var(--stone);margin-top:4px">Letters, digits, spaces and - _ . ' ( ). The screen picks up the new name on its next refresh; history and settings are kept.</div>`;
+  } else {
+    body += `<div style="font-size:0.85em;color:var(--stone)">This screen's firmware doesn't report a MAC address, so it can't be renamed from here — update its firmware first.</div>`;
+  }
+  body += `</div>`;
+
+  body += `<div class="config-row">
       <label>Orientation</label>
       <select onchange="setScreenOrientation('${safeName}', this.value)">
         <option value="landscape" ${orientLandscape}>Landscape</option>

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "image/fdcm.h"
+#include "screen_ident.h"
 
 /*
  * Flash location for the config blob. 0x340000 is 64 KB-aligned and sits in the
@@ -94,5 +95,23 @@ int hokku_config_save(void)
     g_cfg.version = HOKKU_CFG_VERSION;
     if (fdcm_write(g_cfg_fdcm, &g_cfg, (uint16_t)sizeof(g_cfg)) != sizeof(g_cfg))
         return -1;
+    return 0;
+}
+
+int hokku_config_set_screen_name(const char *name)
+{
+    /* Same name first: the server sends it on every response. */
+    if (name && strcmp(g_cfg.screen_name, name) == 0)
+        return 0;
+    if (!hokku_screen_name_valid(name) || strlen(name) >= HOKKU_NAME_MAX)
+        return -1;
+    char old[HOKKU_NAME_MAX];
+    memcpy(old, g_cfg.screen_name, sizeof(old));
+    strncpy(g_cfg.screen_name, name, HOKKU_NAME_MAX - 1);
+    g_cfg.screen_name[HOKKU_NAME_MAX - 1] = '\0';
+    if (hokku_config_save() != 0) {
+        memcpy(g_cfg.screen_name, old, sizeof(old));  /* RAM never ahead of flash */
+        return -1;
+    }
     return 0;
 }

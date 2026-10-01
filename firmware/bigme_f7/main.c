@@ -50,6 +50,7 @@
 #include "logbuf.h"
 #include "frame_proto.h"
 #include "interactive.h"
+#include "screen_ident.h"
 
 /* SoC-shared XR872 code (firmware/common/xr872 — usable by any XR872/XR872AT
  * screen): activity log, software clock, HTTP-header helpers, hibernation. */
@@ -60,7 +61,7 @@
 
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.14"
+#define FIRMWARE_VERSION        "1.2.15"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -196,6 +197,20 @@ static void build_frame_state(char *buf, size_t sz)
         .wifi_cached     = false,
     };
     frame_state_build(buf, sz, &fs);
+}
+
+/* This device's WiFi MAC as X-Screen-Mac ("" if unknown). sysinfo derives it
+ * from the chip ID at every boot (PRJCONF_MAC_ADDR_SOURCE), so it is stable per
+ * unit and is what the network sees. The server keys the screen by it, so a
+ * rename or reflash keeps the screen's history. */
+static void hokku_screen_mac_str(char *out, size_t len)
+{
+    const struct sysinfo *si = sysinfo_get();
+    if (si == NULL) {
+        if (len) out[0] = '\0';
+        return;
+    }
+    hokku_mac_format(si->mac_addr, out, len);
 }
 
 /*
@@ -456,8 +471,13 @@ static int do_refresh(void)
     }
 
     /* Request headers — server uses these for telemetry / OTA checks */
+    char mac_str[HOKKU_MAC_STR_LEN];
+    hokku_screen_mac_str(mac_str, sizeof(mac_str));
+
     HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Name",      cfg->screen_name, 1);
     HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Model",     SCREEN_MODEL,     1);
+    if (mac_str[0])
+        HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Mac",   mac_str,          1);
     HTTPClientAddRequestHeaders(params.pHTTP, "X-Firmware-Version", FIRMWARE_VERSION, 1);
     HTTPClientAddRequestHeaders(params.pHTTP, "X-Firmware-Build",   HOKKU_BUILD_TS,   1);
     HTTPClientAddRequestHeaders(params.pHTTP, "X-Frame-State",      frame_state,      1);
@@ -497,6 +517,19 @@ static int do_refresh(void)
         if (read_resp_header_uint(params.pHTTP, "X-Server-Time-Epoch", &v) && v > 1600000000U)
             hokku_clock_set(v);              /* sanity: after 2020-09-13 */
         read_resp_header_str(params.pHTTP, "X-Firmware-Update", fw_update, sizeof(fw_update));
+
+        /* The server owns the name of a screen it knows (set in its web UI):
+         * adopt it when it differs, so the next request carries it. One byte
+         * beyond the max so an over-long value is refused rather than
+         * truncated into a valid one. */
+        char name[HOKKU_SCREEN_NAME_MAX + 2];
+        if (read_resp_header_str(params.pHTTP, HOKKU_HDR_SCREEN_NAME, name, sizeof(name)) &&
+            strcmp(name, cfg->screen_name) != 0) {
+            if (hokku_config_set_screen_name(name) == 0)
+                hlog("hokku: renamed to '%s'\n", cfg->screen_name);
+            else
+                hlog("hokku: rename refused\n");
+        }
     }
 
     /* OTA takes priority over display: the server told us to update. Discard the

@@ -78,6 +78,7 @@
 #include "../../../common/all/backoff.c"       /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/frame_state.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/frame_proto.c"   /* SoC-agnostic (shared with ESP32) */
+#include "../../../common/all/screen_ident.c"  /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/interactive.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/logbuf.c"        /* SoC-agnostic (shared with ESP32) */
 /* Shared XR872 code (firmware/common/xr872) — included before main.c so its

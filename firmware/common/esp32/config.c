@@ -1,6 +1,10 @@
 #include "config.h"
+#include "screen_ident.h"
+
+#include <string.h>
 
 #include "nvs_flash.h"
+#include "esp_log.h"
 
 config_t config = {0};
 
@@ -31,4 +35,27 @@ bool config_is_valid(void)
     return config_version_ok()
         && config.wifi_ssid[0][0] != '\0'
         && config.image_url[0] != '\0';
+}
+
+bool config_set_screen_name(const char *name)
+{
+    /* Same name first: the server sends it on every response. */
+    if (name && strcmp(config.screen_name, name) == 0) return true;
+    if (!hokku_screen_name_valid(name)) {
+        ESP_LOGW("hokku", "rename refused: invalid name");
+        return false;
+    }
+
+    nvs_handle_t nvs;
+    if (nvs_open("hokku", NVS_READWRITE, &nvs) != ESP_OK) return false;
+    bool ok = nvs_set_str(nvs, "screen_name", name) == ESP_OK && nvs_commit(nvs) == ESP_OK;
+    nvs_close(nvs);
+    if (!ok) {
+        ESP_LOGE("hokku", "rename to '%s' failed to persist", name);
+        return false;
+    }
+    ESP_LOGI("hokku", "renamed '%s' -> '%s'", config.screen_name, name);
+    strncpy(config.screen_name, name, sizeof(config.screen_name) - 1);
+    config.screen_name[sizeof(config.screen_name) - 1] = '\0';
+    return true;
 }
