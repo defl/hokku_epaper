@@ -33,6 +33,7 @@ from hokku.webserver.app_config import AppConfig
 from hokku.webserver.filesystem import atomic_write_json
 from hokku.webserver.image_classifier import ImageClassifier, ImageClassifierDecision
 from hokku.webserver.image_config import ImageConfig
+from hokku.webserver.image_orientation import displayed_size
 from hokku.webserver.image_record import (
     ConversionProgress,
     ConvertStatus,
@@ -53,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 
 _DB_FILENAME = "image_manager.json"
-_DB_VERSION = 4  # bump whenever ImageRecord schema changes; v3 auto-migrates (see _load_db)
+_DB_VERSION = 5  # bump whenever ImageRecord schema changes; v3/v4 auto-migrate (see _load_db)
 
 # Distinguishes "argument not supplied" from an explicit None, which callers use
 # to clear an override.
@@ -752,19 +753,26 @@ class AbstractImageManager(ABC):
         try:
             with Image.open(path) as img:
                 w, h = img.size
+                # Ingest budget gate: an un-draftable source above the decode
+                # budget (e.g. a 38.9 MP HEIF panorama) would OOM-kill the Pi if
+                # any phase decoded it — thumbnail (Phase 1) and classify (Phase
+                # 2) both decode at full resolution and would crash *before* the
+                # render-time check ever runs. Reject it here, at the single
+                # dimension-reading choke point every registration path uses, so
+                # it is marked "failed" and no phase touches it. Reported like an
+                # unreadable image (dims None) so the existing pending/failed
+                # logic and the needs-thumbnail filter both skip it. Runs before
+                # the EXIF read below, which must never be what decodes it.
+                is_jpeg = path.suffix.lower() in JPEG_SUFFIXES
+                if decoded_pixels_exceed_budget(w, h, is_jpeg=is_jpeg):
+                    return None, None, decode_budget_error(w, h)
+                # Phones store portrait shots as landscape sensor data plus an
+                # EXIF rotation; the render path applies it (exif_transpose),
+                # so the recorded dims must too or native_orientation is wrong
+                # (issue #40).
+                w, h = displayed_size(img)
         except Exception as e:
             return None, None, f"{type(e).__name__}: {e}"
-        # Ingest budget gate: an un-draftable source above the decode budget
-        # (e.g. a 38.9 MP HEIF panorama) would OOM-kill the Pi if any phase
-        # decoded it — thumbnail (Phase 1) and classify (Phase 2) both decode at
-        # full resolution and would crash *before* the render-time check ever
-        # runs. Reject it here, at the single dimension-reading choke point every
-        # registration path uses, so it is marked "failed" and no phase touches
-        # it. Reported like an unreadable image (dims None) so the existing
-        # pending/failed logic and the needs-thumbnail filter both skip it.
-        is_jpeg = path.suffix.lower() in JPEG_SUFFIXES
-        if decoded_pixels_exceed_budget(w, h, is_jpeg=is_jpeg):
-            return None, None, decode_budget_error(w, h)
         return w, h, None
 
     def _atomic_write_json(self, payload: dict) -> None:
@@ -843,8 +851,8 @@ class AbstractImageManager(ABC):
         db_version = data.get("version")
         # v3 records carry landscape/portrait slug fields; ImageRecord.from_dict
         # migrates them into the model-keyed slugs dict, so v3 loads cleanly and
-        # is re-saved as v4 on the next write — no re-render storm for Huessen.
-        if db_version not in (3, _DB_VERSION):
+        # is re-saved as current on the next write — no re-render storm for Huessen.
+        if db_version not in (3, 4, _DB_VERSION):
             logger.warning(
                 "DB version mismatch (got %r, need %d) — wiping cache DB; images will be re-rendered on next sync",
                 db_version,
@@ -857,6 +865,30 @@ class AbstractImageManager(ABC):
                 self._records[name] = ImageRecord.from_dict(rec_dict)
             except (KeyError, TypeError, ValueError) as e:
                 logger.warning("Skipping malformed db entry %r: %s", name, e)
+        if db_version < 5:
+            self._migrate_exif_rotated_dims()
+
+    def _migrate_exif_rotated_dims(self) -> None:
+        """Correct dims recorded before they honoured EXIF rotation (issue #40).
+
+        Only a pure width/height swap is applied: that is exactly the old bug,
+        and nothing else about the record (status, slugs — renders are keyed by
+        the requested orientation, not the native one) depends on it. Persisted
+        by the next _save_db(); if that never happens this simply runs again.
+        """
+        fixed = 0
+        for name, rec in self._records.items():
+            if rec.image_width is None or rec.image_height is None:
+                continue
+            src_path = self._upload_dir / name
+            if not src_path.is_file():
+                continue
+            w, h, _ = self._try_read_image_dims(src_path)
+            if (w, h) == (rec.image_height, rec.image_width) and w != h:
+                self._records[name] = replace(rec, image_width=w, image_height=h)
+                fixed += 1
+        if fixed:
+            logger.info("Corrected EXIF-rotated dimensions for %d image(s)", fixed)
 
     def _save_db(self) -> None:
         if self._closed:
@@ -1339,7 +1371,8 @@ class AbstractImageManager(ABC):
         else:
             logger.info("Dithering complete: all %d image(s) done", total)
 
-    def _materialize_thumbnail(self, src_path: Path, thumb_path: Path) -> None:
+    @staticmethod
+    def _materialize_thumbnail(src_path: Path, thumb_path: Path) -> None:
         thumb_path.parent.mkdir(parents=True, exist_ok=True)
         if src_path.suffix.lower() == ".svg":
             with open_image_for_render(src_path) as img:

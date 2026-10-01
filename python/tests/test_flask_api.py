@@ -28,6 +28,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
@@ -35,6 +36,7 @@ from hokku.webserver.flask_app import PREVIEW_MAX_CONCURRENT, _preview_slots, cr
 from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 from hokku.webserver.serve_scheduler import ServeScheduler
+from tests._orientation_fixtures import UPRIGHT_SIZE, upright_mismatch, write_fixture
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
@@ -414,6 +416,36 @@ def test_dither_preview_face_bboxes_header_present(synced_client):
     assert "X-Face-Bboxes" in resp.headers
     bboxes = json.loads(resp.headers["X-Face-Bboxes"])
     assert isinstance(bboxes, list)
+
+
+def test_phone_portrait_is_portrait_through_the_api(bare_client, tmp_path: Path):
+    """Issue #40 end to end: a phone portrait (landscape sensor pixels + EXIF
+    Orientation=6) uploaded over HTTP is reported portrait by /status and
+    previewed upright in a portrait frame by /dither/preview."""
+    client, state = bare_client
+    portrait = (UPRIGHT_SIZE[1], UPRIGHT_SIZE[0])
+    phone = write_fixture("jpeg", 6, tmp_path, size=portrait)
+    plain = write_fixture("jpeg", 1, tmp_path, size=portrait)  # colour reference
+    with Image.open(phone) as img:
+        assert img.size[0] > img.size[1], "fixture must be landscape on the sensor"
+    for f in (phone, plain):
+        assert _upload_bytes(client, f.read_bytes(), f.name).get_json()["saved"] == [f.name]
+    state.manager.sync()
+    state.manager.wait_for_idle()
+
+    entries = {e["name"]: e for e in client.get("/hokku/api/status").get_json()["upload_files"]}
+    entry = entries[phone.name]
+    assert (entry["image_width"], entry["image_height"]) == portrait
+    assert entry["native_orientation"] == "portrait"
+
+    img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])
+    previews = {}
+    for f in (phone, plain):
+        resp = client.post("/hokku/api/dither/preview", json={"name": f.name, "image": img_cfg})
+        assert resp.status_code == 200
+        previews[f.name] = Image.open(io.BytesIO(resp.data))
+    got = upright_mismatch(previews[phone.name], portrait, reference=previews[plain.name])
+    assert got is None, got
 
 
 def test_dither_preview_missing_image_returns_404(bare_client):
