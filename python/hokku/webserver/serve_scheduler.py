@@ -20,6 +20,7 @@ from pathlib import Path
 from hokku.webserver.filesystem import atomic_write_json
 from hokku.webserver.image_manager_abstract import AbstractImageManager
 from hokku.webserver.image_record import ConvertStatus, ImageRecord
+from hokku.webserver.labels import matches_labels
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.screen_config import ScreenConfig
 from hokku.webserver.screen_headers import battery_percent, parse_battery_header
@@ -166,13 +167,21 @@ class ServeScheduler:
 
     # ── Rotation ─────────────────────────────────────────────────
 
-    def pick_next(self, orientation: Orientation) -> str | None:
+    def pick_next(
+        self, orientation: Orientation, labels: frozenset[str] = frozenset()
+    ) -> str | None:
         """Return the pre-determined next image for the given orientation filter.
 
         orientation=NEUTRAL means no filter — returns the global best next image.
         Reconciles state with manager.list() before returning — adds new
         entries, drops orphans, resets show_index for everyone when a new
         image appears so it gets a fair chance immediately.
+
+        ``labels`` narrows the pool further to images carrying any of them.
+        Label filters are per screen, so they are not part of the shared
+        pre-computed slots: the slot is honoured when it passes the filter
+        (which is how a pinned "Show next" still lands on a labelled screen),
+        otherwise the least-shown eligible image is chosen on the spot.
         """
         with self._lock:
             ready = [r for r in self._manager.list() if r.convert_status == ConvertStatus.OK]
@@ -185,13 +194,23 @@ class ServeScheduler:
                 return None
 
             # If the pre-computed choice for this orientation is still valid, honour it.
-            if self._next_for.get(orientation) in ready_names:
-                return self._next_for[orientation]
+            if self._next_for.get(orientation) not in ready_names:
+                # Pre-computed choice is stale or absent — recompute all orientations.
+                self._precompute_all_locked(ready)
+                self._save()
+            precomputed = self._next_for.get(orientation)
+            if not labels:
+                return precomputed
 
-            # Pre-computed choice is stale or absent — recompute all orientations.
-            self._precompute_all_locked(ready)
-            self._save()
-            return self._next_for.get(orientation)
+            by_name = {r.name: r for r in ready}
+            if precomputed is not None and matches_labels(by_name[precomputed].labels, labels):
+                return precomputed
+            eligible = [
+                r
+                for r in self._eligible_for(ready, orientation)
+                if matches_labels(r.labels, labels)
+            ]
+            return self._least_shown_locked(eligible)
 
     def mark_served(self, name: str) -> None:
         """Bump rotation pointer and stats. Attributes elapsed time to the
@@ -234,6 +253,14 @@ class ServeScheduler:
         """Return the pre-determined next image for the given orientation without consuming it."""
         with self._lock:
             return self._next_for.get(orientation)
+
+    def has_eligible(self, orientation: Orientation, labels: frozenset[str]) -> bool:
+        """Whether any ready image passes both the orientation and label filters."""
+        with self._lock:
+            ready = [r for r in self._manager.list() if r.convert_status == ConvertStatus.OK]
+            return any(
+                matches_labels(r.labels, labels) for r in self._eligible_for(ready, orientation)
+            )
 
     def set_next(self, name: str) -> None:
         """Force a specific image to be served next (overrides rotation order).
@@ -654,20 +681,25 @@ class ServeScheduler:
         Must be called under self._lock.
         """
         for orientation in Orientation:
-            if orientation == Orientation.NEUTRAL:
-                eligible = ready
-            else:
-                eligible = [r for r in ready if r.matches_orientation_filter(orientation)]
-            if not eligible:
-                self._next_for[orientation] = None
-            else:
-                # Pick the least-shown index, then break ties randomly rather
-                # than alphabetically — new uploads keep re-tying the least-shown
-                # images (see _reconcile), so a name-sorted tie-break would
-                # replay the same prefix first every time.
-                min_idx = min(self._stats[r.name].show_index for r in eligible)
-                tied = [r.name for r in eligible if self._stats[r.name].show_index == min_idx]
-                self._next_for[orientation] = random.choice(tied)  # noqa: S311 — rotation fairness, not crypto
+            eligible = self._eligible_for(ready, orientation)
+            self._next_for[orientation] = self._least_shown_locked(eligible)
+
+    @staticmethod
+    def _eligible_for(ready: list[ImageRecord], orientation: Orientation) -> list[ImageRecord]:
+        if orientation == Orientation.NEUTRAL:
+            return ready
+        return [r for r in ready if r.matches_orientation_filter(orientation)]
+
+    def _least_shown_locked(self, eligible: list[ImageRecord]) -> str | None:
+        if not eligible:
+            return None
+        # Pick the least-shown index, then break ties randomly rather
+        # than alphabetically — new uploads keep re-tying the least-shown
+        # images (see _reconcile), so a name-sorted tie-break would
+        # replay the same prefix first every time.
+        min_idx = min(self._stats[r.name].show_index for r in eligible)
+        tied = [r.name for r in eligible if self._stats[r.name].show_index == min_idx]
+        return random.choice(tied)  # noqa: S311 — rotation fairness, not crypto
 
     def _reconcile(self, ready_names: set[str]) -> None:
         # Drop orphans.

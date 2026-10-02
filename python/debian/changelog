@@ -1,4 +1,4 @@
-hokku-server (4.0.1~dev.93-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.94-1) unstable; urgency=medium
 
   * Docs: README and manual now describe all three buttons on the Hokku /
     Huessen frame (power button = next image, the other two unused; #18).
@@ -7,6 +7,17 @@ hokku-server (4.0.1~dev.93-1) unstable; urgency=medium
     discussions (#38, #42).
 
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 01 Oct 2026 22:15:42 -0500
+
+hokku-server (4.0.1~dev.93-1) unstable; urgency=medium
+
+  * Labels: tag pictures with free-form labels and let each screen show
+    only pictures carrying any of its ticked labels (empty = whole
+    library, as before). The image grid can be filtered by label. A
+    screen whose labels match nothing keeps its picture and checks back
+    at its normal interval. Idea and code from Erik Rogne (#41) and Dan
+    Rowe (draco2003); closes the tagging request in #18.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 30 Sep 2026 22:03:09 -0500
 
 hokku-server (4.0.1~dev.92-1) unstable; urgency=medium
 

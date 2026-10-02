@@ -782,3 +782,63 @@ def test_clear_caches_resets_progress(
     assert prog_final.done == prog_final.total, (
         f"done never reached total after re-convert: {prog_final}"
     )
+
+
+def test_set_labels_saves_without_a_rerender(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """Labels are not part of the slug: tagging must never cost a conversion."""
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    before = mgr.status("a.png")
+    assert before is not None
+
+    assert mgr.set_labels(["a.png", "ghost.png"], add=("hall",)) == ["ghost.png"]
+    mgr.wait_for_idle()
+
+    after = mgr.status("a.png")
+    assert after is not None
+    assert after.labels == ("hall",)
+    assert after.slugs == before.slugs
+    assert after.convert_status == before.convert_status
+    db = json.loads((Path(app_config.cache_dir) / "image_manager.json").read_text())
+    assert db["images"]["a.png"]["labels"] == ["hall"]
+
+
+def test_set_labels_add_remove_and_replace(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    make_test_image(Path(app_config.upload_dir) / "b.png")
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+
+    mgr.set_labels(["a.png", "b.png"], add=("hall", "summer"))
+    mgr.set_labels(["b.png"], remove=("hall",), add=("winter",))
+    assert mgr.status("a.png").labels == ("hall", "summer")  # type: ignore[union-attr]
+    assert mgr.status("b.png").labels == ("summer", "winter")  # type: ignore[union-attr]
+    assert mgr.all_labels() == ["hall", "summer", "winter"]
+
+    mgr.set_labels(["a.png"], replace_with=())
+    assert mgr.status("a.png").labels == ()  # type: ignore[union-attr]
+    assert mgr.all_labels() == ["summer", "winter"]
+
+
+def test_labels_are_salvaged_across_a_db_version_wipe(
+    app_config: AppConfig, image_manager_factory, make_test_image
+):
+    """Like the overrides: user-authored, so a wipe must carry them over."""
+    mgr = _synced(app_config, image_manager_factory, make_test_image)
+    mgr.set_labels(["a.png"], add=("hall",))
+    mgr.shutdown()
+
+    db_path = Path(app_config.cache_dir) / "image_manager.json"
+    db = json.loads(db_path.read_text())
+    db["version"] = 99
+    db_path.write_text(json.dumps(db))
+
+    mgr2 = image_manager_factory(app_config)
+    mgr2.sync()
+    mgr2.wait_for_idle()
+
+    rec = mgr2.status("a.png")
+    assert rec is not None
+    assert rec.labels == ("hall",)
+    assert rec.image_config is None
