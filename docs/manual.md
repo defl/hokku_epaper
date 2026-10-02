@@ -160,9 +160,11 @@ After editing the config file, restart the server (`systemctl restart hokku-serv
 > Physical controls vary by frame. This section describes the **Hokku / Huessen
 > 13.3"** frame; see your screen's [hardware page](hardware.md) for the others.
 
-**The button** on the side of the frame (right side in landscape orientation, bottom in portrait) forces an immediate refresh regardless of schedule. The frame wakes up, connects to WiFi, fetches the next image, displays it, then goes back to sleep. This works whether the frame is running on battery or plugged into USB. Use it when you've just uploaded something and want to see it on the frame right now rather than waiting for the next scheduled time.
+**The power button** shows the next image right away, regardless of the schedule. The frame wakes up, connects to WiFi, fetches the next image, displays it, then goes back to sleep. This works whether the frame is running on battery or plugged into USB. Use it when you've just uploaded something and want to see it on the frame right now rather than waiting for the next scheduled time. Press it again once the image has changed to skip to another one.
 
-After a button press the frame stays awake for 60 seconds — long enough to press the button again to skip to another image, or to plug in USB for reflashing if needed.
+With Hokku firmware the power button never switches the frame off. There's no "off" to go to: between refreshes the frame is already in a deep sleep that draws almost nothing (see [Sleep and power](#23-sleep-and-power)).
+
+**The other two buttons** do nothing with Hokku firmware. The frame has three buttons, but only the power button is wired so it can wake the frame from deep sleep. The other two can't, so they're left unused rather than working only some of the time.
 
 **Two tiny LEDs** on the bottom edge of the frame:
 
@@ -180,13 +182,13 @@ Common error messages and what to do:
 - **Server unreachable** — the frame connected to WiFi but couldn't reach the server. Check that the server is running, that the IP address in the frame's config is correct, and that nothing on your network is blocking port 8080.
 - **No images available** — the server is running and reachable but the image pool is empty. Upload some photos via the web app.
 
-After fixing the underlying issue, the frame will try again on its next scheduled refresh. You can also press the button to trigger an immediate retry.
+After fixing the underlying issue, the frame will try again on its next scheduled refresh. You can also press the power button to trigger an immediate retry.
 
 ### 2.3 Sleep and power
 
-The frame spends the vast majority of its time in deep sleep, drawing single-digit microamps — a level so low that a full charge lasts several months. (The Hokku / Huessen frame measures around 8 µA; other models differ.) It wakes up only at the scheduled refresh times (or when you press the button), fetches an image, displays it, and goes back to sleep. Displaying a new image takes a few seconds; the rest of the time there is no power draw from the display either, since e-ink retains its image without any power.
+The frame spends the vast majority of its time in deep sleep, drawing single-digit microamps — a level so low that a full charge lasts several months. (The Hokku / Huessen frame measures around 8 µA; other models differ.) It wakes up only at the scheduled refresh times (or when you press the power button), fetches an image, displays it, and goes back to sleep. Displaying a new image takes a few seconds; the rest of the time there is no power draw from the display either, since e-ink retains its image without any power.
 
-On the Hokku / Huessen frame and the Bigme F7, plugging into USB (a computer, not a plain wall charger) keeps the frame fully awake instead of deep sleeping. This is intentional — it keeps the chip reachable for reflashing. On the Hokku / Huessen frame the red LED blinks while this is the case. Not every model detects USB this way. Plugging and unplugging USB does not trigger an image refresh; only the schedule and the button do.
+On the Hokku / Huessen frame and the Bigme F7, plugging into USB (a computer, not a plain wall charger) keeps the frame fully awake instead of deep sleeping. This is intentional — it keeps the chip reachable for reflashing. On the Hokku / Huessen frame the red LED blinks while this is the case. Not every model detects USB this way. Plugging and unplugging USB does not trigger an image refresh; only the schedule and the power button do.
 
 The battery level is reported to the server on every refresh and shown in the Screens tab. The web app flags frames below 20% in red. If a frame's battery gets too low to complete a refresh it will display a low-battery message on screen before powering off.
 

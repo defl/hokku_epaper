@@ -46,7 +46,7 @@ All three use **E Ink Spectra 6**, so one photo library feeds every frame — an
 - **Late-frame warning** — if a frame misses its scheduled update by more than an hour, the web app flags it so you know to check WiFi or the battery.
 - **Scheduled updates** — set the times you want the photo to change (e.g. morning, noon, evening) and the frame wakes up on its own. No constant connection needed.
 - **Settings are on the server** — change the schedule or any other server setting in the web app and every frame picks it up automatically. No restarts, no reflashing.
-- **Instant refresh** — there's a button on the frame that forces an immediate update whenever you want one.
+- **Instant refresh** — on the Hokku / Huessen frame, press the power button to show the next image whenever you want one.
 - **Diagnostics on demand** — one click in the web app shows the frame's status without needing a cable.
 - **Recovers on its own** — a frame that can't reach the server backs off and retries rather than hammering the network flat, and a firmware update that can't phone home afterwards rolls itself back to the previous version.
 - **What happened last refresh** — after every update the frame sends a log of what it did to the server (WiFi connection, image download, display result). Open a frame's details in the web app to read it — no cable, no terminal needed.
@@ -69,6 +69,44 @@ All three use **E Ink Spectra 6**, so one photo library feeds every frame — an
 
 Three tabs: **Images** (your photo library — upload, preview, manage), **Screens** (live status of each frame — battery, WiFi, last seen, next update, per-frame orientation), and **Config** (refresh schedule and conversion settings). Everything updates live without a page reload. For a full walkthrough of every feature see the **[user manual](docs/manual.md)**.
 
+## Colour accuracy
+
+The panel settings aren't copied from a spec sheet; they come from measuring real panels. It started with a colorimeter sitting on the glass, reading well over a thousand test patches to map what each panel can actually show:
+
+<table>
+<tr>
+<td><img src="images/colour/colormunki_on_f7.jpg" width="400"></td>
+<td><img src="images/colour/f7_gamut.png" width="360"></td>
+</tr>
+<tr>
+<td>A colorimeter reading test patches off the Bigme F7.</td>
+<td>The F7's six inks against sRGB. E-ink covers a lot less colour than a monitor.</td>
+</tr>
+<tr>
+<td><img src="images/colour/measured_errors.png" width="400"></td>
+<td><img src="images/colour/f7_vs_huessen.png" width="400"></td>
+</tr>
+<tr>
+<td>Requested colour → measured colour. Each line is how far the panel lands from what was asked for.</td>
+<td>Bigme F7 vs. Hokku / Huessen: nearly the same screen, and the cheaper one comes out slightly ahead.</td>
+</tr>
+</table>
+
+Patch measurements alone only got so far, so the rig grew a high-resolution camera looking down at the panel under a full-spectrum, high-CRI light. Thousands of captured images and a long game of left-or-right comparisons later, the result is the tuning that shipped in 4.0 beta 3:
+
+<table>
+<tr>
+<td><img src="images/colour/camera_rig.jpg" width="300"></td>
+<td><img src="images/colour/ab_hare.jpg" width="480"></td>
+</tr>
+<tr>
+<td>The camera rig: a light tent with the camera on top.</td>
+<td>One of the A/B comparisons, two renderings side by side on the same panel.</td>
+</tr>
+</table>
+
+The full story, with interactive 3D plots, is in the discussions [Let's get the colors as right as we can](https://github.com/defl/hokku_epaper/discussions/38) and [Camera based coloring improvements](https://github.com/defl/hokku_epaper/discussions/42).
+
 ## System Requirements
 
 **Server side** — any Linux, macOS, Windows, or Raspberry Pi on the same local network as the frame. A Raspberry Pi Zero 2 W is the recommended choice: cheap, silent, always-on, and more than fast enough. Around 512 MB of RAM; a few GB of disk for photos.
@@ -89,7 +127,9 @@ Hokku loves Pi! If you need to pick one up, the **[hardware guide](docs/hardware
 
 *(Describes the Hokku / Huessen 13.3" frame — other models differ; see their [screen documentation](docs/hardware.md).)*
 
-**The button** on the back of the frame (right-hand side in landscape, lower side in portrait) forces an immediate refresh — pulls the next image from the server right now, ignoring the schedule. Works whether the frame is deep-asleep on battery, plugged into USB, or anywhere in between.
+**The power button** shows the next image right away: it pulls the next image from the server, ignoring the schedule. It works whether the frame is deep-asleep on battery or plugged into USB. It never switches the frame off; between refreshes the frame is already in a deep sleep that draws almost nothing.
+
+**The other two buttons** do nothing. Only the power button can wake the frame from deep sleep, so the other two are left unused.
 
 **Two tiny LEDs** on the bottom of the frame:
 
