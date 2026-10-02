@@ -10,6 +10,23 @@ Unverified items. Confirmed findings get moved to [`hardware_facts.md`](hardware
 | 4 | CHG_EN1 | Charger enable, active LOW |
 | 13 | CHG_EN2 | Charger enable, active LOW |
 
+## Physical Buttons → GPIO
+
+The frame has three physical buttons. Which physical button is on which GPIO has not been
+tested on the bench; the mapping below is inferred (bench test tracked in
+[issue #56](https://github.com/defl/hokku_epaper/issues/56)):
+
+- **Power button → GPIO 1 (BUTTON_1)**, the only button our firmware reads. Two independent
+  sources point here: the factory firmware's name for GPIO 1 is "power off", and a user
+  reports that on a Wayfair 13.3" unit running Hokku firmware the power button is the one
+  that shows the next image ([issue #18](https://github.com/defl/hokku_epaper/issues/18)).
+- **The other two → GPIO 40 (BUTTON_2, factory "switch photo") and GPIO 39 (BUTTON_3,
+  factory "restart wifi")**, in an unknown physical order. Neither is RTC-capable, so
+  neither can wake the chip from deep sleep, and our firmware ignores both.
+- **GPIO 12 (PWR_BUTTON)**: it is unknown whether any physical button drives it at all. It
+  transitions with GPIO 14 on USB-host plug events (see `hardware_facts.md`), and its name
+  may simply be the factory firmware's.
+
 ## Power Architecture
 
 - **EPAPER_PWR_EN (GPIO3)**: likely controls display power supply — not yet confirmed
