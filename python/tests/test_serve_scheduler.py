@@ -459,3 +459,93 @@ def test_precompute_all_locked_neutral_images_appear_in_all_slots(
     assert sched._next_for[Orientation.NEUTRAL] == "square.png"
     assert sched._next_for[Orientation.LANDSCAPE] == "square.png"
     assert sched._next_for[Orientation.PORTRAIT] == "square.png"
+
+
+# ── Label filter ──────────────────────────────────────────────────────────────
+
+
+def _label(mgr: SingleThreadedImageManager, name: str, *labels: str) -> None:
+    assert mgr.set_labels([name], replace_with=tuple(labels)) == []
+
+
+def test_pick_next_without_labels_is_unchanged(app_config: AppConfig, make_test_image):
+    """The default filter is the pre-labels code path: same precomputed pick."""
+    mgr, sched = _setup(app_config, make_test_image, ["a.png", "b.png"])
+    _label(mgr, "a.png", "kitchen")
+    expected = sched.peek_next(Orientation.NEUTRAL)
+    assert sched.pick_next(Orientation.NEUTRAL, frozenset()) == expected
+
+
+def test_pick_next_honours_label_filter(app_config: AppConfig, make_test_image):
+    mgr, sched = _setup(app_config, make_test_image, ["a.png", "b.png", "c.png"])
+    _label(mgr, "a.png", "kitchen")
+    _label(mgr, "b.png", "summer", "kitchen")
+    for _ in range(12):
+        n = sched.pick_next(Orientation.NEUTRAL, frozenset({"kitchen"}))
+        assert n is not None and n in ("a.png", "b.png")
+        sched.mark_served(n)
+
+
+def test_label_filter_is_any_of(app_config: AppConfig, make_test_image):
+    mgr, sched = _setup(app_config, make_test_image, ["a.png", "b.png", "c.png"])
+    _label(mgr, "a.png", "kitchen")
+    _label(mgr, "b.png", "summer")
+    seen = set()
+    for _ in range(20):
+        n = sched.pick_next(Orientation.NEUTRAL, frozenset({"kitchen", "summer"}))
+        assert n is not None and n != "c.png"
+        seen.add(n)
+        sched.mark_served(n)
+    assert seen == {"a.png", "b.png"}
+
+
+def test_label_filter_with_no_match_serves_nothing(app_config: AppConfig, make_test_image):
+    _, sched = _setup(app_config, make_test_image, ["a.png"])
+    assert sched.pick_next(Orientation.NEUTRAL, frozenset({"winter"})) is None
+
+
+def test_label_filter_stays_fair_within_the_subset(app_config: AppConfig, make_test_image):
+    """Filtered screens rotate through their own pool, least-shown first."""
+    mgr, sched = _setup(app_config, make_test_image, ["a.png", "b.png", "c.png", "d.png"])
+    for n in ("a.png", "b.png", "c.png"):
+        _label(mgr, n, "hall")
+    counts = {"a.png": 0, "b.png": 0, "c.png": 0}
+    for _ in range(9):
+        n = sched.pick_next(Orientation.NEUTRAL, frozenset({"hall"}))
+        assert n is not None
+        sched.mark_served(n)
+        counts[n] += 1
+    assert counts == {"a.png": 3, "b.png": 3, "c.png": 3}
+
+
+def test_label_filter_combines_with_orientation(app_config: AppConfig, make_test_image):
+    mgr, sched = _setup_with_sizes(
+        app_config,
+        make_test_image,
+        [("land.png", (800, 600)), ("port.png", (600, 800)), ("port2.png", (600, 800))],
+    )
+    _label(mgr, "land.png", "hall")
+    _label(mgr, "port.png", "hall")
+    for _ in range(6):
+        n = sched.pick_next(Orientation.PORTRAIT, frozenset({"hall"}))
+        assert n == "port.png"
+        sched.mark_served("port.png")
+
+
+def test_has_eligible_checks_labels_and_orientation(app_config: AppConfig, make_test_image):
+    mgr, sched = _setup_with_sizes(
+        app_config, make_test_image, [("land.png", (800, 600)), ("port.png", (600, 800))]
+    )
+    _label(mgr, "land.png", "hall")
+    assert sched.has_eligible(Orientation.NEUTRAL, frozenset())
+    assert sched.has_eligible(Orientation.NEUTRAL, frozenset({"hall"}))
+    assert sched.has_eligible(Orientation.LANDSCAPE, frozenset({"hall"}))
+    assert not sched.has_eligible(Orientation.PORTRAIT, frozenset({"hall"}))
+    assert not sched.has_eligible(Orientation.NEUTRAL, frozenset({"winter"}))
+
+
+def test_screen_labels_persist(app_config: AppConfig, make_test_image):
+    mgr, sched = _setup(app_config, make_test_image, ["a.png"])
+    sched.set_screen_config("frame-1", ScreenConfig(labels=("hall", "summer")))
+    sched2 = ServeScheduler(mgr)
+    assert sched2.get_screen_config("frame-1").labels == ("hall", "summer")
