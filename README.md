@@ -71,7 +71,7 @@ Three tabs: **Images** (your photo library — upload, preview, manage), **Scree
 
 ## Colour accuracy
 
-The panel settings aren't copied from a spec sheet; they come from measuring real panels. It started with a colorimeter sitting on the glass, reading well over a thousand test patches to map what each panel can actually show:
+The panel settings come from measuring real panels, not a spec sheet: over a thousand colorimeter readings off the glass, then thousands of camera captures judged side by side. See **[Colour accuracy](docs/colour_accuracy.md)** for how it was done.
 
 <table>
 <tr>
@@ -82,30 +82,7 @@ The panel settings aren't copied from a spec sheet; they come from measuring rea
 <td>A colorimeter reading test patches off the Bigme F7.</td>
 <td>The F7's six inks against sRGB. E-ink covers a lot less colour than a monitor.</td>
 </tr>
-<tr>
-<td><img src="images/colour/measured_errors.png" width="400"></td>
-<td><img src="images/colour/f7_vs_huessen.png" width="400"></td>
-</tr>
-<tr>
-<td>Requested colour → measured colour. Each line is how far the panel lands from what was asked for.</td>
-<td>Bigme F7 vs. Hokku / Huessen: nearly the same screen, and the cheaper one comes out slightly ahead.</td>
-</tr>
 </table>
-
-Patch measurements alone only got so far, so the rig grew a high-resolution camera looking down at the panel under a full-spectrum, high-CRI light. Thousands of captured images and a long game of left-or-right comparisons later, the result is the tuning that shipped in 4.0 beta 3:
-
-<table>
-<tr>
-<td><img src="images/colour/camera_rig.jpg" width="300"></td>
-<td><img src="images/colour/ab_hare.jpg" width="480"></td>
-</tr>
-<tr>
-<td>The camera rig: a light tent with the camera on top.</td>
-<td>One of the A/B comparisons, two renderings side by side on the same panel.</td>
-</tr>
-</table>
-
-The full story, with interactive 3D plots, is in the discussions [Let's get the colors as right as we can](https://github.com/defl/hokku_epaper/discussions/38) and [Camera based coloring improvements](https://github.com/defl/hokku_epaper/discussions/42).
 
 ## System Requirements
 
@@ -142,6 +119,7 @@ Hokku loves Pi! If you need to pick one up, the **[hardware guide](docs/hardware
 - **[User manual](docs/manual.md)** — full guide to the web app, frame behaviour, and day-to-day use.
 - **[Installation](docs/install.md)** — step-by-step server + firmware setup for those who prefer the scenic route.
 - **[Dithering pipeline](docs/dithering.md)** — why it looks the way it does; failure modes and countermeasures.
+- **[Colour accuracy](docs/colour_accuracy.md)** — how the panels were measured and the colour tuning was chosen.
 - **[Hardware](docs/hardware.md)** — every supported frame, where to buy, and the recommended Pi server kit.
 - **Per-screen documentation** — [Hokku / Huessen 13.3"](docs/screens/huessen_epf1301/README.md) · [Bigme F7](docs/screens/bigme_f7/README.md) · [Seeed reTerminal E1004](docs/screens/seeedstudio_e1004/README.md) — hardware, firmware and quirks for each.
 - **[Changelog](CHANGELOG.md)** — release history.
