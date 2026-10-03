@@ -1,4 +1,4 @@
-hokku-server (4.0.1~dev.97-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.98-1) unstable; urgency=medium
 
   * Firmware: one shared rule for the server's reply to an image fetch on every
     model. A screen whose labels match no picture keeps its picture and checks
@@ -6,6 +6,14 @@ hokku-server (4.0.1~dev.97-1) unstable; urgency=medium
     seeedstudio_e1004 1.2.7.
 
  -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 03 Oct 2026 10:51:21 -0500
+
+hokku-server (4.0.1~dev.97-1) unstable; urgency=medium
+
+  * Flash a screen installs the firmware library's pinned version (as OTA
+    does) instead of always the bundled one; the scan judges freshness
+    against it.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 03 Oct 2026 10:45:33 -0500
 
 hokku-server (4.0.1~dev.96-1) unstable; urgency=medium
 

@@ -30,6 +30,7 @@ from hokku.webserver import flashing
 from hokku.webserver import flask_app as flask_app_mod
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
+from hokku.webserver.firmware_library import FirmwareStore
 from hokku.webserver.flask_app import OTA_MAX_ATTEMPTS, create_app
 from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
@@ -367,6 +368,39 @@ def test_flash_start_dispatches_selected_model_end_to_end(app_config, tmp_path, 
     assert captured["screen_model"] == "seeedstudio_e1004"
     assert captured["firmware_path"] == seeed_fw  # seeed's bin, not huessen's
     assert captured["port"] == "COM9"
+
+
+def test_flash_start_writes_the_pinned_firmware(app_config, tmp_path, monkeypatch):
+    """A USB flash installs the firmware library's pinned version — the same one
+    OTA serves — not the newest bundled build."""
+    bundled_fw = tmp_path / "hokku-seeedstudio_e1004-1.2.6.bin"
+    bundled_fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
+    monkeypatch.setattr(seeedstudio_e1004, "merged_firmware_file", lambda *a, **k: bundled_fw)
+    monkeypatch.setattr(seeedstudio_e1004, "nvs_tool_available", lambda: True)
+    fw_dir = tmp_path / "fw"
+    fw_dir.mkdir()
+    pinned_fw = fw_dir / "hokku-seeedstudio_e1004-1.2.4.bin"
+    pinned_fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
+    FirmwareStore(fw_dir).set_pin("seeedstudio_e1004", "1.2.4")
+    state = _bare_state(replace(app_config, firmware_dir=str(fw_dir)))
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        state.flash_jobs,
+        "start",
+        lambda port, config, firmware_path, screen_model="": captured.update(fw=firmware_path) or 1,
+    )
+    r = _client(state, tmp_path).post(
+        "/hokku/api/flash/start",
+        json={
+            "screen_model": "seeedstudio_e1004",
+            "port": "COM9",
+            "wifi_ssid1": "Net",
+            "image_url": "http://x/hokku/screen/",
+        },
+    )
+    assert r.status_code == 200
+    assert captured["fw"] == pinned_fw
 
 
 def test_flash_start_remembers_wifi_credentials(app_config, tmp_path, monkeypatch):

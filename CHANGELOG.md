@@ -41,6 +41,10 @@ Bigme F7 and the Seeed E1004, mostly reported by people running them.
   (`1A86:7522`), and once found it showed as having no Hokku firmware (#45).
 - **Phone portraits were treated as landscape**: wrong orientation filter,
   preview frame and listed size (#40).
+- **A USB flash ignored the firmware library's pin** and always installed the
+  bundled firmware, while over-the-air updates used the pin. *Flash a screen*
+  now installs the pinned version too, and the scan judges "up to date"
+  against it.
 - **Face detection missed or misplaced faces** in HEIC, AVIF, JXL and some
   rotated photos, because it decoded the file differently from the renderer.
   iPhone photos got no face detection at all.
