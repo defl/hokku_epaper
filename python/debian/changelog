@@ -1,3 +1,12 @@
+hokku-server (4.0.1~dev.97-1) unstable; urgency=medium
+
+  * Firmware: one shared rule for the server's reply to an image fetch on every
+    model. A screen whose labels match no picture keeps its picture and checks
+    back at its normal interval. bigme_f7 1.2.16, huessen_epf1301 1.2.27,
+    seeedstudio_e1004 1.2.7.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 03 Oct 2026 10:51:21 -0500
+
 hokku-server (4.0.1~dev.96-1) unstable; urgency=medium
 
   * DISCLAIMER: correct palette attribution (esp32-photoframe, MIT;

@@ -50,6 +50,8 @@
 #include "../../all/frame_state.c"
 #include "../../all/sleep_cal.c"
 #include "../../all/screen_ident.c"
+#include "../../all/backoff.c"
+#include "../../all/fetch_outcome.c"
 #include "config.c"
 #include "state.c"
 #include "scheduler.c"
@@ -117,6 +119,44 @@ static void test_set_after_refresh(void)
     ok = scheduler_set_after_refresh(0, 3600, esp_timer_get_time());
     CHECK(!ok && next_refresh_epoch == 42,
           "scheduler: set_after_refresh rejects server_epoch<=0, leaves state for caller fallback");
+}
+
+static void test_apply_fetch(void)
+{
+    /* Image with a full schedule: anchored to the server clock, streak cleared. */
+    consecutive_refresh_failures = 3;
+    hokku_fetch_result_t img = { .http_status = 200, .image_ok = true, .sleep_s = 3600 };
+    hokku_fetch_outcome_t o = scheduler_apply_fetch(&img, 1700000000LL, esp_timer_get_time());
+    CHECK(o.action == HOKKU_FETCH_DISPLAY && next_refresh_epoch == 1700003600LL &&
+          consecutive_refresh_failures == 0,
+          "scheduler: apply_fetch anchors a displayed image to the server clock");
+
+    /* Label filter matches nothing: keep, sleep the normal interval, no outage. */
+    consecutive_refresh_failures = 2;
+    hokku_fetch_result_t nolabel = { .http_status = 404, .sleep_s = 21600 };
+    time_t before = time(NULL);
+    o = scheduler_apply_fetch(&nolabel, 0, esp_timer_get_time());
+    CHECK(o.action == HOKKU_FETCH_KEEP && consecutive_refresh_failures == 0 &&
+          next_refresh_epoch >= (int64_t)before + 21600,
+          "scheduler: apply_fetch 404+sleep keeps the picture until the normal interval");
+
+    /* Image with a sleep but no server epoch: relative sleep of the header value. */
+    hokku_fetch_result_t noepoch = { .http_status = 200, .image_ok = true, .sleep_s = 900 };
+    before = time(NULL);
+    o = scheduler_apply_fetch(&noepoch, 0, esp_timer_get_time());
+    CHECK(o.action == HOKKU_FETCH_DISPLAY && next_refresh_epoch >= (int64_t)before + 900 &&
+          next_refresh_epoch <= (int64_t)time(NULL) + 900,
+          "scheduler: apply_fetch without server epoch sleeps the header value from now");
+
+    /* Outage: streak grows, backoff doubles. */
+    consecutive_refresh_failures = 1;
+    hokku_fetch_result_t down = { .http_status = 0 };
+    before = time(NULL);
+    o = scheduler_apply_fetch(&down, 0, esp_timer_get_time());
+    CHECK(o.action == HOKKU_FETCH_BACKOFF && consecutive_refresh_failures == 2 &&
+          o.sleep_s == 2 * HOKKU_RETRY_BASE_S &&
+          next_refresh_epoch >= (int64_t)before + 2 * HOKKU_RETRY_BASE_S,
+          "scheduler: apply_fetch outage bumps the streak and backs off");
 }
 
 static void test_observe_sleep_learns_drift(void)
@@ -292,6 +332,7 @@ int main(void)
     test_schedule_retry_in();
     test_save_pre_sleep_epoch();
     test_set_after_refresh();
+    test_apply_fetch();
     test_observe_sleep_learns_drift();
     test_observe_sleep_skips_non_timer();
     test_observe_sleep_skips_without_armed();

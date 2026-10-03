@@ -51,6 +51,7 @@
 #include "../../../common/esp32/ota.c"
 #include "../../../common/all/firmware_url.c"
 #include "../../../common/all/backoff.c"
+#include "../../../common/all/fetch_outcome.c"  /* shared reply decision */
 #include "../../../common/all/frame_state.c"
 #include "../../../common/all/sleep_cal.c"
 #include "../../../common/all/json_util.c"

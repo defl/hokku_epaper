@@ -23,11 +23,31 @@ typedef struct _HTTPParameters {
     UINT32                nTimeout;
 } HTTPParameters;
 
-/* do_refresh()'s HTTP orchestration (streaming download/upload) isn't unit
- * tested (integration-level, needs a real socket) — these just need to link. */
-static inline int HTTPC_open(HTTPParameters *p) { (void)p; return 1; }
-static inline int HTTPC_request(HTTPParameters *p, HTTP_CLIENT_GET_HEADER cb) { (void)p; (void)cb; return 1; }
-static inline int HTTPC_get_request_info(HTTPParameters *p, void *hc) { (void)p; (void)hc; return 1; }
+/* Controllable transport for do_refresh(): each step's result (0 = success),
+ * the response status, and how many body bytes HTTPC_read hands out before it
+ * reports the end of the stream. */
+static int    _mock_httpc_open_result = 1;
+static int    _mock_httpc_request_result;
+static int    _mock_httpc_info_result;
+static UINT32 _mock_httpc_status;
+static UINT32 _mock_httpc_body_len;
+static UINT32 _mock_httpc_body_read;
+
+static inline int HTTPC_open(HTTPParameters *p) { (void)p; return _mock_httpc_open_result; }
+static inline int HTTPC_request(HTTPParameters *p, HTTP_CLIENT_GET_HEADER cb) { (void)p; (void)cb; return _mock_httpc_request_result; }
+static inline int HTTPC_get_request_info(HTTPParameters *p, void *hc)
+{
+    (void)p;
+    ((HTTP_CLIENT *)hc)->HTTPStatusCode = _mock_httpc_status;
+    return _mock_httpc_info_result;
+}
 static inline int HTTPC_write(HTTPParameters *p, VOID *buf, UINT32 n) { (void)p; (void)buf; (void)n; return 1; }
-static inline int HTTPC_read(HTTPParameters *p, VOID *buf, UINT32 n, UINT32 *got) { (void)p; (void)buf; (void)n; *got = 0; return 1; }
+static inline int HTTPC_read(HTTPParameters *p, VOID *buf, UINT32 n, UINT32 *got)
+{
+    (void)p; (void)buf;
+    UINT32 left = _mock_httpc_body_len - _mock_httpc_body_read;
+    *got = n < left ? n : left;
+    _mock_httpc_body_read += *got;
+    return (_mock_httpc_body_read < _mock_httpc_body_len) ? HTTP_CLIENT_SUCCESS : 1;
+}
 static inline int HTTPC_close(HTTPParameters *p) { (void)p; return 0; }

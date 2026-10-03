@@ -27,6 +27,7 @@ panel driver) does **not** belong here. ESP-IDF-specific shared code lives in
 | file | what |
 |---|---|
 | `backoff.c/.h`      | exponential retry interval for consecutive failures |
+| `fetch_outcome.c/.h` | what a screen does with the server's reply to an image fetch (display / keep the picture / back off), the shared retry constants, `X-Sleep-Seconds` parsing |
 | `firmware_url.c/.h` | derive the model-tagged firmware endpoint from the server base URL |
 | `frame_proto.c/.h`  | serial `frame` upload protocol: push a full panel buffer over the console (not used by `seeedstudio_e1004`) |
 | `frame_state.c/.h`  | build the `X-Frame-State` telemetry JSON from a `frame_state_t` |

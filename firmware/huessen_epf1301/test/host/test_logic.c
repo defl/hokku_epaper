@@ -61,6 +61,7 @@
 #include "../../../common/esp32/ota.c"    /* A/B OTA                             */
 #include "../../../common/all/firmware_url.c" /* firmware endpoint derivation      */
 #include "../../../common/all/backoff.c"      /* exponential retry backoff policy   */
+#include "../../../common/all/fetch_outcome.c"  /* shared reply decision */
 #include "../../../common/all/frame_state.c"  /* X-Frame-State JSON builder         */
 #include "../../../common/all/sleep_cal.c"    /* oscillator-drift calibration       */
 #include "../../../common/all/json_util.c"    /* json_escape                        */

@@ -2,6 +2,7 @@
 #include "log.h"    /* hokku_log_snapshot / hokku_log_reset / HOKKU_LOG_MAX_UPLOAD */
 #include "config.h" /* config_set_screen_name */
 #include "screen_ident.h"
+#include "fetch_outcome.h" /* hokku_sleep_seconds_parse */
 
 #include <string.h>
 #include <stdlib.h>
@@ -176,12 +177,12 @@ bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
     /* Response headers captured during perform() — safe to read now (copied
      * into ctx, not pointers into esp_http_client internals). */
     if (ctx.sleep_seconds_hdr[0] != '\0' && out && out->out_sleep_seconds) {
-        int32_t secs = atoi(ctx.sleep_seconds_hdr);
+        int32_t secs = hokku_sleep_seconds_parse(ctx.sleep_seconds_hdr);
         if (secs > 0) {
             *out->out_sleep_seconds = secs;
             ESP_LOGI("hokku", "X-Sleep-Seconds: %d", secs);
         } else {
-            ESP_LOGW("hokku", "X-Sleep-Seconds present but non-positive: '%s'", ctx.sleep_seconds_hdr);
+            ESP_LOGW("hokku", "X-Sleep-Seconds invalid: '%s'", ctx.sleep_seconds_hdr);
         }
     } else {
         ESP_LOGW("hokku", "X-Sleep-Seconds header missing (status=%d)", status);

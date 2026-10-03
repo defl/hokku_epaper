@@ -44,6 +44,9 @@ Bigme F7 and the Seeed E1004, mostly reported by people running them.
 - **Face detection missed or misplaced faces** in HEIC, AVIF, JXL and some
   rotated photos, because it decoded the file differently from the renderer.
   iPhone photos got no face detection at all.
+- **A screen whose labels match no picture** now keeps its picture and checks
+  back at its normal interval on every model. The Hokku/Huessen showed "Image
+  download failed"; the Bigme F7 retried every 30 s.
 
 ### Upgrading from beta 3
 
@@ -56,10 +59,11 @@ Bigme F7 and the Seeed E1004, mostly reported by people running them.
 
 ### Firmware
 
-- `bigme_f7` **1.2.12 → 1.2.15** — DHCP default, inactive-slot flashing, live
-  Wi-Fi switch, server-owned name.
-- `huessen_epf1301` **1.2.25 → 1.2.26** — server-owned name.
-- `seeedstudio_e1004` **1.2.5 → 1.2.6** — battery reading, server-owned name.
+- `bigme_f7` **1.2.12 → 1.2.16** — DHCP default, inactive-slot flashing, live
+  Wi-Fi switch, server-owned name, no-match labels.
+- `huessen_epf1301` **1.2.25 → 1.2.27** — server-owned name, no-match labels.
+- `seeedstudio_e1004` **1.2.5 → 1.2.7** — battery reading, server-owned name,
+  shared reply handling.
 
 ## 4.0.0 beta 3
 
