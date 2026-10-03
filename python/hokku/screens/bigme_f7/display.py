@@ -61,6 +61,8 @@ class BigmeF7Display(Display):
         ],
         dtype=np.float32,
     )
+    black_index = 0
+    white_index = 1
 
     # Measured on this glass with an X-Rite ColorMunki Photo (ArgyllCMS spotread,
     # reflective 45/0, D65), averaged over 11 readings of each solid ink:

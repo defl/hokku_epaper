@@ -75,14 +75,16 @@ def render_one(
 
     from hokku.screens.registry import DISPLAY_REGISTRY  # noqa: PLC0415
     from hokku.webserver.bounding_box import BoundingBox  # noqa: PLC0415
-    from hokku.webserver.dither_streaming_numba import NumbaStreamingDither  # noqa: PLC0415
     from hokku.webserver.image_abc import preview_png_from_panel_bytes  # noqa: PLC0415
     from hokku.webserver.image_config import image_config_from_dict_strict  # noqa: PLC0415
-    from hokku.webserver.image_renderer import ImageRenderer, open_image_for_render  # noqa: PLC0415
+    from hokku.webserver.image_renderer import (  # noqa: PLC0415
+        open_image_for_render,
+        renderer_for_display,
+    )
 
     display = DISPLAY_REGISTRY[model]
     cfg = image_config_from_dict_strict(image_config_dict)
-    renderer = ImageRenderer(NumbaStreamingDither(display), display)
+    renderer = renderer_for_display(display)
 
     # Convert bbox dicts back to BoundingBox instances
     bboxes_norm = None

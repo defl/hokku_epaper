@@ -280,7 +280,7 @@ class AbstractImageRenderer(ABC):
 
         Returns ``(uint8_array, padding_mask)`` where ``padding_mask`` is
         True for pixels that are white letterbox padding and should be forced
-        to palette index 1 (white ink) after dithering.
+        to the display's ``white_index`` after dithering.
 
         clahe_keepout_bboxes_norm: [(x, y, w, h), ...] in [0, 1] relative to the original image.
         Converted to canvas pixel coordinates and passed to

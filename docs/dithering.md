@@ -83,7 +83,7 @@ ImageClassifier.decision_for(path, sha1)
                                      clahe_keepout_bboxes }
         # orientation is supplied by the caller per render target
 
-ImageRenderer(NumbaStreamingDither()).render_panel_bytes(img, cfg, orientation)
+renderer_for_display(display).render_panel_bytes(img, cfg, orientation)
     ↓
 render_indices(img, cfg, orientation, FULL_W, PANEL_H,
                clahe_keepout_bboxes_norm=keepout)
@@ -97,7 +97,7 @@ render_indices(img, cfg, orientation, FULL_W, PANEL_H,
                → float32 stripe (3.8 MB)
            _streaming_diffusion_dither()
                rolling 2–3 row error buffer, LUT lookup per pixel
-    6. result_idx[padding_mask] = WHITE
+    6. result_idx[padding_mask] = display.white_index
     ↓
 indices_to_panel_bytes(result_idx) → wire bytes
 ```
@@ -402,8 +402,12 @@ the other space for the chroma stage. The motivation:
 * **Chroma scaling.** OKLAB's better hue uniformity carries over from the
   saturation case above.
 
-The panel anchors come from `PALETTE_OKLAB[0, 0]` (black ≈ 0.085) and
-`PALETTE_OKLAB[1, 0]` (white ≈ 0.825). `vivid_chroma_low_oklab` /
+The L stage maps into the target panel's own black/white range: the Display's
+measured `drc_anchor_l`, or else its `black_index` / `white_index` palette rows
+(`ImageRenderer._drc_anchors`). The chroma stage still scales by the Huessen
+reference palette's range (`PALETTE_OKLAB` black ≈ 0.085, white ≈ 0.825) on
+every panel, until per-model config lets it follow the screen.
+`vivid_chroma_low_oklab` /
 `vivid_chroma_high_oklab` are the OKLAB-unit thresholds (defaults
 `0.025` / `0.075`).
 
@@ -423,7 +427,7 @@ boost colour),
 hue in a grey image to protect.
 
 **Fix 2: B&W-only palette LUT.** The B&W dither config can additionally set
-`lut_name = "bw"`, which builds a LUT that only ever picks the Black or White
+`lut_name = "bw"`, which builds a LUT that only ever picks the Display's `black_index` or `white_index`
 palette entries. This completely eliminates any possibility of a colour ink
 landing on a monochrome image, at the cost of pure two-tone rendering
 (no grey half-tones from colour ink mixing). The LUT is built by

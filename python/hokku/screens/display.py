@@ -51,6 +51,21 @@ class Display(ABC):
     palette_measured_rgb: NDArray
     """Shape (N, 3) float32 — measured RGB of each ink colour on-panel."""
 
+    black_index: int
+    """Palette index of the panel's black ink.
+
+    Shared code asks for this rather than assuming an index: the two-ink B&W LUT
+    and the palette-derived DRC range both need to know which entry is black, and
+    a palette ordered differently (e.g. a greyscale ramp) must not be misread.
+    """
+
+    white_index: int
+    """Palette index of the panel's white ink (the paper colour).
+
+    Letterbox padding is forced to this index after dithering, and it is the
+    other end of the B&W LUT and the palette-derived DRC range.
+    """
+
     drc_anchor_l: tuple[float, float] | None = None
     """(black L\\*, white L\\*) the dynamic-range compressor should target, or None.
 
@@ -61,7 +76,8 @@ class Display(ABC):
     there clips everything past the end — measured at 50 % of one test portrait
     collapsing into flat black.
 
-    ``None`` derives the range from rows 0 and 1 of ``palette_measured_rgb``,
+    ``None`` derives the range from the ``black_index`` and ``white_index`` rows
+    of ``palette_measured_rgb``,
     which is right whenever that table reflects the real panel. Set it explicitly
     when the panel has been measured and the palette has not been re-derived from
     those measurements.
