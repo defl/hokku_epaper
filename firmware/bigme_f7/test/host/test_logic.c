@@ -22,9 +22,9 @@
  *   - epd.c: pure hardware SPI/GPIO bit-banging, no host-testable logic
  *     (unlike the ESP32's text_render.c, there's no pure-software module to
  *     extract here).
- *   - do_refresh() / refresh_thread_fn(): top-level HTTP+EPD streaming
- *     orchestration; integration-level, not unit-tested (mirrors huessen's
- *     firmware, which also doesn't unit-test its top-level refresh loop).
+ *   - refresh_thread_fn(): the top-level loop (sleep/hibernate per outcome).
+ *     do_refresh() IS covered for how it acts on each server reply (shared
+ *     fetch_outcome decision) against the controllable HTTPC mock.
  *   - command.c (`cfg`/`wifi`/`ota` console dispatch): argv parsing/routing
  *     over SDK console utilities not otherwise mocked here; a reasonable
  *     follow-up, not included in this pass.
@@ -76,6 +76,7 @@
 #include "../../led.c"    /* led_usb_present() -> _mock_gpio, shared with main.c below */
 #include "../../../common/all/firmware_url.c"  /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/backoff.c"       /* SoC-agnostic (shared with ESP32) */
+#include "../../../common/all/fetch_outcome.c"  /* shared reply decision */
 #include "../../../common/all/frame_state.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/frame_proto.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/screen_ident.c"  /* SoC-agnostic (shared with ESP32) */
@@ -107,7 +108,8 @@
 void epd_send_cmd(uint8_t cmd) { (void)cmd; }
 void epd_send_data(uint8_t data) { (void)data; }
 void epd_init(void) { }
-void epd_refresh(void) { }
+static int _mock_epd_refresh_calls;
+void epd_refresh(void) { _mock_epd_refresh_calls++; }
 void heap_get_space(uint8_t **start, uint8_t **end, uint8_t **current)
 {
     static uint8_t buf[65536];
@@ -144,6 +146,13 @@ static void reset_all_mocks(void)
 
     _mock_http_header_present = 0;
     _mock_http_header_value = "";
+    _mock_httpc_open_result = 1;     /* transport down unless a test brings it up */
+    _mock_httpc_request_result = 0;
+    _mock_httpc_info_result = 0;
+    _mock_httpc_status = 0;
+    _mock_httpc_body_len = 0;
+    _mock_httpc_body_read = 0;
+    _mock_epd_refresh_calls = 0;
 
     netif_list = NULL;
     _mock_netif_set_addr_called = 0;
@@ -859,6 +868,74 @@ static void test_frame_receive_refuses_while_ota_lock_held(void)
  *  Entry point
  * ═══════════════════════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════════════════════
+ *  do_refresh — acting on the server's reply (shared fetch_outcome)
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+static void mock_server_reply(UINT32 status, const char *header, UINT32 body_len)
+{
+    _mock_httpc_open_result = 0;
+    _mock_httpc_status = status;
+    _mock_http_header_present = header != NULL;
+    _mock_http_header_value = header ? header : "";
+    _mock_httpc_body_len = body_len;
+}
+
+static void test_refresh_404_label_filter_keeps_picture(void)
+{
+    reset_all_mocks();
+    mock_server_reply(404, "X-Sleep-Seconds: 21600", 0);
+    hokku_fetch_outcome_t o = do_refresh(2);
+    CHECK(o.action == HOKKU_FETCH_KEEP && o.sleep_s == 21600 && o.failures == 0 &&
+          _mock_epd_refresh_calls == 0,
+          "do_refresh: 404 + X-Sleep-Seconds keeps the picture, sleeps the server's interval");
+}
+
+static void test_refresh_503_busy_honours_header(void)
+{
+    reset_all_mocks();
+    mock_server_reply(503, "X-Sleep-Seconds: 45", 0);
+    hokku_fetch_outcome_t o = do_refresh(0);
+    CHECK(o.action == HOKKU_FETCH_KEEP && o.sleep_s == 45 && _mock_epd_refresh_calls == 0,
+          "do_refresh: 503 busy sleeps X-Sleep-Seconds (was a fixed 30 s)");
+}
+
+static void test_refresh_error_without_header_backs_off(void)
+{
+    reset_all_mocks();
+    mock_server_reply(500, NULL, 0);
+    hokku_fetch_outcome_t o = do_refresh(1);
+    CHECK(o.action == HOKKU_FETCH_BACKOFF && o.failures == 2 &&
+          o.sleep_s == 2 * HOKKU_RETRY_BASE_S,
+          "do_refresh: error without X-Sleep-Seconds is an outage, backs off");
+}
+
+static void test_refresh_transport_failure_backs_off(void)
+{
+    reset_all_mocks();                  /* HTTPC_open fails */
+    hokku_fetch_outcome_t o = do_refresh(0);
+    CHECK(o.action == HOKKU_FETCH_BACKOFF && o.first_failure && o.sleep_s == HOKKU_RETRY_BASE_S,
+          "do_refresh: no connection backs off from the shared base");
+}
+
+static void test_refresh_image_displays(void)
+{
+    reset_all_mocks();
+    mock_server_reply(200, "X-Sleep-Seconds: 3600", EPD_IMAGE_BYTES);
+    hokku_fetch_outcome_t o = do_refresh(3);
+    CHECK(o.action == HOKKU_FETCH_DISPLAY && o.sleep_s == 3600 && o.failures == 0 &&
+          _mock_epd_refresh_calls == 1,
+          "do_refresh: full image is refreshed onto the panel, sleeps X-Sleep-Seconds");
+}
+
+static void test_refresh_short_image_not_displayed(void)
+{
+    reset_all_mocks();
+    mock_server_reply(200, "X-Sleep-Seconds: 3600", EPD_IMAGE_BYTES / 2);
+    hokku_fetch_outcome_t o = do_refresh(0);
+    CHECK(o.action == HOKKU_FETCH_BACKOFF && _mock_epd_refresh_calls == 0,
+          "do_refresh: short image is not refreshed and backs off");
+}
 int main(void)
 {
     printf("=== test_logic (bigme_f7) ===\n\n");
@@ -931,6 +1008,13 @@ int main(void)
     test_frame_receive_acks_every_chunk();
     test_frame_receive_restores_console_when_host_dies();
     test_frame_receive_refuses_while_ota_lock_held();
+
+    test_refresh_404_label_filter_keeps_picture();
+    test_refresh_503_busy_honours_header();
+    test_refresh_error_without_header_backs_off();
+    test_refresh_transport_failure_backs_off();
+    test_refresh_image_displays();
+    test_refresh_short_image_not_displayed();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

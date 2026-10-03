@@ -82,7 +82,7 @@ The Connected Screens table shows every frame that has ever connected to this se
 
 **Per-screen orientation** — a frame mounted in portrait can show portrait-rendered images while another in landscape shows landscape ones, both served from the same library. A brand-new frame defaults to landscape until you change it. Tick *Match orientation* to show that frame only pictures shot in its own orientation (square ones always qualify).
 
-**Per-screen labels** — in a frame's Config dialog, under *Show only pictures labelled*, tick one or more labels and that frame only rotates through pictures carrying **any** of the ticked labels (a picture labelled both "hall" and "summer" matches either). Leave everything unticked — the default, and what every frame starts with — and the frame shows the whole library exactly as before. Each frame keeps its own selection, so one frame can show the holiday pictures while another shows the children's drawings from the same library. Rotation stays fair within the filtered set. The Screens table shows each frame's label filter under its name and warns when it matches nothing.
+**Per-screen labels** — in a frame's Config dialog, under *Show only pictures labelled*, tick one or more labels and that frame only rotates through pictures carrying **any** of the ticked labels (a picture labelled both "hall" and "summer" matches either). Leave everything unticked — the default, and what every frame starts with — and the frame shows the whole library exactly as before. Each frame keeps its own selection, so one frame can show the holiday pictures while another shows the children's drawings from the same library. Rotation stays fair within the filtered set. The Screens table shows each frame's label filter under its name and warns when it matches nothing. Such a frame keeps its current picture and checks again at its normal interval.
 
 **Firmware version** — each frame reports the firmware it's running, shown in the
 dashboard. If the server is carrying a newer build for that model, the frame is
@@ -189,7 +189,7 @@ Common error messages and what to do:
 
 - **Config missing or invalid** — the frame was flashed without being configured, or the configuration version doesn't match the firmware. Reconfigure it from **Flash a screen** in the web app, or run `python tools/hokku_setup.py` and use option [4] or [5].
 - **WiFi connection failed** — the SSID or password is wrong, or the network isn't available at the frame's location. If a secondary network is configured the frame tries both before giving up. Check your WiFi credentials and run configure again.
-- **Image download failed** — the frame connected to WiFi but got no image from the server address it shows. Check that the server is running, that the address is correct, that nothing on your network is blocking port 8080, and that the library (or the frame's label filter) has pictures in it.
+- **Image download failed** — the frame connected to WiFi but got no image from the server address it shows. Check that the server is running, that the address is correct, and that nothing on your network is blocking port 8080. An empty library or a label filter that matches nothing does not show this; the frame keeps its picture.
 
 After fixing the underlying issue, the frame will try again on its next scheduled refresh. You can also press the power button to trigger an immediate retry.
 

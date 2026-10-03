@@ -90,7 +90,7 @@
 #include "net.h"
 #include "ota.h"
 #include "frame_state.h"
-#include "backoff.h"       /* shared exponential-retry-backoff policy (SoC-agnostic) */
+#include "fetch_outcome.h" /* shared reply decision + retry backoff (SoC-agnostic) */
 
 static const char *TAG = "e1004";
 
@@ -127,8 +127,6 @@ static const char *TAG = "e1004";
 #define NUM_CHUNKS  (HALF_BYTES / SPI_CHUNK_SIZE)
 
 /* ── Regime timings ──────────────────────────────────────────────── */
-#define REFRESH_RETRY_SECONDS   60
-#define REFRESH_RETRY_MAX_SECONDS  3600   /* backoff cap when the server stays unreachable: 1 h */
 #define SLEEP_FALLBACK_S        (3 * 3600)
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -485,23 +483,16 @@ static void build_frame_state_json(char *buf, size_t buflen,
 /* ═══════════════════════════════════════════════════════════════════
  *  Refresh — fetch (or OTA) + display + schedule the next wake.
  * ═══════════════════════════════════════════════════════════════════ */
-/* Exponential backoff for repeated "server unreachable" failures. Bumps the
- * RTC-persistent failure streak and returns the next retry interval (60s, 120,
- * ... capped at REFRESH_RETRY_MAX_SECONDS) via the shared SoC-agnostic policy,
- * so a server outage doesn't reboot the device every 60s forever. The caller
- * resets the streak to 0 on any successful server contact. */
-static int refresh_retry_backoff_seconds(void)
-{
-    uint8_t n = consecutive_refresh_failures;
-    if (consecutive_refresh_failures < 255) consecutive_refresh_failures++;
-    return hokku_backoff_seconds(n, REFRESH_RETRY_SECONDS, REFRESH_RETRY_MAX_SECONDS);
-}
-
+/* What to do with the server's reply (display / keep / back off), the outage
+ * streak and the next wake are all shared: scheduler_apply_fetch() runs the
+ * common/all fetch_outcome decision. This board only draws a DISPLAY. */
 static void perform_refresh(const char *wake_label, int64_t boot_time_us)
 {
+    hokku_fetch_result_t res = { .http_status = 0 };   /* 0 = no response */
+
     if (!wifi_connect()) {
         ESP_LOGE(TAG, "WiFi connect failed");
-        schedule_retry_in(refresh_retry_backoff_seconds(), "wifi_connect failed");
+        scheduler_apply_fetch(&res, 0, 0);
         return;
     }
 
@@ -509,7 +500,7 @@ static void perform_refresh(const char *wake_label, int64_t boot_time_us)
     if (!img) {
         ESP_LOGE(TAG, "image buffer OOM");
         wifi_shutdown();
-        schedule_retry_in(REFRESH_RETRY_SECONDS, "image OOM");
+        scheduler_apply_fetch(&res, 0, 0);
         return;
     }
 
@@ -533,9 +524,11 @@ static void perform_refresh(const char *wake_label, int64_t boot_time_us)
         .out_cal_seed_n    = &cal_seed_n,
     };
 
-    bool ok = hokku_http_fetch_image(img, TOTAL_IMAGE_SIZE, config.image_url,
-                                     config.screen_name, SCREEN_MODEL, frame_state,
-                                     FW_BUILD_TIMESTAMP, &out);
+    res.image_ok = hokku_http_fetch_image(img, TOTAL_IMAGE_SIZE, config.image_url,
+                                          config.screen_name, SCREEN_MODEL, frame_state,
+                                          FW_BUILD_TIMESTAMP, &out);
+    res.http_status = http_status;
+    res.sleep_s     = sleep_seconds;
 
     /* Server-requested OTA: the image body is ignored; update instead. */
     if (fw_update[0] != '\0') {
@@ -543,29 +536,18 @@ static void perform_refresh(const char *wake_label, int64_t boot_time_us)
         perform_ota(fw_update, config.image_url, config.screen_name,
                     SCREEN_MODEL, display_message);   /* reboots on success */
         wifi_shutdown();
-        schedule_retry_in(REFRESH_RETRY_SECONDS, "ota returned (failed)");
-        return;
-    }
-
-    if (!ok) {
-        heap_caps_free(img);
-        wifi_shutdown();
-        if (sleep_seconds > 0) {
-            /* Server responded (e.g. 503 busy) — it IS reachable; clear the
-             * outage streak and honour its suggested retry interval. */
-            consecutive_refresh_failures = 0;
-            schedule_retry_in((int)sleep_seconds, "server busy / no image");
-        } else {
-            /* Couldn't reach the server — back off exponentially. */
-            schedule_retry_in(refresh_retry_backoff_seconds(), "fetch failed");
-        }
+        res.ota_failed = true;
+        scheduler_apply_fetch(&res, 0, 0);
         return;
     }
 
     wifi_shutdown();
 
-    /* Got an image — server reached and healthy; clear any outage streak. */
-    consecutive_refresh_failures = 0;
+    hokku_fetch_outcome_t o = scheduler_apply_fetch(&res, server_epoch, local_at_download);
+    if (o.action != HOKKU_FETCH_DISPLAY) {
+        heap_caps_free(img);   /* keep whatever is on the glass */
+        return;
+    }
 
     /* Cold-start seed: an uncalibrated device (fresh flash / wiped NVS) adopts
      * the server's MAC-pinned mean so it doesn't re-converge from scratch. */
@@ -573,15 +555,10 @@ static void perform_refresh(const char *wake_label, int64_t boot_time_us)
         hokku_cal_save_if_changed();
     }
 
-    /* Schedule the next refresh from the server's absolute clock (drift-free). */
-    if (!scheduler_set_after_refresh(server_epoch, sleep_seconds, local_at_download)) {
-        schedule_retry_in(REFRESH_RETRY_SECONDS, "server response missing/invalid schedule");
-    }
-
     /* Display the freshly-downloaded image (bytes are already panel-native). */
     split_and_display(img);
     heap_caps_free(img);
-    ESP_LOGI(TAG, "refresh done; next in %d s", (int)sleep_seconds);
+    ESP_LOGI(TAG, "refresh done; next in %d s", (int)o.sleep_s);
 }
 
 /* ═══════════════════════════════════════════════════════════════════

@@ -46,7 +46,7 @@
 /* SoC-agnostic shared code (firmware/common/all — pure C, no SDK headers). */
 #include "firmware_url.h"
 #include "frame_state.h"
-#include "backoff.h"
+#include "fetch_outcome.h"
 #include "logbuf.h"
 #include "frame_proto.h"
 #include "interactive.h"
@@ -61,7 +61,7 @@
 
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.15"
+#define FIRMWARE_VERSION        "1.2.16"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -435,12 +435,25 @@ int hokku_frame_receive(void)
     return 0;
 }
 
+/* Run the shared reply decision (common/all/fetch_outcome.h) and log it. */
+static hokku_fetch_outcome_t refresh_decide(const hokku_fetch_result_t *res,
+                                            unsigned prior_failures)
+{
+    hokku_fetch_outcome_t o = hokku_fetch_decide(res, prior_failures);
+    hlog("hokku: fetch status=%d -> %s, next in %d s\n",
+         res->http_status, o.reason, (int)o.sleep_s);
+    return o;
+}
+
 /*
- * Fetch one image from the server and stream it byte-by-byte to the EPD.
- * Returns the number of seconds to sleep before the next refresh, or -1 on
- * any error (caller should retry after a short backoff).
+ * Fetch one image from the server and act on the reply. The body is streamed
+ * byte-by-byte into the EPD's frame memory as it arrives; the panel refresh only
+ * runs when the shared decision says DISPLAY, so a "keep your picture" reply or
+ * a broken download leaves the glass untouched. prior_failures is the outage
+ * streak before this fetch; the returned outcome carries the new streak and the
+ * seconds until the next fetch.
  */
-static int do_refresh(void)
+static hokku_fetch_outcome_t do_refresh(unsigned prior_failures)
 {
     hokku_config_t *cfg = hokku_config_get();
     HTTPParameters  params;
@@ -449,7 +462,7 @@ static int do_refresh(void)
     char            frame_state[384];
     UINT32          bytes_streamed = 0;
     uint32_t        log_sent;                 /* bytes snapshotted for the POST body */
-    int             sleep_sec = (int)cfg->default_sleep_s;
+    hokku_fetch_result_t res = { .http_status = 0 };   /* 0 = no response */
     int             ret;
 
     build_frame_state(frame_state, sizeof(frame_state));
@@ -467,7 +480,7 @@ static int do_refresh(void)
     ret = HTTPC_open(&params);
     if (ret != HTTP_CLIENT_SUCCESS) {
         hlog("hokku: HTTP open failed (%d)\n", ret);
-        return -1;
+        return refresh_decide(&res, prior_failures);
     }
 
     /* Request headers — server uses these for telemetry / OTA checks */
@@ -487,19 +500,26 @@ static int do_refresh(void)
     if (ret != HTTP_CLIENT_SUCCESS) {
         hlog("hokku: HTTP request failed (%d)\n", ret);
         HTTPC_close(&params);
-        return -1;
+        return refresh_decide(&res, prior_failures);
     }
 
-    /* Check HTTP status code */
     if (HTTPC_get_request_info(&params, &info) != HTTP_CLIENT_SUCCESS) {
         HTTPC_close(&params);
-        return -1;
+        return refresh_decide(&res, prior_failures);
+    }
+
+    /* The server answered. X-Sleep-Seconds rides on every reply, including the
+     * no-image ones (503 converting, 404 no label match / empty library). */
+    res.http_status = (int)info.HTTPStatusCode;
+    {
+        char v[16];
+        if (read_resp_header_str(params.pHTTP, "X-Sleep-Seconds", v, sizeof(v)))
+            res.sleep_s = hokku_sleep_seconds_parse(v);
     }
     if (info.HTTPStatusCode != 200) {
         hlog("hokku: server returned %u\n", (unsigned)info.HTTPStatusCode);
         HTTPC_close(&params);
-        /* For 503/404 (no image ready), use a short retry */
-        return (info.HTTPStatusCode == 503 || info.HTTPStatusCode == 404) ? 30 : -1;
+        return refresh_decide(&res, prior_failures);
     }
 
     /* The POST body (log) reached the server in a 200 — clear the buffer so the
@@ -508,12 +528,10 @@ static int do_refresh(void)
     hlog_reset();
     (void)log_sent;
 
-    /* Capture sleep + server clock + any OTA signal from response headers */
+    /* Capture server clock + any OTA signal from response headers */
     char fw_update[32] = "";
     {
         uint32_t v;
-        if (read_resp_header_uint(params.pHTTP, "X-Sleep-Seconds", &v) && v > 0)
-            sleep_sec = (int)v;
         if (read_resp_header_uint(params.pHTTP, "X-Server-Time-Epoch", &v) && v > 1600000000U)
             hokku_clock_set(v);              /* sanity: after 2020-09-13 */
         read_resp_header_str(params.pHTTP, "X-Firmware-Update", fw_update, sizeof(fw_update));
@@ -539,7 +557,8 @@ static int do_refresh(void)
         hlog("hokku: firmware update signalled -> %s\n", fw_update);
         HTTPC_close(&params);
         hokku_do_ota(fw_update);
-        return -1;                           /* OTA failed: short backoff, unchanged */
+        res.ota_failed = true;
+        return refresh_decide(&res, prior_failures);
     }
 
     /* Stream response body to EPD (CMD 0x10 was not sent yet — do it now) */
@@ -565,17 +584,18 @@ static int do_refresh(void)
 
     HTTPC_close(&params);
 
-    if (bytes_streamed < EPD_IMAGE_BYTES) {
+    res.image_ok = (bytes_streamed >= EPD_IMAGE_BYTES);
+    if (!res.image_ok)
         hlog("hokku: short image: %u / %u bytes\n",
                (unsigned)bytes_streamed, (unsigned)EPD_IMAGE_BYTES);
-        return -1;
+
+    hokku_fetch_outcome_t o = refresh_decide(&res, prior_failures);
+    if (o.action == HOKKU_FETCH_DISPLAY) {
+        hlog("hokku: image received, refreshing display...\n");
+        epd_refresh();  /* ~30 s */
+        hlog("hokku: refresh done\n");
     }
-
-    hlog("hokku: image received, refreshing display...\n");
-    epd_refresh();  /* ~30 s */
-    hlog("hokku: refresh done, sleeping %d s\n", sleep_sec);
-
-    return sleep_sec;
+    return o;
 }
 
 /* hokku_hibernate() is now shared XR872 code in firmware/common/xr872/pm.h. */
@@ -623,8 +643,8 @@ static void refresh_thread_fn(void *arg)
         g_epd_ready = 1;
     }
 
-    /* Consecutive server-unreachable failures, for exponential retry backoff.
-     * Persists across the awake loop (the churn case); on battery each
+    /* Consecutive outages (fetch_outcome BACKOFFs), for exponential retry
+     * backoff. Persists across the awake loop (the churn case); on battery each
      * hibernation wake restarts this thread and resets it, which is fine —
      * hibernation is already low-power. */
     unsigned refresh_failures = 0;
@@ -645,22 +665,17 @@ static void refresh_thread_fn(void *arg)
         /* Hold the OTA/flash lock across the whole refresh (which may itself run
          * an OTA on X-Firmware-Update) so a console `ota` can't run concurrently. */
         OS_MutexLock(&g_ota_lock, OS_WAIT_FOREVER);
-        int sleep_sec = do_refresh();          /* may reboot via OTA and never return */
+        /* may reboot via OTA and never return */
+        hokku_fetch_outcome_t o = do_refresh(refresh_failures);
         OS_MutexUnlock(&g_ota_lock);
-        if (sleep_sec < 0) {
-            /* Couldn't reach the server — back off (shared SoC-agnostic policy):
-             * 30s, 60, 120, ... capped at 1 h, instead of hammering every 30s. */
-            sleep_sec = hokku_backoff_seconds(refresh_failures, 30, 3600);
-            if (refresh_failures < 255) refresh_failures++;
-        } else {
-            refresh_failures = 0;              /* reached the server — reset streak */
-        }
+        refresh_failures = o.failures;
+        uint32_t sleep_sec = (uint32_t)o.sleep_s;   /* >= 1, <= HOKKU_SLEEP_MAX_S */
 
         if (hokku_should_sleep()) {
             led_park_for_sleep();                   /* nothing driving the LEDs while asleep */
-            hokku_hibernate((uint32_t)sleep_sec);   /* battery: deep sleep, restarts on wake */
+            hokku_hibernate(sleep_sec);             /* battery: deep sleep, restarts on wake */
         } else {
-            hokku_refresh_wait((uint32_t)sleep_sec * 1000);  /* USB/awake: keep looping */
+            hokku_refresh_wait(sleep_sec * 1000);   /* USB/awake: keep looping (no overflow) */
         }
     }
 }

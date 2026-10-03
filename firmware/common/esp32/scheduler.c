@@ -61,6 +61,24 @@ bool scheduler_set_after_refresh(int64_t server_epoch, int32_t sleep_seconds,
     return true;
 }
 
+hokku_fetch_outcome_t scheduler_apply_fetch(const hokku_fetch_result_t *res,
+                                            int64_t server_epoch,
+                                            int64_t local_time_at_download_us)
+{
+    hokku_fetch_outcome_t o = hokku_fetch_decide(res, consecutive_refresh_failures);
+    consecutive_refresh_failures = (uint8_t)o.failures;
+    ESP_LOGI("hokku", "Fetch: status=%d -> %s, next in %d s",
+             res ? res->http_status : 0, o.reason, (int)o.sleep_s);
+
+    /* A displayed image with a full server schedule anchors to the server
+     * clock (drift-free); everything else is a plain relative sleep. */
+    if (o.action == HOKKU_FETCH_DISPLAY &&
+        scheduler_set_after_refresh(server_epoch, res->sleep_s, local_time_at_download_us))
+        return o;
+    schedule_retry_in((int)o.sleep_s, o.reason);
+    return o;
+}
+
 void scheduler_observe_sleep(void)
 {
     if (last_sleep_mode != LAST_SLEEP_MODE_TIMER_WAKE) return;

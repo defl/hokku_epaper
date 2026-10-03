@@ -10,6 +10,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "fetch_outcome.h"   /* common/all: shared fetch decision */
+
 /* Current wall-clock epoch, or 0 if the clock has not been synced past 2020
  * (guards against reporting/acting on a bogus pre-sync time). */
 time_t now_epoch(void);
@@ -32,7 +34,8 @@ void save_pre_sleep_epoch(int64_t server_epoch, int64_t local_time_at_download_u
  * These three carry the whole next-wake lifecycle so both boards behave
  * identically. Each cycle:
  *   1. scheduler_observe_sleep()      — early in app_main, learns oscillator drift
- *   2. scheduler_set_after_refresh()  — in perform_refresh, anchors the next slot
+ *   2. scheduler_apply_fetch()        — in perform_refresh, acts on the reply and
+ *                                       anchors the next slot
  *   3. scheduler_next_sleep_us()      — at the sleep site, arms the (calibrated) timer
  */
 
@@ -43,6 +46,15 @@ void save_pre_sleep_epoch(int64_t server_epoch, int64_t local_time_at_download_u
  * malformed-response fallback. */
 bool scheduler_set_after_refresh(int64_t server_epoch, int32_t sleep_seconds,
                                  int64_t local_time_at_download_us);
+
+/* Act on one image fetch with the shared decision (common/all/fetch_outcome.h):
+ * store the new outage streak in consecutive_refresh_failures and schedule the
+ * next fetch — anchored to the server clock for a displayed image that came with
+ * X-Server-Time-Epoch + X-Sleep-Seconds, otherwise outcome.sleep_s from now.
+ * Drawing (DISPLAY, or an error on first_failure) is left to the caller. */
+hokku_fetch_outcome_t scheduler_apply_fetch(const hokku_fetch_result_t *res,
+                                            int64_t server_epoch,
+                                            int64_t local_time_at_download_us);
 
 /* On a timer wake, compute the actual-vs-expected sleep error (last_sleep_err_s)
  * and fold the observed oscillator ratio into the drift calibration
