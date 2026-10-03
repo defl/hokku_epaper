@@ -40,7 +40,7 @@
 
 #define static
 
-#include "../../../common/esp32/text_render.c"
+#include "../../../common/all/text_render.c"
 #include "../../../common/esp32/config.c"
 #include "../../../common/esp32/state.c"
 #include "../../../common/esp32/scheduler.c"
@@ -52,6 +52,9 @@
 #include "../../../common/all/firmware_url.c"
 #include "../../../common/all/backoff.c"
 #include "../../../common/all/fetch_outcome.c"  /* shared reply decision */
+#include "../../../common/all/schedule.c"       /* next fetch + drift calibration */
+#include "../../../common/all/messages.c"       /* on-glass message texts */
+#include "../../../common/all/ota_confirm.c"    /* new-firmware confirm policy */
 #include "../../../common/all/frame_state.c"
 #include "../../../common/all/sleep_cal.c"
 #include "../../../common/all/json_util.c"
@@ -76,8 +79,7 @@ static void test_frame_state_schema(void)
 {
     boot_count           = 5;
     last_battery_mv      = 3900;
-    next_refresh_epoch   = 0;
-    last_sleep_err_known = false;
+    hokku_sched_init(&hokku_sched);
     last_wifi_used_cache = false;
     last_sleep_mode      = LAST_SLEEP_MODE_TIMER_WAKE;
     current_regime       = "battery_idle";
@@ -104,30 +106,35 @@ static void test_frame_state_schema(void)
 
 static void test_frame_state_bat_omitted_when_unknown(void)
 {
-    /* If the ADC read is gated out, last_battery_mv is 0 — huessen/seeed both
-     * emit bat_mv unconditionally (0 is a valid reading), so 0 is present. */
-    boot_count = 1; last_battery_mv = 0; next_refresh_epoch = 0;
-    last_sleep_err_known = false; last_wifi_used_cache = false;
+    /* A failed ADC read leaves last_battery_mv at 0; like every board, the
+     * frame-state then leaves bat_mv out rather than report 0 mV. */
+    boot_count = 1; last_battery_mv = 0; hokku_sched_init(&hokku_sched);
+    last_wifi_used_cache = false;
     last_sleep_mode = LAST_SLEEP_MODE_NONE; current_regime = "battery_idle";
     char buf[512];
     build_frame_state_json(buf, sizeof(buf), "first_boot", 0);
-    CHECK(strstr(buf, "\"bat_mv\":0") != NULL,
-          "frame_state: bat_mv:0 emitted (0 is a real reading, not unknown)");
+    CHECK(strstr(buf, "bat_mv") == NULL,
+          "frame_state: no battery reading -> bat_mv omitted");
     CHECK(strstr(buf, "\"sleep_err_s\":null") != NULL,
           "frame_state: sleep_err_s is null when not measured");
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
- *  read_battery_mv — divider + sanity gate. Under the mock, adc_oneshot_read
- *  returns raw=2000 and adc_cali_raw_to_voltage does raw*2200/4095 = 1074 mV;
- *  ×2 divider = 2148 mV, which is below the 2500 mV sanity floor, so the
- *  function gates it to 0. This locks the gate behaviour.
+ *  read_battery_mv — the 2x divider. Under the mock, adc_oneshot_read returns
+ *  raw=2000 and adc_cali_raw_to_voltage does raw*2200/4095 = 1074 mV; x2 =
+ *  2148 mV. That is below HOKKU_BATT_MV_MIN, so the shared frame-state builder
+ *  leaves it out (the plausibility gate is common, not per board).
  * ═══════════════════════════════════════════════════════════════════════ */
 static void test_battery_sanity_gate(void)
 {
     int mv = read_battery_mv();
-    CHECK(mv == 0,
-          "read_battery_mv: gates an implausibly-low reading (2148mV < 2500) to 0");
+    CHECK(mv == 2148, "read_battery_mv: pin mV x 2 divider");
+
+    last_battery_mv = (uint16_t)mv;
+    char buf[512];
+    build_frame_state_json(buf, sizeof(buf), "timer", 0);
+    CHECK(strstr(buf, "bat_mv") == NULL,
+          "frame_state: an implausible reading (2148 mV) is left out");
 }
 
 /* ═══════════════════════════════════════════════════════════════════════

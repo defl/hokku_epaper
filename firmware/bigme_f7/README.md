@@ -49,9 +49,11 @@ After the first flash, all further updates go
 
 - **A/B slots are the safety net — never bypass them.** The flashers write only
   the **inactive** slot plus its config sector, and never touch the bootloader or
-  the slot the unit currently boots. A new image commits itself only once it
+  the slot the unit currently boots. A flashed image commits itself only once it
   reaches `main()` (`hokku_rollback_commit()`); a crash before that rolls back to
-  the other slot automatically. This is not optional
+  the other slot automatically. An OTA'd image goes further: it commits only once
+  a fetch reaches the server, and rolls back otherwise (shared policy,
+  [`ota.md`](../../docs/screens/bigme_f7/ota.md#confirming-the-new-image)). This is not optional
   belt-and-braces: this SoC's only recovery path runs through the mask BROM, and
   a crash-on-boot image that removed the software BROM trigger is exactly how a
   unit was bricked on 2026-06-13. See the STOP rules in the root

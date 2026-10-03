@@ -43,13 +43,13 @@ static enum cmd_status cmd_wifi_exec(char *cmd)
 
 /*
  * `cfg ...` — inspect/change persistent app config (server URL, screen name,
- * static IP / DHCP, default sleep). Changes are in-RAM until `cfg save`.
+ * static IP / DHCP, power mode). Changes are in-RAM until `cfg save`.
  *   cfg show
  *   cfg server <url>
  *   cfg name <screen_name>
  *   cfg ip <ip> <gw> <nm>      (also selects static)
  *   cfg dhcp | cfg static
- *   cfg sleep <seconds>
+ *   cfg power auto|sleep|awake
  *   cfg save
  */
 static enum cmd_status cmd_cfg_exec(char *cmd)
@@ -64,10 +64,10 @@ static enum cmd_status cmd_cfg_exec(char *cmd)
         printf("cfg: url='%s'\n", c->server_url);
         printf("cfg: net=%s ip=%s gw=%s nm=%s\n",
                c->use_dhcp ? "dhcp" : "static", c->ip, c->gw, c->nm);
-        printf("cfg: power=%s default_sleep_s=%u cfg_ver=%u\n",
+        printf("cfg: power=%s cfg_ver=%u\n",
                c->power_mode == HOKKU_PWR_SLEEP ? "sleep" :
                c->power_mode == HOKKU_PWR_AWAKE ? "awake" : "auto",
-               (unsigned)c->default_sleep_s, (unsigned)c->version);
+               (unsigned)c->version);
         /* diagnostics: confirm PA20 USB-detect polarity (bench=USB should read 1)
          * and the best-effort VBAT reading before trusting AUTO/sleep. */
         printf("cfg: usb_present=%d bat_mv=%u\n",
@@ -108,10 +108,6 @@ static enum cmd_status cmd_cfg_exec(char *cmd)
     }
     if (cmd_strcmp(argv[0], "static") == 0) {
         c->use_dhcp = 0;
-        return CMD_STATUS_OK;
-    }
-    if (cmd_strcmp(argv[0], "sleep") == 0 && argc == 2) {
-        c->default_sleep_s = (uint32_t)cmd_atoi(argv[1]);
         return CMD_STATUS_OK;
     }
     if (cmd_strcmp(argv[0], "save") == 0) {

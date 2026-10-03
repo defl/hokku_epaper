@@ -8,7 +8,6 @@ set(HOKKU_COMMON_ALL "${CMAKE_CURRENT_LIST_DIR}/../../common/all")
 idf_component_register(
     SRCS "main.c"
          "${HOKKU_COMMON}/config.c"
-         "${HOKKU_COMMON}/text_render.c"
          "${HOKKU_COMMON}/state.c"
          "${HOKKU_COMMON}/scheduler.c"
          "${HOKKU_COMMON}/nvs_cal.c"
@@ -23,6 +22,10 @@ idf_component_register(
          "${HOKKU_COMMON_ALL}/backoff.c"
          "${HOKKU_COMMON_ALL}/fetch_outcome.c"
          "${HOKKU_COMMON_ALL}/sleep_cal.c"
+         "${HOKKU_COMMON_ALL}/schedule.c"
+         "${HOKKU_COMMON_ALL}/messages.c"
+         "${HOKKU_COMMON_ALL}/text_render.c"
+         "${HOKKU_COMMON_ALL}/ota_confirm.c"
          "${HOKKU_COMMON_ALL}/screen_ident.c"
     INCLUDE_DIRS "." "${HOKKU_COMMON}" "${HOKKU_COMMON_ALL}" "${CMAKE_BINARY_DIR}"
 )

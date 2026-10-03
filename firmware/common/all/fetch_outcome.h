@@ -35,6 +35,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* First outage retry; doubles per consecutive outage up to the cap. Also the
@@ -65,6 +66,16 @@ typedef struct {
     /* The server asked for an OTA (X-Firmware-Update) and it did not complete.
      * A successful OTA reboots, so it never gets here. */
     bool    ota_failed;
+    /* No network: WiFi never came up, so no request was made (http_status 0).
+     * Only chooses which error a screen draws (messages.h). */
+    bool    wifi_failed;
+    /* X-Server-Time-Epoch via hokku_server_epoch_parse: 0 = absent. The server
+     * sends it on every reply; it sets the clock and anchors the schedule. */
+    int64_t server_epoch;
+    /* X-Sleep-Cal-PPM / X-Sleep-Cal-N via hokku_cal_seed_parse: the server's
+     * drift seed for this screen. cal_seed_n 0 = absent. */
+    int32_t cal_seed_ppm;
+    int32_t cal_seed_n;
 } hokku_fetch_result_t;
 
 typedef struct {
@@ -80,8 +91,27 @@ typedef struct {
 hokku_fetch_outcome_t hokku_fetch_decide(const hokku_fetch_result_t *r,
                                          unsigned prior_failures);
 
-/* Parse an X-Sleep-Seconds header value (NULL = header absent). Accepts optional
- * surrounding whitespace around a run of decimal digits, nothing else. Returns
- * the value clamped to HOKKU_SLEEP_MAX_S, or 0 when absent, empty, zero,
- * signed, or not a plain number. */
+/* Whether a 200 body is the image: exactly the panel buffer, byte for byte. A
+ * short body is a cut-off download; a long one is not an image for this panel.
+ * received counts every body byte that arrived, not only the ones kept. */
+bool hokku_image_size_ok(size_t received, size_t expected);
+
+/* Header parsers. Each takes the raw header value (NULL = header absent) and
+ * accepts optional surrounding whitespace around a plain decimal number. */
+
+/* X-Sleep-Seconds. Returns the value clamped to HOKKU_SLEEP_MAX_S, or 0 when
+ * absent, empty, zero, signed, or not a plain number. */
 int32_t hokku_sleep_seconds_parse(const char *value);
+
+/* Oldest server clock a screen believes (2020-01-01). */
+#define HOKKU_EPOCH_MIN  1577836800LL
+
+/* X-Server-Time-Epoch. Returns the epoch, or 0 when absent, not a plain
+ * unsigned number, or before HOKKU_EPOCH_MIN. */
+int64_t hokku_server_epoch_parse(const char *value);
+
+/* X-Sleep-Cal-PPM + X-Sleep-Cal-N, the server's drift seed for this screen.
+ * True only when both parse: ppm an optionally negative number, n a plain
+ * number. Values are not clamped here (sleep_cal clamps on adoption). */
+bool hokku_cal_seed_parse(const char *ppm, const char *n,
+                          int32_t *out_ppm, int32_t *out_n);

@@ -26,9 +26,9 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # OTA rollback: an OTA'd app boots PENDING_VERIFY and must call
-# esp_ota_mark_app_valid_cancel_rollback() (done after a successful refresh via
-# ota_mark_valid_if_pending); otherwise the bootloader reverts to the previous
-# slot on the next boot. Combined with button-wake (an early recovery hatch),
+# esp_ota_mark_app_valid_cancel_rollback() (done by ota_first_fetch once a fetch
+# reaches the server, see common/all/ota_confirm.h); otherwise it rolls back to
+# the previous slot. Combined with button-wake (an early recovery hatch),
 # this satisfies the root AGENTS.md firmware-flashing STOP rules.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 

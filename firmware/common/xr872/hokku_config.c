@@ -45,7 +45,6 @@ static void hokku_config_defaults(void)
      * the hibernation timer-wake cycle (180 s, WiFi-off-first) is clean. */
     g_cfg.power_mode = HOKKU_PWR_AUTO;
     strncpy(g_cfg.nm, "255.255.255.0", HOKKU_IP_MAX - 1);
-    g_cfg.default_sleep_s = 300;
 }
 
 /* True for a config still carrying the legacy compiled-in static address. */
