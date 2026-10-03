@@ -179,7 +179,7 @@ void text_render_row(uint8_t *row, int fb_w, int fb_h, int y, int x, int y0,
         }
         if (cy + char_h > fb_h || cy > y)
             break;                     /* the layout only moves down */
-        if (y >= cy && y < cy + 7 * scale) {
+        if (y < cy + 7 * scale) {           /* y >= cy: guaranteed by the break above */
             char ch = *str;
             if (ch < 32 || ch > 126) ch = '?';
             const uint8_t *glyph = font5x7[ch - 32];
