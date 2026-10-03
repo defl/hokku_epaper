@@ -26,11 +26,16 @@ panel driver) does **not** belong here. ESP-IDF-specific shared code lives in
 
 | file | what |
 |---|---|
+| `backoff.c/.h`      | exponential retry interval for consecutive failures |
 | `firmware_url.c/.h` | derive the model-tagged firmware endpoint from the server base URL |
+| `frame_proto.c/.h`  | serial `frame` upload protocol: push a full panel buffer over the console (not used by `seeedstudio_e1004`) |
 | `frame_state.c/.h`  | build the `X-Frame-State` telemetry JSON from a `frame_state_t` |
+| `interactive.c/.h`  | USB-interactive mode policy: no refresh, poll or sleep while a host drives the console (not used by `seeedstudio_e1004`) |
 | `json_util.c/.h`    | `json_escape()` — minimal JSON string escaper |
+| `logbuf.c/.h`       | circular log buffer under the ESP32 and F7 loggers |
 | `screen_ident.c/.h` | format the `X-Screen-Mac` string; validate the server's name for the screen (response `X-Screen-Name`) |
+| `sleep_cal.c/.h`    | learned deep-sleep oscillator-drift correction (ppm) |
 
 Each firmware compiles these sources directly (ESP-IDF boards add them to their
-`main` component's `SRCS`; the F7 adds them to its Makefile source list) and the
+`main` component's `SRCS`; the F7's Makefile picks up the whole directory) and the
 host-test suites `#include` them like any other unit-under-test.

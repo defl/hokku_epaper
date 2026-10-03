@@ -7,7 +7,7 @@ This manual covers the web app, the frame's day-to-day behaviour, and where to f
 1. [The web app](#1-the-web-app)
    - [1.1 Images](#11-images)
    - [1.2 Screens](#12-screens)
-   - [1.3 Config](#13-config)
+   - [1.3 Admin](#13-admin)
 2. [The frame itself](#2-the-frame-itself)
    - [2.1 Buttons and LEDs](#21-buttons-and-leds)
    - [2.2 Error messages](#22-error-messages)
@@ -18,13 +18,13 @@ This manual covers the web app, the frame's day-to-day behaviour, and where to f
 
 ## 1. The web app
 
-The web app is your control centre for everything. Open it at `http://<your-server>:8080/` from any browser on your network — phone, tablet, or desktop. It has three sections accessible from the navigation bar at the top.
+The web app is your control centre for everything. Open it at `http://<your-server>:8080/` from any browser on your network — phone, tablet, or desktop. It is a single page: **Images**, **Connected Screens**, and a collapsed **Admin** section at the bottom.
 
 ### 1.1 Images
 
 <a href="../images/ui_images.png"><img src="../images/ui_images.png" width="480"></a>
 
-The Images tab is your photo library. Every photo you've uploaded appears here as a thumbnail showing the converted version — what the frame will actually display, not the original. This matters because e-ink has only six colours and images are converted using a dithering process that can look quite different from the original on certain types of photo. Seeing the result before it goes on the wall is one of the key reasons to use this software over the stock firmware.
+The Images section is your photo library. Every photo you've uploaded appears here as a thumbnail; clicking it opens the original. What the frame will actually display is under each photo's **Details** button. This matters because e-ink has only six colours and images are converted using a dithering process that can look quite different from the original on certain types of photo. Seeing the result before it goes on the wall is one of the key reasons to use this software over the stock firmware.
 
 **Uploading photos** — drag files anywhere onto the page, or click the upload zone to browse. You can drop dozens of files at once; a live list shows each file's progress as it uploads. The server accepts JPEG, PNG, HEIC/HEIF, AVIF, WebP, GIF, TIFF, BMP, and JPEG XL — anything from old scanned prints to recent iPhone, Android, or JPEG XL photos. Phone photos are automatically rotated to match their EXIF orientation tag, so a portrait shot taken on a phone doesn't arrive sideways.
 
@@ -34,24 +34,24 @@ The conversion process is smarter than a simple filter. The server analyses each
 
 **Failed conversions** — occasionally an image can't be converted, usually because the file is corrupt, too large to decode within the memory budget, or in a format the server doesn't fully support. These don't silently disappear: they appear in a separate Failed panel below the grid with the error message and the filename. You can delete individual failed entries or clear them all at once, and retry if you think the error was transient.
 
-**Previewing** — click any thumbnail to open the details view.
+**Previewing** — press **Details** under a thumbnail to open the details view.
 
 <a href="../images/ui_images_details.png"><img src="../images/ui_images_details.png" width="480"></a>
 
-The details view shows the original and the converted version side by side at full size, so you can judge exactly how well the conversion worked for that particular photo. It also shows the source dimensions, which pipeline the server chose for it, and how long the conversion took.
+**View dithered** opens the converted image at full size — exactly what the frame will show — so you can judge how well the conversion worked for that particular photo. The details view also shows the source dimensions, whether B&W or faces were detected and which pipeline the server chose, how long the conversion took, and how often the photo has been shown.
 
 **Conversion for this picture** — most photos are fine on the automatic settings, but some are not: flat-colour illustrations and posters in particular can come out with the wrong colours entirely, and no single global setting fixes those without spoiling everything else. The bottom of the details view lets you override the conversion for that one picture.
 
 - **Compare presets** is the quickest route. It converts the picture several different ways — the built-in presets, plus a sweep of the palette matching methods — and shows them as a grid. Click whichever looks right, then Apply. This is worth reaching for first: the palette method is what usually fixes a wrong-coloured picture, and trying them by hand is tedious.
-- **Dither** picks a preset directly, or *Automatic* to hand the picture back to the server's own choice. **Custom…** opens the same advanced panel as the Config tab, with a Preview button that renders this picture with your current settings before you commit to them.
+- **Dither** picks a preset directly, or *Automatic* to hand the picture back to the server's own choice. **Custom…** opens the same advanced panel as *Image rendering* under Admin, with a Preview button that renders this picture with your current settings before you commit to them.
 - **Letterbox fill limit** overrides the global cropping setting for this picture only — useful for the odd photo whose shape doesn't suit the frame. It tells you the minimum percentage this particular picture needs to fill the frame without bars.
 - **Use automatic** clears both overrides and puts the picture back on the server's choices.
 
-Applying re-converts just that one picture; everything else keeps its existing conversion. Your settings survive Clear Cache & Re-convert, and survive re-uploading a new version of the file under the same name — but deleting the picture and uploading it again starts fresh.
+Applying re-converts just that one picture; everything else keeps its existing conversion. Your settings survive *Clear caches and reconvert*, and survive re-uploading a new version of the file under the same name — but deleting the picture and uploading it again starts fresh.
 
 Pictures using something other than the plain default show a small badge on their thumbnail: *Custom* for your own settings, *B&W* or *Face* when the server detected the picture's content and picked a matching pipeline.
 
-**Queue control** — each thumbnail has a "Show next" button that immediately queues that photo to be shown on the frame at its next refresh. Use this when you want a specific photo on the wall without waiting for normal rotation. The server uses a fair rotation algorithm — each image gets equal screen time over the long run, with newly uploaded photos jumping to the front of the queue. The "Show next" button effectively sets an image's priority to maximum.
+**Queue control** — each thumbnail has a **Show Next** button that immediately queues that photo to be shown on the frame at its next refresh. Use this when you want a specific photo on the wall without waiting for normal rotation. The server uses a fair rotation algorithm — each image gets equal screen time over the long run, with newly uploaded photos jumping to the front of the queue. **Show Next** effectively sets an image's priority to maximum.
 
 **Labels** — a label is a short free-form tag on a picture ("hall", "summer", "kids' drawings"); a picture can carry any number of them and they show as small chips on its thumbnail. Add or remove labels for one picture from its Details dialog. To label many at once press **Select pictures**, tick the thumbnails (or **Select all**), type a label and press **Add label** or **Remove label**. The **Show** menu above the grid narrows it to the pictures carrying one label, or to those without any; **Select all** then picks only what is shown, which is also how you rename a label: show it, select all, add the new name, remove the old one. There is nothing to create first: the set of labels is simply whatever the pictures currently carry, and a label vanishes when the last picture drops it. Labelling never re-converts a picture. On their own labels change nothing about what is shown — they become useful when a frame filters on them (see [Screens](#12-screens)).
 
@@ -61,29 +61,34 @@ Pictures using something other than the plain default show a small badge on thei
 
 <a href="../images/ui_screens.png"><img src="../images/ui_screens.png" width="480"></a>
 
-The Screens tab shows every frame that has ever connected to this server. Each entry in the dashboard displays:
+The Connected Screens table shows every frame that has ever connected to this server. Each row displays:
 
 - **Name** — the screen name given to the frame when it was set up. If you have multiple frames this is how you tell them apart.
-- **Battery level** — shown as a percentage with a colour indicator. Drops below 20% and it turns red. The frame reports its battery level on every refresh so this is always current as of the last check-in.
-- **WiFi signal** — the frame's signal strength at the time of its last refresh. Useful for diagnosing frames that are inconsistent updaters.
+- **Model** and **IP** — which kind of frame it is and its address on your network.
+- **Battery** — shown as a percentage; below 20% it turns red. The frame reports its battery level on every refresh so this is always current as of the last check-in.
 - **Last seen** — when the frame last fetched an image. If this is hours ago and the frame is supposed to be on a regular schedule, something is probably wrong.
-- **Next update** — when the server expects the frame to check in next, calculated from the refresh schedule and the sleep duration the server told it to use. A frame that hasn't appeared by this time gets flagged with an overdue warning.
-- **Diagnostics** — a one-click modal that shows the frame's self-reported state: firmware version, boot count, wake cause (timer vs button), free memory, and more. Useful for diagnosing problems without needing a serial cable.
-- **Last log** — the bottom of the diagnostics modal shows the raw firmware log from the last few refresh cycles, timestamped. The frame accumulates log output in a small buffer that survives deep sleep, then uploads it to the server as part of every refresh. Each entry covers WiFi connection, image download, display result, and anything else the firmware logged — essentially a post-mortem for the most recent activity. If a refresh failed silently, the log shows exactly where and why without needing a cable or a serial terminal.
+- **Next update** — when the server expects the frame to check in next, calculated from the refresh schedule and the sleep duration the server told it to use. A frame more than an hour past this time gets flagged with an overdue warning.
+- **Last image** — a thumbnail of what the frame is showing.
+- **Details** — a modal with the frame's self-reported state: firmware version, boot count, wake cause (timer vs button), WiFi signal, free memory, and more. Useful for diagnosing problems without needing a serial cable.
+- **Last log** — the bottom of the Details modal shows the raw firmware log from the last few refresh cycles, timestamped. The frame accumulates log output in a small buffer that survives deep sleep, then uploads it to the server as part of every refresh. Each entry covers WiFi connection, image download, display result, and anything else the firmware logged — essentially a post-mortem for the most recent activity. If a refresh failed silently, the log shows exactly where and why without needing a cable or a serial terminal.
 
 **How frames connect** — the frame calls the server on its refresh schedule, receives the next image and a sleep duration in the response headers, and goes back to deep sleep. It doesn't maintain a persistent connection. This means the Screens table only updates when a frame checks in — a frame that's been asleep for 12 hours will show its last-seen time as 12 hours ago. That's normal.
 
-**Multiple frames** — every frame that connects is tracked independently. You can run as many frames as you like from a single server, and they don't have to be the same model: a 13.3" frame and a 7.3" Bigme F7 can run side by side off the same library, each served images converted for its own panel. Give each one a distinct name so you can tell them apart in the dashboard. All frames share the same refresh schedule and image pool.
+**Multiple frames** — every frame that connects is tracked independently. You can run as many frames as you like from a single server, and they don't have to be the same model: a 13.3" frame and a 7.3" Bigme F7 can run side by side off the same library, each served images converted for its own panel. Give each one a distinct name so you can tell them apart in the dashboard. All frames share the same refresh schedule and library.
 
-**Per-screen orientation** — each frame carries its own orientation, set in the Screens tab. A frame mounted in portrait can show portrait-rendered images while another in landscape shows landscape ones, both served from the same library. A brand-new frame defaults to landscape until you change it.
+**Per-screen settings** — each frame's **Config** button opens its own settings: name, orientation, label filter, a server URL override (written to the frame on its next over-the-air update), and firmware updates.
 
-**Per-screen labels** — in a frame's Config dialog, under *Show only pictures labelled*, tick one or more labels and that frame only rotates through pictures carrying **any** of the ticked labels (a picture labelled both "hall" and "summer" matches either). Leave everything unticked — the default, and what every frame starts with — and the frame shows the whole library exactly as before. Each frame keeps its own selection, so one frame can show the holiday pictures while another shows the children's drawings from the same library. Rotation stays fair within the filtered set. If no ready picture carries a ticked label the frame keeps its current image and checks again at its normal interval (press the frame's button to make it check sooner); the Screens table shows each frame's label filter under its name and warns when it matches nothing.
+**Renaming** — type a new name under *Name* and press **Rename**. The frame picks it up on its next refresh; its history and settings are kept. A frame whose firmware is too old to report its MAC address has to be updated before it can be renamed.
+
+**Per-screen orientation** — a frame mounted in portrait can show portrait-rendered images while another in landscape shows landscape ones, both served from the same library. A brand-new frame defaults to landscape until you change it. Tick *Match orientation* to show that frame only pictures shot in its own orientation (square ones always qualify).
+
+**Per-screen labels** — in a frame's Config dialog, under *Show only pictures labelled*, tick one or more labels and that frame only rotates through pictures carrying **any** of the ticked labels (a picture labelled both "hall" and "summer" matches either). Leave everything unticked — the default, and what every frame starts with — and the frame shows the whole library exactly as before. Each frame keeps its own selection, so one frame can show the holiday pictures while another shows the children's drawings from the same library. Rotation stays fair within the filtered set. The Screens table shows each frame's label filter under its name and warns when it matches nothing.
 
 **Firmware version** — each frame reports the firmware it's running, shown in the
 dashboard. If the server is carrying a newer build for that model, the frame is
 flagged as outdated.
 
-**Firmware updates over the air** — open a frame's details and turn on *Update
+**Firmware updates over the air** — open a frame's **Config** and turn on *Update
 firmware on next refresh*. The next time that frame checks in, it downloads and
 installs the new firmware by itself: no USB, no cable, no terminal. The old
 firmware stays in a second slot and is restored automatically if the new one
@@ -94,21 +99,21 @@ A frame has to be running Hokku firmware already for this to work — the very
 first install is always over USB. After that, every update can be wireless.
 
 **Flash a screen** — if the server runs on the machine you plug frames into (the
-[appliance](appliance.md), typically), the *Flash a screen* page installs firmware
+[appliance](appliance.md), typically), *Flash a screen* under Admin installs firmware
 onto a USB-connected frame directly from the web app, including adopting a
 brand-new one. It handles each supported model's flashing method for you.
 
-### 1.3 Config
+### 1.3 Admin
 
 <a href="../images/ui_config.png"><img src="../images/ui_config.png" width="480"></a>
 
-The Config tab controls how the server behaves and how images are converted. All changes take effect immediately — there's no save-and-restart cycle, and the frame picks up any configuration changes on its next scheduled refresh without reflashing.
+The Admin section at the bottom of the page is collapsed by default; click it to open. It holds *Flash a screen* (see [Screens](#12-screens)), the *Firmware library* (below), *Image rendering* and *Configuration*. Press **Save** to apply changes — there's no restart, and frames pick them up on their next refresh without reflashing.
 
-**Refresh times** — the list of times during the day when each frame should fetch a new image. Add times in HH:MM format; the frame wakes up on its own at these times and goes back to sleep after fetching. The server calculates the sleep duration based on your timezone (set on the server OS, not here) and sends it to the frame as part of every response. Outside of scheduled refresh times the frame draws no meaningful power — see [Sleep and power](#33-sleep-and-power).
+**Refresh times** — the list of times during the day when each frame should fetch a new image. Add times as HHMM (e.g. `0630`); the frame wakes up on its own at these times and goes back to sleep after fetching. The server calculates the sleep duration based on your timezone (set on the server OS, not here) and sends it to the frame as part of every response. Outside of scheduled refresh times the frame draws no meaningful power — see [Sleep and power](#23-sleep-and-power).
 
-**Image workers** — how many photos the server converts in parallel. Set to Auto and the server picks based on available CPU cores and memory. Set it higher on a faster machine to convert large libraries faster; set it to 1 on very constrained hardware. Each worker uses around 50 MB of RAM during conversion.
+**Memory budget** — the most memory the server may use. Leave it empty and the server detects it (honouring a container limit if there is one). The largest image it will convert and the number of photos it converts in parallel are both derived from it; lower it to cap memory use on a shared machine.
 
-**Crop to fill** — when a photo's aspect ratio is close to the frame's but not exact, the server can crop slightly rather than showing a thin letterbox band. The threshold controls how much cropping is acceptable (e.g. 0.05 = up to 5%). Set to 0 to always letterbox. This is the library-wide default; a single awkward photo can override it from its own details view. See [dithering.md](dithering.md) for more detail on how this interacts with the conversion pipeline.
+**Letterbox fill limit** — when a photo's aspect ratio is close to the frame's but not exact, the server can zoom in slightly rather than showing a thin letterbox band. The slider sets how much zoom is acceptable (default 10%); 0% always letterboxes. **Face-aware cropping** centres that crop on detected faces instead of the middle of the photo. This is the library-wide default; a single awkward photo can override it from its own details view. See [dithering.md](dithering.md) for more detail on how this interacts with the conversion pipeline.
 
 <a href="../images/ui_config_dither.png"><img src="../images/ui_config_dither.png" width="480"></a>
 
@@ -116,40 +121,45 @@ The Config tab controls how the server behaves and how images are converted. All
 
 Each slot picks from the same list of presets. The first three are what the server ships with, one per pipeline — *General (default)*, *Black & white (default)* and *Faces (default)* — and on a fresh install that is exactly what each slot is set to. Below them are three hand-picked alternatives: a hue-aware Floyd–Steinberg conversion (smooth gradients, faithful colours), a B&W-safe variant that disables colour-boosting, and a hue-aware Atkinson conversion. Hover the preset name to read what each one does and when it suits.
 
-Two are worth a word. *Faces (default)* is deliberately gentle on local contrast — right for skin, flat-looking on landscapes — so it isn't a good general-purpose pick. And *Atkinson (hue-aware)* is not the same as *General (default)* despite both being Atkinson: the default additionally uses a serpentine scan and works in OKLAB rather than CIELAB.
+Two are worth a word. *Faces (default)* turns both chroma boosters off — right for skin, muted on a colourful landscape — so it isn't a good general-purpose pick. And *Atkinson (hue-aware)* is not the same as *General (default)* despite both being Atkinson: the default additionally uses a serpentine scan and works in OKLAB rather than CIELAB.
 
-Beyond the presets, the **Custom…** button opens an advanced panel with every individual knob exposed: palette LUT (CIELAB, weighted CIELAB, OKLAB, CAM16-UCS, each with optional hue gating, plus a B&W-only LUT), error-diffusion algorithm (Floyd–Steinberg, Atkinson, Stucki), per-stripe adaptive saturation (off / CIELAB / OKLAB), and dynamic-range compression with independent CIELAB/OKLAB selectors for lightness and chroma. Changing any setting doesn't automatically re-convert existing images — use the **Clear Cache & Re-convert** button to regenerate everything. For a full explanation of what each setting does and the reasoning behind the defaults, see [dithering.md](dithering.md).
+Beyond the presets, the **Custom…** button opens an advanced panel with every individual knob exposed: palette LUT (CIELAB, weighted CIELAB, OKLAB, CAM16-UCS, each with optional hue gating, plus a B&W-only LUT), error-diffusion algorithm (Floyd–Steinberg, Atkinson, Stucki), per-stripe adaptive saturation (off / CIELAB / OKLAB), and dynamic-range compression with independent CIELAB/OKLAB selectors for lightness and chroma. Saving a changed setting re-converts the affected images in the background. For a full explanation of what each setting does and the reasoning behind the defaults, see [dithering.md](dithering.md).
 
 Whatever you choose here applies to the whole library. Any individual photo that doesn't suit it can be given its own conversion from its details view — see [Conversion for this picture](#11-images) above — and a per-picture setting always wins over what is chosen here.
 
-**Context-aware conversion** — two toggles control whether the server analyses image content before choosing a conversion approach. B&W detection identifies monochrome photos and routes them through a separate pipeline tuned for black-and-white rather than colour dithering. Face detection identifies photos containing faces and routes them through a pipeline that prioritises skin tone rendering — all detected faces, not just the largest one. Both run entirely locally using on-device models — nothing leaves your network. You can disable either toggle if you prefer a single consistent approach across all images, or if the detection is occasionally misclassifying something.
+**Context-aware conversion** — two toggles, *Detect B&W photos* and *Detect faces*, control whether the server analyses image content before choosing a conversion approach. B&W detection identifies monochrome photos and routes them through a separate pipeline tuned for black-and-white rather than colour dithering. Face detection identifies photos containing faces and routes them through a pipeline that prioritises skin tone rendering — all detected faces, not just the largest one. Both run entirely locally using on-device models — nothing leaves your network. You can disable either toggle if you prefer a single consistent approach across all images, or if the detection is occasionally misclassifying something.
 
-**CLAHE face protection** — located in the Config tab, directly below the Context-aware conversion toggles. This toggle is only visible when face detection is turned on.
+**Protect faces from CLAHE** — in the face pipeline settings, which are only visible when face detection is turned on.
 
 - **What CLAHE is:** CLAHE (Contrast Limited Adaptive Histogram Equalization) is a local-contrast boost applied during image conversion. It analyses the image in small tiles and stretches contrast within each tile independently, which pulls out shadow detail and highlight texture that a global adjustment would miss. The trade-off is that it can shift skin tones noticeably, making portraits look unnatural.
 - **What the toggle does:** When enabled, detected face regions are excluded from the CLAHE step entirely. The rest of the image still gets the contrast boost; only the pixels inside detected face bounding boxes are left at their pre-CLAHE values. This is the default when face detection is on. Disabling the toggle applies CLAHE uniformly across the whole image, including faces.
 - **Feathering:** Rather than a hard cut at the face boundary, a short Gaussian blur is applied to the edge of the protected region so the transition blends smoothly into the surrounding CLAHE-processed area. This prevents a visible ring around each face.
 
-**Poll interval** — how often the web app checks the server for status updates (queue progress, new images, screen check-ins). Default is 10 seconds. Raise it if you want to reduce network chatter on a slow connection; lower it if you want near-instant updates during large uploads.
+**Poll interval** — how often, in seconds, the server checks the photo folder for files added or removed outside the web app (over Samba, for example). Default is 10.
 
-**Clear Cache & Re-convert** — wipes all converted images and regenerates them from the originals using the current settings. Use this after changing dither preset or crop-to-fill threshold. The process runs in the background; the status strip on the Images tab shows progress.
+**Debug screen** — tells every frame to refresh every 180 seconds regardless of the schedule, for trying out settings on the glass. It drains batteries fast; a banner stays up while it is on.
 
-**Config file options** — a few settings can't be changed from the web app and need to be edited in the config file directly (`/var/lib/hokku/config.json` on a deb install, or `./config.json` from source). These are:
+**Auto-clear cache** — deletes old converted copies when disk space runs low. Originals are never touched.
 
-- **`mdns_hostname`** — the mDNS/Bonjour hostname the server advertises on your network. When set (default: `"hokku"`), the server is reachable as `hokku.local` in addition to its IP address, which means you can bookmark `http://hokku.local:8080/` and never worry about the IP changing. Set to an empty string to disable mDNS.
+**mDNS / Bonjour** — the name the server advertises on your network (default `hokku`, so `http://hokku.local:8080/`). Untick to stop advertising.
+
+**Clear caches and reconvert** — wipes all converted images and regenerates them from the originals using the current settings. The process runs in the background; the status strip above the Images grid shows progress.
+
+**Config file options** — a few settings can't be changed from the web app and need to be edited in the config file directly (`/var/lib/hokku/config.json` on a deb install, or the path you passed when starting from source). These are:
+
 - **`port`** — the port the server listens on (default: `8080`). Change this if something else on your server is already using 8080.
 - **`upload_dir`** / **`cache_dir`** — where originals and converted images are stored. The defaults are sensible for a deb install; override these if you want to put your photo library on a different drive or mount point.
-- **`firmware_github_repo`** — the `owner/repo` the **Firmware library** (Admin tab) downloads GitHub releases from. Default `"defl/hokku_epaper"`. Change it only if you publish firmware from a fork. The server only contacts GitHub when you press the *Check GitHub for firmware* button — nothing is ever fetched automatically.
+- **`firmware_github_repo`** — the `owner/repo` the **Firmware library** downloads GitHub releases from. Default `"defl/hokku_epaper"`. Change it only if you publish firmware from a fork. The server only contacts GitHub when you press the *Check GitHub for firmware* button — nothing is ever fetched automatically.
 - **`firmware_dir`** — where downloaded firmware and the per-model pin (`selection.json`) are stored. Default `/var/lib/hokku/firmware`.
 
 After editing the config file, restart the server (`systemctl restart hokku-server`) for changes to take effect.
 
-**Firmware library** (Admin tab) — the server ships with a bundled firmware for each screen model and works fully offline. The Firmware library lets you optionally pull newer firmware from GitHub and choose which version each model is offered:
+**Firmware library** — the server ships with a bundled firmware for each screen model and works fully offline. The Firmware library lets you optionally pull newer firmware from GitHub and choose which version each model is offered:
 
-- Each model shows the version it is currently **serving** (what a screen receives over-the-air or when flashed). By default this is the highest **stable** bundled or downloaded version.
+- Each model shows the version it is **currently serving** over the air. By default this is the bundled version, or a newer **stable** one you downloaded.
 - **Check GitHub for firmware** lists downloadable releases. Tick **Include pre-releases (beta)** to also see beta builds. Press **Download** to add one to the library — this does *not* change what's served.
-- To actually use a downloaded (or older) version, **pin** it from the version dropdown next to the model. Betas are never selected automatically; you must pin one deliberately. Choose *Auto (highest stable)* to unpin and return to the default.
-- Pinning takes effect the next time a screen updates (over-the-air via the per-screen "Update firmware on next refresh" toggle, or on the next USB flash).
+- To actually use a downloaded (or older) version, **pin** it from the version dropdown next to the model. Betas are never selected automatically; you must pin one deliberately. Choose *Auto (bundled / newest stable)* to unpin and return to the default.
+- Pinning takes effect the next time a screen updates over the air (the per-screen *Update firmware on next refresh* toggle). *Flash a screen* over USB always installs the bundled firmware.
 
 ---
 
@@ -177,10 +187,9 @@ If something goes wrong the frame doesn't go blank or silently stop working — 
 
 Common error messages and what to do:
 
-- **Config missing or invalid** — the frame was flashed without being configured, or the configuration version doesn't match the firmware. Reconfigure it from **Flash a screen** in the web app, or run `python tools/hokku_setup.py` and use option [3] or [4].
+- **Config missing or invalid** — the frame was flashed without being configured, or the configuration version doesn't match the firmware. Reconfigure it from **Flash a screen** in the web app, or run `python tools/hokku_setup.py` and use option [4] or [5].
 - **WiFi connection failed** — the SSID or password is wrong, or the network isn't available at the frame's location. If a secondary network is configured the frame tries both before giving up. Check your WiFi credentials and run configure again.
-- **Server unreachable** — the frame connected to WiFi but couldn't reach the server. Check that the server is running, that the IP address in the frame's config is correct, and that nothing on your network is blocking port 8080.
-- **No images available** — the server is running and reachable but the image pool is empty. Upload some photos via the web app.
+- **Image download failed** — the frame connected to WiFi but got no image from the server address it shows. Check that the server is running, that the address is correct, that nothing on your network is blocking port 8080, and that the library (or the frame's label filter) has pictures in it.
 
 After fixing the underlying issue, the frame will try again on its next scheduled refresh. You can also press the power button to trigger an immediate retry.
 
@@ -190,7 +199,7 @@ The frame spends the vast majority of its time in deep sleep, drawing single-dig
 
 On the Hokku / Huessen frame and the Bigme F7, plugging into USB (a computer, not a plain wall charger) keeps the frame fully awake instead of deep sleeping. This is intentional — it keeps the chip reachable for reflashing. On the Hokku / Huessen frame the red LED blinks while this is the case. Not every model detects USB this way. Plugging and unplugging USB does not trigger an image refresh; only the schedule and the power button do.
 
-The battery level is reported to the server on every refresh and shown in the Screens tab. The web app flags frames below 20% in red. If a frame's battery gets too low to complete a refresh it will display a low-battery message on screen before powering off.
+The battery level is reported to the server on every refresh and shown in the Connected Screens table. The web app flags frames below 20% in red.
 
 ---
 

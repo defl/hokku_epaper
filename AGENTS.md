@@ -54,7 +54,7 @@ rules directly. They are absolute and override "it's easier", "to be safe", and
 **Getting a calibration target onto a panel MUST use the direct USB/serial frame
 upload.** The `frame` console command (see
 [`docs/screens/bigme_f7/custom_firmware.md`](docs/screens/bigme_f7/custom_firmware.md))
-plus [`tools/f7_send_frame.py`](tools/f7_send_frame.py) push the exact bytes down
+plus [`tools/send_frame.py`](tools/send_frame.py) push the exact bytes down
 the UART. That is what the firmware feature exists for.
 
 **Do NOT propose, and do not fall back to, serving the target over HTTP from a
@@ -165,7 +165,7 @@ Agents MUST NOT use even PATCH — that is exclusively the release track (see `/
 
 Firmware uses `PROTOCOL.CONFIG.N` versioning stored in `firmware/huessen_epf1301/VERSION`:
 - **`PROTOCOL`** — server↔client wire protocol (HTTP API between device and server). Bump only on backwards-incompatible wire-protocol changes. Agents MUST warn the human and wait for their decision before bumping.
-- **`CONFIG`** — NVS configuration schema. Bump when NVS fields are added, removed, or incompatibly changed. When bumping, also update `CONFIG_VERSION` in `tools/hokku_config.py` to the same value.
+- **`CONFIG`** — NVS configuration schema. Bump when NVS fields are added, removed, or incompatibly changed. When bumping, also update `CONFIG_VERSION` in `python/hokku/screens/*/constants.py` to the same value.
 - **`N`** — monotonic counter for all firmware changes. **Never resets.** Agents increment `N` for every firmware code change; include the updated `firmware/huessen_epf1301/VERSION` in the same commit.
 
 ## Firmware — verify before push
@@ -205,7 +205,7 @@ debugging time. What the operator sees must match what the flasher actually does
 **Rule**: `hardware_facts.md` contains ONLY empirically confirmed or definitively documented information (chip markings, measured values, official spec sheets). Inferences, SDK defaults, estimates, and unknowns belong in `hardware_guesses.md` in the same directory. Never mix the two.
 
 - `huessen_epf1301` (Hokku/Huessen 13.3"): `docs/screens/huessen_epf1301/hardware_facts.md`
-- `bigme_f7` (Bigme F7 7.3" ACeP): `docs/screens/bigme_f7/hardware_facts.md` + `hardware_guesses.md` — XR872AT SoC, firmware not yet dumped
+- `bigme_f7` (Bigme F7 7.3" Spectra 6): `docs/screens/bigme_f7/hardware_facts.md` + `hardware_guesses.md` — XR872AT SoC
 
 ## Datasheets
 

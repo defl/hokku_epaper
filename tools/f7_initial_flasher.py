@@ -10,8 +10,8 @@ drops the port and misses the window). No vendor tool needed.
 Modes:
 
   pure-python (DEFAULT) — catch the BROM via the replug+press, then flash_slot.
-      Writes ONLY slot0 (our app-chain) + the A/B cfg; NEVER erases the bootloader
-      or slot1. Portable (works on a Pi). No PhoenixMC.
+      Writes our app-chain into the INACTIVE A/B slot + the cfg; NEVER erases the
+      bootloader or the running slot. Portable (works on a Pi). No PhoenixMC.
 
   --phoenixmc — fallback: the vendor GUI tool catches the BROM (Windows-only), then
       is killed to free the port and the in-BROM device is handed to flash_slot.
@@ -53,6 +53,7 @@ from hokku.common.xr872.slots import (  # noqa: E402
     inactive_slot,
     read_active_slot,
 )
+from hokku.screens.bigme_f7.bootstrap import POWER_CYCLE_HOW  # noqa: E402
 
 FLASH_SIZE = 0x400000
 SLOT0_APP = BL_SIZE  # 0x8000
@@ -60,8 +61,8 @@ OTA_SECTOR_END = OTA_ADDR + 0x1000  # 0x181000
 DEFAULT_IMAGE = _HERE.parents[0] / "firmware/bigme_f7" / "image" / "xr872" / "xr_system.img"
 
 PROVISION_HELP = (
-    "\nPOWER-CYCLE to boot (unplug/replug USB, or long-press) — sys_reboot leaves the\n"
-    "chip in BROM, and the e-paper stays on its old image until WiFi is set. Then\n"
+    f"\nTo boot (sys_reboot leaves the chip in BROM): {POWER_CYCLE_HOW}\n"
+    "The e-paper stays on its old image until WiFi is set. Then\n"
     "provision over the UART console (115200):\n"
     "  wifi <ssid> <password>\n"
     "  cfg save    (server URL + screen name default from the compiled-in config)\n"

@@ -1,5 +1,66 @@
 # Changelog
 
+## 4.0.0 beta 4
+
+Labels, so one library can feed several frames, and a round of fixes for the
+Bigme F7 and the Seeed E1004, mostly reported by people running them.
+
+### Added
+
+- **Labels.** Give pictures free-form labels ("hall", "christmas", "kids") and
+  tick any of them in a screen's Config; that screen then shows only pictures
+  carrying a ticked label. Nothing ticked is the whole library, as before.
+  Labels can be added in bulk, the image grid can be filtered by them, and the
+  Screens table warns when a screen's labels match no picture.
+  Built from contributions by Dan Rowe and Erik Rogne (#18, #41).
+- **Rename a screen** from its Config dialog. The server now owns the name of
+  every screen it knows and sends it to the screen, so two Bigme F7s on the
+  default name no longer collide.
+
+### Changed
+
+- **The Seeed reTerminal E1004 is supported**, no longer experimental, now that
+  several people have it running on their own units.
+- Re-provisioning a known screen over USB no longer renames it: the server's
+  name wins. Rename it in the web UI instead.
+
+### Fixed
+
+- **Bigme F7: a flashed unit never came online** on any network but the
+  developer's. The firmware defaulted to a hard-coded static address; it now
+  uses DHCP and finds the server at `hokku.local` (#44).
+- **Bigme F7: flashing over USB could overwrite the running image** on a unit
+  already on Hokku firmware. It now writes the inactive A/B slot.
+- **Bigme F7: changing Wi-Fi on a running unit** left it on the old network
+  with the old address until a reboot.
+- **Bigme F7: the flash instructions said to replug USB to boot.** With a
+  charged battery that is not a power cycle. They now say long-press.
+- **Seeed E1004: the battery read about 16 % forever** after the first sleep.
+  Fix by Dan Rowe (#43).
+- **Seeed E1004: the flash tools could not find it.** It enumerates as a CH340K
+  (`1A86:7522`), and once found it showed as having no Hokku firmware (#45).
+- **Phone portraits were treated as landscape**: wrong orientation filter,
+  preview frame and listed size (#40).
+- **Face detection missed or misplaced faces** in HEIC, AVIF, JXL and some
+  rotated photos, because it decoded the file differently from the renderer.
+  iPhone photos got no face detection at all.
+
+### Upgrading from beta 3
+
+- The F7 and E1004 fixes are in the screen firmware. Tick *Update firmware on
+  next refresh* in the screen's Config; an F7 that never came online needs a
+  USB flash instead.
+- Existing pictures are corrected in place. Swapped portrait dimensions are
+  fixed without a re-render; face results for the affected formats are
+  re-checked once, and only a photo whose result changes is re-rendered.
+
+### Firmware
+
+- `bigme_f7` **1.2.12 → 1.2.15** — DHCP default, inactive-slot flashing, live
+  Wi-Fi switch, server-owned name.
+- `huessen_epf1301` **1.2.25 → 1.2.26** — server-owned name.
+- `seeedstudio_e1004` **1.2.5 → 1.2.6** — battery reading, server-owned name.
+
 ## 4.0.0 beta 3
 
 The beta where the colour stopped being guesswork. Two measurement campaigns

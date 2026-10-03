@@ -7,7 +7,7 @@ All findings here are facts derived directly from disassembly — no guesses.
 
 ## Display Controller
 
-**EK79655 or direct compatible** — E Ink Spectra 6 ACeP 7-color controller.
+**EK79655 or direct compatible**, driving an E Ink Spectra 6 (6-colour) panel.
 
 Evidence: the initialization command sequence (see below) is a byte-for-byte match with the
 publicly available Waveshare `EPD_7in3f` driver (`epd7in3f.cpp`). That driver targets the
@@ -60,18 +60,19 @@ Reads GPIOA_9 (via HAL_GPIO_ReadPin at 0x0000BDC8) in a tight loop until non-zer
 - **Size**: **192,000 bytes** (= 800 × 480 ÷ 2)
 - **Encoding**: 4 bits per pixel, 2 pixels per byte (upper nibble = left pixel, lower nibble = right pixel)
 - **Row order**: top to bottom, left to right within each row
-- **Color values** (standard E Ink Spectra 6 / Waveshare 7in3f mapping):
+- **Color values** (Spectra 6). Not from disassembly: first assumed to be the Waveshare 7in3f
+  ACeP mapping, which was wrong. Confirmed by decoding the OEM's built-in image, whose nibbles
+  land on exactly this set — see [`display.py`](../../../python/hokku/screens/bigme_f7/display.py).
 
 | Nibble | Color |
 |---|---|
 | 0x0 | Black |
 | 0x1 | White |
-| 0x2 | Green |
-| 0x3 | Blue |
-| 0x4 | Red |
-| 0x5 | Yellow |
-| 0x6 | Orange |
-| 0x7–0xF | Undefined / reserved |
+| 0x2 | Yellow |
+| 0x3 | Red |
+| 0x5 | Blue |
+| 0x6 | Green |
+| 0x4, 0x7–0xF | Unused |
 
 ## Command Set
 
@@ -191,7 +192,7 @@ wait BUSY HIGH                           ; wait for power-on complete
 CMD 0x06, DATA: 6F 1F 17 49              ; BTST: booster pre-refresh settings
 CMD 0x12, DATA: 00                       ; DRF: trigger display refresh
 
-wait BUSY HIGH                           ; ~20–30 s for full ACeP refresh to complete
+wait BUSY HIGH                           ; ~20–30 s for a full refresh to complete
 
 CMD 0x02, DATA: 00                       ; POF: power off
 wait BUSY HIGH                           ; wait for power-off complete
@@ -202,8 +203,8 @@ wait BUSY HIGH                           ; wait for power-off complete
 The initialization sequence is a byte-for-byte match with:
 https://github.com/waveshare/e-Paper/blob/master/RaspberryPi_JetsonNano/python/lib/waveshare_epd/epd7in3f.py
 
-This confirms the panel is the same E Ink Spectra 6 7-color ACeP module used in the
-Waveshare 7.3" e-Paper HAT (F), product code `7.3inch e-Paper HAT (F)`.
+That confirms the controller and its init, not the panel: the colour mapping (above) shows a
+6-ink Spectra 6 panel, not the 7-colour ACeP module of the Waveshare 7.3" e-Paper HAT (F).
 
 ## Implications for hokku_epaper Integration
 
@@ -214,7 +215,7 @@ rather than JPEG — consistent with the absence of any JPEG decoder library in 
 To integrate:
 1. Implement the `/PhotoFrameDeviceStatus` endpoint (see [`cloud_protocol.md`](cloud_protocol.md))
 2. Serve images as raw 4bpp 192000-byte blobs at `pictureUrl`
-3. hokku_epaper must convert RGB images to the 7-color nibble format before serving
+3. hokku_epaper must convert RGB images to the 6-color nibble format before serving
 
-The raw 4bpp format is identical to what Waveshare documents for their 7in3f panel.
-Color quantization: reduce each pixel to the nearest of the 7 supported colors.
+The raw 4bpp layout is the one Waveshare documents for their 7in3f panel; only the nibble→ink
+mapping differs.

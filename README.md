@@ -19,10 +19,11 @@ All three use **E Ink Spectra 6**, so one photo library feeds every frame — an
 **Photos, your way**
 - **Local-only** — your photos never leave your network. No cloud, no third-party servers, no telemetry. The web app itself makes no external requests — fonts and assets are self-hosted, so nothing is phoned home just by opening a browser tab. Your hardware and open source software means you're in full control.
 - **Drag-and-drop upload** — single files or dozens at a time, straight into the web app, with a live progress list. Works on phones too.
-- **Browse in a grid** — preview exactly what the frame will show before it shows it, original and converted version side by side. Delete anything you don't want with one click.
-- **Click any photo** — see how it was processed and compare the original against what's going to the frame at full size.
+- **Browse in a grid** — every photo in the library, with its labels. Delete anything you don't want with one click.
+- **See it before the frame does** — open any photo's details to see how it was processed and, at full size, exactly what's going to the frame.
+- **Fix the odd photo** — override the conversion or the crop for a single picture, or compare the presets on it side by side and pick one.
 - **All the formats you actually have** — JPEG, PNG, HEIC/HEIF, AVIF, WebP, GIF, TIFF, BMP, JPEG XL. Anything from 90s scanned prints to modern iPhone, Android, and JPEG XL. Phone photos auto-rotate.
-- **Landscape or portrait** — flip a switch and everything re-converts to match how the frame is mounted.
+- **Landscape or portrait** — set each frame's orientation to match how it's mounted, and it gets images converted to suit.
 - **Jump the queue** — pick any photo in the library to be the next one shown on the frame.
 
 **Looks good on e-paper**
@@ -34,10 +35,10 @@ All three use **E Ink Spectra 6**, so one photo library feeds every frame — an
 - **Colour-accurate** — calibrated against the actual panels, not a theoretical colour profile.
 
 **Smart about frames**
-- **Over-the-air firmware updates** — update the firmware on any frame wirelessly from the web app. Open a frame's Details, toggle "Update firmware on next refresh", and the frame downloads and installs the new firmware on its own — no USB, no cable, no terminal. The old firmware stays in a second slot and is automatically restored if the new one can't reach the server. First-time setup still needs a USB flash to activate OTA; after that, all future updates are wireless.
-- **Flash frames from the web app** — if you're running the server on the same machine you use for setup (the appliance scenario), connect a frame via USB and use "Flash a screen" in the web app directly, without running any setup wizard separately. On the Pi Zero 2 W appliance the single USB port is dual-role, so **boot the appliance with nothing on the data port, then hot-plug the frame** (through a micro-USB→USB-A OTG adapter, with the Pi powered from its PWR port) — a frame attached at boot stops the appliance from starting. See [the appliance guide](docs/appliance.md#flashing-a-frame-from-the-appliance).
-- **Multiple frames, one server** — each frame gets a name and shows up in a dashboard with battery level, WiFi signal, and when it'll next update. Mix models, sizes and orientations against one library: a 13.3" frame in the hall and a 7.3" on a shelf, each served images converted for its own panel.
-- **Per-frame settings** — orientation, crop behaviour and firmware updates are set per screen, not globally.
+- **Over-the-air firmware updates** — update the firmware on any frame wirelessly from the web app. Open a frame's Config, toggle "Update firmware on next refresh", and the frame downloads and installs the new firmware on its own — no USB, no cable, no terminal. The old firmware stays in a second slot and is automatically restored if the new one can't reach the server. First-time setup still needs a USB flash to activate OTA; after that, all future updates are wireless.
+- **Flash frames from the web app** — plug a frame into the machine the server runs on and use "Flash a screen" in the web app, including on a brand-new frame. No setup wizard to run separately. On the Pi Zero 2 W appliance, power the Pi from its PWR port and connect the frame to the data port through a micro-USB→USB-A OTG adapter. See [the appliance guide](docs/appliance.md#flashing-a-frame-from-the-appliance).
+- **Multiple frames, one server** — each frame gets a name and shows up in a dashboard with battery level, last-shown image, and when it'll next update. Mix models, sizes and orientations against one library: a 13.3" frame in the hall and a 7.3" on a shelf, each served images converted for its own panel.
+- **Per-frame settings** — name, orientation, label filter and firmware updates are set per screen, not globally. Rename a frame from the web app; it picks up the new name on its next refresh.
 - **Labels** — tag pictures ("hall", "summer", "kids' drawings") and tick labels per frame so each frame rotates through its own slice of one shared library. No labels ticked means the whole library, as before.
 - **Knows which firmware each frame runs** — the dashboard shows every frame's firmware version and flags the ones that are behind.
 - **Fair rotation** — every photo gets its turn. Newly uploaded photos go to the front of the queue; after that, whichever image has been shown least goes next.
@@ -49,7 +50,7 @@ All three use **E Ink Spectra 6**, so one photo library feeds every frame — an
 - **Instant refresh** — on the Hokku / Huessen frame, press the power button to show the next image whenever you want one.
 - **Diagnostics on demand** — one click in the web app shows the frame's status without needing a cable.
 - **Recovers on its own** — a frame that can't reach the server backs off and retries rather than hammering the network flat, and a firmware update that can't phone home afterwards rolls itself back to the previous version.
-- **What happened last refresh** — after every update the frame sends a log of what it did to the server (WiFi connection, image download, display result). Open a frame's details in the web app to read it — no cable, no terminal needed.
+- **What happened last refresh** — after every update the frame sends a log of what it did to the server (WiFi connection, image download, display result). Open a frame's Details in the web app to read it — no cable, no terminal needed.
 - **Comically over-engineered firmware** — on the ESP32 frames it runs at 240 MHz (up from the 160 MHz default) on a dual-core processor with the compiler's maximum optimisations turned on, code and data copied into dedicated high-speed RAM at boot, and cache tuned for the exact chip revision on your board. Completely unnecessary for a frame that wakes up once a day, downloads a picture, and goes back to sleep. We did it anyway. 🚀
 - **A whole SoC reverse-engineered for the cheap one** — the $99 Bigme F7 runs an XRADIOTECH XR872AT: no public SDK support, no vendor documentation. Supporting it meant recovering the panel init sequence from the stock firmware and writing a BROM flasher from scratch in Python, so adopting one needs no vendor tools at all.
 
@@ -67,7 +68,7 @@ All three use **E Ink Spectra 6**, so one photo library feeds every frame — an
 
 <img src="images/ui.png" width="500">
 
-Three tabs: **Images** (your photo library — upload, preview, manage), **Screens** (live status of each frame — battery, WiFi, last seen, next update, per-frame orientation), and **Config** (refresh schedule and conversion settings). Everything updates live without a page reload. For a full walkthrough of every feature see the **[user manual](docs/manual.md)**.
+One page: **Images** (your photo library — upload, preview, label, manage), **Connected Screens** (live status of each frame — battery, last seen, next update — and its per-frame settings), and a collapsed **Admin** section (flashing, firmware library, conversion settings, refresh schedule). Everything updates live without a page reload. For a full walkthrough of every feature see the **[user manual](docs/manual.md)**.
 
 ## Colour accuracy
 

@@ -21,16 +21,15 @@ bootloader is provably untouched and there is **no brick window**.
 
 - The unit must be running **our custom firmware** (it enters the mask-BROM via the
   `upgrade` command; **stock OEM does not answer `upgrade`**, so a unit already on
-  stock can only be re-flashed via a long-press `0x55` catch or PhoenixMC).
-- The unit's **own** OEM dump, 4 MB. Dumps are filed per-unit at
-  `.private/screens/bigme_f7/units/<serial>/flash_full.bin`. Use the unit's *own*
-  dump — the serial (`6000xxx`) lives in flash, so flashing another unit's dump
-  changes the reported serial (the MAC/cloud-ID is in efuse and is preserved).
+  stock can only be re-flashed via the replug+press `0x55` catch or PhoenixMC).
+- The unit's **own** OEM dump, 4 MB. Use the unit's *own* dump — the serial lives
+  in flash, so flashing another unit's dump changes the reported serial (the
+  MAC/cloud-ID is in efuse and is preserved).
 
 ## Procedure
 
 ```bash
-DUMP=.private/screens/bigme_f7/units/<serial>/flash_full.bin   # this unit's OWN 4 MB dump
+DUMP=<path to this unit's OWN 4 MB OEM dump>
 
 # 1. Dry-run: enter BROM, read the current 4 MB, diff vs the OEM dump in 4 KB
 #    blocks, print exactly what differs, then reboot back — writes NOTHING.

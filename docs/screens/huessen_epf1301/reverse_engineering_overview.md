@@ -1,6 +1,6 @@
 # Reverse-engineering the Hokku/E_Frame stock firmware — overview
 
-This directory documents what we've learned by reverse-engineering the stock firmware that the Hokku 13.3" ACeP 6-color e-paper frame ships with. Two versions of that firmware have been analyzed so far:
+This directory documents what we've learned by reverse-engineering the stock firmware that the Hokku 13.3" Spectra 6 e-paper frame ships with. Two versions of that firmware have been analyzed so far:
 
 - [`reverse_engineering_v2.0.19_apr21.md`](reverse_engineering_v2.0.19_apr21.md) — the build the device shipped with from the factory (April 21 2025).
 - [`reverse_engineering_v2.0.26_jun20.md`](reverse_engineering_v2.0.26_jun20.md) — an OTA-updated build pulled off the device (June 20 2025). This is the build most units in the wild are actually running.
@@ -27,10 +27,10 @@ The goal is always the same: **our firmware's display driver should, on the pins
 
 ## The hardware in one page
 
-- **Frame:** Hokku 13.3" ACeP 6-color e-paper frame (sometimes branded "E_Frame" or "xiaowooya" in the firmware strings — the internal project directory in the stock firmware is `D:/Project/ESP32/Eink/`).
+- **Frame:** Hokku 13.3" Spectra 6 e-paper frame (sometimes branded "E_Frame" or "xiaowooya" in the firmware strings — the internal project directory in the stock firmware is `D:/Project/ESP32/Eink/`).
 - **SoC:** ESP32-S3 v0.2, 16 MB flash, 8 MB PSRAM. Built-in USB-Serial/JTAG (VID 0x303a, PID 0x1001) — no external debug probe needed.
-- **Display controller:** UC8179C in dual-panel mode. The 13.3" panel is actually two 6.6" panels tiled side-by-side at 1200×800, each driven by its own UC8179C with a shared SPI bus and individual CS-like select pins (`CTRL1`, `CTRL2`).
-- **Palette:** 6-color ACeP (Advanced Color e-Paper) Spectra 6 — black, white, red, yellow, green, blue. No grayscale. A full refresh takes ~19 s on this hardware, which is why every bit of the init/refresh sequence matters.
+- **Display controller:** UC8179C in dual-panel mode. The 13.3" panel is two 600×1600 halves tiled left/right, each driven by its own UC8179C with a shared SPI bus and individual CS-like select pins (`CTRL1`, `CTRL2`).
+- **Palette:** E Ink Spectra 6 (not ACeP) — black, white, red, yellow, green, blue. No grayscale. A full refresh takes ~19 s on this hardware, which is why every bit of the init/refresh sequence matters.
 
 Full pin map (confirmed — matches both stock firmware's `gpio_config` masks and our `firmware/huessen_epf1301/main/main.c`):
 
@@ -42,14 +42,14 @@ Full pin map (confirmed — matches both stock firmware's `gpio_config` masks an
 | 3 | EPAPER_PWR_EN | output | Display rail enable. The stock firmware sets this HIGH once at boot and never touches it. **Whether this pin actually powers the display or is decorative is still not fully pinned down** — see "GPIO 3 mystery" below. |
 | 4 | CHG_EN1 | output | Charger enable 1 (one of two sink/source control pins on the battery-management IC). |
 | 6 | EPAPER_RST | output | Display reset (active LOW). Pulsed LOW 100 ms / HIGH 100 ms during init. |
-| 7 | EPAPER_BUSY | input, pulled up | Display busy signal (active LOW). **External pull-up on the PCB** — firmware must also enable the internal pull-up (`gpio_reset_pin` does this) for reliable reads. When nothing drives BUSY (e.g. controller unpowered or wedged) the external pull-up holds it HIGH, which trivially passes `wait_busy` and hides stuck-state bugs. |
+| 7 | EPAPER_BUSY | input | Display busy signal (active LOW). **External pull-up on the PCB** — the internal pull-up must stay disabled (an internal pull-up masks BUSY LOW; see `hardware_facts.md`). When nothing drives BUSY (e.g. controller unpowered or wedged) the external pull-up holds it HIGH, which trivially passes `wait_busy` and hides stuck-state bugs. |
 | 8 | CTRL2 | output | Select for panel 2 of the dual-panel tiled display. Active-LOW — "LOW selects this panel". |
 | 9 | EPAPER_SCLK | output (SPI) | SPI clock. |
 | 10 | I2C_SDA | bidir | I2C bus data. The stock firmware creates an I2C master bus at boot but we've never observed it being used per-refresh. Likely for the battery fuel gauge or a PMIC. |
 | 11 | I2C_SCL | bidir | I2C bus clock. |
-| 12 | PWR_BUTTON | input, pulled up | Power button. Active-LOW. RTC-capable. |
+| 12 | PWR_BUTTON | input, pulled up | Active-LOW. RTC-capable. Moves with GPIO 14 on USB-host plug events; whether a physical button drives it is unknown (`hardware_guesses.md`). |
 | 13 | CHG_EN2 | output | Charger enable 2. |
-| 14 | CHG_STATUS | input, pulled up | Charger status (LOW = actively charging, HIGH = idle or topped off). RTC-capable. Do not use this as a "USB cable connected" signal — a fully-charged battery will float HIGH while USB is still plugged in. |
+| 14 | USB_HOST_DETECT | input, pulled up | LOW = computer USB host present (not plain VBUS — wall chargers leave it HIGH). RTC-capable. Formerly misnamed CHG_STATUS; see `hardware_facts.md` → "USB Detection". |
 | 17 | SYS_POWER | output | **Display power rail latch.** Driven HIGH at the start of every display update, LOW at the end. In the stock firmware this pin does the real power-gating of the display controller, not GPIO 3. See the per-version docs for exactly when it's toggled. |
 | 18 | CTRL1 | output | Select for panel 1. Same polarity as CTRL2. |
 | 38 | WIFI_LED | output | Wi-Fi / network LED. |
@@ -89,7 +89,7 @@ esptool.py --chip esp32s3 -p COM3 read_flash 0x0 0x1000000 \
     .private/factory_full_flash_dump_2025-04_dual-ota.bin
 ```
 
-16 MB. Includes bootloader, partition table, both OTA slots, NVS, `imagedata` FAT partition. The filename encodes the date (2025-04) and the fact that both OTA slots were present. This dump is what we flash back onto the device with `esptool write_flash 0x0 …` to force a known-good factory restore; that's documented in the root `CLAUDE.md`.
+16 MB. Includes bootloader, partition table, both OTA slots, NVS, `imagedata` FAT partition. The filename encodes the date (2025-04) and the fact that both OTA slots were present. This dump is what we flash back onto the device with `esptool write_flash 0x0 …` to force a known-good factory restore (a bootloader write — see `firmware/huessen_epf1301/AGENTS.md` → "Flashing procedure").
 
 ### Per-OTA-slot dumps
 
