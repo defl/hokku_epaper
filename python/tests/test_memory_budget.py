@@ -21,6 +21,7 @@ import pytest
 from PIL import Image
 
 from hokku.webserver.dither_abc import _DEFAULT_STRIPE_H as DEFAULT_STRIPE_H
+from hokku.webserver.dither_streaming import PALETTE_LAB, PALETTE_OKLAB
 from hokku.webserver.image_config import ImageConfig
 from hokku.webserver.image_renderer import ImageRenderer, open_image_for_render
 from hokku.webserver.memory_guard import memory_limit
@@ -41,6 +42,11 @@ _rss_budget_linux_only = pytest.mark.skipif(
     reason="RSS byte-budget is calibrated for the Linux target (Pi); "
     "peak_wset/macOS metrics differ",
 )
+
+
+# Reference-panel DRC range for the direct compress_dynamic_range calls below.
+_REF_LAB_L = (float(PALETTE_LAB[0, 0]), float(PALETTE_LAB[1, 0]))
+_REF_OKLAB_L = (float(PALETTE_OKLAB[0, 0]), float(PALETTE_OKLAB[1, 0]))
 
 
 # Default image config used across all peak tests (real Floyd-Steinberg).
@@ -156,6 +162,8 @@ def test_compress_dynamic_range_peak_under_1mb_per_row() -> None:
         adaptive_vivid=False,
         vivid_chroma_low=10.0,
         vivid_chroma_high=40.0,
+        anchor_lab_l=_REF_LAB_L,
+        anchor_oklab_l=_REF_OKLAB_L,
     )
     peak_mb = peak / (1024 * 1024)
     print(f"\n  DRC 3200×1 row peak (Python heap) = {peak_mb:.3f} MB")
@@ -188,6 +196,8 @@ def test_compress_dynamic_range_peak_under_30mb_per_stripe() -> None:
         adaptive_vivid=False,
         vivid_chroma_low=10.0,
         vivid_chroma_high=40.0,
+        anchor_lab_l=_REF_LAB_L,
+        anchor_oklab_l=_REF_OKLAB_L,
     )
     peak_mb = peak / (1024 * 1024)
     print(f"\n  DRC 3200×{DEFAULT_STRIPE_H} stripe peak (Python heap) = {peak_mb:.2f} MB")

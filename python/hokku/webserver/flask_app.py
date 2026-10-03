@@ -47,7 +47,6 @@ from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver import firmware_github
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState
-from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.firmware_library import FirmwareStore
 from hokku.webserver.image_abc import transform_bboxes_to_canvas_norm
 from hokku.webserver.image_classifier import Observations
@@ -61,9 +60,9 @@ from hokku.webserver.image_renderer import (
     IMAGE_EXTENSIONS,
     MAX_UPLOAD_PIXELS,
     SVG_PROBE_DIMS,
-    ImageRenderer,
     format_megapixels,
     open_image_for_render,
+    renderer_for_display,
 )
 from hokku.webserver.labels import LabelError, parse_labels
 from hokku.webserver.mdns import _get_local_ip
@@ -1471,9 +1470,7 @@ def create_app(
             logger.debug("Preview: %r", name)
             with open_image_for_render(path) as img:
                 orig_w, orig_h = img.size
-                png = ImageRenderer(
-                    NumbaStreamingDither(preview_display), preview_display
-                ).render_preview_png(
+                png = renderer_for_display(preview_display).render_preview_png(
                     img,
                     cfg,
                     render_orientation,
