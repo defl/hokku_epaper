@@ -23,7 +23,19 @@ Bigme F7 and the Seeed E1004, mostly reported by people running them.
   several people have it running on their own units.
 - Re-provisioning a known screen over USB no longer renames it: the server's
   name wins. Rename it in the web UI instead.
-
+- **Every model behaves the same.** The firmwares now share their behaviour, not
+  just their wire format:
+  - every model shows the same message when it can't reach the server, can't
+    join Wi-Fi, has no configuration, or is updating its firmware (the Seeed
+    E1004 and Bigme F7 showed nothing);
+  - the Bigme F7 wakes on the server's schedule and corrects its clock drift
+    like the others, and remembers its retry back-off through sleep;
+  - a firmware update confirms itself on the first refresh that reaches the
+    server and otherwise rolls back to the previous firmware, on every model.
+    The E1004 kept a new firmware even if it never reached the server; the F7
+    kept any firmware that booted;
+  - an image download of the wrong size is rejected on every model, and an
+    implausible battery reading is left out instead of shown as 0 %.
 ### Fixed
 
 - **Bigme F7: a flashed unit never came online** on any network but the
@@ -63,11 +75,13 @@ Bigme F7 and the Seeed E1004, mostly reported by people running them.
 
 ### Firmware
 
-- `bigme_f7` **1.2.12 → 1.2.16** — DHCP default, inactive-slot flashing, live
-  Wi-Fi switch, server-owned name, no-match labels.
-- `huessen_epf1301` **1.2.25 → 1.2.27** — server-owned name, no-match labels.
-- `seeedstudio_e1004` **1.2.5 → 1.2.7** — battery reading, server-owned name,
-  shared reply handling.
+- `bigme_f7` **1.2.12 → 1.2.17** — DHCP default, inactive-slot flashing, live
+  Wi-Fi switch, server-owned name, no-match labels, shared behaviour (messages,
+  schedule + drift correction, update confirmation).
+- `huessen_epf1301` **1.2.25 → 1.2.28** — server-owned name, no-match labels,
+  shared behaviour.
+- `seeedstudio_e1004` **1.2.5 → 1.2.8** — battery reading, server-owned name,
+  shared reply handling, shared behaviour.
 
 ## 4.0.0 beta 3
 
