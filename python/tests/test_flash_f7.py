@@ -146,7 +146,7 @@ def test_cancel_with_no_job_is_false():
 def test_route_start_f7_requires_port(app_config, tmp_path, monkeypatch):
     monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
     monkeypatch.setattr(
-        "hokku.webserver.flask_app.bigme_firmware.firmware_image_file",
+        "hokku.screens.bigme_f7.firmware_image_file",
         lambda: tmp_path / "xr_system.img",
     )
     (tmp_path / "xr_system.img").write_bytes(b"AWIH" + b"\x00" * 32)
@@ -164,9 +164,7 @@ def test_route_start_f7_503_without_tooling(app_config, tmp_path, monkeypatch):
 
 def test_route_start_f7_503_without_image(app_config, tmp_path, monkeypatch):
     monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
-    monkeypatch.setattr(
-        "hokku.webserver.flask_app.bigme_firmware.firmware_image_file", lambda: None
-    )
+    monkeypatch.setattr("hokku.screens.bigme_f7.firmware_image_file", lambda: None)
     client = _client(_bare_state(app_config), tmp_path)
     r = client.post("/hokku/api/flash/start_f7", json={"port": "COM7"})
     assert r.status_code == 503
@@ -176,7 +174,7 @@ def test_route_start_f7_starts_and_is_single_slot(app_config, tmp_path, monkeypa
     img = tmp_path / "xr_system.img"
     img.write_bytes(b"AWIH" + b"\x00" * 32)
     monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
-    monkeypatch.setattr("hokku.webserver.flask_app.bigme_firmware.firmware_image_file", lambda: img)
+    monkeypatch.setattr("hokku.screens.bigme_f7.firmware_image_file", lambda: img)
 
     def slow(port, image_path, on_line, should_cancel, **kw):
         on_line("catching")
@@ -505,7 +503,7 @@ def test_route_start_f7_builds_provision(app_config, tmp_path, monkeypatch):
     img = tmp_path / "xr_system.img"
     img.write_bytes(b"AWIH" + b"\x00" * 32)
     monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
-    monkeypatch.setattr("hokku.webserver.flask_app.bigme_firmware.firmware_image_file", lambda: img)
+    monkeypatch.setattr("hokku.screens.bigme_f7.firmware_image_file", lambda: img)
     captured = {}
 
     def fake_bootstrap(port, image_path, on_line, should_cancel, provision=None, **kw):
@@ -539,7 +537,7 @@ def test_route_start_f7_no_provision_when_blank(app_config, tmp_path, monkeypatc
     img = tmp_path / "xr_system.img"
     img.write_bytes(b"AWIH" + b"\x00" * 32)
     monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
-    monkeypatch.setattr("hokku.webserver.flask_app.bigme_firmware.firmware_image_file", lambda: img)
+    monkeypatch.setattr("hokku.screens.bigme_f7.firmware_image_file", lambda: img)
     captured: dict = {"provision": "unset"}
 
     def fake_bootstrap(port, image_path, on_line, should_cancel, provision=None, **kw):
@@ -559,7 +557,7 @@ def _f7_ready(tmp_path, monkeypatch):
     img = tmp_path / "xr_system.img"
     img.write_bytes(b"AWIH" + b"\x00" * 32)
     monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
-    monkeypatch.setattr("hokku.webserver.flask_app.bigme_firmware.firmware_image_file", lambda: img)
+    monkeypatch.setattr("hokku.screens.bigme_f7.firmware_image_file", lambda: img)
     monkeypatch.setattr(
         flashing.f7_bootstrap,
         "bootstrap_device",
@@ -609,7 +607,7 @@ def test_route_start_f7_rejects_spaces(app_config, tmp_path, monkeypatch):
     img = tmp_path / "xr_system.img"
     img.write_bytes(b"AWIH" + b"\x00" * 32)
     monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
-    monkeypatch.setattr("hokku.webserver.flask_app.bigme_firmware.firmware_image_file", lambda: img)
+    monkeypatch.setattr("hokku.screens.bigme_f7.firmware_image_file", lambda: img)
     client = _client(_bare_state(app_config), tmp_path)
     for field in ("wifi_ssid1", "wifi_pass1", "screen_name"):
         r = client.post("/hokku/api/flash/start_f7", json={"port": "COM7", field: "has space"})
@@ -621,7 +619,7 @@ def test_route_start_f7_passes_local_url_through(app_config, tmp_path, monkeypat
     img = tmp_path / "xr_system.img"
     img.write_bytes(b"AWIH" + b"\x00" * 32)
     monkeypatch.setattr(bigme_bootstrap, "tooling_available", lambda: True)
-    monkeypatch.setattr("hokku.webserver.flask_app.bigme_firmware.firmware_image_file", lambda: img)
+    monkeypatch.setattr("hokku.screens.bigme_f7.firmware_image_file", lambda: img)
     captured = {}
 
     def fake_bootstrap(port, image_path, on_line, should_cancel, provision=None, **kw):

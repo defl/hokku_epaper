@@ -54,7 +54,7 @@ def _put(
 def bundled(monkeypatch):
     """Stub the registry's bundled resolution to a single version, no dir files."""
 
-    def _set(version: str | None, *, image: bytes | None = None, listing=None):
+    def _set(version: str | None, *, image: bytes | None = None, listing=None, file=None):
         # No bundled version -> no bundled image, matching reality.
         img = image if image is not None else (b"BUNDLED" if version else None)
         monkeypatch.setattr(
@@ -71,6 +71,11 @@ def bundled(monkeypatch):
             firmware_registry,
             "list_bundled_firmware",
             lambda m: (listing or []) if m == MODEL else [],
+        )
+        monkeypatch.setattr(
+            firmware_registry,
+            "release_file_for",
+            lambda m: file if m == MODEL else None,
         )
 
     return _set
@@ -221,3 +226,43 @@ def test_effective_versions_covers_all_models(tmp_path, bundled):
     versions = store.effective_versions()
     assert set(versions) == set(firmware_registry.known_models())
     assert versions[MODEL] == "1.2.2"
+
+
+# ── USB flash file: must follow the same selection as OTA ─────────
+
+
+def test_effective_file_passthrough_is_bundled_release_file(tmp_path, bundled):
+    bundled_file = tmp_path / "hokku-bigme_f7-1.2.2.img"
+    bundled("1.2.2", file=bundled_file)
+    assert FirmwareStore(tmp_path / "fw").effective_file(MODEL) == bundled_file
+
+
+def test_effective_file_follows_pin_like_ota(tmp_path, bundled):
+    bundled("1.2.2", file=tmp_path / "hokku-bigme_f7-1.2.2.img")
+    dl = tmp_path / "fw"
+    pinned = _put(dl, "1.9.0", channel=CHANNEL_BETA, data=b"AWIH-BETA")
+    store = FirmwareStore(dl)
+    store.set_pin(MODEL, "1.9.0")
+    flashed = store.effective_file(MODEL)
+    assert flashed is not None and flashed == pinned
+    # USB writes the same bytes OTA serves (the F7 image is served verbatim).
+    assert flashed.read_bytes() == store.effective_app_image(MODEL)
+
+
+def test_effective_file_pin_older_bundled(tmp_path, bundled):
+    old = tmp_path / "hokku-bigme_f7-1.2.0.img"
+    old.write_bytes(b"AWIH-OLD")
+    new = tmp_path / "hokku-bigme_f7-1.2.2.img"
+    new.write_bytes(b"AWIH-NEW")
+    bundled("1.2.2", listing=[("1.2.0", old), ("1.2.2", new)], file=new)
+    store = FirmwareStore(tmp_path / "fw")
+    store.set_pin(MODEL, "1.2.0")
+    assert store.effective_file(MODEL) == old
+
+
+def test_effective_file_stale_pin_falls_back_to_bundled(tmp_path, bundled):
+    bundled_file = tmp_path / "hokku-bigme_f7-1.2.2.img"
+    bundled("1.2.2", file=bundled_file)
+    store = FirmwareStore(tmp_path / "fw")
+    store.set_pin(MODEL, "9.9.9")
+    assert store.effective_file(MODEL) == bundled_file

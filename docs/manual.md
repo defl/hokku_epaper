@@ -156,10 +156,10 @@ After editing the config file, restart the server (`systemctl restart hokku-serv
 
 **Firmware library** — the server ships with a bundled firmware for each screen model and works fully offline. The Firmware library lets you optionally pull newer firmware from GitHub and choose which version each model is offered:
 
-- Each model shows the version it is **currently serving** over the air. By default this is the bundled version, or a newer **stable** one you downloaded.
+- Each model shows the version it is **currently serving**, over the air and to *Flash a screen*. By default this is the bundled version, or a newer **stable** one you downloaded.
 - **Check GitHub for firmware** lists downloadable releases. Tick **Include pre-releases (beta)** to also see beta builds. Press **Download** to add one to the library — this does *not* change what's served.
 - To actually use a downloaded (or older) version, **pin** it from the version dropdown next to the model. Betas are never selected automatically; you must pin one deliberately. Choose *Auto (bundled / newest stable)* to unpin and return to the default.
-- Pinning takes effect the next time a screen updates over the air (the per-screen *Update firmware on next refresh* toggle). *Flash a screen* over USB always installs the bundled firmware.
+- Pinning takes effect the next time a screen is updated: over the air (the per-screen *Update firmware on next refresh* toggle) or with *Flash a screen* over USB.
 
 ---
 

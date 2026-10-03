@@ -15,11 +15,12 @@ import subprocess
 import sys
 import tempfile
 import zlib
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 import serial.tools.list_ports
 
-from hokku.common.esp32.firmware import release_app_header
+from hokku.common.esp32.firmware import app_header_of, release_app_header
 from hokku.common.esp32.nvs import read_nvs
 from hokku.common.esp32.spec import Esp32Spec
 
@@ -282,7 +283,10 @@ def parse_device_state(
 
 
 def scan_devices(
-    spec: Esp32Spec, boot_after: bool = True, specs: Sequence[Esp32Spec] = ()
+    spec: Esp32Spec,
+    boot_after: bool = True,
+    specs: Sequence[Esp32Spec] = (),
+    release_files: Mapping[str, Path] | None = None,
 ) -> list[dict]:
     """Enumerate all serial ports; for ESP32-S3 ports, read on-flash state.
 
@@ -298,6 +302,10 @@ def scan_devices(
     flash then interrupts that paint and wedges the panel controller. The panel
     keeps showing its last image while held in the bootloader (e-paper is
     persistent), but such a caller MUST guarantee an eventual boot.
+
+    *release_files* maps a model_id to the merged image a flash of that model
+    would write; freshness is judged against it. Models it omits use the bundled
+    image.
 
     Returns a list of dicts (one per serial port).
     """
@@ -326,7 +334,10 @@ def scan_devices(
         dev_spec = usb_spec(specs, dev["vid"], dev["pid"])
         if dev_spec is not None:
             if dev_spec.model_id not in release_headers:
-                release_headers[dev_spec.model_id] = release_app_header(dev_spec)
+                target = (release_files or {}).get(dev_spec.model_id)
+                release_headers[dev_spec.model_id] = (
+                    app_header_of(dev_spec, target) if target else release_app_header(dev_spec)
+                )
             nvs_data, app_header = read_device_flash(dev_spec, dev["port"], boot_after=boot_after)
             dev.update(
                 parse_device_state(
