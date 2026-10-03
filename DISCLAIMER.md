@@ -95,13 +95,14 @@ included.
 - **Pillow, NumPy, Flask, pillow-heif** — the image server's Python
   dependencies. Each has its own license; see their individual
   projects.
-- **Measured Spectra 6 palette values.** The Hokku / Huessen and
-  Seeed palette, and the idea of compressing an image into the
-  panel's real lightness range, come from
-  [esp32-photoframe](https://github.com/aitjcize/esp32-photoframe)
-  (MIT). The Bigme F7 palette is epdoptimize's `spectra6`
+- **Spectra 6 ink colours.** The ink table the dither picks from comes
+  from [esp32-photoframe](https://github.com/aitjcize/esp32-photoframe)
+  (MIT) for the Hokku / Huessen and Seeed, as does the idea of
+  compressing an image into the panel's real lightness range; the
+  Bigme F7's is epdoptimize's `spectra6`
   ([paperlesspaper/epdoptimize](https://github.com/paperlesspaper/epdoptimize),
-  Apache-2.0).
+  Apache-2.0). The lightness range and gamut correction each panel
+  actually renders with are this project's own measurements.
 - **XR872 SDK** — required to build the Bigme F7 firmware from
   source. Not redistributed by this project; obtain it separately.
 - **pi-gen** (BSD-3-Clause) — used to build the Raspberry Pi
