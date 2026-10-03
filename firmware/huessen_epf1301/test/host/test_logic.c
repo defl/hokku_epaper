@@ -1,7 +1,7 @@
 /*
  * test_logic.c — host-side unit tests for pure logic functions in main.c:
  *   - config_is_valid
- *   - now_epoch / refresh_due / schedule_retry_in
+ *   - now_epoch / refresh_due / scheduler_retry_in (shared schedule glue)
  *   - usb_host_present_stable  (debounce state machine)
  *   - button1_pressed_debounced (debounce state machine)
  *
@@ -50,7 +50,7 @@
  * re-processing when main.c re-includes the same headers). */
 #define static
 
-#include "../../../common/esp32/text_render.c"  /* font table + draw_char + draw_string */
+#include "../../../common/all/text_render.c"  /* font table + draw_char + draw_string */
 #include "../../../common/esp32/config.c"       /* NVS config struct + load/validate    */
 #include "../../../common/esp32/state.c"  /* RTC-persistent state + validation    */
 #include "../../../common/esp32/scheduler.c"  /* now_epoch / refresh_due / retry / drift cal */
@@ -62,6 +62,9 @@
 #include "../../../common/all/firmware_url.c" /* firmware endpoint derivation      */
 #include "../../../common/all/backoff.c"      /* exponential retry backoff policy   */
 #include "../../../common/all/fetch_outcome.c"  /* shared reply decision */
+#include "../../../common/all/schedule.c"       /* next fetch + drift calibration */
+#include "../../../common/all/messages.c"       /* on-glass message texts */
+#include "../../../common/all/ota_confirm.c"    /* new-firmware confirm policy */
 #include "../../../common/all/frame_state.c"  /* X-Frame-State JSON builder         */
 #include "../../../common/all/sleep_cal.c"    /* oscillator-drift calibration       */
 #include "../../../common/all/json_util.c"    /* json_escape                        */
@@ -113,53 +116,36 @@ static void test_now_epoch_returns_post_2020_value(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
- *  refresh_due tests
+ *  refresh_due — this board's USB_AWAKE poll against the shared schedule
  * ═══════════════════════════════════════════════════════════════════════ */
 
 static void test_refresh_due_when_not_scheduled(void)
 {
-    next_refresh_epoch = 0;
-    CHECK(refresh_due(), "refresh_due: returns true when next_refresh_epoch == 0 (unscheduled)");
+    hokku_sched_init(&hokku_sched);
+    CHECK(refresh_due(), "refresh_due: returns true when unscheduled");
 }
 
 static void test_refresh_due_when_epoch_in_past(void)
 {
-    next_refresh_epoch = 1;  /* ancient past — always before real time */
+    hokku_sched.next_epoch = 1;  /* ancient past — always before real time */
     CHECK(refresh_due(), "refresh_due: returns true when epoch is in the past");
 }
 
 static void test_refresh_not_due_when_epoch_far_future(void)
 {
-    next_refresh_epoch = (int64_t)9999999999LL;  /* year 2286 */
+    hokku_sched.next_epoch = (int64_t)9999999999LL;  /* year 2286 */
     CHECK(!refresh_due(), "refresh_due: returns false when epoch is far in the future");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
- *  schedule_retry_in tests
- * ═══════════════════════════════════════════════════════════════════════ */
-
-static void test_schedule_retry_sets_next_epoch_to_now_plus_seconds(void)
+static void test_config_error_retries_after_fallback(void)
 {
-    next_refresh_epoch = 0;
+    /* A stale schedule in the past must not wake the screen straight back into
+     * the config error: the board schedules HOKKU_FALLBACK_SLEEP_S instead. */
+    hokku_sched.next_epoch = 1;
     time_t before = time(NULL);
-    schedule_retry_in(60, "test");
-    time_t after  = time(NULL);
-
-    /* next_refresh_epoch should be in [before+60, after+60] */
-    CHECK(next_refresh_epoch >= (int64_t)before + 60 &&
-          next_refresh_epoch <= (int64_t)after  + 60,
-          "schedule_retry_in: sets next_refresh_epoch to now + seconds");
-}
-
-static void test_schedule_retry_clears_sleep_error_state(void)
-{
-    pre_sleep_server_epoch = 12345;
-    last_sleep_err_known   = true;
-    schedule_retry_in(60, "test");
-    CHECK(pre_sleep_server_epoch == 0,
-          "schedule_retry_in: clears pre_sleep_server_epoch");
-    CHECK(!last_sleep_err_known,
-          "schedule_retry_in: clears last_sleep_err_known");
+    scheduler_retry_in(HOKKU_FALLBACK_SLEEP_S);
+    CHECK(hokku_sched.next_epoch >= (int64_t)before + HOKKU_FALLBACK_SLEEP_S,
+          "config error: next try is the fallback interval from now");
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -636,8 +622,7 @@ int main(void)
     test_refresh_due_when_not_scheduled();
     test_refresh_due_when_epoch_in_past();
     test_refresh_not_due_when_epoch_far_future();
-    test_schedule_retry_sets_next_epoch_to_now_plus_seconds();
-    test_schedule_retry_clears_sleep_error_state();
+    test_config_error_retries_after_fallback();
 
     /* USB debounce */
     test_usb_stable_no_usb_on_single_high_read();

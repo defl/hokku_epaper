@@ -25,6 +25,9 @@
 #include "driver/chip/hal_gpio.h"
 #include "kernel/os/os.h"
 
+#include "messages.h"     /* common/all: message layout */
+#include "text_render.h"  /* common/all: row renderer */
+
 /* Port A pins */
 #define EPD_PIN_PA8     GPIO_PIN_8
 #define EPD_PIN_BUSY    GPIO_PIN_9
@@ -257,4 +260,24 @@ void epd_refresh(void)
     epd_send_cmd(0x02);                              /* POF: power off */
     epd_send_data(0x00);
     epd_wait_busy();
+}
+
+/*
+ * Put a message on the glass (common/all/messages.h). There is no RAM for a
+ * 192 KB framebuffer, so each row is rendered on the fly and streamed straight
+ * into the controller, exactly as an image is; the layout is the same as the
+ * ESP32 boards' framebuffer path (text_render.h).
+ */
+void epd_show_text(const char *msg)
+{
+    static uint8_t row[EPD_WIDTH / 2];
+
+    epd_send_cmd(0x10);                              /* DTM: data start transmission */
+    for (int y = 0; y < EPD_HEIGHT; y++) {
+        text_render_row(row, EPD_WIDTH, EPD_HEIGHT, y, HOKKU_MSG_X, HOKKU_MSG_Y, msg,
+                        HOKKU_MSG_COLOR, HOKKU_MSG_BG, HOKKU_MSG_SCALE);
+        for (int i = 0; i < EPD_WIDTH / 2; i++)
+            epd_send_data(row[i]);
+    }
+    epd_refresh();
 }

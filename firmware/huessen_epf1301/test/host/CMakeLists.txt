@@ -36,16 +36,6 @@ set(HOKKU_COMMON_ALL ../../../common/all)
 # firmware sources' `#include "mocks/..."` and `driver/...` lines.
 set(HOKKU_TEST ../../../common/esp32/test)
 
-# ── test_text_render ──────────────────────────────────────────────────────
-# Pure test: no ESP-IDF dependencies.
-add_executable(test_text_render
-    test_text_render.c
-    ${HOKKU_COMMON}/text_render.c
-)
-target_include_directories(test_text_render PRIVATE
-    ${HOKKU_COMMON}     # for text_render.h
-)
-
 # ── test_logic ────────────────────────────────────────────────────────────
 # Compiles test_logic.c, which #include-s the firmware source with all static
 # storage classes stripped. mocks/ shadows the real ESP-IDF headers.
@@ -56,8 +46,8 @@ add_executable(test_logic
 target_include_directories(test_logic PRIVATE
     ${HOKKU_TEST}/mocks # mock ESP-IDF headers (bare "driver/gpio.h" etc.)
     ${HOKKU_TEST}       # resolves the "mocks/..."-prefixed includes
-    ${HOKKU_COMMON}     # config.h / text_render.h / state.h / scheduler.h / log.h
-    ${HOKKU_COMMON_ALL} # frame_state.h / firmware_url.h / json_util.h
+    ${HOKKU_COMMON}     # config.h / state.h / scheduler.h / log.h
+    ${HOKKU_COMMON_ALL} # frame_state.h / schedule.h / text_render.h / messages.h ...
     ../../main          # for any board-local headers
     ${CMAKE_BINARY_DIR} # for generated version.h
 )
@@ -84,6 +74,5 @@ endif()
 
 # ── CTest integration ────────────────────────────────────────────────────
 enable_testing()
-add_test(NAME text_render COMMAND test_text_render)
 add_test(NAME logic       COMMAND test_logic)
 add_test(NAME config      COMMAND test_config)

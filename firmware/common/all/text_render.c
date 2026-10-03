@@ -154,3 +154,50 @@ void draw_string(uint8_t *fb, int fb_w, int fb_h, int x, int y,
         str++;
     }
 }
+
+void text_render_row(uint8_t *row, int fb_w, int fb_h, int y, int x, int y0,
+                     const char *str, uint8_t color, uint8_t bg, int scale)
+{
+    uint8_t fill = (uint8_t)((bg << 4) | (bg & 0x0F));
+    for (int i = 0; i < fb_w / 2; i++)
+        row[i] = fill;
+
+    /* Same walk as draw_string, keeping only the glyph row that lands on y. */
+    int char_w = 6 * scale;
+    int char_h = 8 * scale;
+    int cx = x, cy = y0;
+
+    for (; *str; str++) {
+        if (*str == '\n') {
+            cx = x;
+            cy += char_h;
+            continue;
+        }
+        if (cx + char_w > fb_w) {
+            cx = x;
+            cy += char_h;
+        }
+        if (cy + char_h > fb_h || cy > y)
+            break;                     /* the layout only moves down */
+        if (y >= cy && y < cy + 7 * scale) {
+            char ch = *str;
+            if (ch < 32 || ch > 126) ch = '?';
+            const uint8_t *glyph = font5x7[ch - 32];
+            int glyph_row = (y - cy) / scale;
+            for (int col = 0; col < 5; col++) {
+                if (!(glyph[col] & (1 << glyph_row)))
+                    continue;
+                for (int sx = 0; sx < scale; sx++) {
+                    int px = cx + col * scale + sx;
+                    if (px < 0 || px >= fb_w)
+                        continue;
+                    if (px % 2 == 0)
+                        row[px / 2] = (uint8_t)((row[px / 2] & 0x0F) | (color << 4));
+                    else
+                        row[px / 2] = (uint8_t)((row[px / 2] & 0xF0) | (color & 0x0F));
+                }
+            }
+        }
+        cx += char_w;
+    }
+}
