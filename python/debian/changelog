@@ -1,3 +1,11 @@
+hokku-server (4.0.1~dev.97-1) unstable; urgency=medium
+
+  * Flash a screen installs the firmware library's pinned version (as OTA
+    does) instead of always the bundled one; the scan judges freshness
+    against it.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 03 Oct 2026 10:45:33 -0500
+
 hokku-server (4.0.1~dev.96-1) unstable; urgency=medium
 
   * DISCLAIMER: correct palette attribution (esp32-photoframe, MIT;

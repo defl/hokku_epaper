@@ -222,6 +222,17 @@ class FirmwareStore:
             return firmware_registry.app_image_from_file(model_id, ov.path)
         return firmware_registry.release_app_image_for(model_id)
 
+    def effective_file(self, model_id: str | None) -> Path | None:
+        """The full release artifact (ESP32 merged ``.bin``, F7 ``.img``) for the
+        effective version of *model_id* — what a USB flash writes, so it installs
+        the same version OTA serves. Like :meth:`effective_app_image`, a pin or
+        download is read from its file and otherwise this defers to the registry's
+        bundled ``release_file_for`` unchanged."""
+        ov = self._override(model_id) if model_id else None
+        if ov is not None and ov.path is not None:
+            return ov.path
+        return firmware_registry.release_file_for(model_id)
+
     # ── downloads ────────────────────────────────────────────────
 
     def add_download(
