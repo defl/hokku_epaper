@@ -158,12 +158,13 @@ jobs:
         # /usr/bin/qemu-aarch64-static under that exact name.
         #
         # pi-gen's own dependencies_check() (separate from debootstrap)
-        # additionally hard-requires a tool literally named "qemu-arm" on
-        # PATH (from .pigen/depends: qemu-arm:qemu-user-binfmt) — the 32-bit
-        # ARM binary, unsuffixed, regardless of build arch. qemu-user-static
-        # only ships qemu-arm-static (suffixed). Unlike the debootstrap
-        # case, this check is a bare `hash qemu-arm` — it never executes the
-        # binary — so a symlink is fine here.
+        # additionally hard-requires an unsuffixed qemu binary on PATH, named
+        # in .pigen/depends: "qemu-arm" until pi-gen 74d08a3 (2026-09-16),
+        # "qemu-aarch64" since (qemu-aarch64:qemu-user-binfmt). pi-gen is
+        # cloned unpinned, so that change failed the v4.0.0-beta3 image
+        # build. qemu-user-static only ships the -static names. The check
+        # is a bare `hash` — it never executes the binary — so symlinks are
+        # fine; both are made so either pi-gen revision passes.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -172,7 +173,8 @@ jobs:
             libarchive-tools rsync xz-utils curl xxd file kmod bc gpg \
             pigz arch-test
           sudo ln -sf /usr/bin/qemu-arm-static /usr/bin/qemu-arm
-          ls -l /usr/bin/qemu-aarch64-static /usr/bin/qemu-arm
+          sudo ln -sf /usr/bin/qemu-aarch64-static /usr/bin/qemu-aarch64
+          ls -l /usr/bin/qemu-aarch64-static /usr/bin/qemu-arm /usr/bin/qemu-aarch64
           cat /proc/sys/fs/binfmt_misc/qemu-aarch64 || true
           arch-test arm64 && echo "arch-test arm64: OK"
 
