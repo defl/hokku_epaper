@@ -1,13 +1,14 @@
 # Face-detection memory budget
 
-> **Reference commit:** [`32c05bf`](https://github.com/anthropics/hokku_epaper/commit/32c05bf) — "Pluggable face detection: AbstractFaceDetector + 3 concretes". Re-measure with
-> `pytest webserver/tests/test_face_detect_memory.py -m time_intensive -s` if numbers below diverge from observed behaviour.
+> **Reference commit:** [`32c05bf`](https://github.com/defl/hokku_epaper/commit/32c05bf) — "Pluggable face detection: AbstractFaceDetector + 3 concretes".
 > Numbers are from the dev box (Windows / x86, Python 3.13, opencv-contrib-python 4.x, onnxruntime 1.26).
 > Pi-class hosts will see different absolute numbers — opencv-python-headless is similar across architectures, but onnxruntime arm64 wheels differ.
 
 This document captures the per-detector memory profile for the three
-concrete `AbstractFaceDetector` implementations shipped with hokku-server,
-how it was measured, and which detector to pick for which host.
+`AbstractFaceDetector` implementations that existed at the reference commit,
+and how it was measured. Face detection was later dropped (`0782ac3`) and
+restored with `yunet_opencv` (`OpenCVYuNetFaceDetector`) only (`ce0224c`). The
+Haar and ONNX detectors and the memory test and helper below no longer exist.
 
 ---
 
@@ -31,40 +32,6 @@ transient is bounded by the static `[1, 3, 640, 640]` input tensor
 (~5 MB) plus a handful of small output tensors. End-to-end it's still
 larger than `yunet_opencv` here because the bulk of the cost is the
 static onnxruntime baseline.
-
----
-
-## Which detector to pick
-
-### Default: `yunet_opencv`
-
-Best accuracy and lowest memory on this dev box. Existing users get the
-same behaviour they had before the abstract refactor.
-
-### Pi Zero 2 W (512 MB total, ~200 MB free at startup): `yunet_opencv`
-
-Still the right answer — its transient is ~6–11 MB, which fits
-comfortably inside the available headroom. **Don't pick `haar_opencv`
-here**: its 110 MB transient will reliably tip the system into OOM the
-first time the classifier evaluates a portrait, which is exactly the
-failure mode this work was triggered by. **Don't pick `yunet_onnx`
-here either**: the +27 MB always-resident overhead from onnxruntime
-isn't worth it when `yunet_opencv` already fits.
-
-### Quality-driven desktop / mid-tier server: `yunet_opencv` or `yunet_onnx`
-
-Identical accuracy (same model file). Pick `yunet_onnx` if you want to
-drop opencv's DNN backend entirely from your dependency graph (e.g.
-you're already pulling in onnxruntime for other models and don't want
-two ONNX runtimes). Otherwise stay on `yunet_opencv`.
-
-### When `haar_opencv` makes sense: rarely
-
-The only reason to pick it is if `onnxruntime` and opencv's DNN backend
-are both unavailable on the target — which is unusual since
-`opencv-python` ships the DNN backend by default and the deb postinst
-installs it. If you're stuck without a DNN backend, Haar still works
-end-to-end; just budget for ~170 MB peak inference RSS.
 
 ---
 
@@ -126,8 +93,7 @@ end-to-end; just budget for ~170 MB peak inference RSS.
 | yunet_onnx   | Albi_Panorama_Sunset_Panini_General.jpg            | 83.6 MB | 100.9 MB | False |
 
 All detectors agree on the contract test pile (3 portraits → True, 11
-non-portraits → False) without any allowlist. See
-`webserver/tests/test_face_detect.py` for the full agreement assertions.
+non-portraits → False) without any allowlist.
 
 ---
 
@@ -147,8 +113,8 @@ Layer-C subprocess + psutil RSS sampling (the same pattern used in
   and exits.
 * Parent reports four RSS checkpoints plus the polled peak.
 
-Helper: `webserver/tests/_face_detect_memory_helpers.py` (function
-`peak_rss_subprocess_face_detect`).
+Helper (since removed): `_face_detect_memory_helpers.py`, function
+`peak_rss_subprocess_face_detect`.
 
 The Windows-specific quirk encountered while building this:
 `psutil.Process(child.pid).memory_info().rss` initially returns a stale
@@ -179,30 +145,20 @@ The measurement disagrees:
 So the right answer for the Pi-OOM case isn't "switch face detector";
 it's "look elsewhere in the per-render budget" (the 50 MB dither
 stripe, opencv-headless's static cost, or something else entirely).
-The pluggable architecture is still useful — it makes future detector
-additions cheap and lets ops swap out `yunet_opencv` if a specific
-host needs a different trade-off — but on the dev box none of the
-alternatives shipped here are actually lighter than the original.
+None of the alternatives was lighter, which is why they were removed.
 
 ---
 
-## Reference: file map
+## Reference: file map (current)
 
 ```
-webserver/
-  webserver/
-    face_detect.py                 ← public re-export shim
-    face_detect_abstract.py        ← AbstractFaceDetector + load_image_resized
-    face_detect_yunet_opencv.py    ← OpenCVYuNetFaceDetector (cv2.FaceDetectorYN)
-    face_detect_haar_opencv.py     ← OpenCVHaarFaceDetector (cv2.CascadeClassifier)
-    face_detect_yunet_onnx.py      ← ONNXYuNetFaceDetector (onnxruntime)
-    face_detect_factory.py         ← build_face_detector(config)
-    models/face_detection_yunet_2023mar.onnx
-  tests/
-    test_face_detect.py            ← parametrised contract tests (33 cases)
-    test_face_detect_memory.py     ← Layer-C peak-RSS assertions
-    _face_detect_memory_helpers.py ← peak_rss_subprocess_face_detect
-
-docs/
-  face_detection_memory_usage.md   ← this document
+python/hokku/webserver/
+  face_detect_abstract.py        ← AbstractFaceDetector + load_image_resized
+                                   (decodes via open_image_for_render, so the
+                                   same frame, decode budget and _DECODE_LOCK
+                                   as a render)
+  face_detect_yunet_opencv.py    ← OpenCVYuNetFaceDetector (cv2.FaceDetectorYN)
+  models/face_detection_yunet_2023mar.onnx
+python/tests/
+  test_face_detect.py            ← contract tests
 ```

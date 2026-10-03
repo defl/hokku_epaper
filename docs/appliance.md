@@ -22,7 +22,7 @@ network with the server running.
 
 ## 1. Write the image
 
-Download `image-<date>-hokku.img.xz` from the
+Download `image_<date>-hokku.img.xz` from the
 [latest release](https://github.com/defl/hokku_epaper/releases).
 
 Write it to the card with [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
@@ -51,14 +51,14 @@ network resolves there, so almost any address you type will land on the wizard.
 
 | Field | What it does |
 |---|---|
-| **WiFi network + password** | The network the Pi will join once setup finishes. Pick from the scan list or type it in. Must be 2.4 GHz. |
-| **Country** | Sets the WiFi regulatory domain. Required — the radio stays disabled without it. |
-| **Hostname** | The Pi's system name on your network. |
+| **Network name (SSID) + WiFi password** | The network the Pi will join once setup finishes. Pick from the scan list or type it in. Must be 2.4 GHz. |
+| **WiFi country** | Sets the WiFi regulatory domain. Required — the radio stays disabled without it. |
+| **IP address assignment** | DHCP (default, recommended) or a static IP with gateway and DNS. |
+| **Device name** | The Pi's system hostname. |
 | **Timezone** | Used for the refresh schedule, so photos change at the times you expect. |
-| **Network** | DHCP (default, recommended) or a static IP with gateway and DNS. |
-| **Find on network by name** | Advertises the server over mDNS so you can reach it at `http://<name>.local:8080` instead of chasing an IP. On by default. |
-| **SSH** | Optional. Enables remote terminal access. |
-| **File sharing (Samba)** | Optional. Exposes the photo folder as a network share. |
+| **mDNS / Bonjour** | Advertises the server under the *mDNS name* so you can reach it at `http://<name>.local:8080` instead of chasing an IP. On by default, as `hokku`. |
+| **SSH access** | Optional. Enables remote terminal access. |
+| **Samba file sharing** | Optional. Exposes the photo folder as a network share. |
 | **Admin password** | Optional but **strongly recommended**, especially if you enable SSH — see [Default credentials](#default-credentials) below. |
 
 Submit the form. The Pi applies everything and reboots; it takes roughly a minute
@@ -69,7 +69,7 @@ to come back on your real network.
 Disconnect from `Hokku Setup`, rejoin your normal WiFi, and open:
 
 ```
-http://<the-name-you-chose>.local:8080
+http://<mdns-name>.local:8080
 ```
 
 That's the web app — upload photos, add frames, set the schedule. See the
@@ -133,8 +133,8 @@ a login prompt.
 ### Starting over
 
 To send a configured appliance back to setup mode — to move it to a different
-WiFi network, for example — run this on the Pi as root (over SSH or the serial
-console):
+WiFi network, for example — run this on the Pi over SSH (the serial console is
+not available outside setup mode):
 
 ```sh
 sudo /usr/lib/hokku-installer/reset.sh

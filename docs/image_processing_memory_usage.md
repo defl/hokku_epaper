@@ -1,8 +1,10 @@
 # Image-processing memory budget
 
-> **Reference commit:** [`ee7528b`](https://github.com/anthropics/hokku_epaper/commit/ee7528b0a816826cd14c0bf04ba670d881bec324) — "Batch dither prep into 100-row stripes (~27% faster, same memory peak)"
+> **Reference commit:** [`ee7528b`](https://github.com/defl/hokku_epaper/commit/ee7528b0a816826cd14c0bf04ba670d881bec324) — "Batch dither prep into 100-row stripes (~27% faster, same memory peak)"
 >
-> If the numbers below diverge from observed behaviour on a future commit, re-run `pytest webserver/tests/test_memory_budget.py -m time_intensive -s` to refresh them and bump the SHA.
+> If the numbers below diverge from observed behaviour on a future commit, re-run `pytest python/tests/test_memory_budget.py -m time_intensive -s` to refresh them and bump the SHA.
+>
+> All sizes are for the 3200 × 1600 canvas of that commit. The Huessen canvas is now 1200 × 1600, so per-pixel buffers are about 2.7× smaller.
 
 This document captures the per-render memory profile of the dither pipeline,
 how it was measured, and the design decisions that got us from the original
@@ -28,7 +30,7 @@ interpreter/import overhead so the number reflects the pipeline alone.
 | Synthetic 6000 × 4000 random JPEG | 6000 × 4000 | ~6 MB | **37.0 MB** |
 | Synthetic 10000 × 10000 black PNG | 10000 × 10000 | 285 KB | **762.7 MB** ⚠ |
 
-The 10000×10000 PNG is a **documented limit** — see "PNG decode ceiling"
+The 10000×10000 PNG is now refused before decode — see "Oversized sources"
 below. Real-world content fits comfortably in the 50 MB budget.
 
 End-to-end render time, on the dev box (Windows / x86, 1556×2247 portrait,
@@ -38,7 +40,7 @@ optimisation hold.
 
 ---
 
-## Where the memory goes (current architecture)
+## Where the memory goes
 
 For a full panel render (3200 × 1600), simultaneously live at peak:
 
@@ -49,7 +51,7 @@ For a full panel render (3200 × 1600), simultaneously live at peak:
 | Padding mask (bool) | 5.1 MB |
 | One DRC'd-stripe cache (100 × 3200 × 3 × float32) | 3.8 MB |
 | Rolling error buffer (2-3 × 3200 × 3 × float32) | 0.08-0.12 MB |
-| LUT (cached, 64³ uint8) | 0.26 MB |
+| LUT (cached, 32³ uint8) | 0.03 MB |
 | Misc (PIL handles, numpy bookkeeping, transients) | ~5-6 MB |
 | **Subtotal** | **~35 MB** |
 
@@ -68,7 +70,7 @@ architecture eliminates that entirely.
 This is the actual sequence of measurements observed during the session
 that built the current pipeline. Each row is a Layer-C subprocess
 measurement (peak RSS minus baseline) from
-`pytest webserver/tests/test_memory_budget.py -m time_intensive -s`,
+`pytest python/tests/test_memory_budget.py -m time_intensive -s`,
 running on this Windows dev box. Use it to diagnose future regressions
 — if you change one of the listed optimisations and the relevant
 column jumps, this table tells you which buffer is suddenly back.
@@ -134,7 +136,7 @@ Run on the De Niro / Fitz_Roy / Forest_road set with the
 `floyd_steinberg_hue_aware` preset and the *current* (post-step-9)
 streaming dither, but with the prep batch size dialled up.
 Demonstrates the cost-of-going-wider — informs the choice of
-`DEFAULT_STRIPE_H = 100`.
+`_DEFAULT_STRIPE_H = 100`.
 
 | Prep mode | De Niro peak | Fitz_Roy peak | Forest_road peak | Render time |
 |---|---:|---:|---:|---:|
@@ -199,7 +201,7 @@ during a full-panel call). Six changes brought it down to ~35 MB:
 The three diffusion algorithms (Floyd-Steinberg, Atkinson, Stucki) used to
 take a full-panel float32 canvas (60 MB), convert it to a working float32
 copy, and mutate that copy as errors propagated. Now they share a single
-`_streaming_diffusion_dither` driver that holds only a **2- or 3-row
+streaming driver that holds only a **2- or 3-row
 rolling error buffer** (~115 KB) — 2 rows for Floyd-Steinberg, 3 for
 Atkinson / Stucki where the kernel reaches `dy=2`.
 
@@ -263,8 +265,9 @@ materialising the full source. For 4500 × 2850 → k=2 → 2250 × 1425.
 Sources ≤ MAX are untouched (no draft, no thumbnail, no quality loss).
 
 The thumbnail() fallback after `convert("RGB")` catches PNG / HEIC /
-WebP since those formats don't support draft. **PNG / HEIC / WebP > ~5 MP
-still blow the budget** — see "PNG decode ceiling".
+WebP since those formats don't support draft. The cap has since become a
+2400 × 1800 source bbox, and un-draftable sources over the decode budget are
+refused — see "Oversized sources".
 
 **Saved: ~80 MB peak** on JPEG sources > panel size.
 
@@ -272,7 +275,7 @@ still blow the budget** — see "PNG decode ceiling".
 
 Previously the source image was held by the caller through the entire
 render (PIL canvas + dither). Now `render_panel_bytes` calls
-`img.close()` on the source as soon as `_render_indices` has the resized
+`img.close()` on the source as soon as `_prepare_canvas` has the resized
 canvas, releasing the source's pixel buffer mid-render.
 
 Trade: callers must not reuse the image after `render_panel_bytes`
@@ -336,7 +339,7 @@ full Lanczos *downsample* from 4500 → 3200 would produce.
 We measured the cost of skipping draft for these mid-size sources by
 raising `_MAX_SOURCE_LONG_SIDE` to 4800:
 
-| Image | Cap = 3200 (current) | Cap = 4800 | Δ |
+| Image | Cap = 3200 (then) | Cap = 4800 | Δ |
 |---|---:|---:|---:|
 | Robert_De_Niro 1556×2247 | 34.5 MB | 34.7 MB | 0 |
 | Fitz_Roy 1536×2048 | 36.4 MB | 35.4 MB | 0 |
@@ -403,7 +406,7 @@ properly needs **libvips** (not currently a dependency, ~40 MB install)
 or a bespoke streaming PNG decoder. Not justified for a use case where
 the user can re-encode oversized PNGs to JPEG.
 
-This is a real ceiling — see "PNG decode ceiling".
+Such sources are refused instead — see "Oversized sources".
 
 ### In-place colour-space transforms
 
@@ -433,29 +436,18 @@ restructuring.
 
 ### `RLIMIT_AS` wired into the per-render path
 
-The `webserver/memory_guard.py` module exists as an opt-in context
-manager. It's **not yet wired into the render worker** because:
-
-1. `RLIMIT_AS` is process-wide, not per-render. Each worker process
-   spawned by `RenderPool` would need the limit set once at worker
-   startup (sized to `budget + interpreter baseline`), not inside
-   individual render calls.
-2. Worker startup happens inside `ProcessPoolExecutor`'s internal
-   machinery; injecting an initializer that calls `setrlimit` is
-   straightforward but has not been done yet.
-
-The render pipeline now runs in a `ProcessPoolExecutor`
-(`webserver/render_pool.py`), so `RLIMIT_AS` set at worker-process
-startup would correctly isolate each render without touching the Flask
-request-handler process. For now the streaming design holds the soft
-budget; the hard-guarantee path is documented and tested but not in
-production.
+`python/hokku/webserver/memory_guard.py` exists as an opt-in context
+manager and is **not used in production**. `RLIMIT_AS` is process-wide,
+and renders run on threads inside the server process
+(`MultiThreadedImageManager` / `SingleThreadedImageManager`), so it cannot
+cap one render without capping the whole server. The streaming design holds
+the soft budget, and the decode budget keeps oversized sources out.
 
 ---
 
 ## How to measure
 
-Three layers of memory measurement, all in `webserver/tests/_memory_helpers.py`:
+Three layers of memory measurement, all in `python/tests/_memory_helpers.py`:
 
 ### Layer A — `tracemalloc` (deterministic, Python-heap only)
 
@@ -490,10 +482,9 @@ render then exits — no pytest / cached-LUT / interpreter-warm-up
 contamination.
 
 Tests that use it: `test_full_render_peak_under_50mb` (parametrised over
-real photos), `test_full_render_huge_jpeg_under_50mb` (synthetic 6000×
-4000), `test_full_render_huge_png_documents_decode_limit` (asserts
-that 10 000 × 10 000 PNG *exceeds* 200 MB so a future fix flips the
-test red).
+real photos) and `test_full_render_huge_jpeg_under_50mb` (synthetic 6000×
+4000). `test_full_render_huge_png_rejected_by_cap` checks that the
+10 000 × 10 000 PNG is refused.
 
 ### Layer B — in-process psutil polling (drafted, not currently used)
 
@@ -505,52 +496,47 @@ checked-in tests rely on it.
 
 ---
 
-## PNG decode ceiling
+## Oversized sources
 
-A 10 000 × 10 000 PNG (e.g. a screenshot of a 5-monitor setup, or a
-deliberately oversized upload) cannot fit the 50 MB budget. PNG
+A 10 000 × 10 000 PNG cannot fit the 50 MB budget: PNG, HEIF and WebP
 decoders have no equivalent of JPEG `draft`, so the full uint8 buffer
-(~285 MB for 10 000² × 3) materialises before we can `thumbnail` it
-down.
+(~285 MB for 10 000² × 3) materialises before it can be shrunk. Measured
+at the reference commit: **~763 MB peak**, enough to OOM-kill the server
+on a Pi.
 
-Measured: **~763 MB peak** in the subprocess. This is documented by
-`test_full_render_huge_png_documents_decode_limit`, which **asserts the
-peak exceeds 200 MB** — so if a future change adopts a streaming PNG
-decoder (libvips, etc.) and silently fixes this case, the test goes
-red and forces a budget-spec update.
+Such sources are now refused before anything decodes them
+(`image_renderer.py`):
 
-In the current single-process Flask server **without** memory_guard
-wired up, this case will OOM-kill the worker on a 512 MB Pi rather
-than failing cleanly. The user-visible failure mode is "image stuck
-in pending", not "image marked failed". This is the strongest argument
-for wiring memory_guard in phase 2.
+- `MAX_IMAGE_PIXELS` (40 MP) refuses a declared size at header read — the
+  decompression-bomb guard, which catches this PNG.
+- `DECODE_BUDGET_PIXELS` refuses anything still above budget after JPEG
+  draft. It is derived from `memory_budget_mb` at startup (~16 MP on the Pi).
+- `decoded_pixels_exceed_budget()` applies the same test at ingest, from
+  the header dimensions, so the picture is marked failed and no phase —
+  thumbnail, classify, render — decodes it.
 
 ---
 
 ## Reference: file map
 
 ```
-webserver/
-  webserver/
-    image.py                  ← _render_indices, render_panel_bytes,
-                                 open_image_for_render (JPEG draft),
-                                 compress_dynamic_range (per-stripe).
-    dither_constrained.py     ← _streaming_diffusion_dither (rolling buffer +
-                                 stripe cache), prep_stripe API,
-                                 adaptive_saturate, build_rgb_lut*,
-                                 DEFAULT_STRIPE_H = 100.
-    dither_unconstrained.py   ← full-canvas reference dither (quality
-                                 comparison / regression baseline only).
-    dither.py                 ← backward-compat re-export shim →
-                                 dither_constrained.
-    render_pool.py            ← lazy ProcessPoolExecutor; renders run here.
-    render_worker.py          ← top-level render_one() submitted to the pool.
-    memory_guard.py           ← memory_limit() ctx mgr (RLIMIT_AS), opt-in.
-  tests/
-    _memory_helpers.py        ← Layer A / B / C measurement helpers.
-    test_memory_budget.py     ← time_intensive marker; the headline
-                                 50 MB / render assertions live here.
-
-docs/
-  image_processing_memory_usage.md    ← this document
+python/hokku/webserver/
+  image_abc.py              ← _prepare_canvas (fit/crop, release_input),
+                               _apply_prepare_enhancements, render_panel_bytes.
+  image_renderer.py         ← open_image_for_render (bomb guard, JPEG draft,
+                               decode budget, source bbox), render_indices,
+                               compress_dynamic_range (per-stripe).
+  dither_abc.py             ← AbstractDither, _DEFAULT_STRIPE_H = 100.
+  dither_streaming.py       ← StreamingDither (rolling buffer + stripe cache),
+                               adaptive_saturate, build_rgb_lut*.
+  dither_streaming_numba.py ← NumbaStreamingDither, the production dither.
+  dither_unconstrained.py   ← full-canvas reference dither (quality
+                               comparison / regression baseline only).
+  resource_budget.py        ← memory budget → decode budget + worker count.
+  render_worker.py          ← render_one(), run by the image manager.
+  memory_guard.py           ← memory_limit() ctx mgr (RLIMIT_AS), opt-in.
+python/tests/
+  _memory_helpers.py        ← Layer A / B / C measurement helpers.
+  test_memory_budget.py     ← time_intensive marker; the headline
+                               50 MB / render assertions live here.
 ```

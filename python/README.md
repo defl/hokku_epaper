@@ -11,8 +11,10 @@ firmware, and the zero-terminal Raspberry Pi appliance image — see the
 
 ## Install
 
+The wheel is attached to each [GitHub release](https://github.com/defl/hokku_epaper/releases); it is not on PyPI.
+
 ```sh
-pip install hokku-server
+pip install ./hokku_server-<version>-py3-none-any.whl
 ```
 
 `pip` pulls in every runtime dependency automatically (Flask, waitress, Pillow +

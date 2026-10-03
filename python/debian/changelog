@@ -1,3 +1,11 @@
+hokku-server (4.0.1~dev.95-1) unstable; urgency=medium
+
+  * Docs: beta 4 changelog; README, manual and screen docs brought in line
+    with the current web app and firmware. F7 initial flasher now says
+    long-press (not replug) to boot after a flash.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 02 Oct 2026 21:44:27 -0500
+
 hokku-server (4.0.1~dev.94-1) unstable; urgency=medium
 
   * Docs: README and manual now describe all three buttons on the Hokku /

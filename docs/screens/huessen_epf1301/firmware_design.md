@@ -61,6 +61,10 @@ The BATTERY_IDLE awake window uses the same 100 ms poll loop. The window is at m
 
 Interrupts are reserved for the one place they're actually needed: EXT1 wake out of deep sleep, which is managed by hardware, not software.
 
+### USB-interactive mode and `frame` uploads
+
+While a console `frame` upload is in progress, or a host has set `interactive on`, the USB_AWAKE loop skips both the button and the scheduled refresh (skipped, not queued) — either would `esp_restart()` and drop the host. The flag lives in plain RAM, so any reset clears it, and it only engages while a USB host is present. Rationale in [`interactive.h`](../../../firmware/common/all/interactive.h).
+
 ### Button press = full chip restart
 
 The button triggers `esp_restart()` with an `ACTION_REFRESH_FROM_BUTTON` flag in RTC memory. The next boot reads the flag, does the refresh, then returns to whichever regime matches current USB state.
@@ -77,7 +81,7 @@ Boot-loop guard: `pending_action` is cleared early in `app_main`, *before* the r
 
 ### Schedule anchored to absolute server time
 
-Earlier firmwares computed sleep as "relative to now", which accumulated `+60 s` of awake-window drift per cycle. The current firmware stores `next_refresh_epoch` (Unix seconds, server-provided) in RTC-NOINIT memory and computes `remaining = (next_refresh_epoch − now_epoch) * 1e6`. RTC slow-clock drift between cycles washes out because we re-anchor on every server response.
+Earlier firmwares computed sleep as "relative to now", which accumulated `+60 s` of awake-window drift per cycle. The current firmware stores `next_refresh_epoch` (Unix seconds, server-provided) in RTC-NOINIT memory and computes `remaining = (next_refresh_epoch − now_epoch) * 1e6`. RTC slow-clock drift between cycles washes out because we re-anchor on every server response; drift within one sleep is corrected by the learned calibration in [`sleep_cal.h`](../../../firmware/common/all/sleep_cal.h).
 
 Floored at 5 s minimum (spec awake window) before entering sleep.
 

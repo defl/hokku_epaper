@@ -1,8 +1,8 @@
 # Panel cache compression investigation
 
 This document records the compression benchmark run on `_panel.bin` cache files
-(May 2026) and its conclusions. It is here so the tradeoffs don't have to be
-re-derived from scratch if the feature is ever implemented.
+(May 2026) and its conclusions. The recommendation was implemented: panel
+caches are stored as `_panel.bin.zst`, zstd level 1 (see the last section).
 
 ---
 
@@ -103,10 +103,9 @@ compression ratio. The only cost is a new dependency.
 
 **Dependency situation on the Pi:**
 - System package: `python3-zstd` (apt, `import zstd`) — confirmed present in
-  Debian Trixie (`python3-zstd 1.5.5.1-1+b4`). Would be added to the `.deb`'s
-  `Depends:` field and to `requirements.txt` as `zstandard` (the pip name uses
-  a different import, `import zstandard`, with a richer API — the two are not
-  the same package).
+  Debian Trixie (`python3-zstd 1.5.5.1-1+b4`). It is in the `.deb`'s
+  `Depends:`, and `requirements.txt` / `pyproject.toml` list the matching pip
+  package `zstd` (not `zstandard`, which has a different import and API).
 - If adding a dependency is undesirable: **zlib-1** (Python stdlib, zero new
   deps) is the runner-up — 91 ms compress, 18 ms decompress, 65% savings.
 
@@ -115,19 +114,17 @@ compression ratio. The only cost is a new dependency.
 
 ---
 
-## What implementation would touch
+## Implementation
 
-If this feature is built, the changes are confined to
-`webserver/hokku_server/image_manager_abstract.py`:
+Confined to `python/hokku/webserver/image_manager_abstract.py`:
 
-- `_PANEL_SUFFIX` — change extension (e.g. `_panel.bin.zst`) so the scrubber
-  recognises the new format and old uncompressed files are treated as orphans
-  and cleaned up automatically.
-- `_on_render_done` — compress `panel_bytes` before `write_bytes()`.
-- `panel_bytes()` — decompress after `read_bytes()`, then validate
-  `len(decompressed) == TOTAL_BYTES`.
-- `_KNOWN_SUFFIXES` — add the new suffix.
+- `_PANEL_SUFFIX = "_panel.bin.zst"`, listed in `_KNOWN_SUFFIXES`, so old
+  uncompressed files are orphans and the scrubber removes them.
+- `_on_render_done` writes `zstd.compress(panel_bytes, 1)`.
+- `panel_bytes_for_model_orientation()` decompresses, then checks the length
+  against the model's `Display.total_bytes`; a mismatch deletes the file and
+  re-queues the render.
 
-No changes are needed in the Flask layer, the ESP32 firmware, or the render
-worker — the panel bytes are decompressed in memory before being sent over HTTP,
-so the wire format is unchanged.
+The Flask layer, the firmware and the render worker are untouched — the panel
+bytes are decompressed in memory before being sent over HTTP, so the wire
+format is unchanged.

@@ -10,7 +10,7 @@ without putting a meter back on glass. Reproducing it costs roughly 17 hours of
 panel time spread across 20 human-attended calibration cycles, so it is stored
 rather than regenerated.
 
-Structured and measured the same way as the [Bigme F7's campaign](../../bigme_f7/measurements/data/)
+Structured and measured the same way as the [Bigme F7's campaign](../../../bigme_f7/measurements/data/)
 — same spec generator, same runner, same instrument protocol — so the two
 datasets are directly comparable field-for-field. See `findings.md` in the
 parent directory for the write-up and the head-to-head numbers.

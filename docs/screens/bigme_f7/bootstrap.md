@@ -6,7 +6,7 @@ else — firmware updates, config — happens **over-the-air** ([`ota.md`](ota.m
 never needs USB again.
 
 It is a **fully pure-Python** procedure — no vendor tool required — driven by
-`tools/f7_initial_flasher.py`. **Proven end-to-end 2026-07-07** on unit 6000135.
+`tools/f7_initial_flasher.py`. **Proven end-to-end 2026-07-07.**
 
 ## Why USB (and the entry trick)
 
@@ -41,16 +41,17 @@ python tools/f7_initial_flasher.py --port COM7
    the power button**, and repeat until it prints `BROM SYNC CAUGHT`. This is the
    only step that needs a physical action.
 2. **Write our firmware (automatic).** The flasher hands the in-BROM device to the
-   validated `flash_slot0` write: app-chain into **slot 0 only**, read-back verified,
-   the A/B cfg flipped to seq0 **last**, and the **bootloader + slot 1 left
-   untouched**. Nothing outside slot 0 + its cfg sector is written.
+   validated `flash_slot` write: app-chain into the **inactive** slot (the one the
+   A/B cfg says the unit is not booting; slot 0 if no cfg is readable), read-back
+   verified, the A/B cfg flipped to it **last**. The **bootloader and the running
+   slot are left untouched**; nothing outside the target slot + its cfg sector is
+   written.
 3. **Power-cycle to boot — this means a LONG-PRESS, not a replug.** `sys_reboot`
-   only re-enters BROM on this chip, so the flasher does **not** auto-reboot.
-   With a charged battery a USB unplug/replug does **not** remove power: the SoC
-   keeps running off the pack, the PRCM domain holds the sticky boot flag, and
-   the unit drops straight back into the BROM on every reset. **Long-press the
-   power button until it powers off, then short-press to power on.** (Confirmed
-   2026-07-28: three replugs left it in the BROM; one long-press booted it.) The e-paper stays on its old image until WiFi is set (it only
+   only re-enters BROM on this chip, so the flasher does **not** auto-reboot, and
+   with a charged battery a USB replug is not a power cycle
+   ([`hardware_facts.md`](hardware_facts.md#power-button)). **Long-press the power
+   button until the LED goes out**; the unit restarts on its own (if it stays off,
+   short-press power). The e-paper stays on its old image until WiFi is set (it only
    redraws once it can fetch an image), so use the console to confirm the boot.
 4. **Provision over the UART console** (115200) — no persistent WiFi exists yet:
    ```
@@ -72,7 +73,7 @@ python tools/f7_initial_flasher.py --port COM7
 
 - `--phoenixmc` — the vendor GUI catches the BROM (driven headlessly via
   `pywinauto`), is then killed to free the port, and the in-BROM device is handed to
-  the same `flash_slot0` write.
+  the same `flash_slot` write.
 - `--full <oem_dump>` — vendor-tool full-erase + write of a composed 4 MB image (OEM
   base + our app in slot 0 + cfg→seq0). Momentarily blanks the bootloader during the
   erase, so it's the last resort.
@@ -82,10 +83,11 @@ python tools/f7_initial_flasher.py --port COM7
 The "Flash a screen" page also drives this bootstrap. Scan for devices, pick the
 F7 (recognised by the CH340 VID/PID — it shows a **Bootstrap F7** panel instead of
 the ESP32 form), enter the **Wi-Fi + screen name**, and press **Bootstrap F7**. The
-server writes slot 0 via the identical `flash_slot0`, then **provisions Wi-Fi/config
-over the console** for you (see below), streaming progress into the log with a
-**Cancel** button. It's the same one-slot job as the ESP32 flash (scanning is
-refused while it runs).
+server writes the inactive slot via the identical `flash_slot`, writes the server URL
+and screen name into the config sector over the **same BROM session**, and — for a
+fresh unit — sets Wi-Fi over the console after boot (see below), streaming progress
+into the log with a **Cancel** button. It's the same one-slot job as the ESP32
+flash (scanning is refused while it runs).
 
 Wi-Fi provisioning caveats: the F7 supports a **single** network (no fallback yet),
 and because the console tokenizer splits on whitespace, the **SSID, password, and
@@ -105,19 +107,17 @@ Entry is two-phase, so the physical dance is usually unnecessary:
 
 So a stock unit needs the replug+press; a unit already on our firmware doesn't.
 
-After the write, if you supplied Wi-Fi/config the log asks you to **power-cycle** the
-unit (needed to boot on this chip regardless) — a **long-press** until the LED goes
-out, never a USB replug (see step 3 above; a replug-only prompt is what stranded a
-unit in the BROM in issue #44). Re-confirmed on 6000135 on 2026-09-27: a fast replug
-left it in the BROM; a long-press until the LED went out booted it, with the unit
-powering back on by itself (USB connected) — no second press needed. The server then waits for the console
-to come up and writes `cfg server`/`cfg name`/`cfg save` + `wifi <ssid> <psk>`
-(password never logged), and briefly watches for the join + first server POST.
+After the write the log asks you to **boot** the unit — a **long-press** until the
+LED goes out, never a USB replug (step 3 above; a replug-only prompt is what
+stranded a unit in the BROM in issue #44). For a fresh unit the server then waits
+for the console and sends `wifi <ssid> <psk>` (password never logged), and briefly
+watches for the join + first server POST. A unit that already ran Hokku firmware
+keeps its Wi-Fi (sysinfo is not touched by a reflash), so it skips this step.
 
 Server bits: `POST /hokku/api/flash/start_f7` + `/hokku/api/flash/cancel`,
-`hokku/screens/bigme_f7/bootstrap.py` (wraps the `tools/` primitives; only available
-where the dev-tree `tools/` dir is present — it gates on `tooling_available()` and
-returns 503 otherwise, e.g. on a packaged Pi install), and `FlashJobManager.start_f7`.
+`hokku/screens/bigme_f7/bootstrap.py` (wraps the packaged `hokku.common.xr872`
+primitives, so it works on an appliance install too; 503 only if pyserial or the
+bundled F7 image is missing), and `FlashJobManager.start_f7`.
 
 ## Reversing it (back to stock)
 

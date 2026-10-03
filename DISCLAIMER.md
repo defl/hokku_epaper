@@ -119,11 +119,12 @@ included.
   8080 on your network can view, upload and delete photos and
   reconfigure your frames. This is deliberate for a home appliance on
   a trusted LAN — do not expose it to the internet.
-- The image server stores a `database.json` on disk tracking per-image
-  and per-screen usage (show counts, last-seen timestamps, IP
-  addresses, full `X-Frame-State` dicts). Treat this as sensitive
-  local telemetry if you care.
-- No data is transmitted off your local network by this project — it
-  makes no outbound requests at all. The stock firmware on these
+- The image server stores per-image and per-screen usage on disk
+  (`image_manager.json`, `serve_scheduler.json`: show counts, last-seen
+  timestamps, IP addresses, full `X-Frame-State` dicts). Treat this as
+  sensitive local telemetry if you care.
+- No data is transmitted off your local network by this project. The
+  only outbound request is to the GitHub Releases API, and only when
+  you click *Check GitHub for firmware*. The stock firmware on these
   frames did talk to external servers; this project exists
   specifically to replace that behaviour.

@@ -1684,9 +1684,9 @@ def create_app(
         """Bootstrap a fresh Bigme F7 (XR872) into Hokku firmware over USB.
 
         Catches the mask-BROM (the operator power-cycles with a USB replug + power
-        press) and writes slot 0 via the same validated ``flash_slot`` — bootloader
-        and OEM slot 1 untouched. Wi-Fi/config are provisioned afterward over the
-        device console, not here. Progress polls the shared ``/flash/status``."""
+        press) and writes the inactive A/B slot via the same validated ``flash_slot`` —
+        bootloader and running slot untouched. Optional Wi-Fi/name/server provisioning
+        follows. Progress polls the shared ``/flash/status``."""
         if not bigme_bootstrap.tooling_available():
             logger.error("F7 bootstrap requested but tools/ flash primitives are absent")
             return jsonify({"error": "Bigme F7 flash tooling is not available on this server"}), 503

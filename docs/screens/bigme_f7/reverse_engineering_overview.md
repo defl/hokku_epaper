@@ -13,7 +13,7 @@ See [`hardware_facts.md`](hardware_facts.md) for the hardware reference.
 ## Current Status
 
 - [x] SoC identified: XRADIOTECH XR872AT (from FCC internal photo)
-- [x] Display identified: E Ink Spectra 6 ACeP, 7.3", 800×480 (EK79655)
+- [x] Display identified: E Ink Spectra 6, 7.3", 800×480 (EK79655)
 - [x] Battery identified: U255671P 1300mAh; voltage sense = ADC ch4/PA14
 - [x] PCB photographed: FCC filing internal photos (L-shaped board)
 - [x] Toolchain: PhoenixMC (UART), pure-Python `xr872_flasher` (BROM), CH341A (SPI)

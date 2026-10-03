@@ -15,7 +15,7 @@ Only confirmed information lives here. Inferences and unverified items belong in
 - **Product page**: https://www.eink.com/product/detail/EL133UF1
 - **Technology**: E Ink Spectra 6 (NOT ACeP) — 6 primary colors via microcup with 4 particle types
 - **Controller**: UC8179C
-- **Resolution**: 1600(H)×1200(V) total, dual-panel: each panel is 600 columns × 1600 rows
+- **Resolution**: 1200×1600 total, dual-panel: each panel is 600 columns × 1600 rows, split left/right (see Panel arrangement below)
 - **TRES register**: {0x04,0xB0,0x03,0x20} → 0x04B0=1200, 0x0320=800. This is the logical resolution the controller uses internally; the dual-gate panel hardware maps 1200×800 logical pixels to 600×1600 physical pixels (each logical row of 1200 feeds two physical rows of 600 via top/bottom gate drivers)
 - **Pixel density**: 150 ppi
 - **Active area**: 202.8mm × 270.4mm
