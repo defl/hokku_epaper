@@ -35,32 +35,27 @@ ESP-IDF:       v5.2.2 (same as v2.0.19)
 Source path:   D:/Project/ESP32/Eink/ (same)
 ```
 
-### Files in `.private/v2.0.26_jun20/`
+### Extracted segments
 
-```
-ota_0_v2.0.19_apr21_inactive.bin   — the old April build, no longer active
-ota_1_v2.0.26_jun20_ACTIVE.bin     — the June build that's running
-otadata.bin                         — OTA slot selector showing seq=2
-drom.bin  (@ 0x3c100020)
-irom.bin  (@ 0x42000020)
-iram.bin  (@ 0x40374000)
-seg_0 through seg_6 .bin            — raw per-segment extractions
-```
+Same layout as v2.0.19: the June build sits in `ota_1` (otadata seq 2) with the
+April build left inactive in `ota_0`. Segments were extracted at the same bases.
 
 ---
 
 ## Ghidra project
 
-`.private/ghidra_proj/hokku_jun20.gpr` is a Ghidra 12.0.4 project with the `ota_1` image pre-loaded and analyzed. Memory regions are configured via `.private/ghidra_scripts/SetupESP32S3Memory.java` which maps:
+A Ghidra 12.0.4 project holds the `ota_1` image, with memory mapped as:
 
-- `drom.bin` at `0x3c100020`
-- `irom.bin` at `0x42000020`
-- `iram.bin` at `0x40374000`
+- DROM at `0x3c100020`
+- IROM at `0x42000020`
+- IRAM at `0x40374000`
 - plus the two DRAM segments at their correct bases
 
-`.private/ghidra_scripts/DumpDisplayFunctions.java` is the post-analysis script that walks a list of string-referenced functions, finds each function by its reference to a known string (`"Write PON"`, `"TSC Data"`, `"app_spi_init"`, etc.), and dumps the decompilation. Its output is `.private/ghidra_output_jun20.txt` — the primary artifact this document is built on.
-
-`.private/ghidra_extra.txt` holds decomps for a few helper functions (`hardware_reset`, `ctrl_pin_setter`, `vTaskDelay_ms`, `epaper_cmd_data`) that the main script missed because they're referenced indirectly.
+A post-analysis script finds each display function by its reference to a known
+string (`"Write PON"`, `"TSC Data"`, `"app_spi_init"`, etc.) and dumps its
+decompilation; that output is what this document is built on. A few helpers
+(`hardware_reset`, `ctrl_pin_setter`, `vTaskDelay_ms`, `epaper_cmd_data`) are
+referenced indirectly and were decompiled separately.
 
 ---
 

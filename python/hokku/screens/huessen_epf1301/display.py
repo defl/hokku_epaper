@@ -28,6 +28,7 @@ class HuessenEpf1301Display(Display):
     panel_rotated = True  # portrait 1200×1600 memory, mounted landscape
 
     # Measured RGB values of the six on-panel inks (used for Lab→palette LUTs).
+    # Source: aitjcize/esp32-photoframe main/color_palette.c (MIT).
     palette_measured_rgb = np.array(
         [
             [2, 2, 2],  # 0 black

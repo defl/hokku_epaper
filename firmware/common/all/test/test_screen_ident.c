@@ -7,10 +7,10 @@
 
 static void test_mac_format(void)
 {
-    const uint8_t mac[6] = {0x18, 0x9E, 0x2D, 0x0A, 0xB7, 0x05};
+    const uint8_t mac[6] = {0x02, 0x0A, 0xBC, 0x0D, 0xE0, 0x05};
     char out[HOKKU_MAC_STR_LEN];
     hokku_mac_format(mac, out, sizeof(out));
-    CHECK(strcmp(out, "18:9e:2d:0a:b7:05") == 0, "mac: lowercase, colon-separated, zero-padded");
+    CHECK(strcmp(out, "02:0a:bc:0d:e0:05") == 0, "mac: lowercase, colon-separated, zero-padded");
 }
 
 static void test_mac_zero_is_unknown(void)
