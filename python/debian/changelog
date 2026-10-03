@@ -1,3 +1,10 @@
+hokku-server (4.0.1~dev.96-1) unstable; urgency=medium
+
+  * DISCLAIMER: correct palette attribution (esp32-photoframe, MIT;
+    epdoptimize, Apache-2.0). Reverse-engineering docs tidied.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 03 Oct 2026 10:13:44 -0500
+
 hokku-server (4.0.1~dev.95-1) unstable; urgency=medium
 
   * Docs: beta 4 changelog; README, manual and screen docs brought in line

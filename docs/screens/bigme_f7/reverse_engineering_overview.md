@@ -116,9 +116,5 @@ App binary likely loads to SRAM at 0x00200000 and executes from flash XIP at 0x1
 
 ## Files
 
-Private artifacts go in `.private/`:
-- Raw flash dump: `flash_dump_<date>.bin`
-- Extracted sections: `extracted/bootloader.bin`, `extracted/app.bin`, `extracted/wlan_fw.bin`
-- Boot log capture: `uart_boot_log_<date>.txt`
-- Analysis scripts: `analyze_*.py`
-- Ghidra project: `ghidra_proj/`
+Private artifacts (flash dumps, extracted sections, boot logs, analysis scripts,
+the Ghidra project) stay in `.private/`.

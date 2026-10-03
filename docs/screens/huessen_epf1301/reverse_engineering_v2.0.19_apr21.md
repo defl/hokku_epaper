@@ -32,29 +32,13 @@ Partition table (same across both stock versions):
 | `ota_1` | `0x00190000` | 1.5 MB | App slot 1. |
 | `imagedata` | `0x00310000` | 12 MB | FAT filesystem for cached images. |
 
-### Files in `.private/v2.0.19_apr21/`
+### Extracted segments
 
-```
-ota_0.bin                        — app partition image (1.5 MB)
-bootloader.bin                   — 32 KB standard ESP-IDF v5.2.2 bootloader
-drom.bin  (@ 0x3c100020)         — read-only data segment (~246 KB)
-irom.bin  (@ 0x42000020)         — instruction ROM segment (~1 MB)
-iram.bin  (@ 0x40374000)         — IRAM (ISRs and critical code, ~100 KB)
-dram_1.bin, dram_3.bin           — initialized data segments
-seg_0 through seg_6 .bin         — raw per-segment extractions (address in filename)
-```
-
-Scratch notes from the initial analysis pass:
-
-```
-ANALYSIS.md        — first pass, several claims that didn't hold up
-ERRATA.md          — self-falsification of ANALYSIS.md (honest corrections)
-FINAL_FINDINGS.md  — what survived
-display_init_disasm.txt, app_main_disasm.txt, gpio_power_analysis.txt
-analyze_app_main.py, analyze_v2.py, analyze_v3.py  — Capstone scripts
-```
-
-Treat `ANALYSIS.md` and `ERRATA.md` as historical context only — the conclusions there are partly wrong (see "Things we got wrong during the v2.0.19 analysis" below). `FINAL_FINDINGS.md` is the consolidated truth, and this document supersedes it.
+The app partition was split into per-segment images for Ghidra: DROM at
+`0x3c100020`, IROM at `0x42000020`, IRAM at `0x40374000`, plus the initialised
+DRAM segments. The bootloader is a standard ESP-IDF v5.2.2 one. Early scratch
+analysis was partly wrong (see "Things we got wrong during the v2.0.19
+analysis" below); this document supersedes it.
 
 ---
 

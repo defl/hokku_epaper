@@ -370,7 +370,7 @@ static void spi_init(void)
 
 /* Matches the original firmware's hardware_reset at IROM 0x4200b984:
  *   RST LOW 100ms, RST HIGH 100ms, then wait for BUSY before any cmd.
- * See .private/boot_analysis/FINAL_FINDINGS.md. Our previous
+ * See docs/screens/huessen_epf1301/reverse_engineering_v2.0.26_jun20.md. Our previous
  * 20ms / 20ms / 200ms (no BUSY wait) sequence was the leading suspect
  * for why the display got stuck in half-rendered states that only
  * reflashing the original firmware reliably cleared. */
@@ -389,7 +389,7 @@ static void epaper_init_panel(void)
 {
     /* Init sequence matches the June 2025 E_Frame v2.0.26 firmware (IROM
      * 0x4200b9e8), extracted by Ghidra decompilation of the factory dump
-     * currently running on the device. See .private/ANALYSIS_FINAL.md.
+     * currently running on the device. See docs/screens/huessen_epf1301/reverse_engineering_v2.0.26_jun20.md.
      *
      * Differences from the April 2025 v2.0.19 sequence we used previously:
      *   - cmd_00 (PANEL_SETTING):        0xDF 0x69 -> 0xDF 0x6B  (bit flip)
@@ -482,7 +482,7 @@ static void epaper_send_panel(int ctrl_pin, const uint8_t *image)
 /* Send 480K per panel and refresh. ctrl1_data and ctrl2_data are each 480K.
  *
  * Structure mirrors display_update() from the original firmware
- * (IROM 0x4200acac, disassembled in .private/boot_analysis/FINAL_FINDINGS.md):
+ * (IROM 0x4200acac; see docs/screens/huessen_epf1301/reverse_engineering_v2.0.26_jun20.md):
  *
  *   gpio_set_level(17, 1)       ; raise display rail
  *   vTaskDelay(10ms)
@@ -618,7 +618,7 @@ static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_
 
     /* Step 7: post-refresh shutdown sequence.  Matches the June 2025
      * original firmware's display_update() at IROM 0x4200acb0 byte-for-
-     * byte (Ghidra decompilation, .private/ANALYSIS_FINAL.md).
+     * byte (Ghidra decompilation; see reverse_engineering_v2.0.26_jun20.md).
      *
      * First drive all SPI / button / indicator pins LOW so there is no
      * residual voltage on MOSI/SCLK that could back-bias the UC8179C
