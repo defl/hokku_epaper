@@ -11,12 +11,20 @@ from hokku.webserver.app_config import AppConfig
 
 DEBUG_FAST_REFRESH_SECONDS = 180
 
+#: A slot this close ahead counts as the one being served now. Screens wake a
+#: little early (oscillator drift, rounding), and without this a screen arriving
+#: at 11:59:59 for the 12:00 slot was told to come back in a minute and refreshed
+#: twice.
+EARLY_WAKE_GRACE_SECONDS = 60
+
 
 def calculate_sleep_seconds(config: AppConfig) -> int:
     """Seconds until the next configured refresh time (system local TZ).
 
-    In debug-fast-refresh mode the schedule is bypassed and a flat 180s is
-    used instead. With no times configured, defaults to 6h.
+    A slot less than :data:`EARLY_WAKE_GRACE_SECONDS` ahead is treated as the
+    current one, so the answer is always the slot after it. In debug-fast-refresh
+    mode the schedule is bypassed and a flat 180s is used instead. With no times
+    configured, defaults to 6h.
     """
     if config.debug_fast_refresh:
         return DEBUG_FAST_REFRESH_SECONDS
@@ -32,16 +40,16 @@ def calculate_sleep_seconds(config: AppConfig) -> int:
         wake_times.append((int(s[:2]), int(s[2:])))
     wake_times.sort()
 
-    for h, m in wake_times:
-        candidate = now.replace(hour=h, minute=m, second=0, microsecond=0)
-        if candidate > now:
-            return max(60, int((candidate - now).total_seconds()))
-
-    # All today's slots are past — use tomorrow's first slot.
-    h, m = wake_times[0]
-    tomorrow = now + timedelta(days=1)
-    candidate = tomorrow.replace(hour=h, minute=m, second=0, microsecond=0)
-    return max(60, int((candidate - now).total_seconds()))
+    earliest = now + timedelta(seconds=EARLY_WAKE_GRACE_SECONDS)
+    # Today, then tomorrow; the day after covers a lone slot that falls inside
+    # the grace window just after midnight.
+    for day in range(3):
+        base = now + timedelta(days=day)
+        for h, m in wake_times:
+            candidate = base.replace(hour=h, minute=m, second=0, microsecond=0)
+            if candidate > earliest:
+                return int((candidate - now).total_seconds())
+    raise AssertionError("unreachable: a configured slot always recurs within 2 days")
 
 
 def format_duration_human(minutes: float) -> str:
