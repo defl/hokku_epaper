@@ -26,7 +26,10 @@ What one run does, in order:
   7. Optionally clears the classifier and render caches and waits for every
      picture to be re-rendered (the same as Admin -> "Clear caches and
      reconvert"). On a Pi Zero 2 W that takes a while for a large library.
-  8. Prints the rollback command.
+  8. Lists frames whose firmware is older than what the new release serves
+     and offers to tick "Update firmware on next refresh" for each, so they
+     update over the air when they next wake up.
+  9. Prints the rollback command.
 
 With ``--restore`` it installs the chosen release and then puts a backup made
 by step 4 back in place, which is a byte-for-byte rollback of settings, photos
@@ -49,6 +52,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -529,25 +533,72 @@ def reconvert(base: str, mode: str, timeout: float, assume_yes: bool, dry_run: b
         time.sleep(5)
 
 
-def report_firmware(base: str, dry_run: bool) -> None:
+@dataclass
+class FrameFirmware:
+    name: str
+    model: str
+    have: str
+    want: str
+    ota_capable: bool
+    ota_pending: bool
+
+
+def frame_firmware(status: dict[str, Any]) -> list[FrameFirmware]:
+    """Frames whose firmware is older than what the server now serves for their model."""
+    served = status.get("bundled_firmware_versions") or {}
+    out = []
+    for name, s in sorted((status.get("screens") or {}).items()):
+        model = s.get("screen_model") or ""
+        want = served.get(model)
+        have = (s.get("state") or {}).get("fw") or s.get("firmware_version")
+        if want and have and compare_versions(want, have) > 0:
+            out.append(
+                FrameFirmware(
+                    name,
+                    model,
+                    have,
+                    want,
+                    bool(s.get("ota_capable")),
+                    bool(s.get("ota_pending")),
+                )
+            )
+    return out
+
+
+def update_firmware(base: str, mode: str, assume_yes: bool, dry_run: bool) -> None:
+    """Report served firmware and offer to tick "Update firmware on next refresh"
+    (``POST /hokku/api/screens/<name>/update``) for each frame that is behind."""
+    print("\n== Frame firmware")
     if dry_run:
+        print("  (dry run) would offer an over-the-air update to frames on older firmware")
         return
     st = api(base, "/hokku/api/status")
-    bundled = st.get("bundled_firmware_versions") or {}
-    print("\n== Frame firmware")
+    served = st.get("bundled_firmware_versions") or {}
     print(
         "  Served firmware: "
-        + (", ".join(f"{m} {v}" for m, v in sorted(bundled.items())) or "unknown")
+        + (", ".join(f"{m} {v}" for m, v in sorted(served.items()) if v) or "unknown")
     )
-    for name, s in sorted((st.get("screens") or {}).items()):
-        want = bundled.get(s.get("screen_model") or "")
-        have = s.get("firmware_version")
-        flag = (
-            "  (older: tick 'Update firmware on next refresh')"
-            if want and have and have != want
-            else ""
-        )
-        print(f"  {name}: {s.get('screen_model')} {have}{flag}")
+    behind = frame_firmware(st)
+    if not behind:
+        print("  Every frame is on the served firmware (or hasn't reported a version yet).")
+        return
+    for f in behind:
+        line = f"  {f.name}: {f.model} {f.have} -> {f.want}"
+        if not f.ota_capable:
+            print(f"{line}  (no over-the-air update on this firmware; flash it over USB)")
+        elif f.ota_pending:
+            print(f"{line}  (already set to update on next refresh)")
+        elif mode == "no":
+            print(f"{line}  (skipped, --firmware no)")
+        elif mode == "yes" or confirm(f"{line}: update on its next refresh?", assume_yes):
+            api(
+                base,
+                f"/hokku/api/screens/{urllib.parse.quote(f.name, safe='')}/update",
+                {"enabled": True},
+            )
+            print(f"  {f.name}: will update on its next refresh.")
+        else:
+            print(f"  {f.name}: not scheduled; tick 'Update firmware on next refresh' later.")
 
 
 # ── main ────────────────────────────────────────────────────────────────
@@ -571,6 +622,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=("ask", "yes", "no"),
         default="ask",
         help="clear caches and re-render every picture after the install",
+    )
+    ap.add_argument(
+        "--firmware",
+        choices=("ask", "yes", "no"),
+        default="ask",
+        help="tick 'Update firmware on next refresh' for frames behind the served firmware",
     )
     ap.add_argument("--backup-dir", type=Path, default=DEFAULT_BACKUP_DIR)
     ap.add_argument("--no-backup", action="store_true", help="skip the backup (not recommended)")
@@ -674,7 +731,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.restore:
         report_settings(base, before, args.settings, args.yes, args.dry_run)
         reconvert(base, args.reconvert, args.convert_timeout, args.yes, args.dry_run)
-    report_firmware(base, args.dry_run)
+    update_firmware(base, args.firmware, args.yes, args.dry_run)
 
     print("\nDone.")
     if backup and installed:

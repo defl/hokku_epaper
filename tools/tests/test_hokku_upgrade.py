@@ -138,3 +138,88 @@ class TestApplianceBlocker:
     def test_configured_appliance(self, tmp_path):
         (tmp_path / "setup_complete").touch()
         assert hu.appliance_blocker(tmp_path) is None
+
+
+FW_STATUS = {
+    "bundled_firmware_versions": {"huessen_epf1301": "1.2.27", "seeedstudio_e1004": "1.2.7"},
+    "screens": {
+        "Frame2": {
+            "screen_model": "huessen_epf1301",
+            "firmware_version": "1.2.25",
+            "state": {"fw": "1.2.25", "ota": 1},
+            "ota_capable": True,
+            "ota_pending": False,
+        },
+        "Kitchen": {
+            "screen_model": "seeedstudio_e1004",
+            "firmware_version": "1.2.7",
+            "ota_capable": True,
+        },
+        "Newer": {"screen_model": "seeedstudio_e1004", "firmware_version": "1.2.10"},
+        "Unknown": {"screen_model": None, "firmware_version": "1.0.0"},
+        "Silent": {"screen_model": "huessen_epf1301", "firmware_version": None},
+    },
+}
+
+
+class TestFrameFirmware:
+    def test_only_frames_behind_the_served_version(self):
+        assert hu.frame_firmware(FW_STATUS) == [
+            hu.FrameFirmware("Frame2", "huessen_epf1301", "1.2.25", "1.2.27", True, False)
+        ]
+
+    def test_reported_state_wins_over_last_recorded_version(self):
+        status = {
+            "bundled_firmware_versions": {"huessen_epf1301": "1.2.27"},
+            "screens": {
+                "F": {
+                    "screen_model": "huessen_epf1301",
+                    "firmware_version": "1.2.25",
+                    "state": {"fw": "1.2.27"},
+                }
+            },
+        }
+        assert hu.frame_firmware(status) == []
+
+
+class TestUpdateFirmware:
+    def _run(self, monkeypatch, mode, answer=False, status=FW_STATUS):
+        calls = []
+
+        def fake_api(base, path, body=None, method=None):
+            if path == "/hokku/api/status":
+                return status
+            calls.append((path, body))
+            return {"ok": True, "ota_pending": True}
+
+        monkeypatch.setattr(hu, "api", fake_api)
+        monkeypatch.setattr(hu, "confirm", lambda prompt, assume_yes: answer)
+        hu.update_firmware("http://x", mode, False, False)
+        return calls
+
+    def test_yes_ticks_the_box_for_frames_behind(self, monkeypatch):
+        assert self._run(monkeypatch, "yes") == [
+            ("/hokku/api/screens/Frame2/update", {"enabled": True})
+        ]
+
+    def test_accepted_prompt_ticks_the_box(self, monkeypatch):
+        assert len(self._run(monkeypatch, "ask", answer=True)) == 1
+
+    def test_declined_or_no_leaves_frames_alone(self, monkeypatch):
+        assert self._run(monkeypatch, "ask", answer=False) == []
+        assert self._run(monkeypatch, "no", answer=True) == []
+
+    def test_frame_name_is_escaped(self, monkeypatch):
+        status = {
+            "bundled_firmware_versions": {"huessen_epf1301": "1.2.27"},
+            "screens": {
+                "Living Room/2": {
+                    "screen_model": "huessen_epf1301",
+                    "firmware_version": "1.2.25",
+                    "ota_capable": True,
+                }
+            },
+        }
+        assert self._run(monkeypatch, "yes", status=status) == [
+            ("/hokku/api/screens/Living%20Room%2F2/update", {"enabled": True})
+        ]

@@ -161,6 +161,8 @@ full for that — `--backup-dir` can point it at a USB stick instead. It prints
 the command that rolls back to the old release and that backup. Re-rendering
 the whole library afterwards is optional and takes a while on a Pi Zero 2 W;
 frames keep their current picture and pick up new ones as they are rendered.
+It also offers to tick "Update firmware on next refresh" for every frame on
+older firmware than the new release serves.
 
 ## Default credentials
 

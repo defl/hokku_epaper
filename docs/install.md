@@ -121,7 +121,7 @@ sudo apt install ./hokku-server_*.deb
 
 The package creates a default config at `/var/lib/hokku/config.json` on first start and brings up the web UI at `http://hokku.local:8080/`.
 
-**Upgrading later.** [`tools/hokku_upgrade.py`](../tools/hokku_upgrade.py) lists the releases, then backs up `/var/lib/hokku`, installs the one you pick, shows new settings and how yours differ from the release's defaults, offers to re-render the pictures, and prints a rollback command. The same script upgrades the [appliance](appliance.md#updating-the-server):
+**Upgrading later.** [`tools/hokku_upgrade.py`](../tools/hokku_upgrade.py) lists the releases, then backs up `/var/lib/hokku`, installs the one you pick, shows new settings and how yours differ from the release's defaults, offers to re-render the pictures and to update frames on older firmware over the air on their next refresh, and prints a rollback command. The same script upgrades the [appliance](appliance.md#updating-the-server):
 
 ```bash
 curl -LO https://raw.githubusercontent.com/defl/hokku_epaper/main/tools/hokku_upgrade.py
