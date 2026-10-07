@@ -23,7 +23,7 @@ from hokku.webserver.image_record import ConvertStatus, ImageRecord
 from hokku.webserver.labels import matches_labels
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.screen_config import ScreenConfig
-from hokku.webserver.screen_headers import battery_percent, parse_battery_header
+from hokku.webserver.screen_headers import battery_percent, reported_battery_mv
 
 logger = logging.getLogger(__name__)
 
@@ -438,11 +438,7 @@ class ServeScheduler:
                 cal_ppm if cal_ppm is not None else (existing.cal_ppm if existing else None)
             )
 
-            # Frame-state may carry a more reliable battery reading.
-            if frame_state and isinstance(frame_state.get("bat_mv"), (int, float)):
-                fs_mv = parse_battery_header(str(int(frame_state["bat_mv"])))
-                if fs_mv is not None:
-                    battery_mv = fs_mv
+            battery_mv = reported_battery_mv(battery_mv, frame_state)
 
             bat_pct = None
             bat_mv_value = existing.battery_mv if existing else None

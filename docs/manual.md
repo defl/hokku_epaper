@@ -95,6 +95,12 @@ firmware stays in a second slot and is restored automatically if the new one
 can't reach the server afterwards, so a bad update rolls itself back rather than
 bricking the frame.
 
+A frame whose battery is flat (below 3.40 V, the dashboard's 0 %) is not sent the
+update: the panel runs off the battery even when the frame is plugged in, so it
+couldn't refresh around the update. The update stays scheduled — the Config
+dialog says *Waiting for battery* — and goes ahead on the first check-in with a
+charged battery. A frame that doesn't report its battery is never held.
+
 A frame has to be running Hokku firmware already for this to work — the very
 first install is always over USB. After that, every update can be wireless.
 

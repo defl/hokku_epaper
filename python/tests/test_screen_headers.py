@@ -7,12 +7,15 @@ import pytest
 from hokku.webserver.screen_headers import (
     BATTERY_MV_EMPTY,
     BATTERY_MV_FULL,
+    OTA_MIN_BATTERY_MV,
     battery_percent,
+    ota_battery_too_low,
     parse_battery_header,
     parse_cal_ppm,
     parse_frame_state,
     parse_mac_header,
     parse_screen_model,
+    reported_battery_mv,
 )
 
 # ── parse_mac_header ──────────────────────────────────────────────────────────
@@ -143,6 +146,38 @@ def test_parse_battery_header_at_high_boundary():
 def test_parse_battery_header_float_string_returns_none():
     # Only integer strings accepted.
     assert parse_battery_header("3800.5") is None
+
+
+# ── reported_battery_mv / ota_battery_too_low ─────────────────────────────────
+
+
+def test_reported_battery_prefers_plausible_frame_state():
+    assert reported_battery_mv(3900, {"bat_mv": 3700}) == 3700
+
+
+def test_reported_battery_ignores_implausible_frame_state():
+    assert reported_battery_mv(3900, {"bat_mv": 0}) == 3900
+    assert reported_battery_mv(None, {"bat_mv": 0}) is None
+
+
+def test_reported_battery_without_frame_state():
+    assert reported_battery_mv(3900, None) == 3900
+    assert reported_battery_mv(None, None) is None
+
+
+def test_ota_battery_threshold_is_the_dashboards_empty_point():
+    assert OTA_MIN_BATTERY_MV == BATTERY_MV_EMPTY
+
+
+def test_ota_battery_too_low():
+    assert ota_battery_too_low(2718) is True
+    assert ota_battery_too_low(OTA_MIN_BATTERY_MV - 1) is True
+    assert ota_battery_too_low(OTA_MIN_BATTERY_MV) is False
+    assert ota_battery_too_low(4000) is False
+
+
+def test_ota_battery_missing_reading_does_not_hold():
+    assert ota_battery_too_low(None) is False
 
 
 # ── parse_frame_state ─────────────────────────────────────────────────────────

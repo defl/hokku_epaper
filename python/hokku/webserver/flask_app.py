@@ -75,6 +75,8 @@ from hokku.webserver.resource_budget import (
 )
 from hokku.webserver.resource_limits import detect_memory_limit_bytes
 from hokku.webserver.screen_headers import (
+    OTA_MIN_BATTERY_MV,
+    ota_battery_too_low,
     parse_battery_header,
     parse_cal_ppm,
     parse_config_state,
@@ -83,6 +85,7 @@ from hokku.webserver.screen_headers import (
     parse_frame_state,
     parse_mac_header,
     parse_screen_model,
+    reported_battery_mv,
     screen_name_valid,
 )
 from hokku.webserver.time_utils import calculate_sleep_seconds, format_duration_human
@@ -443,8 +446,20 @@ def create_app(
         # (success can't be confirmed by version). An UPGRADE is re-signalled every
         # poll until the device reports the target version, so a dropped download
         # self-heals — capped at OTA_MAX_ATTEMPTS to bound a genuinely-bad image.
+        # Below OTA_MIN_BATTERY_MV the update stays pending and unsignalled, and
+        # the poll is not an attempt: it goes ahead once the battery recovers.
         if ota_capable and model_fw_version and scheduler.is_ota_pending(screen_name):
-            if scheduler.is_ota_reflash(screen_name):
+            reported_mv = reported_battery_mv(battery_mv, frame_state)
+            if ota_battery_too_low(reported_mv):
+                logger.info(
+                    "Holding OTA for %s [%s] (-> %s): battery %s mV < %d mV",
+                    screen_name,
+                    screen_model,
+                    model_fw_version,
+                    reported_mv,
+                    OTA_MIN_BATTERY_MV,
+                )
+            elif scheduler.is_ota_reflash(screen_name):
                 if scheduler.take_ota_pending(screen_name):
                     response.headers["X-Firmware-Update"] = model_fw_version
                     logger.info(
@@ -1193,6 +1208,8 @@ def create_app(
                 scfg.orientation if scfg.filter_by_orientation else Orientation.NEUTRAL
             )
             screen_peek_orientations.add(peek_orientation)
+            ota_pending = scheduler.is_ota_pending(sname)
+            ota_capable = bool(t.frame_state and t.frame_state.get("ota"))
             screens_payload[sname] = {
                 "mac": t.mac,
                 "cal_ppm": t.cal_ppm,
@@ -1233,8 +1250,19 @@ def create_app(
                 ),
                 "firmware_version": t.firmware_version,
                 "firmware_build": t.firmware_build,
-                "ota_pending": scheduler.is_ota_pending(sname),
-                "ota_capable": bool(t.frame_state and t.frame_state.get("ota")),
+                "ota_pending": ota_pending,
+                "ota_capable": ota_capable,
+                # The battery level a pending update is waiting for, or None when
+                # it isn't held. Judged on the last check-in's own reading, as
+                # serve_binary does, not on an older one.
+                "ota_battery_hold_mv": (
+                    OTA_MIN_BATTERY_MV
+                    if ota_pending
+                    and ota_capable
+                    and t.battery_seen_at == t.last_seen_at
+                    and ota_battery_too_low(t.battery_mv)
+                    else None
+                ),
                 "renamable": t.mac is not None,
                 "ota_error": t.ota_error,
                 "ota_error_at": (

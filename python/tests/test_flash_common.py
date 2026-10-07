@@ -34,6 +34,7 @@ from hokku.webserver.firmware_library import FirmwareStore
 from hokku.webserver.flask_app import OTA_MAX_ATTEMPTS, create_app
 from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
+from hokku.webserver.screen_headers import OTA_MIN_BATTERY_MV
 from hokku.webserver.serve_scheduler import ServeScheduler
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -802,6 +803,105 @@ def test_serve_binary_reflash_same_version_is_one_shot(
     assert client.get("/hokku/screen/", headers=headers).headers.get("X-Firmware-Update") == "9.9.9"
     r = client.get("/hokku/screen/", headers=headers)
     assert "X-Firmware-Update" not in r.headers
+    assert state.scheduler.is_ota_pending("frame-1") is False
+
+
+def _ota_headers(fw: str, battery_mv: int | None) -> dict[str, str]:
+    headers = {
+        "X-Screen-Name": "frame-1",
+        "X-Screen-Model": "huessen_epf1301",
+        "X-Firmware-Version": fw,
+        "X-Frame-State": json.dumps({"fw": fw, "ota": 1}),
+    }
+    if battery_mv is not None:
+        headers["X-Battery-mV"] = str(battery_mv)
+    return headers
+
+
+def test_serve_binary_holds_upgrade_on_low_battery(
+    app_config, make_test_image, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "9.9.9")
+    state = _state_with_image(app_config, make_test_image)
+    client = _client(state, tmp_path)
+    client.post("/hokku/api/screens/frame-1/update", json={"enabled": True})
+
+    # A flat battery: no signal, still pending, and the held polls are not
+    # attempts — more than OTA_MAX_ATTEMPTS of them must not give up.
+    low = _ota_headers("1.0.0", 2718)
+    for _ in range(OTA_MAX_ATTEMPTS + 2):
+        r = client.get("/hokku/screen/", headers=low)
+        assert r.status_code == 200
+        assert "X-Firmware-Update" not in r.headers
+    assert state.scheduler.is_ota_pending("frame-1") is True
+    assert state.scheduler.screens()["frame-1"].ota_error is None
+    screen = client.get("/hokku/api/status").get_json()["screens"]["frame-1"]
+    assert screen["ota_pending"] is True
+    assert screen["ota_battery_hold_mv"] == OTA_MIN_BATTERY_MV
+
+    # Battery recovered: the upgrade goes ahead, as attempt 1 of the full budget.
+    high = _ota_headers("1.0.0", 3900)
+    for _ in range(OTA_MAX_ATTEMPTS):
+        assert client.get("/hokku/screen/", headers=high).headers.get("X-Firmware-Update") == (
+            "9.9.9"
+        )
+    screen = client.get("/hokku/api/status").get_json()["screens"]["frame-1"]
+    assert screen["ota_battery_hold_mv"] is None
+
+
+def test_serve_binary_holds_on_low_frame_state_battery(
+    app_config, make_test_image, tmp_path, monkeypatch
+):
+    # The frame-state bat_mv wins over the header, as it does for the dashboard.
+    monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "9.9.9")
+    state = _state_with_image(app_config, make_test_image)
+    client = _client(state, tmp_path)
+    client.post("/hokku/api/screens/frame-1/update", json={"enabled": True})
+    headers = {
+        **_ota_headers("1.0.0", 3900),
+        "X-Frame-State": json.dumps({"fw": "1.0.0", "ota": 1, "bat_mv": 3000}),
+    }
+    assert "X-Firmware-Update" not in client.get("/hokku/screen/", headers=headers).headers
+    assert state.scheduler.is_ota_pending("frame-1") is True
+
+
+def test_serve_binary_does_not_hold_without_battery_reading(
+    app_config, make_test_image, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "9.9.9")
+    state = _state_with_image(app_config, make_test_image)
+    client = _client(state, tmp_path)
+    client.post("/hokku/api/screens/frame-1/update", json={"enabled": True})
+
+    # A low reading earlier, then a check-in without one (missing or out of
+    # range): the stale reading does not hold the update.
+    client.get("/hokku/screen/", headers=_ota_headers("1.0.0", 2718))
+    for battery in (None, 0):
+        r = client.get("/hokku/screen/", headers=_ota_headers("1.0.0", battery))
+        assert r.headers.get("X-Firmware-Update") == "9.9.9"
+        screen = client.get("/hokku/api/status").get_json()["screens"]["frame-1"]
+        assert screen["ota_battery_hold_mv"] is None
+
+
+def test_serve_binary_reflash_not_consumed_on_low_battery(
+    app_config, make_test_image, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(huessen_epf1301, "bundled_firmware_version", lambda *a, **k: "9.9.9")
+    state = _state_with_image(app_config, make_test_image)
+    client = _client(state, tmp_path)
+    client.get("/hokku/screen/", headers=_ota_headers("9.9.9", 3900))
+    client.post("/hokku/api/screens/frame-1/update", json={"enabled": True})
+    assert state.scheduler.is_ota_reflash("frame-1") is True
+
+    low = _ota_headers("9.9.9", 2718)
+    assert "X-Firmware-Update" not in client.get("/hokku/screen/", headers=low).headers
+    assert "X-Firmware-Update" not in client.get("/hokku/screen/", headers=low).headers
+    assert state.scheduler.is_ota_pending("frame-1") is True
+
+    # Still one-shot once the battery allows it.
+    high = _ota_headers("9.9.9", 3900)
+    assert client.get("/hokku/screen/", headers=high).headers.get("X-Firmware-Update") == "9.9.9"
+    assert "X-Firmware-Update" not in client.get("/hokku/screen/", headers=high).headers
     assert state.scheduler.is_ota_pending("frame-1") is False
 
 

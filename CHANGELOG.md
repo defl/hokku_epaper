@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.0.0 beta 5
+
+### Changed
+
+- **A firmware update waits for a charged battery.** A frame reporting less
+  than 3.40 V (0 %) is not sent a scheduled update; it stays scheduled, the
+  Config dialog says it is waiting for the battery, and it goes ahead on the
+  first check-in above that. The panel runs off the battery even on USB, so an
+  update on a flat cell left the frame unable to refresh.
+
 ## 4.0.0 beta 4
 
 Labels, so one library can feed several frames, and a round of fixes for the

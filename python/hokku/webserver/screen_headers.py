@@ -12,6 +12,13 @@ logger = logging.getLogger(__name__)
 BATTERY_MV_EMPTY = 3400
 BATTERY_MV_FULL = 4100
 
+# A pending firmware update is held while the screen reports less than this.
+# The panel runs off the battery rail, not USB (docs/screens/huessen_epf1301/
+# hardware_facts.md), so a screen updated on a flat cell can't refresh around
+# the update, even while it is plugged in, and the update drains it further.
+# The same 0 % point the dashboard shows.
+OTA_MIN_BATTERY_MV = BATTERY_MV_EMPTY
+
 
 def battery_percent(mv: int | float | None) -> int | None:
     if mv is None or mv <= 0:
@@ -30,6 +37,25 @@ def parse_battery_header(raw: str | None) -> int | None:
     if v < 2000 or v > 5000:
         return None
     return v
+
+
+def reported_battery_mv(header_mv: int | None, frame_state: dict | None) -> int | None:
+    """The battery reading of one check-in: the frame-state ``bat_mv`` when it
+    is plausible (the more reliable of the two), else the X-Battery-mV header
+    value, else None."""
+    if frame_state and isinstance(frame_state.get("bat_mv"), (int, float)):
+        fs_mv = parse_battery_header(str(int(frame_state["bat_mv"])))
+        if fs_mv is not None:
+            return fs_mv
+    return header_mv
+
+
+def ota_battery_too_low(mv: int | None) -> bool:
+    """Whether a pending firmware update must wait for the battery. A screen
+    that reports no plausible reading is not held: the server can't tell a flat
+    cell from firmware that doesn't report one, and holding would strand those
+    screens on their current firmware for good."""
+    return mv is not None and mv < OTA_MIN_BATTERY_MV
 
 
 def parse_firmware_version(raw: str | None) -> str | None:
