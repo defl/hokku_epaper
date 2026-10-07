@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.0.0 beta 5
+
+### Fixed
+
+- **A screen that woke a few seconds before its refresh time refreshed twice**:
+  the server sent it back for a minute instead of to the next slot. A slot
+  less than a minute away now counts as the current one.
+
 ## 4.0.0 beta 4
 
 Labels, so one library can feed several frames, and a round of fixes for the
