@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.0.0 beta 5
+
+### Fixed
+
+- **A screen that woke a few seconds before its refresh time refreshed twice**:
+  the server sent it back for a minute instead of to the next slot. A slot
+  less than a minute away now counts as the current one.
+
 ## 4.0.0 beta 4
 
 Labels, so one library can feed several frames, and a round of fixes for the
@@ -41,9 +49,6 @@ Bigme F7 and the Seeed E1004, mostly reported by people running them.
   (`1A86:7522`), and once found it showed as having no Hokku firmware (#45).
 - **Phone portraits were treated as landscape**: wrong orientation filter,
   preview frame and listed size (#40).
-- **A screen that woke a few seconds before its refresh time refreshed twice**:
-  the server sent it back for a minute instead of to the next slot. A slot
-  less than a minute away now counts as the current one.
 - **A USB flash ignored the firmware library's pin** and always installed the
   bundled firmware, while over-the-air updates used the pin. *Flash a screen*
   now installs the pinned version too, and the scan judges "up to date"
