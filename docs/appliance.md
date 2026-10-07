@@ -145,6 +145,23 @@ Your photos and settings are left alone. The USB data port returns to serial-
 console duty for the duration of setup, and goes back to being a frame port when
 you finish the wizard again.
 
+### Updating the server
+
+A new release doesn't need a new SD card. With SSH enabled in the wizard, run
+this on the Pi:
+
+```sh
+curl -LO https://raw.githubusercontent.com/defl/hokku_epaper/main/tools/hokku_upgrade.py
+sudo python3 hokku_upgrade.py
+```
+
+Pick a release from the list. The script backs up `/var/lib/hokku` (photos,
+settings, renders) to `/var/backups/hokku` first and stops if the card is too
+full for that — `--backup-dir` can point it at a USB stick instead. It prints
+the command that rolls back to the old release and that backup. Re-rendering
+the whole library afterwards is optional and takes a while on a Pi Zero 2 W;
+the pictures keep showing in the meantime.
+
 ## Default credentials
 
 The image ships with a default system login:

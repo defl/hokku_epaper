@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Upgrade (or downgrade / roll back) a Debian ``hokku-server`` install.
 
-Run it on the server itself::
+Run it on the server itself — a Debian / Ubuntu box or the Raspberry Pi
+appliance (Pi OS is Debian; the package is ``Architecture: all``)::
 
     sudo python3 hokku_upgrade.py                 # pick a release from a list
-    sudo python3 hokku_upgrade.py --version v4.0.0-beta4
+    sudo python3 hokku_upgrade.py --tag v4.0.0-beta4
     python3 hokku_upgrade.py --list               # releases + tags, no changes
-    sudo python3 hokku_upgrade.py --version v4.0.0-beta3 --restore BACKUP.tgz   # roll back
+    sudo python3 hokku_upgrade.py --tag v4.0.0-beta3 --restore BACKUP.tar   # roll back
 
 What one run does, in order:
 
@@ -15,20 +16,25 @@ What one run does, in order:
   2. Prints the chosen release's "Upgrading" notes and asks for confirmation.
   3. Downloads the ``.deb`` and checks its SHA-256 against the release.
   4. Stops the service and tars ``/var/lib/hokku`` (plus ``upload_dir`` /
-     ``cache_dir`` if they live elsewhere) into ``--backup-dir``.
-  5. ``apt-get install`` the package (its postinst restarts the service).
+     ``cache_dir`` if they live elsewhere) into ``--backup-dir``, after
+     checking the disk has room for it — an SD card often does not.
+  5. ``apt-get install`` the package. Its postinst pip-installs anything the
+     new release needs that isn't on the box yet, so the server needs internet.
   6. Waits for the server, then reports settings that are new in this release
      and where the pipeline settings differ from the release's shipped
      defaults, and optionally adopts those defaults.
-  7. Clears the classifier and render caches and waits for every picture to
-     be re-rendered (the same as Admin -> "Clear caches and reconvert").
+  7. Optionally clears the classifier and render caches and waits for every
+     picture to be re-rendered (the same as Admin -> "Clear caches and
+     reconvert"). On a Pi Zero 2 W that takes a while for a large library.
   8. Prints the rollback command.
 
 With ``--restore`` it installs the chosen release and then puts a backup made
 by step 4 back in place, which is a byte-for-byte rollback of settings, photos
 and renders.
 
-Stdlib only: it runs with the ``python3`` the package already depends on.
+Stdlib only, and standalone on purpose: it runs on the server with the
+``python3`` the package already depends on, where there is no repo checkout to
+import ``release_cache`` from.
 """
 
 from __future__ import annotations
@@ -41,7 +47,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tarfile
 import time
 import urllib.error
 import urllib.request
@@ -49,7 +54,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SUMMARY = "Upgrade (or downgrade / roll back) a Debian hokku-server install."
 DEFAULT_REPO = "defl/hokku_epaper"
 PACKAGE = "hokku-server"
 SERVICE = "hokku-server"
@@ -57,8 +61,15 @@ STATE_DIR = Path("/var/lib/hokku")
 CONFIG_PATH = STATE_DIR / "config.json"
 DEFAULT_BACKUP_DIR = Path("/var/backups/hokku")
 DOWNLOAD_DIR = Path("/var/cache/hokku-upgrade")
-# Regenerable and large; restoring a backup without it only costs one re-JIT.
-BACKUP_EXCLUDE = ("numba_cache",)
+# Regenerable, so not backed up — but kept across a restore: on a Pi Zero 2 W
+# re-JITting the dither kernel takes minutes of the only fast core.
+NUMBA_CACHE = STATE_DIR / "numba_cache"
+# The appliance's first-boot wizard. While its sentinel is missing the
+# hokku-server unit's ConditionPathExists keeps the server from starting.
+INSTALLER_DIR = Path("/var/lib/hokku-installer")
+SETUP_SENTINEL = INSTALLER_DIR / "setup_complete"
+# Headroom on top of the backup's own size, so the backup can't fill the disk.
+FREE_SPACE_MARGIN = 200 * 1024**2
 PIPELINES = {
     "image_config_default": "default_general",
     "image_config_bw": "default_bw",
@@ -83,7 +94,7 @@ class Release:
         return tag_to_upstream_version(self.tag)
 
 
-# ---------- pure helpers (unit tested) ----------
+# ── pure helpers (unit tested) ──────────────────────────────────────────
 
 
 def tag_to_upstream_version(tag: str) -> str:
@@ -181,6 +192,26 @@ def preset_payload(presets: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def backup_command(dest: Path, paths: list[Path]) -> list[str]:
+    """``tar`` invocation for the backup. Uncompressed: the bulk is JPEGs and
+    rendered panels that don't shrink, and gzip on a Pi Zero's A53 would double
+    the downtime for nothing."""
+    rel = [str(p).lstrip("/") for p in paths]
+    exclude = str(NUMBA_CACHE).lstrip("/")
+    return ["tar", "-C", "/", "--exclude", exclude, "-cpf", str(dest), *rel]
+
+
+def appliance_blocker(installer_dir: Path = INSTALLER_DIR) -> str | None:
+    """Why the server can't be started right now on an appliance, or None."""
+    if installer_dir.is_dir() and not (installer_dir / SETUP_SENTINEL.name).exists():
+        return (
+            "this appliance is in setup mode (no "
+            f"{installer_dir / SETUP_SENTINEL.name}), so hokku-server won't start; "
+            "finish the Hokku Setup wizard first"
+        )
+    return None
+
+
 def compare_versions(a: str, b: str) -> int:
     """dpkg ordering of two Debian versions: -1, 0 or 1."""
 
@@ -194,7 +225,7 @@ def compare_versions(a: str, b: str) -> int:
     return -1 if lt else 1
 
 
-# ---------- GitHub ----------
+# ── GitHub ──────────────────────────────────────────────────────────────
 
 
 def _gh_get(url: str) -> Any:
@@ -214,7 +245,7 @@ def fetch_tags(repo: str) -> list[str]:
     return [t["name"] for t in _gh_get(f"https://api.github.com/repos/{repo}/tags?per_page=100")]
 
 
-# ---------- local system ----------
+# ── local system ────────────────────────────────────────────────────────
 
 
 def run(cmd: list[str], dry_run: bool = False, check: bool = True) -> int:
@@ -285,9 +316,12 @@ def download(rel: Release, dry_run: bool) -> Path:
         return dest
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".part")
+    h = hashlib.sha256()
     with urllib.request.urlopen(rel.deb_url, timeout=60) as r, open(tmp, "wb") as f:
-        shutil.copyfileobj(r, f)
-    sha = hashlib.sha256(tmp.read_bytes()).hexdigest()
+        for chunk in iter(lambda: r.read(1 << 16), b""):
+            h.update(chunk)
+            f.write(chunk)
+    sha = h.hexdigest()
     if rel.deb_sha256 and sha != rel.deb_sha256:
         tmp.unlink()
         sys.exit(
@@ -309,22 +343,37 @@ def backup_paths(config: dict[str, Any]) -> list[Path]:
     return paths
 
 
+def dir_size(path: Path) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        if Path(root) == NUMBA_CACHE or NUMBA_CACHE in Path(root).parents:
+            continue
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(root, f)).st_size
+            except OSError:
+                pass
+    return total
+
+
 def make_backup(backup_dir: Path, version: str, config: dict[str, Any], dry_run: bool) -> Path:
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    dest = backup_dir / f"hokku-{version}-{stamp}.tgz"
+    dest = backup_dir / f"hokku-{version}-{stamp}.tar"
     paths = backup_paths(config)
     print(f"\n== Back up {', '.join(map(str, paths))} -> {dest}")
+    need = sum(dir_size(p) for p in paths)
+    probe = backup_dir if backup_dir.exists() else backup_dir.parent
+    free = shutil.disk_usage(probe).free
+    print(f"  {need / 1024**2:.0f} MB to copy, {free / 1024**2:.0f} MB free on {probe}")
+    if need + FREE_SPACE_MARGIN > free:
+        sys.exit(
+            "error: not enough free space for the backup; point --backup-dir at a "
+            "bigger disk (e.g. a USB stick) or pass --no-backup"
+        )
     if dry_run:
         return dest
     backup_dir.mkdir(parents=True, exist_ok=True)
-
-    def skip(ti: tarfile.TarInfo) -> tarfile.TarInfo | None:
-        rel = Path("/" + ti.name).relative_to("/")
-        return None if any(part in BACKUP_EXCLUDE for part in rel.parts[:4]) else ti
-
-    with tarfile.open(dest, "w:gz") as tar:
-        for p in paths:
-            tar.add(str(p), arcname=str(p).lstrip("/"), filter=skip)
+    run(backup_command(dest, paths))
     (backup_dir / (dest.name + ".json")).write_text(
         json.dumps(
             {"package_version": version, "paths": [str(p) for p in paths], "created": stamp},
@@ -346,19 +395,23 @@ def restore_backup(backup: Path, dry_run: bool) -> None:
         ] or paths
     run(["systemctl", "stop", SERVICE], dry_run)
     stamp = time.strftime("%Y%m%d-%H%M%S")
+    numba_aside = None
     for p in paths:
         if p.exists():
             aside = p.with_name(f"{p.name}.pre-restore-{stamp}")
             print(f"  move {p} -> {aside}")
             if not dry_run:
                 p.rename(aside)
-    if not dry_run:
-        with tarfile.open(backup, "r:gz") as tar:
-            tar.extractall("/")  # noqa: S202 — our own backup, made by this script
+            if p == STATE_DIR:
+                numba_aside = aside / NUMBA_CACHE.name
+    # tar auto-detects compression, so older .tgz backups restore the same way.
+    run(["tar", "-C", "/", "-xpf", str(backup)], dry_run)
+    if numba_aside and not dry_run and numba_aside.is_dir() and not NUMBA_CACHE.exists():
+        numba_aside.rename(NUMBA_CACHE)
     run(["systemctl", "start", SERVICE], dry_run)
 
 
-# ---------- interactive ----------
+# ── interactive ─────────────────────────────────────────────────────────
 
 
 def print_menu(releases: list[Release], tags: list[str], installed: str | None) -> list[Release]:
@@ -398,7 +451,7 @@ def confirm(prompt: str, assume_yes: bool) -> bool:
     return input(f"{prompt} [y/N] ").strip().lower() in ("y", "yes")
 
 
-# ---------- steps after install ----------
+# ── steps after install ─────────────────────────────────────────────────
 
 
 def report_settings(
@@ -443,8 +496,16 @@ def report_settings(
         print("  Kept current settings.")
 
 
-def regenerate(base: str, timeout: float, dry_run: bool) -> None:
-    print("\n== Regenerate images")
+def reconvert(base: str, mode: str, timeout: float, assume_yes: bool, dry_run: bool) -> None:
+    print("\n== Reconvert pictures")
+    if mode == "no":
+        print("  Skipped (--reconvert no).")
+        return
+    if mode == "ask" and not confirm(
+        "  Clear caches and re-render every picture with this release's pipeline?", assume_yes
+    ):
+        print("  Skipped; Admin -> 'Clear caches and reconvert' does it later.")
+        return
     if dry_run:
         print("  (dry run) POST /hokku/api/classifier/clear, POST /hokku/api/clear_cache, wait")
         return
@@ -489,22 +550,27 @@ def report_firmware(base: str, dry_run: bool) -> None:
         print(f"  {name}: {s.get('screen_model')} {have}{flag}")
 
 
-# ---------- main ----------
+# ── main ────────────────────────────────────────────────────────────────
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=SUMMARY)
-    ap.add_argument(
-        "--repo", default=DEFAULT_REPO, help=f"GitHub repo to install from (default {DEFAULT_REPO})"
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument(
-        "--version", help="release tag to install, e.g. v4.0.0-beta4 (default: pick from a list)"
-    )
+    ap.add_argument("--repo", default=DEFAULT_REPO, help="GitHub repo to install from")
+    ap.add_argument("--tag", help="release tag to install, e.g. v4.0.0-beta4 (default: pick one)")
     ap.add_argument("--list", action="store_true", help="list releases and tags, then exit")
-    ap.add_argument("--settings", choices=("ask", "keep", "defaults"), default="ask",
-                    help="adopt the release's default dither presets (default: ask)")  # fmt: skip
     ap.add_argument(
-        "--no-regenerate", action="store_true", help="skip clearing caches / re-rendering"
+        "--settings",
+        choices=("ask", "keep", "defaults"),
+        default="ask",
+        help="adopt the release's default presets for the three pipelines",
+    )
+    ap.add_argument(
+        "--reconvert",
+        choices=("ask", "yes", "no"),
+        default="ask",
+        help="clear caches and re-render every picture after the install",
     )
     ap.add_argument("--backup-dir", type=Path, default=DEFAULT_BACKUP_DIR)
     ap.add_argument("--no-backup", action="store_true", help="skip the backup (not recommended)")
@@ -512,15 +578,22 @@ def main(argv: list[str] | None = None) -> int:
         "--restore",
         type=Path,
         metavar="BACKUP",
-        help="after installing, restore this backup (rollback)",
+        help="after installing, put this backup back in place (rollback)",
     )
     ap.add_argument(
-        "--timeout", type=float, default=600, help="seconds to wait for the server to answer"
+        "--startup-timeout",
+        type=float,
+        default=900.0,
+        help="max seconds to wait for the server to answer (a Pi Zero 2 W may "
+        "re-JIT the dither kernel on first start)",
     )
     ap.add_argument(
-        "--regen-timeout", type=float, default=3600, help="seconds to wait for re-rendering"
+        "--convert-timeout",
+        type=float,
+        default=3600.0,
+        help="max seconds to wait for re-rendering; it carries on in the background",
     )
-    ap.add_argument("-y", "--yes", action="store_true", help="don't ask for confirmation")
+    ap.add_argument("-y", "--yes", action="store_true", help="answer yes to every question")
     ap.add_argument("--dry-run", action="store_true", help="show what would happen, change nothing")
     args = ap.parse_args(argv)
 
@@ -528,6 +601,8 @@ def main(argv: list[str] | None = None) -> int:
         sys.exit("error: this script is for Debian package (.deb) installs")
     if sys.platform != "win32" and not (args.list or args.dry_run) and os.geteuid() != 0:
         sys.exit("error: run with sudo (or use --list / --dry-run)")
+    if not args.list and (why := appliance_blocker()):
+        sys.exit(f"error: {why}")
 
     try:
         releases = fetch_releases(args.repo)
@@ -539,7 +614,7 @@ def main(argv: list[str] | None = None) -> int:
     except urllib.error.URLError as e:
         sys.exit(f"error: cannot reach GitHub: {e.reason}")
     installed = installed_version()
-    if args.list or not args.version:
+    if args.list or not args.tag:
         try:
             tags = fetch_tags(args.repo)
         except urllib.error.URLError:
@@ -549,10 +624,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         target = choose(installable)
     else:
-        target = next((r for r in releases if r.tag == args.version), None)
+        target = next((r for r in releases if r.tag == args.tag), None)
         if target is None or not target.deb_url:
             sys.exit(
-                f"error: no release {args.version!r} with a {PACKAGE} .deb in {args.repo} (try --list)"
+                f"error: no release {args.tag!r} with a {PACKAGE} .deb in {args.repo} (try --list)"
             )
 
     if args.restore and not args.restore.is_file():
@@ -593,13 +668,12 @@ def main(argv: list[str] | None = None) -> int:
     if not args.dry_run:
         if not now or upstream_of(now) != target.upstream_version:
             sys.exit(f"error: expected {target.upstream_version}, dpkg reports {now}")
-        cfg = wait_for_server(base, args.timeout)
+        cfg = wait_for_server(base, args.startup_timeout)
         print(f"  server answering at {base}, version {cfg.get('git_describe')}")
 
     if not args.restore:
         report_settings(base, before, args.settings, args.yes, args.dry_run)
-        if not args.no_regenerate:
-            regenerate(base, args.regen_timeout, args.dry_run)
+        reconvert(base, args.reconvert, args.convert_timeout, args.yes, args.dry_run)
     report_firmware(base, args.dry_run)
 
     print("\nDone.")
@@ -610,12 +684,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         script = Path(sys.argv[0]).resolve()
         if old:
-            print(
-                f"Roll back with:\n  sudo python3 {script} --version {old.tag} --restore {backup}"
-            )
+            print(f"Roll back with:\n  sudo python3 {script} --tag {old.tag} --restore {backup}")
         else:
             print(f"Backup: {backup} ({installed} is not a GitHub release; reinstall that .deb, then "
-                  f"--restore it with any --version)")  # fmt: skip
+                  f"--restore it with any --tag)")  # fmt: skip
     return 0
 
 

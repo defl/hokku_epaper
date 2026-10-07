@@ -110,3 +110,31 @@ class TestSettings:
         outside.mkdir()
         cfg = {"upload_dir": str(outside), "cache_dir": "/var/lib/hokku/cache"}
         assert hu.backup_paths(cfg) == [hu.STATE_DIR, outside]
+
+
+class TestBackup:
+    def test_backup_command_is_uncompressed_and_skips_numba_cache(self):
+        cmd = hu.backup_command(hu.Path("/b/x.tar"), [hu.STATE_DIR, hu.Path("/srv/pics")])
+        assert cmd == [
+            "tar",
+            "-C",
+            "/",
+            "--exclude",
+            "var/lib/hokku/numba_cache",
+            "-cpf",
+            "/b/x.tar",
+            "var/lib/hokku",
+            "srv/pics",
+        ]
+
+
+class TestApplianceBlocker:
+    def test_plain_debian_install(self, tmp_path):
+        assert hu.appliance_blocker(tmp_path / "absent") is None
+
+    def test_appliance_in_setup_mode(self, tmp_path):
+        assert "setup mode" in (hu.appliance_blocker(tmp_path) or "")
+
+    def test_configured_appliance(self, tmp_path):
+        (tmp_path / "setup_complete").touch()
+        assert hu.appliance_blocker(tmp_path) is None
