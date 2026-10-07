@@ -2,11 +2,33 @@
 
 ## 4.0.0 beta 5
 
+### Changed
+
+- **Every model behaves the same.** The firmwares now share their behaviour, not
+  just their wire format:
+  - every model shows the same message when it can't reach the server, can't
+    join Wi-Fi, has no configuration, or is updating its firmware (the Seeed
+    E1004 and Bigme F7 showed nothing);
+  - the Bigme F7 wakes on the server's schedule and corrects its clock drift
+    like the others, and remembers its retry back-off through sleep;
+  - a firmware update confirms itself on the first refresh that reaches the
+    server and otherwise rolls back to the previous firmware, on every model.
+    The E1004 kept a new firmware even if it never reached the server; the F7
+    kept any firmware that booted;
+  - an image download of the wrong size is rejected on every model, and an
+    implausible battery reading is left out instead of shown as 0 %.
+
 ### Fixed
 
 - **A screen that woke a few seconds before its refresh time refreshed twice**:
   the server sent it back for a minute instead of to the next slot. A slot
   less than a minute away now counts as the current one.
+
+### Firmware
+
+- `bigme_f7` **1.2.16 → 1.2.17**, `huessen_epf1301` **1.2.27 → 1.2.28**,
+  `seeedstudio_e1004` **1.2.7 → 1.2.8** — shared behaviour (messages, schedule
+  and drift correction, update confirmation).
 
 ## 4.0.0 beta 4
 
