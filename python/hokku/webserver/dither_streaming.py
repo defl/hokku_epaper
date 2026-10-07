@@ -82,10 +82,10 @@ def rgb_to_lab(rgb: ArrayLike, *, dtype: Any = np.float64) -> FloatArray:
     return xyz_to_lab(linear_to_xyz(srgb_to_linear(arr, dtype=dtype), dtype=dtype), dtype=dtype)
 
 
-# Reference palette (Huessen EPF1301) for shared quality/saturation analytics
-# and DRC-anchor defaults.  The per-model dither LUTs below are built from the
-# Display passed into each dither instance — NOT from these module constants —
-# so a Bigme F7 render uses its own 7-colour palette, not this reference.
+# Reference palette (Huessen EPF1301) for shared quality analytics and tests.
+# Nothing in the render path reads these: the per-model dither LUTs below are
+# built from the Display passed into each dither instance, and the renderer's
+# DRC takes its range from the target Display (ImageRenderer._drc_anchors).
 _REFERENCE_DISPLAY = DISPLAY_REGISTRY["huessen_epf1301"]
 PALETTE_MEASURED_RGB = _REFERENCE_DISPLAY.palette_measured_rgb
 
@@ -351,7 +351,7 @@ def build_rgb_lut_hue_aware_weighted(
 
 
 def build_rgb_lut_bw(display: Display) -> tuple[UInt8Array, float]:
-    """32³ RGB grid → palette index using ONLY black (0) and white (1) entries.
+    """32³ RGB grid → palette index using ONLY the display's black and white entries.
 
     Prevents B&W dithering from using colored palette entries, which would
     create artifacts like red/pink tints in grayscale images.
@@ -364,12 +364,11 @@ def build_rgb_lut_bw(display: Display) -> tuple[UInt8Array, float]:
     rgb_grid = np.stack([rr, gg, bb], axis=-1).reshape(-1, 3)
     lab_grid = rgb_to_lab(rgb_grid)
 
-    # Only use black (0) and white (1) palette entries
-    bw_palette = PALETTE_LAB[[0, 1]]
+    bw_indices = np.array([display.black_index, display.white_index], dtype=np.uint8)
+    bw_palette = PALETTE_LAB[bw_indices]
     dists = np.sum((lab_grid[:, None, :] - bw_palette[None, :, :]) ** 2, axis=2)
-    # Map 0→0 (black), 1→1 (white) in the results
-    lut_indices = np.argmin(dists, axis=1).astype(np.uint8)
-    lut = lut_indices.reshape(steps, steps, steps)
+    # argmin picks 0/1 within the pair; map back to the real palette indices.
+    lut = bw_indices[np.argmin(dists, axis=1)].reshape(steps, steps, steps)
     return lut, scale
 
 

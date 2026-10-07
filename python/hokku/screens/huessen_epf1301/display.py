@@ -40,6 +40,8 @@ class HuessenEpf1301Display(Display):
         ],
         dtype=np.float32,
     )
+    black_index = 0
+    white_index = 1
 
     # Measured on this glass with an X-Rite ColorMunki Photo (ArgyllCMS spotread,
     # reflective 45/0, D65): black L* 10.86, white L* 66.94 (29.4:1 contrast),

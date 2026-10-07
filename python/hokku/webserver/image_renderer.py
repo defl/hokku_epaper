@@ -34,11 +34,6 @@ from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.bounding_box import BoundingBox
 from hokku.webserver.dither_abc import AbstractDither
 from hokku.webserver.dither_streaming import (
-    # Huessen reference DRC anchors. Now only a LAST-RESORT default inside the
-    # DRC helpers: the renderer supplies the target panel's own range via
-    # _drc_anchors(). Reusing these for another screen compressed images into a
-    # range that screen could not show — on the F7, L* 0.55..79.86 against a real
-    # 10.21..68.02, clipping both ends.
     PALETTE_LAB,
     PALETTE_OKLAB,
     adaptive_saturate,
@@ -47,6 +42,7 @@ from hokku.webserver.dither_streaming import (
     rgb_to_lab,
     rgb_to_oklab,
 )
+from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.image_abc import AbstractImageRenderer
 from hokku.webserver.image_config import DrcSpace, ImageConfig
 from hokku.webserver.orientation import Orientation
@@ -57,6 +53,15 @@ from hokku.webserver.orientation import Orientation
 _REFERENCE_DISPLAY = DISPLAY_REGISTRY["huessen_epf1301"]
 _SCREEN_W = _REFERENCE_DISPLAY.panel_w
 _SCREEN_H = _REFERENCE_DISPLAY.panel_h
+
+# Lightness range the DRC chroma stage scales by — still the Huessen reference
+# palette's, for every screen, NOT the target panel's (the L stage already uses
+# the target's). Moving chroma onto the target range changes the two
+# adaptive_vivid dropdown presets on every panel, so it waits for per-model
+# config, where the panel value becomes a "follow screen" default and existing
+# configs can keep this one explicitly.
+_CHROMA_RANGE_LAB_L = (float(PALETTE_LAB[0, 0]), float(PALETTE_LAB[1, 0]))
+_CHROMA_RANGE_OKLAB_L = (float(PALETTE_OKLAB[0, 0]), float(PALETTE_OKLAB[1, 0]))
 
 
 @lru_cache(maxsize=8)
@@ -468,7 +473,8 @@ class ImageRenderer(AbstractImageRenderer):
             rows = np.stack([greys[int(np.argmin(np.abs(ls - v)))] for v in (lo_l, hi_l)])
             ok = rgb_to_oklab(rows)
             return (lo_l, hi_l), (float(ok[0, 0]), float(ok[1, 0]))
-        pal = np.asarray(self._display.palette_measured_rgb, dtype=np.float32)[:2]
+        d = self._display
+        pal = np.asarray(d.palette_measured_rgb, dtype=np.float32)[[d.black_index, d.white_index]]
         lab_l = rgb_to_lab(pal)
         ok_l = rgb_to_oklab(pal)
         return (float(lab_l[0, 0]), float(lab_l[1, 0])), (float(ok_l[0, 0]), float(ok_l[1, 0]))
@@ -519,8 +525,8 @@ class ImageRenderer(AbstractImageRenderer):
         vivid_chroma_high_oklab: float = 0.075,
         drc_l_space: DrcSpace = "cielab",
         drc_chroma_space: DrcSpace = "cielab",
-        anchor_lab_l: tuple[float, float] | None = None,
-        anchor_oklab_l: tuple[float, float] | None = None,
+        anchor_lab_l: tuple[float, float],
+        anchor_oklab_l: tuple[float, float],
     ) -> NDArray[np.float32]:
         """Map source range into the panel's reachable L\\* range.
 
@@ -528,6 +534,10 @@ class ImageRenderer(AbstractImageRenderer):
         OKLAB.  When both spaces are the same, the work happens in one pass;
         when they differ, the L stage runs first then we round-trip through
         sRGB into the second space for the chroma stage.
+
+        ``anchor_lab_l`` / ``anchor_oklab_l`` are the target panel's (black,
+        white) lightness in each space — see ``_drc_anchors``. They are required:
+        there is no panel-independent default that is right for every screen.
         """
         if drc_l_space not in ("cielab", "oklab"):
             raise ValueError(f"drc_l_space must be 'cielab' or 'oklab', got {drc_l_space!r}")
@@ -549,6 +559,7 @@ class ImageRenderer(AbstractImageRenderer):
         if drc_chroma_space == "cielab":
             return ImageRenderer._drc_cielab_chroma(
                 rgb,
+                _CHROMA_RANGE_LAB_L,
                 scale_chroma=scale_chroma,
                 adaptive_vivid=adaptive_vivid,
                 vivid_chroma_low=vivid_chroma_low,
@@ -556,6 +567,7 @@ class ImageRenderer(AbstractImageRenderer):
             )
         return ImageRenderer._drc_oklab_chroma(
             rgb,
+            _CHROMA_RANGE_OKLAB_L,
             scale_chroma=scale_chroma,
             adaptive_vivid=adaptive_vivid,
             vivid_chroma_low=vivid_chroma_low_oklab,
@@ -614,14 +626,13 @@ class ImageRenderer(AbstractImageRenderer):
 
     @staticmethod
     def _drc_cielab_l(
-        rgb: NDArray[np.float32], anchor_l: tuple[float, float] | None = None
+        rgb: NDArray[np.float32], anchor_l: tuple[float, float]
     ) -> NDArray[np.float32]:
         """Map source L* into the panel's CIELAB L* range via a bounded S-curve.
 
         ``anchor_l`` is the target range. It must describe the panel being
-        rendered for: the module-level PALETTE_LAB is the Huessen reference, and
-        using it for another screen compresses into a range that screen cannot
-        show, clipping both ends.
+        rendered for: another screen's range compresses into lightness this
+        panel cannot show, clipping both ends.
 
         The output is provably confined to [black_L, white_L]: _scurve() only
         ever returns a value in [0, 1], so no separate clamp/shoulder step is
@@ -630,9 +641,8 @@ class ImageRenderer(AbstractImageRenderer):
         f32 = np.float32
         lab = rgb_to_lab(rgb, dtype=f32)
         L = lab[..., 0]
-        lo, hi = anchor_l if anchor_l is not None else (PALETTE_LAB[0, 0], PALETTE_LAB[1, 0])
-        black_L = f32(lo)
-        white_L = f32(hi)
+        black_L = f32(anchor_l[0])
+        white_L = f32(anchor_l[1])
         t = np.clip(L / f32(100.0), f32(0.0), f32(1.0)).astype(f32)
         t_curved = ImageRenderer._scurve(t, ImageRenderer._DRC_SIGMOID_K)
         lab[..., 0] = black_L + (white_L - black_L) * t_curved
@@ -640,12 +650,11 @@ class ImageRenderer(AbstractImageRenderer):
 
     @staticmethod
     def _drc_oklab_l(
-        rgb: NDArray[np.float32], anchor_l: tuple[float, float] | None = None
+        rgb: NDArray[np.float32], anchor_l: tuple[float, float]
     ) -> NDArray[np.float32]:
         """Map source L into the panel's OKLAB L range via a bounded S-curve.
 
-        Panel anchors come from PALETTE_OKLAB (black L ≈ 0.085, white ≈ 0.825).
-        OKLAB has noticeably better perceived-lightness prediction than CIELAB
+        ``anchor_l`` is the panel's (black, white) OKLAB L. OKLAB has noticeably better perceived-lightness prediction than CIELAB
         (Bottosson 2020), so the curve follows perceived brightness more
         faithfully near the panel's limits. See _drc_cielab_l for the S-curve
         rationale and _DRC_SIGMOID_K for the steepness — identical shape
@@ -654,9 +663,8 @@ class ImageRenderer(AbstractImageRenderer):
         f32 = np.float32
         oklab = rgb_to_oklab(rgb, dtype=f32)
         L = oklab[..., 0]
-        lo, hi = anchor_l if anchor_l is not None else (PALETTE_OKLAB[0, 0], PALETTE_OKLAB[1, 0])
-        black_L = f32(lo)
-        white_L = f32(hi)
+        black_L = f32(anchor_l[0])
+        white_L = f32(anchor_l[1])
         t = np.clip(L, f32(0.0), f32(1.0)).astype(f32)
         t_curved = ImageRenderer._scurve(t, ImageRenderer._DRC_SIGMOID_K)
         oklab[..., 0] = black_L + (white_L - black_L) * t_curved
@@ -665,21 +673,25 @@ class ImageRenderer(AbstractImageRenderer):
     @staticmethod
     def _drc_cielab_chroma(
         rgb: NDArray[np.float32],
+        anchor_l: tuple[float, float],
         *,
         scale_chroma: bool,
         adaptive_vivid: bool,
         vivid_chroma_low: float,
         vivid_chroma_high: float,
     ) -> NDArray[np.float32]:
+        """Scale chroma by the fraction of the L* axis that ``anchor_l`` spans.
+
+        ``anchor_l`` is a (black, white) L* range; a narrower range squeezes
+        chroma harder. See ``_CHROMA_RANGE_LAB_L`` for which range is used.
+        """
         f32 = np.float32
         if not (scale_chroma or adaptive_vivid):
             return rgb
         lab = rgb_to_lab(rgb, dtype=f32)
         a = lab[..., 1]
         b_ch = lab[..., 2]
-        black_L = f32(PALETTE_LAB[0, 0])
-        white_L = f32(PALETTE_LAB[1, 0])
-        c_ratio = f32((float(white_L) - float(black_L)) / 100.0)
+        c_ratio = f32((float(anchor_l[1]) - float(anchor_l[0])) / 100.0)
         if adaptive_vivid:
             chroma = np.sqrt(a * a + b_ch * b_ch)
             span = f32(vivid_chroma_high - vivid_chroma_low)
@@ -697,23 +709,23 @@ class ImageRenderer(AbstractImageRenderer):
     @staticmethod
     def _drc_oklab_chroma(
         rgb: NDArray[np.float32],
+        anchor_l: tuple[float, float],
         *,
         scale_chroma: bool,
         adaptive_vivid: bool,
         vivid_chroma_low: float,
         vivid_chroma_high: float,
     ) -> NDArray[np.float32]:
+        """OKLAB counterpart of ``_drc_cielab_chroma``; ``anchor_l`` is in OKLAB L."""
         f32 = np.float32
         if not (scale_chroma or adaptive_vivid):
             return rgb
         oklab = rgb_to_oklab(rgb, dtype=f32)
         a = oklab[..., 1]
         b_ch = oklab[..., 2]
-        black_L = f32(PALETTE_OKLAB[0, 0])
-        white_L = f32(PALETTE_OKLAB[1, 0])
         # c_ratio is the same fractional compression as the CIELAB path —
         # both anchors live on a [0, 1]-ish L axis in OKLAB.
-        c_ratio = f32((float(white_L) - float(black_L)) / 1.0)
+        c_ratio = f32((float(anchor_l[1]) - float(anchor_l[0])) / 1.0)
         if adaptive_vivid:
             chroma = np.sqrt(a * a + b_ch * b_ch)
             span = f32(vivid_chroma_high - vivid_chroma_low)
@@ -803,5 +815,15 @@ class ImageRenderer(AbstractImageRenderer):
 
         result_idx = self._dither.dither_with_prep(arr, cfg.dither, _prep_stripe)
         del arr
-        result_idx[padding_mask] = 1
+        result_idx[padding_mask] = self._display.white_index
         return result_idx
+
+
+def renderer_for_display(display: Display) -> AbstractImageRenderer:
+    """The production renderer for *display*.
+
+    The one place that decides how a screen is rendered, so a screen whose panel
+    needs a different pipeline (e.g. a greyscale panel) can be routed to it here
+    without touching the callers.
+    """
+    return ImageRenderer(NumbaStreamingDither(display), display)

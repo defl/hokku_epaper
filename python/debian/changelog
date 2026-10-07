@@ -1,3 +1,12 @@
+hokku-server (4.0.1~dev.101-1) unstable; urgency=medium
+
+  * Render core: screens declare which palette entries are black and white;
+    the B&W ink table, letterbox padding and palette-derived DRC range use
+    them instead of assuming indices 0/1. One renderer factory picks the
+    render path per screen. No change to rendered output (#62).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 07 Oct 2026 06:46:16 -0500
+
 hokku-server (4.0.1~dev.100-1) unstable; urgency=medium
 
   * Firmware parity: every model shows the same error messages, confirms or

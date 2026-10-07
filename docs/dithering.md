@@ -84,7 +84,7 @@ ImageClassifier.decision_for(path, sha1)
                                      clahe_keepout_bboxes, face_crop_bboxes }
         # orientation is supplied by the caller per render target
 
-ImageRenderer(NumbaStreamingDither(display), display).render_panel_bytes(img, cfg, orientation, …)
+renderer_for_display(display).render_panel_bytes(img, cfg, orientation, …)
     ↓
 render_indices(img, cfg, orientation, display.panel_w, display.panel_h, …)
     1. Resize / crop-to-fill → PIL canvas (uint8 RGB)
@@ -98,7 +98,7 @@ render_indices(img, cfg, orientation, display.panel_w, display.panel_h, …)
                + per-panel correction LUT (if built) + dither noise
                → float32 stripe
            rolling 2–3 row error buffer, LUT lookup per pixel
-    6. result_idx[padding_mask] = 1 (white)
+    6. result_idx[padding_mask] = display.white_index
     ↓
 display.indices_to_panel_bytes(result_idx) → wire bytes
 ```
@@ -422,9 +422,12 @@ the other space for the chroma stage. The motivation:
 * **Chroma scaling.** OKLAB's better hue uniformity carries over from the
   saturation case above.
 
-The panel anchors come from `ImageRenderer._drc_anchors()`: the display's
-`drc_anchor_l` when the panel has been measured, otherwise rows 0 and 1 of its
-`palette_measured_rgb`, converted to each space. `vivid_chroma_low_oklab` /
+The L stage's panel anchors come from `ImageRenderer._drc_anchors()`: the
+display's `drc_anchor_l` when the panel has been measured, otherwise its
+`black_index` / `white_index` rows of `palette_measured_rgb`, converted to each
+space. The chroma stage still scales by the Huessen reference palette's range
+(`PALETTE_OKLAB` black ≈ 0.085, white ≈ 0.825) on every panel, until
+per-model config lets it follow the screen. `vivid_chroma_low_oklab` /
 `vivid_chroma_high_oklab` are the OKLAB-unit thresholds (defaults
 `0.025` / `0.075`).
 
@@ -443,7 +446,7 @@ boost colour) and `adaptive_vivid=False` — because there is no meaningful
 hue in a grey image to protect.
 
 **Fix 2: B&W-only palette LUT.** The B&W dither config sets
-`lut_name = "bw"`, which builds a LUT that only ever picks the Black or White
+`lut_name = "bw"`, which builds a LUT that only ever picks the Display's `black_index` or `white_index`
 palette entries. This completely eliminates any possibility of a colour ink
 landing on a monochrome image, at the cost of pure two-tone rendering
 (no grey half-tones from colour ink mixing). The LUT is built by

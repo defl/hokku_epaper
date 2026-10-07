@@ -248,7 +248,7 @@ def _build_rgb_lut_hue_aware_weighted(
 
 
 def _build_rgb_lut_bw(display: Display) -> tuple[UInt8Array, float]:
-    """32³ RGB grid → palette index using ONLY black (0) and white (1) entries.
+    """32³ RGB grid → palette index using ONLY the display's black and white entries.
 
     Prevents B&W dithering from using colored palette entries.
     """
@@ -260,10 +260,10 @@ def _build_rgb_lut_bw(display: Display) -> tuple[UInt8Array, float]:
     rgb_grid = np.stack([rr, gg, bb], axis=-1).reshape(-1, 3)
     lab_grid = _rgb_to_lab(rgb_grid)
 
-    bw_palette = _PALETTE_LAB[[0, 1]]
+    bw_indices = np.array([display.black_index, display.white_index], dtype=np.uint8)
+    bw_palette = _PALETTE_LAB[bw_indices]
     dists = np.sum((lab_grid[:, None, :] - bw_palette[None, :, :]) ** 2, axis=2)
-    lut_indices = np.argmin(dists, axis=1).astype(np.uint8)
-    lut = lut_indices.reshape(steps, steps, steps)
+    lut = bw_indices[np.argmin(dists, axis=1)].reshape(steps, steps, steps)
     return lut, scale
 
 

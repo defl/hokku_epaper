@@ -34,7 +34,12 @@ from PIL import Image
 from hokku.screens.display import Display
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver.dither_config import DitherConfig
-from hokku.webserver.dither_streaming import PALETTE_LAB, adaptive_saturate, rgb_to_lab
+from hokku.webserver.dither_streaming import (
+    PALETTE_LAB,
+    PALETTE_OKLAB,
+    adaptive_saturate,
+    rgb_to_lab,
+)
 from hokku.webserver.dither_streaming_numba import NumbaStreamingDither
 from hokku.webserver.image_abc import _apply_prepare_enhancements
 from hokku.webserver.image_classifier import ImageClassifier
@@ -48,6 +53,10 @@ _HUESSEN = DISPLAY_REGISTRY["huessen_epf1301"]
 # Panel ink L* limits — same derivation as image.py's private constants.
 _DISPLAY_BLACK_L = float(PALETTE_LAB[0, 0])
 _DISPLAY_WHITE_L = float(PALETTE_LAB[1, 0])
+
+# The DRC range those limits describe, in the form compress_dynamic_range takes.
+_REF_LAB_L = (_DISPLAY_BLACK_L, _DISPLAY_WHITE_L)
+_REF_OKLAB_L = (float(PALETTE_OKLAB[0, 0]), float(PALETTE_OKLAB[1, 0]))
 
 
 def render_preview_png(img, cfg, orientation, max_side_px=800, crop_to_fill_threshold=0.0):
@@ -134,6 +143,8 @@ def test_drc_maps_white_below_display_white():
         adaptive_vivid=False,
         vivid_chroma_low=5.0,
         vivid_chroma_high=15.0,
+        anchor_lab_l=_REF_LAB_L,
+        anchor_oklab_l=_REF_OKLAB_L,
     )
     out_lab = rgb_to_lab(out.astype(np.float64))
     L_out = float(out_lab[0, 0, 0])
@@ -153,6 +164,8 @@ def test_drc_maps_black_above_display_black():
         adaptive_vivid=False,
         vivid_chroma_low=5.0,
         vivid_chroma_high=15.0,
+        anchor_lab_l=_REF_LAB_L,
+        anchor_oklab_l=_REF_OKLAB_L,
     )
     out_lab = rgb_to_lab(out.astype(np.float64))
     L_out = float(out_lab[0, 0, 0])
@@ -171,6 +184,8 @@ def test_drc_output_in_valid_rgb_range():
         adaptive_vivid=False,
         vivid_chroma_low=5.0,
         vivid_chroma_high=15.0,
+        anchor_lab_l=_REF_LAB_L,
+        anchor_oklab_l=_REF_OKLAB_L,
     )
     assert float(out.min()) >= 0.0
     assert float(out.max()) <= 255.0
@@ -185,6 +200,8 @@ def test_drc_scale_chroma_reduces_saturation():
         adaptive_vivid=False,
         vivid_chroma_low=5.0,
         vivid_chroma_high=15.0,
+        anchor_lab_l=_REF_LAB_L,
+        anchor_oklab_l=_REF_OKLAB_L,
     )
     out_plain = ImageRenderer.compress_dynamic_range(
         vivid_red,
@@ -192,6 +209,8 @@ def test_drc_scale_chroma_reduces_saturation():
         adaptive_vivid=False,
         vivid_chroma_low=5.0,
         vivid_chroma_high=15.0,
+        anchor_lab_l=_REF_LAB_L,
+        anchor_oklab_l=_REF_OKLAB_L,
     )
     lab_scaled = rgb_to_lab(out_scaled.astype(np.float64))
     lab_plain = rgb_to_lab(out_plain.astype(np.float64))
@@ -212,6 +231,8 @@ def test_drc_adaptive_vivid_preserves_more_chroma_than_scale_chroma():
         adaptive_vivid=True,
         vivid_chroma_low=5.0,
         vivid_chroma_high=15.0,
+        anchor_lab_l=_REF_LAB_L,
+        anchor_oklab_l=_REF_OKLAB_L,
     )
     out_scaled = ImageRenderer.compress_dynamic_range(
         vivid_red,
@@ -219,6 +240,8 @@ def test_drc_adaptive_vivid_preserves_more_chroma_than_scale_chroma():
         adaptive_vivid=False,
         vivid_chroma_low=5.0,
         vivid_chroma_high=15.0,
+        anchor_lab_l=_REF_LAB_L,
+        anchor_oklab_l=_REF_OKLAB_L,
     )
     lab_vivid = rgb_to_lab(out_vivid.astype(np.float64))
     lab_scaled = rgb_to_lab(out_scaled.astype(np.float64))
@@ -238,6 +261,8 @@ def test_drc_adaptive_vivid_no_boost_for_neutral():
         adaptive_vivid=True,
         vivid_chroma_low=5.0,
         vivid_chroma_high=15.0,
+        anchor_lab_l=_REF_LAB_L,
+        anchor_oklab_l=_REF_OKLAB_L,
     )
     out_plain = ImageRenderer.compress_dynamic_range(
         grey,
@@ -245,6 +270,8 @@ def test_drc_adaptive_vivid_no_boost_for_neutral():
         adaptive_vivid=False,
         vivid_chroma_low=5.0,
         vivid_chroma_high=15.0,
+        anchor_lab_l=_REF_LAB_L,
+        anchor_oklab_l=_REF_OKLAB_L,
     )
     # Both outputs should be very close — neutral grey has no chroma to boost.
     assert np.allclose(out_vivid, out_plain, atol=2.0), (
