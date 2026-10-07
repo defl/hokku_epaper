@@ -1,4 +1,4 @@
-hokku-server (4.0.1~dev.3-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.5-1) unstable; urgency=medium
 
   * tools/hokku_upgrade.py: pick a release from a list and upgrade (or roll
     back) a .deb install, on Debian/Ubuntu or the Raspberry Pi appliance --
