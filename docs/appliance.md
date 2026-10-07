@@ -160,7 +160,7 @@ settings, renders) to `/var/backups/hokku` first and stops if the card is too
 full for that — `--backup-dir` can point it at a USB stick instead. It prints
 the command that rolls back to the old release and that backup. Re-rendering
 the whole library afterwards is optional and takes a while on a Pi Zero 2 W;
-the pictures keep showing in the meantime.
+frames keep their current picture and pick up new ones as they are rendered.
 
 ## Default credentials
 
