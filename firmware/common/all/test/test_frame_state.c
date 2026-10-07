@@ -33,6 +33,29 @@ static void test_full_object_exact(void)
     CHECK(strcmp(buf, expect) == 0, "frame_state: full object matches the locked schema exactly");
 }
 
+static void test_worst_case_fits_caller_buffer(void)
+{
+    /* Every board builds into char[384]. Truncation would drop the closing
+     * brace and the server would discard the whole header, so hold the widest
+     * values each field realistically takes (year-2100 epochs, a year of uptime,
+     * the firmware's +/-150000 ppm clamp, the longest labels) to that size.
+     * ~320 bytes today: this trips if a new field eats the remaining slack. */
+    char buf[384];
+    frame_state_t fs = {
+        .fw = "99.99.99-dev.9999", .boot = 1000000, .wake = "button_wake",
+        .regime = "battery_idle", .uptime_s = 31536000, .bat_mv = 4200,
+        .usb = "none", .last_sleep = "timer_wake", .rssi = -127,
+        .heap_kb = 65536, .spurious = 100000, .cfg_ver = 255,
+        .clk_now = 4102444800LL, .next_ep = 4102444800LL,
+        .sleep_err_known = 1, .sleep_err_s = -86400,
+        .cal_known = 1, .cal_ppm = -150000, .wifi_cached = 0,
+    };
+    frame_state_build(buf, sizeof(buf), &fs);
+    size_t n = strlen(buf);
+    CHECK(n < sizeof(buf) - 1 && buf[n - 1] == '}',
+          "frame_state: widest values still fit the callers' 384-byte buffer");
+}
+
 static void test_bat_mv_omitted_when_negative(void)
 {
     char buf[512];
@@ -125,6 +148,7 @@ static void test_epoch_beyond_int32(void)
 int main(void)
 {
     test_full_object_exact();
+    test_worst_case_fits_caller_buffer();
     test_bat_mv_omitted_when_negative();
     test_bat_mv_zero_is_emitted();
     test_sleep_err_null_when_unknown();

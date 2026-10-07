@@ -41,8 +41,7 @@ from werkzeug.utils import secure_filename
 
 from hokku.screens import firmware_registry, huessen_epf1301
 from hokku.screens.bigme_f7 import bootstrap as bigme_bootstrap
-from hokku.screens.bigme_f7 import firmware as bigme_firmware
-from hokku.screens.flasher_registry import esp32_screen, esp32_screens
+from hokku.screens.flasher_registry import esp32_screen, esp32_screens, esp32_specs
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver import firmware_github
 from hokku.webserver.app_config import AppConfig
@@ -65,6 +64,7 @@ from hokku.webserver.image_renderer import (
     format_megapixels,
     open_image_for_render,
 )
+from hokku.webserver.labels import LabelError, parse_labels
 from hokku.webserver.mdns import _get_local_ip
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS, PRESET_META
@@ -83,6 +83,7 @@ from hokku.webserver.screen_headers import (
     parse_frame_state,
     parse_mac_header,
     parse_screen_model,
+    screen_name_valid,
 )
 from hokku.webserver.time_utils import calculate_sleep_seconds, format_duration_human
 
@@ -313,13 +314,22 @@ def create_app(
         # long-term mean that seeds cold-start devices.
         screen_mac = parse_mac_header(request.headers.get("X-Screen-Mac"))
         cal_ppm = parse_cal_ppm(frame_state.get("cal_ppm")) if frame_state else None
+        # The server owns the name of a screen it knows (by MAC); from here on
+        # the request is handled under that name, and it is sent back so the
+        # device adopts it.
+        screen_name = scheduler.identify(screen_name, screen_mac)
 
-        def _add_cal_seed(resp):
-            """Attach the MAC-pinned drift seed to every response; the device
-            decides whether to adopt it (based on the sample count)."""
+        def _add_screen_headers(resp):
+            """Attach the MAC-pinned drift seed to every response (the device
+            decides whether to adopt it, based on the sample count), and the
+            server's name for the screen, which the device saves if it differs
+            from its own. A legacy name outside the rename rule (set over USB)
+            is left out: the device already has it and would refuse it."""
             mean_ppm, samples = scheduler.cal_seed_for(screen_name, screen_mac)
             resp.headers["X-Sleep-Cal-PPM"] = str(mean_ppm)
             resp.headers["X-Sleep-Cal-N"] = str(samples)
+            if screen_name_valid(screen_name):
+                resp.headers["X-Screen-Name"] = screen_name
             return resp
 
         # A device that reports its model's bundled version has finished any
@@ -345,12 +355,23 @@ def create_app(
 
         cfg = scheduler.get_screen_config(screen_name)
         pick_orientation = cfg.orientation if cfg.filter_by_orientation else Orientation.NEUTRAL
-        chosen = scheduler.pick_next(orientation=pick_orientation)
+        chosen = scheduler.pick_next(orientation=pick_orientation, labels=frozenset(cfg.labels))
         sleep_seconds = calculate_sleep_seconds(config) if chosen else _busy_retry_seconds(config)
 
         if chosen is None:
             progress = manager.conversion_progress()
             converting = progress.total > 0
+            if converting:
+                msg, status, label = "Converting images, try again shortly", 503, "Converting"
+            elif cfg.labels:
+                # Nothing will match until someone edits labels, so a fast
+                # retry would only drain the battery. Keep the picture on the
+                # glass and come back at the normal interval (the frame's
+                # button forces an earlier refresh).
+                msg, status, label = "No images carry this screen's labels", 404, "No labels"
+                sleep_seconds = calculate_sleep_seconds(config)
+            else:
+                msg, status, label = "No images in upload directory", 404, "No images"
             scheduler.record_screen_call(
                 screen_name,
                 screen_ip,
@@ -365,14 +386,10 @@ def create_app(
                 mac=screen_mac,
                 cal_ppm=cal_ppm,
             )
-            if converting:
-                msg, status, label = "Converting images, try again shortly", 503, "Converting"
-            else:
-                msg, status, label = "No images in upload directory", 404, "No images"
             resp = make_response(msg, status)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
             logger.debug("%s: %s told to retry in %ss", label, screen_name, sleep_seconds)
-            return _add_cal_seed(resp)
+            return _add_screen_headers(resp)
 
         binary = manager.panel_bytes_for_model_orientation(chosen, screen_model, cfg.orientation)
         if binary is None:
@@ -394,7 +411,7 @@ def create_app(
             )
             resp = make_response("Cached binary missing, try again shortly", 503)
             resp.headers["X-Sleep-Seconds"] = str(sleep_seconds)
-            return _add_cal_seed(resp)
+            return _add_screen_headers(resp)
 
         scheduler.mark_served(chosen)
         scheduler.record_screen_call(
@@ -418,7 +435,7 @@ def create_app(
         response.headers["X-Sleep-Seconds"] = str(sleep_seconds)
         response.headers["X-Server-Time-Epoch"] = str(int(_time.time()))
         response.headers["Content-Disposition"] = "attachment; filename=hokku.bin"
-        _add_cal_seed(response)
+        _add_screen_headers(response)
 
         # Manual OTA: if the user toggled "update on next refresh" and the screen
         # is OTA-capable with firmware to ship, tell it to update (it ignores this
@@ -502,6 +519,11 @@ def create_app(
         current = parse_config_state(request.headers.get("X-Config-State"))
         if not screen_name:
             screen_name = (current or {}).get("screen_name") or "unnamed"
+        # A screen the server knows by MAC goes by the server's name (see
+        # serve_binary); the rebuilt config below carries that name too.
+        mac = parse_mac_header(request.headers.get("X-Screen-Mac"))
+        if mac and state.scheduler.resolve(mac=mac) is not None:
+            screen_name = state.scheduler.identify(screen_name, mac)
         if current is None:
             logger.error("firmware-config from %s: missing/invalid X-Config-State", screen_name)
             return make_response("missing X-Config-State", 400)
@@ -516,6 +538,9 @@ def create_app(
         if url_override:
             migrated["image_url"] = url_override
             logger.info("Applying server URL override for %s: %s", screen_name, url_override)
+        if mac and screen_name != migrated.get("screen_name"):
+            logger.info("firmware-config: screen_name -> %r (server's name)", screen_name)
+            migrated["screen_name"] = screen_name
 
         if not _nvs_build_slots.acquire(blocking=False):
             logger.warning("firmware-config: NVS build slots exhausted, refusing %s", screen_name)
@@ -757,6 +782,46 @@ def create_app(
             _request_sync(state)
         return jsonify({"ok": True, "queued": queued})
 
+    @app.route("/hokku/api/labels", methods=["PATCH"])
+    def api_labels_patch():
+        """Edit labels on one or more pictures.
+
+        Body: ``{"names": [...], "labels": [...]}`` replaces each picture's
+        labels, or ``{"names": [...], "add": [...], "remove": [...]}`` adjusts
+        them — the bulk form, where a picture keeps whatever else it had. One
+        route for both keeps the single-picture editor and the multi-select
+        toolbar on the same code path. Nothing is written unless the whole
+        body validates.
+        """
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "expected JSON object"}), 400
+        unknown = body.keys() - {"names", "labels", "add", "remove"}
+        if unknown:
+            return jsonify({"error": f"unknown field(s): {', '.join(sorted(unknown))}"}), 400
+        names = body.get("names")
+        if not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names):
+            return jsonify({"error": "names must be a non-empty list of strings"}), 400
+        if "labels" in body and ("add" in body or "remove" in body):
+            return jsonify({"error": "use either labels or add/remove, not both"}), 400
+
+        try:
+            if "labels" in body:
+                missing = state.manager.set_labels(names, replace_with=parse_labels(body["labels"]))
+            else:
+                missing = state.manager.set_labels(
+                    names,
+                    add=parse_labels(body.get("add", []), field="add"),
+                    remove=parse_labels(body.get("remove", []), field="remove"),
+                )
+        except LabelError as e:
+            logger.info("Labels: rejected %r", str(e))
+            return jsonify({"error": str(e)}), 400
+
+        if missing:
+            logger.info("Labels: %d unknown image(s) skipped", len(missing))
+        return jsonify({"ok": True, "missing": missing})
+
     @app.route("/hokku/api/show_next/<path:name>", methods=["POST"])
     def api_show_next(name: str):
         rec = state.manager.status(name)
@@ -802,9 +867,42 @@ def create_app(
         state.scheduler.remove_screen(name)
         return jsonify({"ok": True})
 
+    @app.route("/hokku/api/screens/<string:name>/rename", methods=["POST"])
+    def api_screen_rename(name: str):
+        """Rename a screen (``{"name": "..."}``).
+
+        Takes effect on the server at once. The screen learns the new name from
+        its next response and saves it. The server keys the screen by MAC, so its
+        history, settings and calibration stay with it."""
+        body = request.get_json(silent=True) or {}
+        new_name = body.get("name")
+        if isinstance(new_name, str):
+            new_name = new_name.strip()
+        entry = state.scheduler.screens().get(name)
+        if entry is None:
+            return jsonify({"error": f"unknown screen {name!r}"}), 404
+        if not screen_name_valid(new_name):
+            return jsonify(
+                {
+                    "error": "name must be 1-63 letters, digits, spaces or - _ . ' ( ), "
+                    "without leading or trailing spaces"
+                }
+            ), 400
+        if not entry.mac:
+            # Without a MAC the name is the only way to recognise the screen:
+            # renamed here, its next check-in would look like a new screen.
+            return jsonify(
+                {"error": "this screen's firmware doesn't report a MAC; update it first"}
+            ), 409
+        try:
+            state.scheduler.rename_screen(name, new_name)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 409
+        return jsonify({"ok": True, "name": new_name})
+
     @app.route("/hokku/api/screens/<string:name>/config", methods=["PATCH"])
     def api_screen_config(name: str):
-        """Patch per-screen config (orientation and/or orientation filter)."""
+        """Patch per-screen config (orientation, orientation filter, label filter)."""
         body = request.get_json(silent=True) or {}
         current = state.scheduler.get_screen_config(name)
         updates: dict = {}
@@ -830,6 +928,13 @@ def create_app(
             if not isinstance(val, str):
                 return jsonify({"error": "server_url_override must be a string"}), 400
             updates["server_url_override"] = val.strip()
+
+        if "labels" in body:
+            try:
+                updates["labels"] = parse_labels(body.get("labels"))
+            except LabelError as e:
+                logger.info("Screen config %r: %s", name, e)
+                return jsonify({"error": str(e)}), 400
 
         if updates:
             state.scheduler.set_screen_config(name, replace(current, **updates))
@@ -1051,6 +1156,7 @@ def create_app(
                 "has_image_config_override": r.image_config is not None,
                 "crop_to_fill_threshold": r.crop_to_fill_threshold,
                 "pipeline": _pipeline_label(r, obs),
+                "labels": list(r.labels),
             }
             upload_files.append(entry)
             if r.convert_status == ConvertStatus.FAILED:
@@ -1114,6 +1220,11 @@ def create_app(
                 "orientation": scfg.orientation,
                 "filter_by_orientation": scfg.filter_by_orientation,
                 "server_url_override": scfg.server_url_override,
+                "labels": list(scfg.labels),
+                # True when the label filter leaves this screen nothing to show,
+                # so the dashboard can say why the picture is not changing.
+                "labels_match_nothing": bool(scfg.labels)
+                and not scheduler.has_eligible(peek_orientation, frozenset(scfg.labels)),
                 "last_log": t.last_log or None,
                 "last_log_at": (
                     datetime.fromtimestamp(t.last_log_at).isoformat(timespec="seconds")
@@ -1124,6 +1235,7 @@ def create_app(
                 "firmware_build": t.firmware_build,
                 "ota_pending": scheduler.is_ota_pending(sname),
                 "ota_capable": bool(t.frame_state and t.frame_state.get("ota")),
+                "renamable": t.mac is not None,
                 "ota_error": t.ota_error,
                 "ota_error_at": (
                     datetime.fromtimestamp(t.ota_error_at).isoformat(timespec="seconds")
@@ -1142,6 +1254,7 @@ def create_app(
                 "upload_files": upload_files,
                 "failed_files": failed_files,
                 "serve_data": serve_data,
+                "labels": manager.all_labels(),
                 "screens": screens_payload,
                 "last_served": last[0] if last else None,
                 "converting": 1 if progress.current_name or progress.done < progress.total else 0,
@@ -1403,33 +1516,42 @@ def create_app(
         holds the single serial slot for its whole duration so a flash cannot
         start mid-scan.
 
-        The optional ``?model=`` selects which ESP32 screen's release the device's
-        "up to date?" freshness is judged against (the two boards enumerate
-        identically; only the version/config comparison is model-specific). It
-        defaults to the huessen reference model.
+        Every ESP32 screen is recognised by its own USB VID:PID (huessen as native
+        USB Serial/JTAG, the E1004 as its CH340K bridge), and each device's
+        ``model`` is the one its id matched; its "up to date?" freshness is
+        judged against the firmware a flash of that model would write (the
+        firmware library's effective version, honouring a pin).
         """
-        if not any(s.merged_firmware_file() for s in esp32_screens()):
-            logger.error("Flash scan requested but no bundled ESP32 firmware available")
-            return jsonify({"error": "no bundled firmware available on this server"}), 503
+        store = _firmware_store()
+        release_files = {
+            s.SPEC.model_id: f
+            for s in esp32_screens()
+            if (f := store.effective_file(s.SPEC.model_id))
+        }
+        if not release_files:
+            logger.error("Flash scan requested but no ESP32 firmware available")
+            return jsonify({"error": "no firmware available on this server"}), 503
         if not state.flash_jobs.begin_scan():
             logger.warning("Flash scan rejected: the serial port is busy")
             return jsonify({"error": "a flash is in progress", "busy": True}), 409
         try:
-            screen = esp32_screen(request.args.get("model")) or huessen_epf1301
             # Leave the scanned screens in the bootloader. Booting one starts a
             # full panel repaint (~30-60s), and a scan is nearly always the step
             # right before a flash — which would then interrupt that paint
             # mid-refresh and wedge the panel controller. The panel keeps showing
             # its last image meanwhile (e-paper holds without power), and
             # arm_deferred_boot puts it back to work if no flash follows.
-            devices = screen.scan_devices(boot_after=False)
+            devices = huessen_epf1301.scan_devices(
+                boot_after=False, specs=esp32_specs(), release_files=release_files
+            )
         finally:
             state.flash_jobs.end_scan()
-        state.flash_jobs.arm_deferred_boot(
-            screen, [d["port"] for d in devices if d.get("is_esp32")]
-        )
-        # Classify non-ESP32 ports the UI knows how to guide: a CH340 bridge is a
-        # Bigme F7 (XR872), which is USB-flashed by a different (vendor-tool)
+        for d in devices:
+            if d.get("is_esp32"):
+                screen = esp32_screen(d.get("model")) or huessen_epf1301
+                state.flash_jobs.arm_deferred_boot(screen, [d["port"]])
+        # Classify non-ESP32 ports the UI knows how to guide: a CH340 bridge
+        # (1A86:7523, not the E1004's CH340K 1A86:7522) is a Bigme F7 (XR872), which is USB-flashed by a different (vendor-tool)
         # procedure, not esptool — so the UI shows F7 guidance instead of the
         # generic "not an ESP32-S3" warning.
         #
@@ -1498,10 +1620,12 @@ def create_app(
         if screen is None:
             logger.info("Flash start: unknown ESP32 model %r", screen_model)
             return jsonify({"error": f"unknown ESP32 screen model {screen_model!r}"}), 400
-        model_firmware = screen.merged_firmware_file()
+        # The firmware library's effective version (a pin, else the newest
+        # bundled/stable), so USB installs exactly what OTA would serve.
+        model_firmware = _firmware_store().effective_file(screen_model)
         if model_firmware is None:
-            logger.error("Flash start requested but no bundled firmware for %s", screen_model)
-            return jsonify({"error": f"no bundled firmware for {screen_model} on this server"}), 503
+            logger.error("Flash start requested but no firmware for %s", screen_model)
+            return jsonify({"error": f"no firmware for {screen_model} on this server"}), 503
         if not screen.nvs_tool_available():
             logger.error("Flash start requested but esp-idf-nvs-partition-gen is not installed")
             return jsonify(
@@ -1570,16 +1694,16 @@ def create_app(
         """Bootstrap a fresh Bigme F7 (XR872) into Hokku firmware over USB.
 
         Catches the mask-BROM (the operator power-cycles with a USB replug + power
-        press) and writes slot 0 via the same validated ``flash_slot`` — bootloader
-        and OEM slot 1 untouched. Wi-Fi/config are provisioned afterward over the
-        device console, not here. Progress polls the shared ``/flash/status``."""
+        press) and writes the inactive A/B slot via the same validated ``flash_slot`` —
+        bootloader and running slot untouched. Optional Wi-Fi/name/server provisioning
+        follows. Progress polls the shared ``/flash/status``."""
         if not bigme_bootstrap.tooling_available():
             logger.error("F7 bootstrap requested but tools/ flash primitives are absent")
             return jsonify({"error": "Bigme F7 flash tooling is not available on this server"}), 503
-        image = bigme_firmware.firmware_image_file()
+        image = _firmware_store().effective_file("bigme_f7")
         if image is None:
-            logger.error("F7 bootstrap requested but no bundled xr_system.img is present")
-            return jsonify({"error": "no bundled Bigme F7 firmware on this server"}), 503
+            logger.error("F7 bootstrap requested but no Bigme F7 firmware image is present")
+            return jsonify({"error": "no Bigme F7 firmware on this server"}), 503
 
         body = request.get_json(silent=True) or {}
         port = (body.get("port") or "").strip()

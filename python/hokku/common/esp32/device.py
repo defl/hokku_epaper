@@ -15,30 +15,42 @@ import subprocess
 import sys
 import tempfile
 import zlib
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 import serial.tools.list_ports
 
-from hokku.common.esp32.firmware import release_app_header
+from hokku.common.esp32.firmware import app_header_of, release_app_header
 from hokku.common.esp32.nvs import read_nvs
 from hokku.common.esp32.spec import Esp32Spec
 
 logger = logging.getLogger(__name__)
 
 
-def list_serial_ports(spec: Esp32Spec) -> list[dict]:
-    """Return ``{port, description, vid, pid, is_esp32}`` for every serial port.
+def usb_spec(specs: Sequence[Esp32Spec], vid: int | None, pid: int | None) -> Esp32Spec | None:
+    """The spec among *specs* whose USB VID:PID is ``vid:pid``, or None."""
+    return next((s for s in specs if (s.vid, s.pid) == (vid, pid)), None)
 
+
+def list_serial_ports(spec: Esp32Spec, specs: Sequence[Esp32Spec] = ()) -> list[dict]:
+    """Return ``{port, description, vid, pid, is_esp32, model}`` for every serial port.
+
+    A port is an ESP32 screen when its USB id matches *spec*, or any of *specs*
+    when given — a caller that has not been told the model (the web scan) passes
+    every ESP32 screen's spec. ``model`` is the matching spec's ``model_id``.
     ``vid``/``pid`` are raw USB ids (or None) so callers can classify the port's
     hardware model (e.g. a CH340 bridge → Bigme F7)."""
     ports = []
     for p in serial.tools.list_ports.comports():
+        match = usb_spec(specs or (spec,), p.vid, p.pid)
         ports.append(
             {
                 "port": p.device,
                 "description": p.description or p.device,
                 "vid": p.vid,
                 "pid": p.pid,
-                "is_esp32": p.vid == spec.vid and p.pid == spec.pid,
+                "is_esp32": match is not None,
+                "model": match.model_id if match else None,
             }
         )
     return ports
@@ -206,6 +218,12 @@ def _version_from_header(header: bytes | None) -> str | None:
     return ver
 
 
+# ``esp_app_desc_t.project_name`` within the 256-byte app header: 24-byte image
+# header + 8-byte segment header, then 48 bytes into the descriptor.
+_PROJECT_NAME_SLICE = slice(80, 112)
+_HOKKU_PROJECT_PREFIX = b"hokku_"
+
+
 def parse_device_state(
     spec: Esp32Spec,
     nvs_data: bytes | None,
@@ -216,8 +234,14 @@ def parse_device_state(
 
     *release_header* is the bundled firmware's app header (256 bytes); if omitted
     it is read from the bundled image. Used to compute ``firmware_current``.
+
+    ``flash_read_ok`` is False when *app_header* is None, i.e. the esptool read
+    failed. ``has_hokku_firmware`` is then False only because nothing was read,
+    so callers must report the read error, never "no Hokku firmware" (which
+    invites a full reflash of what may be a working frame).
     """
     result = {
+        "flash_read_ok": app_header is not None,
         "config": None,
         "has_hokku_firmware": False,
         "config_version_ok": False,
@@ -226,7 +250,9 @@ def parse_device_state(
         "release_version": None,
     }
 
-    if app_header and b"hokku_epaper" in app_header:
+    # Every hokku ESP32 app's project name starts ``hokku_`` (huessen's is
+    # ``hokku_epaper``, the E1004's ``hokku_seeedstudio_e1004``).
+    if app_header and app_header[_PROJECT_NAME_SLICE].startswith(_HOKKU_PROJECT_PREFIX):
         result["has_hokku_firmware"] = True
     result["device_version"] = _version_from_header(app_header)
 
@@ -256,11 +282,19 @@ def parse_device_state(
     return result
 
 
-def scan_devices(spec: Esp32Spec, boot_after: bool = True) -> list[dict]:
+def scan_devices(
+    spec: Esp32Spec,
+    boot_after: bool = True,
+    specs: Sequence[Esp32Spec] = (),
+    release_files: Mapping[str, Path] | None = None,
+) -> list[dict]:
     """Enumerate all serial ports; for ESP32-S3 ports, read on-flash state.
 
     Each ESP32-S3 device is driven over the same serial port a flash uses, so
     only call this when no flash is in progress.
+
+    *specs* widens recognition as in :func:`list_serial_ports`; each recognised
+    device is then read and judged against the spec its USB id matched.
 
     *boot_after* controls whether a scanned device is left running its firmware.
     A caller that is about to flash passes False: booting starts a full panel
@@ -269,20 +303,26 @@ def scan_devices(spec: Esp32Spec, boot_after: bool = True) -> list[dict]:
     keeps showing its last image while held in the bootloader (e-paper is
     persistent), but such a caller MUST guarantee an eventual boot.
 
+    *release_files* maps a model_id to the merged image a flash of that model
+    would write; freshness is judged against it. Models it omits use the bundled
+    image.
+
     Returns a list of dicts (one per serial port).
     """
-    all_ports = list_serial_ports(spec)
+    specs = specs or (spec,)
+    all_ports = list_serial_ports(spec, specs)
     logger.info(
         "Scanning for screens: found %d serial port(s): %s",
         len(all_ports),
         [p["port"] for p in all_ports] or "none",
     )
 
-    release_header = release_app_header(spec)
+    release_headers: dict[str, bytes | None] = {}
     devices = []
     for dev in all_ports:
         dev.update(
             {
+                "flash_read_ok": None,
                 "config": None,
                 "has_hokku_firmware": False,
                 "config_version_ok": False,
@@ -291,13 +331,32 @@ def scan_devices(spec: Esp32Spec, boot_after: bool = True) -> list[dict]:
                 "release_version": None,
             }
         )
-        if dev["is_esp32"]:
-            nvs_data, app_header = read_device_flash(spec, dev["port"], boot_after=boot_after)
-            dev.update(parse_device_state(spec, nvs_data, app_header, release_header))
+        dev_spec = usb_spec(specs, dev["vid"], dev["pid"])
+        if dev_spec is not None:
+            if dev_spec.model_id not in release_headers:
+                target = (release_files or {}).get(dev_spec.model_id)
+                release_headers[dev_spec.model_id] = (
+                    app_header_of(dev_spec, target) if target else release_app_header(dev_spec)
+                )
+            nvs_data, app_header = read_device_flash(dev_spec, dev["port"], boot_after=boot_after)
+            dev.update(
+                parse_device_state(
+                    dev_spec, nvs_data, app_header, release_headers[dev_spec.model_id]
+                )
+            )
             state = dev
+            if not state["flash_read_ok"]:
+                logger.warning(
+                    "  %s: model=%s flash read FAILED (USB link?); state unknown",
+                    dev["port"],
+                    dev_spec.model_id,
+                )
+                devices.append(dev)
+                continue
             logger.info(
-                "  %s: hokku_firmware=%s version=%s firmware_current=%s screen_name=%r",
+                "  %s: model=%s hokku_firmware=%s version=%s firmware_current=%s screen_name=%r",
                 dev["port"],
+                dev_spec.model_id,
                 state["has_hokku_firmware"],
                 state["device_version"] or "unknown",
                 state["firmware_current"],

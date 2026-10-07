@@ -10,7 +10,7 @@ Write the [appliance image](docs/appliance.md) to a Raspberry Pi, join the WiFi 
 |---|---|---|---|
 | **Hokku / Huessen 13.3"** | 13.3" | from ~$279 | ✅ Fully supported — the original, most thoroughly tested |
 | **Bigme F7** | 7.3" | ~$99 | ✅ Supported — proven end-to-end on real hardware |
-| **Seeed reTerminal E1004** | 13.3" | ~$288 | ⚠️ Experimental — confirmed working on real hardware once |
+| **Seeed reTerminal E1004** | 13.3" | ~$288 | ✅ Supported — confirmed working by multiple users |
 
 All three use **E Ink Spectra 6**, so one photo library feeds every frame — and you can mix sizes and orientations against it. See **[Hardware](docs/hardware.md)** for where to buy and what to check.
 
@@ -19,10 +19,11 @@ All three use **E Ink Spectra 6**, so one photo library feeds every frame — an
 **Photos, your way**
 - **Local-only** — your photos never leave your network. No cloud, no third-party servers, no telemetry. The web app itself makes no external requests — fonts and assets are self-hosted, so nothing is phoned home just by opening a browser tab. Your hardware and open source software means you're in full control.
 - **Drag-and-drop upload** — single files or dozens at a time, straight into the web app, with a live progress list. Works on phones too.
-- **Browse in a grid** — preview exactly what the frame will show before it shows it, original and converted version side by side. Delete anything you don't want with one click.
-- **Click any photo** — see how it was processed and compare the original against what's going to the frame at full size.
+- **Browse in a grid** — every photo in the library, with its labels. Delete anything you don't want with one click.
+- **See it before the frame does** — open any photo's details to see how it was processed and, at full size, exactly what's going to the frame.
+- **Fix the odd photo** — override the conversion or the crop for a single picture, or compare the presets on it side by side and pick one.
 - **All the formats you actually have** — JPEG, PNG, HEIC/HEIF, AVIF, WebP, GIF, TIFF, BMP, JPEG XL. Anything from 90s scanned prints to modern iPhone, Android, and JPEG XL. Phone photos auto-rotate.
-- **Landscape or portrait** — flip a switch and everything re-converts to match how the frame is mounted.
+- **Landscape or portrait** — set each frame's orientation to match how it's mounted, and it gets images converted to suit.
 - **Jump the queue** — pick any photo in the library to be the next one shown on the frame.
 
 **Looks good on e-paper**
@@ -34,10 +35,11 @@ All three use **E Ink Spectra 6**, so one photo library feeds every frame — an
 - **Colour-accurate** — calibrated against the actual panels, not a theoretical colour profile.
 
 **Smart about frames**
-- **Over-the-air firmware updates** — update the firmware on any frame wirelessly from the web app. Open a frame's Details, toggle "Update firmware on next refresh", and the frame downloads and installs the new firmware on its own — no USB, no cable, no terminal. The old firmware stays in a second slot and is automatically restored if the new one can't reach the server. First-time setup still needs a USB flash to activate OTA; after that, all future updates are wireless.
-- **Flash frames from the web app** — if you're running the server on the same machine you use for setup (the appliance scenario), connect a frame via USB and use "Flash a screen" in the web app directly, without running any setup wizard separately. On the Pi Zero 2 W appliance the single USB port is dual-role, so **boot the appliance with nothing on the data port, then hot-plug the frame** (through a micro-USB→USB-A OTG adapter, with the Pi powered from its PWR port) — a frame attached at boot stops the appliance from starting. See [the appliance guide](docs/appliance.md#flashing-a-frame-from-the-appliance).
-- **Multiple frames, one server** — each frame gets a name and shows up in a dashboard with battery level, WiFi signal, and when it'll next update. Mix models, sizes and orientations against one library: a 13.3" frame in the hall and a 7.3" on a shelf, each served images converted for its own panel.
-- **Per-frame settings** — orientation, crop behaviour and firmware updates are set per screen, not globally.
+- **Over-the-air firmware updates** — update the firmware on any frame wirelessly from the web app. Open a frame's Config, toggle "Update firmware on next refresh", and the frame downloads and installs the new firmware on its own — no USB, no cable, no terminal. The old firmware stays in a second slot and is automatically restored if the new one can't reach the server. First-time setup still needs a USB flash to activate OTA; after that, all future updates are wireless.
+- **Flash frames from the web app** — plug a frame into the machine the server runs on and use "Flash a screen" in the web app, including on a brand-new frame. No setup wizard to run separately. On the Pi Zero 2 W appliance, power the Pi from its PWR port and connect the frame to the data port through a micro-USB→USB-A OTG adapter. See [the appliance guide](docs/appliance.md#flashing-a-frame-from-the-appliance).
+- **Multiple frames, one server** — each frame gets a name and shows up in a dashboard with battery level, last-shown image, and when it'll next update. Mix models, sizes and orientations against one library: a 13.3" frame in the hall and a 7.3" on a shelf, each served images converted for its own panel.
+- **Per-frame settings** — name, orientation, label filter and firmware updates are set per screen, not globally. Rename a frame from the web app; it picks up the new name on its next refresh.
+- **Labels** — tag pictures ("hall", "summer", "kids' drawings") and tick labels per frame so each frame rotates through its own slice of one shared library. No labels ticked means the whole library, as before.
 - **Knows which firmware each frame runs** — the dashboard shows every frame's firmware version and flags the ones that are behind.
 - **Fair rotation** — every photo gets its turn. Newly uploaded photos go to the front of the queue; after that, whichever image has been shown least goes next.
 - **Battery lasts months** — the frame uses almost no power between refreshes. The web app shows a battery level for each frame and flags it red when it's getting low.
@@ -45,10 +47,10 @@ All three use **E Ink Spectra 6**, so one photo library feeds every frame — an
 - **Late-frame warning** — if a frame misses its scheduled update by more than an hour, the web app flags it so you know to check WiFi or the battery.
 - **Scheduled updates** — set the times you want the photo to change (e.g. morning, noon, evening) and the frame wakes up on its own. No constant connection needed.
 - **Settings are on the server** — change the schedule or any other server setting in the web app and every frame picks it up automatically. No restarts, no reflashing.
-- **Instant refresh** — there's a button on the frame that forces an immediate update whenever you want one.
+- **Instant refresh** — on the Hokku / Huessen frame, press the power button to show the next image whenever you want one.
 - **Diagnostics on demand** — one click in the web app shows the frame's status without needing a cable.
 - **Recovers on its own** — a frame that can't reach the server backs off and retries rather than hammering the network flat, and a firmware update that can't phone home afterwards rolls itself back to the previous version.
-- **What happened last refresh** — after every update the frame sends a log of what it did to the server (WiFi connection, image download, display result). Open a frame's details in the web app to read it — no cable, no terminal needed.
+- **What happened last refresh** — after every update the frame sends a log of what it did to the server (WiFi connection, image download, display result). Open a frame's Details in the web app to read it — no cable, no terminal needed.
 - **Comically over-engineered firmware** — on the ESP32 frames it runs at 240 MHz (up from the 160 MHz default) on a dual-core processor with the compiler's maximum optimisations turned on, code and data copied into dedicated high-speed RAM at boot, and cache tuned for the exact chip revision on your board. Completely unnecessary for a frame that wakes up once a day, downloads a picture, and goes back to sleep. We did it anyway. 🚀
 - **A whole SoC reverse-engineered for the cheap one** — the $99 Bigme F7 runs an XRADIOTECH XR872AT: no public SDK support, no vendor documentation. Supporting it meant recovering the panel init sequence from the stock firmware and writing a BROM flasher from scratch in Python, so adopting one needs no vendor tools at all.
 
@@ -66,7 +68,22 @@ All three use **E Ink Spectra 6**, so one photo library feeds every frame — an
 
 <img src="images/ui.png" width="500">
 
-Three tabs: **Images** (your photo library — upload, preview, manage), **Screens** (live status of each frame — battery, WiFi, last seen, next update, per-frame orientation), and **Config** (refresh schedule and conversion settings). Everything updates live without a page reload. For a full walkthrough of every feature see the **[user manual](docs/manual.md)**.
+One page: **Images** (your photo library — upload, preview, label, manage), **Connected Screens** (live status of each frame — battery, last seen, next update — and its per-frame settings), and a collapsed **Admin** section (flashing, firmware library, conversion settings, refresh schedule). Everything updates live without a page reload. For a full walkthrough of every feature see the **[user manual](docs/manual.md)**.
+
+## Colour accuracy
+
+The panel settings come from measuring real panels, not a spec sheet: over a thousand colorimeter readings off the glass, then thousands of camera captures judged side by side. See **[Colour accuracy](docs/colour_accuracy.md)** for how it was done.
+
+<table>
+<tr>
+<td><img src="images/colour/colormunki_on_f7.jpg" width="400"></td>
+<td><img src="images/colour/f7_gamut.png" width="360"></td>
+</tr>
+<tr>
+<td>A colorimeter reading test patches off the Bigme F7.</td>
+<td>The F7's six inks against sRGB. E-ink covers a lot less colour than a monitor.</td>
+</tr>
+</table>
 
 ## System Requirements
 
@@ -88,7 +105,9 @@ Hokku loves Pi! If you need to pick one up, the **[hardware guide](docs/hardware
 
 *(Describes the Hokku / Huessen 13.3" frame — other models differ; see their [screen documentation](docs/hardware.md).)*
 
-**The button** on the back of the frame (right-hand side in landscape, lower side in portrait) forces an immediate refresh — pulls the next image from the server right now, ignoring the schedule. Works whether the frame is deep-asleep on battery, plugged into USB, or anywhere in between.
+**The power button** shows the next image right away: it pulls the next image from the server, ignoring the schedule. It works whether the frame is deep-asleep on battery or plugged into USB. It never switches the frame off; between refreshes the frame is already in a deep sleep that draws almost nothing.
+
+**The other two buttons** do nothing. Only the power button can wake the frame from deep sleep, so the other two are left unused.
 
 **Two tiny LEDs** on the bottom of the frame:
 
@@ -101,6 +120,7 @@ Hokku loves Pi! If you need to pick one up, the **[hardware guide](docs/hardware
 - **[User manual](docs/manual.md)** — full guide to the web app, frame behaviour, and day-to-day use.
 - **[Installation](docs/install.md)** — step-by-step server + firmware setup for those who prefer the scenic route.
 - **[Dithering pipeline](docs/dithering.md)** — why it looks the way it does; failure modes and countermeasures.
+- **[Colour accuracy](docs/colour_accuracy.md)** — how the panels were measured and the colour tuning was chosen.
 - **[Hardware](docs/hardware.md)** — every supported frame, where to buy, and the recommended Pi server kit.
 - **Per-screen documentation** — [Hokku / Huessen 13.3"](docs/screens/huessen_epf1301/README.md) · [Bigme F7](docs/screens/bigme_f7/README.md) · [Seeed reTerminal E1004](docs/screens/seeedstudio_e1004/README.md) — hardware, firmware and quirks for each.
 - **[Changelog](CHANGELOG.md)** — release history.

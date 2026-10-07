@@ -18,6 +18,7 @@ import json
 import struct
 import zlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -42,11 +43,13 @@ def _never_touch_real_hardware(monkeypatch):
     monkeypatch.setattr(esp32_flasher, "boot_app", lambda *a, **k: True)
 
 
-def _make_app_header(version: bytes = b"20260101000000Z") -> bytes:
-    """A 256-byte app header with the version string at bytes 48:80."""
+def _make_app_header(
+    version: bytes = b"20260101000000Z", project: bytes = b"hokku_epaper"
+) -> bytes:
+    """A 256-byte app header: version at bytes 48:80, project name at 80:112."""
     header = bytearray(256)
-    header[0:12] = b"hokku_epaper"
     header[48 : 48 + len(version)] = version
+    header[80 : 80 + len(project)] = project
     return bytes(header)
 
 
@@ -103,6 +106,61 @@ def test_parse_device_state_detects_firmware_and_version(esp32_mod):
     assert state["has_hokku_firmware"] is True
     assert state["device_version"] == "20260101000000Z"
     assert state["firmware_current"] is True
+
+
+@pytest.mark.parametrize("project", [b"hokku_epaper", b"hokku_seeedstudio_e1004"])
+def test_parse_device_state_recognises_every_hokku_app(esp32_mod, project):
+    # The E1004's app is hokku_seeedstudio_e1004, not huessen's hokku_epaper (#45).
+    state = esp32_mod.parse_device_state(b"", _make_app_header(project=project))
+    assert state["has_hokku_firmware"] is True
+
+
+def test_parse_device_state_failed_read(esp32_mod):
+    # read_device_flash returns (None, None) when esptool fails; that is "state
+    # unknown", flagged so callers don't report it as "no Hokku firmware".
+    state = esp32_mod.parse_device_state(None, None, release_header=_make_app_header())
+    assert state["flash_read_ok"] is False
+    assert esp32_mod.parse_device_state(b"", _make_app_header())["flash_read_ok"] is True
+
+
+def test_parse_device_state_foreign_app(esp32_mod):
+    state = esp32_mod.parse_device_state(b"", _make_app_header(project=b"E_Frame"))
+    assert state["has_hokku_firmware"] is False
+
+
+def test_scan_devices_matches_each_board_by_its_usb_id(monkeypatch):
+    """With every ESP32 spec, a scan recognises both boards and tags their model;
+    the E1004 enumerates as its CH340K (1A86:7522), the F7's CH340 is 7523."""
+    ports = [
+        SimpleNamespace(device="COM3", description="USB JTAG", vid=0x303A, pid=0x1001),
+        SimpleNamespace(device="COM12", description="CH340K", vid=0x1A86, pid=0x7522),
+        SimpleNamespace(device="COM9", description="CH340", vid=0x1A86, pid=0x7523),
+    ]
+    monkeypatch.setattr(esp32_device.serial.tools.list_ports, "comports", lambda: ports)
+    read_with = {}
+
+    def fake_read(spec, port, **kwargs):
+        read_with[port] = spec.model_id
+        return None, None
+
+    monkeypatch.setattr(esp32_device, "read_device_flash", fake_read)
+    monkeypatch.setattr(esp32_device, "release_app_header", lambda spec: None)
+
+    devs = {
+        d["port"]: d
+        for d in huessen_epf1301.scan_devices(
+            boot_after=False, specs=[huessen_epf1301.SPEC, seeedstudio_e1004.SPEC]
+        )
+    }
+    assert (devs["COM3"]["is_esp32"], devs["COM3"]["model"]) == (True, "huessen_epf1301")
+    assert (devs["COM12"]["is_esp32"], devs["COM12"]["model"]) == (True, "seeedstudio_e1004")
+    assert (devs["COM9"]["is_esp32"], devs["COM9"]["model"]) == (False, None)
+    # Each device is read with the spec its USB id matched.
+    assert read_with == {"COM3": "huessen_epf1301", "COM12": "seeedstudio_e1004"}
+
+    # Bound to one model without specs, only that model's id is recognised.
+    only = {d["port"]: d["is_esp32"] for d in seeedstudio_e1004.scan_devices(boot_after=False)}
+    assert only == {"COM3": False, "COM12": True, "COM9": False}
 
 
 def test_parse_device_state_blank_device(esp32_mod):
@@ -503,3 +561,28 @@ def test_firmware_config_returns_migrated_nvs_image(esp32_mod, app_config, tmp_p
     assert back["screen_name"] == "Den"
     assert back["image_url"] == cfg["image_url"]
     assert back["wifi_order"] == 1
+
+
+@pytest.mark.skipif(
+    not esp32_nvs.nvs_tool_available(), reason="esp-idf-nvs-partition-gen not installed"
+)
+def test_firmware_config_carries_the_servers_name(esp32_mod, app_config, tmp_path):
+    """An OTA that starts before the device has adopted a UI rename writes the
+    server's name into the rebuilt NVS, so the update can't bring the old one back."""
+    state = _bare_state(app_config)
+    client = _client(state, tmp_path)
+    mac = "de:ad:be:ef:00:20"
+    state.scheduler.record_screen_call("Den", "1.1.1.1", 300, None, None, None, mac=mac)
+    state.scheduler.rename_screen("Den", "Study")
+    cfg = {"wifi_ssid1": "Net", "image_url": "http://x/hokku/screen/", "screen_name": "Den"}
+    r = client.get(
+        "/hokku/firmware-config",
+        headers={
+            "X-Screen-Name": "Den",
+            "X-Screen-Mac": mac,
+            "X-Screen-Model": esp32_mod.SPEC.model_id,
+            "X-Config-State": json.dumps(cfg),
+        },
+    )
+    assert r.status_code == 200
+    assert esp32_mod.read_nvs(r.data)["screen_name"] == "Study"

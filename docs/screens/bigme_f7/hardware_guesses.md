@@ -27,8 +27,8 @@ All pin assignments below are XR872AT SDK defaults. The device vendor may use an
 | PB7 | FLASH_CLK | XR872AT hardware-fixed |
 
 Display SPI pins — confirmed from boot partition disassembly 2026-06-06 (moved to facts):
-PA9=BUSY (input), PA19=MOSI/DC, PA21=SCLK, PA22=CS (active low).
-Remaining unknown: which of PA8, PA13, PA15, PA16, PA17 is RST vs power-enable.
+PA9=BUSY (input), PA19=MOSI/DC, PA21=SCLK, PA22=CS (active low), PA13=RST, PB17=POWER_EN.
+Remaining unknown: what PA8/PA15/PA16 (held static by the OEM) actually control.
 
 ## UART / Boot Protocol
 
@@ -45,6 +45,11 @@ From XR872AT SDK documentation unless noted:
   unit, a boot-strap pad may be the only non-SPI-clip recovery. Needs PCB probing.
 
 ## Custom-firmware XIP crash (root cause TBD)
+
+> **Worked around.** The `platform_init_level0` override in `firmware/bigme_f7/main.c` now
+> sets the bias per slot (`0x13040 + boot_seq * 0x179000`) and the firmware boots from either
+> slot ([`custom_firmware.md`](custom_firmware.md)). Why the stock SDK path leaves it 0 is
+> still unconfirmed; the notes below are the original investigation.
 
 Our custom firmware crashes in `platform_init_level1` (MemManage IACCVIOL, PC=0x40000000) because
 the XIP cache bias (`OPI_MEM_CTRL->BIAS_ADDR0`, see facts) is left at 0 instead of our app_xip
@@ -110,5 +115,4 @@ Controller, image format, and SPI pins are now fully confirmed — see [`hardwar
 
 Remaining unknowns:
 - **Panel part number**: Likely GDEP073E01 or equivalent 7.3" Spectra 6 module — not confirmed
-- **RST pin**: PA15 is set LOW during GPIO init (EPD_init_2) suggesting active-low reset, but not conclusively confirmed vs PA8/PA13/PA16/PA17
 - **Image transfer**: Confirmed from disassembly (2026-06-06). `pictureUrl` HTTP response is raw 4bpp (192000 bytes, no header). The device streams HTTP body bytes directly to EPD via SPI with no intermediate decode step. No JPEG decoder exists.

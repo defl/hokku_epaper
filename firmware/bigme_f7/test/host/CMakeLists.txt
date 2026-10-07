@@ -37,6 +37,7 @@ add_executable(test_config
 target_include_directories(test_config PRIVATE
     mocks
     ../..
+    ../../../common/all     # screen_ident.h (rename validation)
     ../../../common/xr872   # hokku_config.h/.c moved here
 )
 

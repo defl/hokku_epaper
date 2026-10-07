@@ -65,6 +65,7 @@ appliance is unreachable any other way. See
 | `hokku/installer/ap_manager.py` | Raises/tears down the AP via `nmcli` |
 | `hokku/installer/system_config.py` | Applies hostname, timezone, WiFi country, SSH, Samba, password |
 | `hokku/installer/network_config.py` | Writes the target WiFi connection (DHCP or static) |
+| `hokku/installer/wifi_scanner.py` | `nmcli` scan behind the form's network list |
 | `hokku/installer/setup_state.py` | Sentinel + saved answers |
 | `hokku/installer/validators.py` | Field validation shared by form and tests |
 | `files/dnsmasq-ap.conf` | DHCP range and catch-all DNS for the portal |
@@ -93,8 +94,8 @@ appliance is unreachable any other way. See
   installed and so can use the installed script). Don't reintroduce a second
   copy of the `config.txt`/`cmdline.txt` edits anywhere; `dr_mode=otg` is not a
   way out, it was tried and reverted.
-- Field names in `flask_app.py` and `templates/index.html` must stay in sync with
-  `validators.py`; `python/tests/` covers the validation paths.
+- Field names in `flask_app.py` and `hokku/installer/templates/index.html` must stay in sync with
+  `validators.py`. Nothing tests that: CI only checks the modules import.
 
 ## Building
 

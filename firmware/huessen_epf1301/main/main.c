@@ -127,12 +127,9 @@ static const char *TAG = "hokku";
 /* Fallback sleep durations when we have no server-provided schedule */
 #define SLEEP_FALLBACK_3H_US  (3LL * 3600 * 1000000LL)
 
-/* Retry delay when a refresh attempt fails (WiFi down, server unreachable,
- * server returned nonsense sleep_seconds). Applied as the next
- * next_refresh_epoch so the regime loops don't hot-retry at 100 ms. */
-#define REFRESH_RETRY_SECONDS           60
-#define REFRESH_RETRY_MAX_SECONDS       3600  /* backoff cap when the server stays unreachable: 1 h */
-#define SERVER_BUSY_DISPLAY_THRESHOLD_S 20
+/* Retry delays after a failed refresh are shared (HOKKU_RETRY_BASE_S /
+ * HOKKU_RETRY_MAX_S in common/all/fetch_outcome.h) and land in
+ * next_refresh_epoch, so the regime loops never hot-retry at 100 ms. */
 
 /* A freshly-OTA'd (pending-verify) app that fails its FIRST refresh gets rolled
  * back on the next reboot. That first refresh can miss on a one-off transient
@@ -170,7 +167,7 @@ static spi_device_handle_t spi_handle;
 #include "ota.h"            /* A/B OTA (shared) */
 #include "frame_state.h"    /* X-Frame-State JSON builder (SoC-agnostic) */
 #include "firmware_url.h"   /* firmware endpoint derivation (SoC-agnostic) */
-#include "backoff.h"        /* shared exponential-retry-backoff policy (SoC-agnostic) */
+#include "fetch_outcome.h"  /* shared reply decision + retry backoff (SoC-agnostic) */
 #include "json_util.h"      /* json_escape (SoC-agnostic) */
 #include "frame_proto.h"    /* serial frame-upload protocol (SoC-agnostic) */
 #include "console.h"        /* USB Serial/JTAG console + `frame` dispatch */
@@ -370,7 +367,7 @@ static void spi_init(void)
 
 /* Matches the original firmware's hardware_reset at IROM 0x4200b984:
  *   RST LOW 100ms, RST HIGH 100ms, then wait for BUSY before any cmd.
- * See .private/boot_analysis/FINAL_FINDINGS.md. Our previous
+ * See docs/screens/huessen_epf1301/reverse_engineering_v2.0.26_jun20.md. Our previous
  * 20ms / 20ms / 200ms (no BUSY wait) sequence was the leading suspect
  * for why the display got stuck in half-rendered states that only
  * reflashing the original firmware reliably cleared. */
@@ -389,7 +386,7 @@ static void epaper_init_panel(void)
 {
     /* Init sequence matches the June 2025 E_Frame v2.0.26 firmware (IROM
      * 0x4200b9e8), extracted by Ghidra decompilation of the factory dump
-     * currently running on the device. See .private/ANALYSIS_FINAL.md.
+     * currently running on the device. See docs/screens/huessen_epf1301/reverse_engineering_v2.0.26_jun20.md.
      *
      * Differences from the April 2025 v2.0.19 sequence we used previously:
      *   - cmd_00 (PANEL_SETTING):        0xDF 0x69 -> 0xDF 0x6B  (bit flip)
@@ -482,7 +479,7 @@ static void epaper_send_panel(int ctrl_pin, const uint8_t *image)
 /* Send 480K per panel and refresh. ctrl1_data and ctrl2_data are each 480K.
  *
  * Structure mirrors display_update() from the original firmware
- * (IROM 0x4200acac, disassembled in .private/boot_analysis/FINAL_FINDINGS.md):
+ * (IROM 0x4200acac; see docs/screens/huessen_epf1301/reverse_engineering_v2.0.26_jun20.md):
  *
  *   gpio_set_level(17, 1)       ; raise display rail
  *   vTaskDelay(10ms)
@@ -618,7 +615,7 @@ static void epaper_display_dual(const uint8_t *ctrl1_data, const uint8_t *ctrl2_
 
     /* Step 7: post-refresh shutdown sequence.  Matches the June 2025
      * original firmware's display_update() at IROM 0x4200acb0 byte-for-
-     * byte (Ghidra decompilation, .private/ANALYSIS_FINAL.md).
+     * byte (Ghidra decompilation; see reverse_engineering_v2.0.26_jun20.md).
      *
      * First drive all SPI / button / indicator pins LOW so there is no
      * residual voltage on MOSI/SCLK that could back-bias the UC8179C
@@ -1175,22 +1172,15 @@ static void enter_deep_sleep(int64_t sleep_us)
  * slot flip, rollback-commit) is shared, in common/esp32/ota.c. huessen passes
  * its display_message as the progress callback. */
 
-/* Exponential backoff for repeated "server unreachable" failures (WiFi down or
- * download failed). Bumps the RTC-persistent failure streak and returns the next
- * retry interval, doubling from REFRESH_RETRY_SECONDS and capped at
- * REFRESH_RETRY_MAX_SECONDS: 60s, 120, 240, ... 3600. Without this a server
- * outage reboots the device + re-renders the panel every 60s indefinitely
- * (battery, flash-wear, e-paper wear). The caller resets the streak to 0 on any
- * successful server contact. Returns true via *first_of_streak on the first
- * failure so the caller can draw the error once and stay silent afterward. */
-static int refresh_retry_backoff_seconds(bool *first_of_streak)
-{
-    uint8_t n = consecutive_refresh_failures;      /* failures BEFORE this one */
-    if (consecutive_refresh_failures < 255) consecutive_refresh_failures++;
-    if (first_of_streak) *first_of_streak = (n == 0);
-    return hokku_backoff_seconds(n, REFRESH_RETRY_SECONDS, REFRESH_RETRY_MAX_SECONDS);
-}
-
+/* Fetch + act on the server's reply. What a reply means (display / keep the
+ * picture / back off), the outage streak and the next wake are shared:
+ * scheduler_apply_fetch() runs the common/all fetch_outcome decision, so this
+ * board reacts to every reply exactly like the others. Board-specific: drawing
+ * the image, and drawing an error once at the start of an outage streak (later
+ * backed-off retries stay silent to spare battery and e-paper).
+ *
+ * Returns true when the server answered (DISPLAY or KEEP) — that is what proves
+ * a freshly-OTA'd app works. */
 static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
 {
     /* Enable INFO logging for the duration of the refresh so diagnostics
@@ -1205,14 +1195,12 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
     int32_t cal_seed_ppm = 0;
     int     cal_seed_n = -1;   /* < 0 until the server's seed headers arrive */
     uint8_t *img = NULL;
+    hokku_fetch_result_t res = { .http_status = 0 };   /* 0 = no response */
 
     if (!wifi_connect()) {
         ESP_LOGE(TAG, "WiFi connect failed");
-        bool first;
-        int backoff = refresh_retry_backoff_seconds(&first);
-        /* Draw the error only on the first failure of a streak — re-rendering
-         * the panel on every backed-off retry wastes battery + e-paper. */
-        if (first) {
+        hokku_fetch_outcome_t o = scheduler_apply_fetch(&res, 0, 0);
+        if (o.first_failure) {
             char wifi_err_msg[256];
             snprintf(wifi_err_msg, sizeof(wifi_err_msg),
                      "WiFi connect failed.\n"
@@ -1222,7 +1210,6 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
                      "try again now.");
             display_message(wifi_err_msg);
         }
-        schedule_retry_in(backoff, "wifi_connect failed");
         log_level_apply(usb_host_present());
         return false;
     }
@@ -1233,10 +1220,14 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
                          fw_update_ver, sizeof(fw_update_ver),
                          &cal_seed_ppm, &cal_seed_n, wake_label, boot_time_us);
     local_time_at_download_us = esp_timer_get_time();
+    res.http_status = http_status;
+    res.image_ok    = (img != NULL);
+    res.sleep_s     = sleep_seconds;
 
     /* OTA path: the server asked this screen to update. The image body (if any)
      * is ignored. perform_ota needs WiFi, so do it before wifi_shutdown(); on
-     * success it reboots into the new slot and never returns. */
+     * success it reboots into the new slot and never returns. perform_ota draws
+     * its own progress/failure messages. */
     if (fw_update_ver[0] != '\0') {
         if (img) { heap_caps_free(img); img = NULL; }
         bool ota_ok = perform_ota(fw_update_ver, config.image_url, config.screen_name,
@@ -1244,7 +1235,8 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
         wifi_shutdown();
         gpio_set_level(PIN_WIFI_LED, 0);
         if (!ota_ok) {
-            schedule_retry_in(REFRESH_RETRY_SECONDS, "ota failed");
+            res.ota_failed = true;
+            scheduler_apply_fetch(&res, 0, 0);
         }
         log_level_apply(usb_host_present());
         return ota_ok;
@@ -1253,71 +1245,29 @@ static bool perform_refresh(const char *wake_label, int64_t boot_time_us)
     wifi_shutdown();
     gpio_set_level(PIN_WIFI_LED, 0);
 
-    /* Update persisted schedule: absolute server epoch at which the next
-     * refresh is due. Anchors to server time so display + awake time
-     * doesn't drift the wake moment later each cycle.
-     *
-     * If server_epoch is bad (<=0) or sleep_seconds is nonsense (<=0 —
-     * malformed response, misconfigured server), fall through to the
-     * retry-in-60s helper below so we don't hot-loop. */
-    if (scheduler_set_after_refresh(server_epoch, sleep_seconds, local_time_at_download_us)) {
-        ESP_LOGI(TAG, "Next refresh scheduled for epoch %lld (in %d s)",
-                 (long long)next_refresh_epoch, (int)sleep_seconds);
-    } else if (img) {
-        /* Download succeeded but the response was missing / invalid
-         * scheduling headers. Display the image we got (below) but
-         * don't trust the schedule. */
-        schedule_retry_in(REFRESH_RETRY_SECONDS,
-                          "server response missing/invalid X-Sleep-Seconds");
-    }
-
-    if (!img) {
-        if (http_status == 503 && sleep_seconds > 0) {
-            /* Server busy (converting images, cache warming, etc.) — it IS
-             * reachable, so clear the outage streak and use the server-suggested
-             * retry interval from X-Sleep-Seconds. */
-            consecutive_refresh_failures = 0;
-            if (sleep_seconds > SERVER_BUSY_DISPLAY_THRESHOLD_S) {
-                char msg[128];
-                snprintf(msg, sizeof(msg),
-                         "Server not ready.\n"
-                         "\n"
-                         "Retrying in %d s.\n"
-                         "Press reset to try\n"
-                         "again now.",
-                         (int)sleep_seconds);
-                display_message(msg);
-            }
-            /* ≤ threshold: silent — leave current display untouched. */
-            schedule_retry_in((int)sleep_seconds, "server busy (503)");
-        } else {
-            /* Real failure: network error, non-503, or 503 without header.
-             * Back off exponentially and draw the error only once per streak so
-             * a server outage doesn't reboot + re-render every 60 s forever. */
-            bool first;
-            int backoff = refresh_retry_backoff_seconds(&first);
-            if (first) {
-                char msg[384];
-                snprintf(msg, sizeof(msg),
-                         "Image download failed.\n"
-                         "\n"
-                         "Tried to connect to:\n"
-                         "%s\n"
-                         "\n"
-                         "Retrying (backing off).\n"
-                         "Press reset to try\n"
-                         "again now.",
-                         config.image_url);
-                display_message(msg);
-            }
-            schedule_retry_in(backoff, "download failed");
+    hokku_fetch_outcome_t o = scheduler_apply_fetch(&res, server_epoch,
+                                                    local_time_at_download_us);
+    if (o.action != HOKKU_FETCH_DISPLAY) {
+        if (img) heap_caps_free(img);
+        /* KEEP leaves the picture alone: the server answered, nothing is wrong.
+         * An outage draws its error once, at the start of the streak. */
+        if (o.action == HOKKU_FETCH_BACKOFF && o.first_failure) {
+            char msg[384];
+            snprintf(msg, sizeof(msg),
+                     "Image download failed.\n"
+                     "\n"
+                     "Tried to connect to:\n"
+                     "%s\n"
+                     "\n"
+                     "Retrying (backing off).\n"
+                     "Press reset to try\n"
+                     "again now.",
+                     config.image_url);
+            display_message(msg);
         }
         log_level_apply(usb_host_present());
-        return false;
+        return o.action == HOKKU_FETCH_KEEP;
     }
-
-    /* Got an image — server reached and healthy; clear any outage streak. */
-    consecutive_refresh_failures = 0;
 
     /* Cold-start seed: an uncalibrated device (fresh flash / wiped NVS) adopts
      * the server's MAC-pinned mean so it doesn't re-converge from scratch. */
@@ -1445,8 +1395,8 @@ static void regime_battery_idle(int64_t boot_time_us)
      * us via EXT1).
      *
      * perform_refresh always sets next_refresh_epoch to a future value
-     * on this boot (either from the server's schedule or via
-     * schedule_retry_in on failure). The shared scheduler derives the
+     * on this boot (scheduler_apply_fetch, whatever the reply). The
+     * shared scheduler derives the
      * interval from the anchor (all three states), pre-distorts it by the
      * learned oscillator drift so the wake lands on the slot, and records
      * what it armed for the next cycle's measurement. SLEEP_FALLBACK_3H_US
@@ -1639,15 +1589,17 @@ void app_main(void)
         hokku_cal_save_if_changed();
 
         bool refreshed = perform_refresh(label, boot_time);
-        /* A successful refresh proves a freshly-OTA'd app can reach the server
-         * and drive the display — confirm it so the bootloader stops watching
-         * for a rollback. No-op on a normally-booted (non-pending) app.
+        /* A server answer (an image, or a "keep your picture" reply) proves a
+         * freshly-OTA'd app can reach the server — confirm it so the bootloader
+         * stops watching for a rollback. No-op on a normally-booted
+         * (non-pending) app. Counting the keep reply matters: a screen whose
+         * label filter matches nothing would otherwise roll back every OTA.
          *
          * When we are pending-verify and the first refresh missed (usually a
          * one-off mDNS-warmup hiccup on a fresh boot), retry a few times before
          * giving up — otherwise the next reboot rolls back an otherwise-good
          * OTA. Non-pending boots don't retry here; a failed refresh takes the
-         * usual 60 s schedule_retry_in path. */
+         * shared backoff path. */
         for (int attempt = 2;
              !refreshed && attempt <= OTA_PENDING_VERIFY_REFRESH_ATTEMPTS
                  && ota_is_pending_verify();

@@ -71,6 +71,13 @@ def test_inline_javascript_parses(rendered_ui: str, tmp_path: Path):
         "imgcfg-compare-btn",
         "imgcfg-crop",
         "imgcfg-compare-grid",
+        # Labels: the per-picture editor, the bulk bar and the shared datalist.
+        "img-detail-labels",
+        "img-detail-label-input",
+        "label-bulk-bar",
+        "label-select-btn",
+        "label-datalist",
+        "label-filter-select",
     ],
 )
 def test_ui_has_mount_points(rendered_ui: str, element_id: str):

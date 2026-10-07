@@ -1,9 +1,8 @@
 # Bigme F7 — Firmware Dump and Flash Procedure
 
 Full 4 MB flash dump successfully obtained 2026-06-06 (repeated 2026-06-06 to verify automation).
-Dumps are organised per physical unit under `.private/units/<serial>_<tag>/flash_full.bin`
-(4,194,304 bytes, `AWIH` magic — valid XR872AT images). Two units dumped so far:
-one factory unit and one provisioned unit (folders named `<serial>_<tag>`). See each unit's `NOTES.md`.
+Dumps (4,194,304 bytes, `AWIH` magic — valid XR872AT images) are kept per physical unit,
+outside the repo. Two units dumped so far: one factory unit and one provisioned unit.
 
 ## Hardware Setup
 
@@ -16,11 +15,7 @@ one factory unit and one provisioned unit (folders named `<serial>_<tag>`). See 
 **PhoenixMC v3.1.240901a** — the XRADIO/Allwinner flash tool.
 (XRadioTech was acquired by Allwinner; the tool works for XR806/XR809/XR872 family.)
 
-Copies archived at `.private/tools/`:
-- `phoenixmc_v3.1.240901a/` ← used for the dump
-- `phoenixmc_v3.1.23215d/`
-- `phoenixmc_v3.1.21014b/`
-- Also available at: https://github.com/openshwprojects/FlashTools/tree/main/XRadioTech-AllWinner
+Available at: https://github.com/openshwprojects/FlashTools/tree/main/XRadioTech-AllWinner
 
 ## Critical Setting: Baud Rate
 
@@ -72,8 +67,7 @@ python tools/_dump_bigme_f7.py [out_dir]
 - Auto-enters BROM via the awake firmware console (`upgrade\n` → watchdog reset → BROM), retrying
   until it syncs; if the device is asleep, a single button press wakes it.
 - Dumps the whole 4 MB in 256 KB ReadSector frames chained on **one** BROM session (~6 min).
-- `out_dir` is optional; pass a per-unit folder, e.g.
-  `.private/units/<serial>_<tag>`.
+- `out_dir` is optional; pass a per-unit folder.
 
 This depends on the **sector-addressed** ReadSector/WriteSector semantics (addr = `byte>>9`,
 length = sector count) — see "BROM command wire protocol" in [`hardware_facts.md`](hardware_facts.md).
@@ -166,7 +160,7 @@ Phases:
 2. Wait for BROM mode (`Open comm OK!`)
 3. Read 4 MB flash → `flash_A_0x0_L_0x400000.bin` in PhoenixMC dir (~5 min)
 4. Compare first 1 MB against `firmware/bigme_f7/image/xr872/xr_system.img`
-5. Flash any unit's OEM image `.private/units/<serial>_<tag>/flash_full.bin` (4 MB) (~5 min). Dumps are effectively interchangeable: firmware is identical and the MAC lives in efuse (not flash), so the device keeps its own MAC / `BIGME_<MAC>` cloud ID / `XRZ_<MAC>` AP regardless. The only thing inherited from the donor dump is the in-flash config blob (`sn=` serial, prior owner's WiFi creds/email, cached picture) — overwritten on re-provision. Prefer the unit's *own* dump only to preserve its original serial/config.
+5. Flash any unit's 4 MB OEM dump (~5 min). Dumps are effectively interchangeable: firmware is identical and the MAC lives in efuse (not flash), so the device keeps its own MAC / `BIGME_<MAC>` cloud ID / `XRZ_<MAC>` AP regardless. The only thing inherited from the donor dump is the in-flash config blob (`sn=` serial, prior owner's WiFi creds/email, cached picture) — overwritten on re-provision. Prefer the unit's *own* dump only to preserve its original serial/config.
 6. Click reboot, close PhoenixMC, open COM6 at 115200 baud, capture 30 s of boot output
 
 ### OEM Restore from AND-Corrupted Flash
@@ -185,7 +179,7 @@ those bits at 0).
 Phases:
 1. Launch PhoenixMC (device auto-connects from BROM mode, no button press needed)
 2. Read current 4 MB flash → `flash_readback_<timestamp>.bin`
-3. Compare vs the matching unit's `.private/units/<serial>_<tag>/flash_full.bin` (prints diff count and first mismatches)
+3. Compare vs the matching unit's OEM dump (prints diff count and first mismatches)
 4. Full chip erase (4 MB)
 5. Write OEM dump (4 MB, ~5 min)
 6. Read back 4 MB → byte-by-byte compare vs OEM reference
@@ -197,43 +191,14 @@ completed with `VERIFICATION PASSED — all 4,194,304 bytes match OEM reference`
 
 ## Building Custom Firmware
 
-### Build environment
-
-A Dockerfile is provided at `firmware/bigme_f7/Dockerfile`. Build the image once:
-
-```
-docker build -t hokku-xr872-builder firmware/bigme_f7/
-```
-
-Then build from `firmware/bigme_f7/gcc/`:
-
-```
-docker run --rm \
-  -v "$PWD:/hokku" \
-  -v "/path/to/xr872_sdk:/xr872_sdk" \
-  -w /hokku/firmware/bigme_f7/gcc \
-  hokku-xr872-builder \
-  make build XR872_SDK=/xr872_sdk CC_DIR=/usr/bin IMAGE_TOOL=/xr872_sdk/tools/mkimage
-```
-
-On Windows with PowerShell (xr872_sdk is a sibling of hokku_epaper):
-
-```powershell
-$xr872 = "c:/path/to/xr872_sdk"
-docker run --rm `
-  -v "c:/path/to/hokku_epaper:/hokku" `
-  -v "${xr872}:/xr872_sdk" `
-  -w /hokku/firmware/bigme_f7/gcc `
-  hokku-xr872-builder `
-  make build XR872_SDK=/xr872_sdk CC_DIR=/usr/bin IMAGE_TOOL=/xr872_sdk/tools/mkimage
-```
-
-Output: `firmware/bigme_f7/image/xr872/xr_system.img` (~1 MB).
-
-**Note**: `make build` (not just `make`) is required — the `image` target (invoked by `build`)
-runs `mkimage` to produce `xr_system.img` from the linked binaries. Plain `make` only links.
+See [`firmware_build.md`](firmware_build.md).
 
 ## Flashing Custom Firmware
+
+> **Superseded — do not use.** The flows below write `xr_system.img` from offset 0, over the
+> bootloader and with no A/B fallback, which the flashing STOP rules in the root `AGENTS.md`
+> forbid. They are kept as the record of how the first images got on. To flash a unit, use
+> [`bootstrap.md`](bootstrap.md).
 
 To write `firmware/bigme_f7/image/xr872/xr_system.img` back to the device:
 
@@ -354,7 +319,7 @@ wlan information: R-XR_C10.08.52.64_01.80 Jul 6 2019 20:05:10
 XRADIO Skylark SDK 1.2.2 Jun  7 2026 03:34:48
 sram heap space [0x215818, 0x26dc00), total size 361448 Bytes
 cpu clock 240000000 Hz  /  HF clock 40000000 Hz  /  XIP: enable
-mac address: efuse: 18:9e:2d:f9:87:54 / in use: 48:73:c1:0d:f1:0d
+mac address: efuse: <efuse MAC> / in use: <MAC in use>
 hokku bigme-f7 firmware
 WiFi provisioning: net sta config <ssid> <password>, then: net sta enable
 ```
@@ -416,3 +381,8 @@ serves Huessen EPF1301 format (960,000 bytes for 1200×1600 6-color display). Th
 firmware reads only the first 192,000 bytes and streams them to the EPD. The display does update
 but shows the wrong image and wrong colors. Correct bigme_f7 server support (800×480 7-color
 format, server-side `python/hokku/screens/bigme_f7/`) is the next step.
+
+> **Superseded (2026-06-07 state above).** Wi-Fi is now provisioned with `wifi <ssid> <password>`;
+> the firmware runs lwIP 2.1.2 ([`firmware_build.md`](firmware_build.md)), defaults to DHCP, and
+> sets a static address via `netif_set_addr()`; the server renders the F7's own 800×480 Spectra 6
+> format. See [`bootstrap.md`](bootstrap.md) and [`custom_firmware.md`](custom_firmware.md).

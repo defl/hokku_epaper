@@ -17,9 +17,9 @@ Related docs: [`hardware_facts.md`](hardware_facts.md) (pins, battery, display),
 
 | Capability | How it works on the F7 |
 |---|---|
-| **Reporting** | `POST /hokku/screen/` with the activity-log ring as the body, a rich `X-Frame-State` JSON (`fw`, `uptime_s`, `heap_kb`, `rssi`, `regime`, `wake`, `cfg_ver`, `clk_now`, `bat_mv`, `ota`), `X-Firmware-Version` / `X-Firmware-Build`, and a software wall-clock anchored to `X-Server-Time-Epoch`. |
-| **Configuration** | FDCM-backed `hokku_config` (`hokku_config.c`) at flash `0x340000`: server URL, screen name, static-IP/DHCP, `power_mode`, default sleep. Provisioned over the UART console (`cfg` command group), versioned (`cfg_ver`), forward-migrating. WiFi creds live separately in **sysinfo** (fdcm) via the `wifi` command. |
-| **Power / battery** | USB-aware hibernation: stay awake on USB, deep-sleep on battery (`power_mode` = auto/sleep/awake). `pm_enter_mode(PM_MODE_HIBERNATION)` + `HAL_Wakeup_SetTimer_Sec`; requires `PRJCONF_PM_EN=1` **and** `PRJCONF_NET_PM_EN=1` (WiFi is powered off before hibernate — without this it reset-loops). Battery via ADC ch4/PA14 (see [`hardware_facts.md`](hardware_facts.md#voltage-sensing)). |
+| **Reporting** | `POST /hokku/screen/` with the activity-log ring as the body, a rich `X-Frame-State` JSON (`fw`, `uptime_s`, `heap_kb`, `rssi`, `regime`, `wake`, `cfg_ver`, `clk_now`, `bat_mv`, `ota`), `X-Screen-Mac` (the server's durable key for the screen), `X-Firmware-Version` / `X-Firmware-Build`, and a software wall-clock anchored to `X-Server-Time-Epoch`. The server sends its name for the screen back as `X-Screen-Name` (changed in the web UI); the screen saves it to the config blob when it differs. |
+| **Configuration** | FDCM-backed `hokku_config` (`hokku_config.c`) at flash `0x340000`: server URL, screen name, DHCP (default) or static IP, `power_mode`, default sleep. Provisioned over the UART console (`cfg` command group), versioned (`cfg_ver`), forward-migrating. WiFi creds live separately in **sysinfo** (fdcm) via the `wifi` command. |
+| **Power / battery** | USB-aware hibernation: stay awake on USB, deep-sleep on battery (`power_mode` = auto/sleep/awake). `pm_enter_mode(PM_MODE_HIBERNATION)` + `HAL_Wakeup_SetTimer_Sec`; requires `PRJCONF_PM_EN=1` **and** `PRJCONF_NET_PM_EN=1` (WiFi is powered off before hibernate — without this it reset-loops). Battery via ADC ch4/PA14 (see [`hardware_facts.md`](hardware_facts.md#voltage-sensing-confirmed-2026-07-06-reverse-engineered-from-oem-firmware)). |
 | **OTA** | A/B slot update over HTTP — see [`ota.md`](ota.md). |
 
 ## Power button — invisible to firmware
@@ -68,11 +68,14 @@ was the near-brick the adversarial review caught (see [`ota.md`](ota.md#adversar
 
 `FIRMWARE_VERSION` in `main.c`. Bring-up/test iterations ran `1.0.0` → `1.1.4`;
 `1.2.0` was the first clean release, `1.2.1` the first fully user-driven web-GUI
-OTA. The version is reported in `X-Firmware-Version` and the frame-state `fw`.
+OTA; current is `1.2.15` (changes per release in the [CHANGELOG](../../../CHANGELOG.md)).
+The version is reported in `X-Firmware-Version` and the frame-state `fw`.
 
 ## Console commands (UART @115200)
 
-- `wifi <ssid> <password>` — persist WiFi creds to sysinfo + connect.
+- `wifi <ssid> <password>` — persist WiFi creds to sysinfo + connect. Works on a
+  running unit: the station is disabled and its address dropped first, so a switch
+  takes effect without a reboot.
 - `cfg show | server <url> | name <n> | ip <ip> <gw> <nm> | dhcp | static | sleep <s> | power <auto|sleep|awake> | save`
 - `ota` — trigger an OTA from the configured server right now (test hook).
 - `frame` — upload one ready-made 192000-byte panel buffer over this console and
@@ -92,12 +95,16 @@ OTA. The version is reported in `X-Firmware-Version` and the frame-state `fw`.
   timeout alike — so a host that dies mid-transfer costs ~5 s, not the console.
   `console_disable()` state is pure RAM, so a reboot restores it regardless, and
   the mask-BROM replug+press catch is unaffected either way.
+- `interactive on|off` — hand the screen to a USB host: no fetching, no
+  hibernation, so the console stays up between `frame` uploads. Not persisted, and
+  inert off USB.
 - `upgrade` — SDK command that drops to the mask-BROM (used by the flashers).
   **Only our firmware answers `upgrade`; stock OEM does not.**
 
 ## Build & flash
 
-Build: `firmware_build.md`. First-time flash of a unit (bootstrap) is USB-only via
-the safe slot-0 flashers (`python/hokku/common/xr872/{slot0,catch}.py`) — the pre-OTA image
-must be flashed over USB because it has no OTA client yet. After that, updates go
-over the air. See [`ota.md`](ota.md) and [`restore_to_stock.md`](restore_to_stock.md).
+Build: `firmware_build.md`. First-time flash of a unit (bootstrap) is USB-only —
+stock firmware has no OTA client — via the A/B slot flasher
+(`python/hokku/common/xr872/{slots,catch}.py`); see [`bootstrap.md`](bootstrap.md).
+After that, updates go over the air. See [`ota.md`](ota.md) and
+[`restore_to_stock.md`](restore_to_stock.md).

@@ -17,6 +17,9 @@
 
 #include "mocks/nvs_flash.h"
 
+#include "mocks/esp_log.h"
+
+#include "../../../common/all/screen_ident.c"
 #include "../../../common/esp32/config.c"
 
 /* ── Minimal test framework ────────────────────────────────────────────── */

@@ -18,6 +18,7 @@
 
 #include "mocks/image/fdcm.h"
 
+#include "../../../common/all/screen_ident.c"
 #include "../../../common/xr872/hokku_config.c"
 
 /* ── Minimal test framework ────────────────────────────────────────────── */
@@ -76,6 +77,12 @@ static void test_load_uses_defaults_when_fdcm_open_fails(void)
           "config_load: default power_mode is AUTO");
     CHECK(g_cfg.default_sleep_s == 300,
           "config_load: default default_sleep_s is 300");
+    /* Issue #44: no hard-coded addresses — DHCP, and an mDNS server name. */
+    CHECK(g_cfg.use_dhcp == 1, "config_load: default is DHCP");
+    CHECK(g_cfg.ip[0] == 0 && g_cfg.gw[0] == 0,
+          "config_load: no default static IP / gateway");
+    CHECK(strcmp(g_cfg.server_url, "http://hokku.local:8080/hokku/screen/") == 0,
+          "config_load: default server URL is hokku.local, not an IP");
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -133,6 +140,35 @@ static void test_load_reads_saved_fields(void)
           "config_load: reads default_sleep_s from the saved blob");
 }
 
+static void seed_static(const char *ip, const char *gw)
+{
+    seed_valid_saved_config();
+    hokku_config_t *seeded = (hokku_config_t *)_mock_fdcm_read_buf;
+    seeded->use_dhcp = 0;
+    strncpy(seeded->ip, ip, HOKKU_IP_MAX - 1);
+    strncpy(seeded->gw, gw, HOKKU_IP_MAX - 1);
+}
+static void test_load_moves_legacy_default_static_to_dhcp(void)
+{
+    /* Issue #44: a saved config still holding the old compiled-in 192.168.6.199 /
+     * .254 was never a user choice; on any other LAN it strands the unit. */
+    reset_mock_fdcm();
+    seed_static("192.168.6.199", "192.168.6.254");
+    hokku_config_load();
+    CHECK(g_cfg.use_dhcp == 1,
+          "config_load: legacy default static IP is switched to DHCP");
+    CHECK(strcmp(g_cfg.screen_name, "kitchen") == 0,
+          "config_load: legacy-static switch keeps the rest of the saved config");
+}
+static void test_load_keeps_user_static_ip(void)
+{
+    reset_mock_fdcm();
+    seed_static("10.0.0.50", "10.0.0.1");
+    hokku_config_load();
+    CHECK(g_cfg.use_dhcp == 0 && strcmp(g_cfg.ip, "10.0.0.50") == 0,
+          "config_load: a user-chosen static IP is kept");
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
  *  hokku_config_get
  * ═══════════════════════════════════════════════════════════════════════ */
@@ -184,6 +220,47 @@ static void test_save_fails_when_fdcm_open_fails(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+ *  hokku_config_set_screen_name — server-requested rename
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+static void test_rename_persists(void)
+{
+    reset_mock_fdcm();
+    strncpy(g_cfg.screen_name, "bigme-f7", HOKKU_NAME_MAX - 1);
+    CHECK(hokku_config_set_screen_name("hallway") == 0, "rename: valid name accepted");
+    const hokku_config_t *written = (const hokku_config_t *)_mock_fdcm_write_buf;
+    CHECK(strcmp(g_cfg.screen_name, "hallway") == 0 &&
+          strcmp(written->screen_name, "hallway") == 0,
+          "rename: live config and flash both carry the new name");
+}
+static void test_rename_refuses_invalid(void)
+{
+    reset_mock_fdcm();
+    strncpy(g_cfg.screen_name, "bigme-f7", HOKKU_NAME_MAX - 1);
+    CHECK(hokku_config_set_screen_name("a\r\nb") == -1, "rename: CR/LF refused");
+    CHECK(_mock_fdcm_write_call_count == 0, "rename: refused name is never written");
+    CHECK(strcmp(g_cfg.screen_name, "bigme-f7") == 0, "rename: refused name leaves config alone");
+}
+static void test_rename_same_name_is_a_no_op(void)
+{
+    /* The server echoes the name on every response, including a legacy name the
+     * rename rule would refuse: that must not write flash or fail. */
+    reset_mock_fdcm();
+    strncpy(g_cfg.screen_name, "legacy/name", HOKKU_NAME_MAX - 1);
+    CHECK(hokku_config_set_screen_name("legacy/name") == 0, "rename: unchanged name accepted");
+    CHECK(_mock_fdcm_write_call_count == 0, "rename: unchanged name is never rewritten");
+}
+static void test_rename_keeps_old_name_on_write_failure(void)
+{
+    reset_mock_fdcm();
+    strncpy(g_cfg.screen_name, "bigme-f7", HOKKU_NAME_MAX - 1);
+    _mock_fdcm_open_fail = 1;  /* g_cfg_fdcm is NULL, so save() must open and fails */
+    CHECK(hokku_config_set_screen_name("hallway") == -1, "rename: write failure reported");
+    CHECK(strcmp(g_cfg.screen_name, "bigme-f7") == 0,
+          "rename: failed write restores the old name (RAM never ahead of flash)");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
  *  Entry point
  * ═══════════════════════════════════════════════════════════════════════ */
 
@@ -196,10 +273,16 @@ int main(void)
     test_load_uses_defaults_when_version_wrong();
     test_load_uses_defaults_on_short_read();
     test_load_reads_saved_fields();
+    test_load_moves_legacy_default_static_to_dhcp();
+    test_load_keeps_user_static_ip();
     test_get_returns_pointer_to_live_config();
     test_save_stamps_magic_and_version();
     test_save_opens_fdcm_lazily_if_not_yet_open();
     test_save_fails_when_fdcm_open_fails();
+    test_rename_persists();
+    test_rename_refuses_invalid();
+    test_rename_same_name_is_a_no_op();
+    test_rename_keeps_old_name_on_write_failure();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

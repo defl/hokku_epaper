@@ -10,7 +10,7 @@ photo library.
 |---|---|---|---|---|
 | [**Hokku / Huessen 13.3"**](#hokku--huessen-133) | 13.3" | from ~$279 | ESP32-S3 | ✅ Fully supported — the original, most thoroughly tested |
 | [**Bigme F7**](#bigme-f7) | 7.3" | ~$99 | XR872AT | ✅ Supported — proven end-to-end on real hardware |
-| [**Seeed reTerminal E1004**](#seeed-reterminal-e1004) | 13.3" | ~$288 | ESP32-S3 | ⚠️ Experimental — confirmed working on real hardware once |
+| [**Seeed reTerminal E1004**](#seeed-reterminal-e1004) | 13.3" | ~$288 | ESP32-S3 | ✅ Supported — confirmed working by multiple users |
 
 All three use **E Ink Spectra 6** — the same six-ink family (black, white, yellow,
 red, blue, green), so the same photo library and conversion pipeline serves all of
@@ -83,14 +83,10 @@ the usual marketplaces.
 
 ## Seeed reTerminal E1004
 
-> ⚠️ **Experimental — confirmed on hardware once.** A first end-to-end run on a
-> physical E1004 is confirmed
-> ([issue #14](https://github.com/defl/hokku_epaper/issues/14)): flash, WiFi,
-> server fetch, correct panel render and battery reporting all worked, so the
-> ESP-IDF SPI/DMA plumbing and the ×2.0 battery divider check out. That is one
-> unit in one session — deep sleep over days, OTA and full-discharge battery
-> behaviour are still unproven. More reports
-> [very welcome](https://github.com/defl/hokku_epaper/issues).
+> ✅ **Supported — confirmed working by multiple users.** First confirmed end-to-end in
+> [issue #14](https://github.com/defl/hokku_epaper/issues/14) (flash, WiFi,
+> server fetch, panel render and battery reporting), and since run by several
+> other users on their own units.
 
 A 13.3" Spectra 6 panel on a Seeed XIAO ESP32-S3, on the reTerminal E-Series
 baseboard. Same panel family and resolution as the Hokku/Huessen frame.

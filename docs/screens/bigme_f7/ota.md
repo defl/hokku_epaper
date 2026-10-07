@@ -38,12 +38,13 @@ one-time fresh-unit bootstrap is documented in [`bootstrap.md`](bootstrap.md).
 
 ## Server side (model-aware)
 
-- `python/hokku/screens/bigme_f7/firmware.py` serves `xr_system.img` verbatim and
-  resolves the version from a `<img>.version` sidecar or `main.c`'s
-  `FIRMWARE_VERSION`.
+- `python/hokku/screens/bigme_f7/firmware.py` serves the bundled
+  `hokku-bigme_f7-<version>.img` verbatim (from `firmware/release/` in a dev tree,
+  else `/usr/share/hokku-server/firmware/`). The version is parsed from the
+  filename, which `ci-build.sh` takes from `main.c`'s `FIRMWARE_VERSION`.
 - `python/hokku/screens/firmware_registry.py` maps `model_id` → firmware provider
-  (`bundled_firmware_version` / `release_app_image`). huessen and bigme_f7 both
-  register.
+  (`bundled_firmware_version` / `release_app_image`). Every OTA-capable model
+  registers there.
 - `flask_app.py`: `/hokku/firmware.bin?model=…`, the `X-Firmware-Update` signal,
   the version comparison, and `/api/status`'s `bundled_firmware_versions` map all
   resolve per-model. `/hokku/firmware.bin` defaults to the huessen reference model

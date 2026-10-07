@@ -28,6 +28,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
@@ -35,6 +36,7 @@ from hokku.webserver.flask_app import PREVIEW_MAX_CONCURRENT, _preview_slots, cr
 from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.presets import PRESET_IMAGE_CONFIGS
 from hokku.webserver.serve_scheduler import ServeScheduler
+from tests._orientation_fixtures import UPRIGHT_SIZE, upright_mismatch, write_fixture
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
@@ -416,6 +418,36 @@ def test_dither_preview_face_bboxes_header_present(synced_client):
     assert isinstance(bboxes, list)
 
 
+def test_phone_portrait_is_portrait_through_the_api(bare_client, tmp_path: Path):
+    """Issue #40 end to end: a phone portrait (landscape sensor pixels + EXIF
+    Orientation=6) uploaded over HTTP is reported portrait by /status and
+    previewed upright in a portrait frame by /dither/preview."""
+    client, state = bare_client
+    portrait = (UPRIGHT_SIZE[1], UPRIGHT_SIZE[0])
+    phone = write_fixture("jpeg", 6, tmp_path, size=portrait)
+    plain = write_fixture("jpeg", 1, tmp_path, size=portrait)  # colour reference
+    with Image.open(phone) as img:
+        assert img.size[0] > img.size[1], "fixture must be landscape on the sensor"
+    for f in (phone, plain):
+        assert _upload_bytes(client, f.read_bytes(), f.name).get_json()["saved"] == [f.name]
+    state.manager.sync()
+    state.manager.wait_for_idle()
+
+    entries = {e["name"]: e for e in client.get("/hokku/api/status").get_json()["upload_files"]}
+    entry = entries[phone.name]
+    assert (entry["image_width"], entry["image_height"]) == portrait
+    assert entry["native_orientation"] == "portrait"
+
+    img_cfg = asdict(PRESET_IMAGE_CONFIGS["atkinson_hue_aware"])
+    previews = {}
+    for f in (phone, plain):
+        resp = client.post("/hokku/api/dither/preview", json={"name": f.name, "image": img_cfg})
+        assert resp.status_code == 200
+        previews[f.name] = Image.open(io.BytesIO(resp.data))
+    got = upright_mismatch(previews[phone.name], portrait, reference=previews[plain.name])
+    assert got is None, got
+
+
 def test_dither_preview_missing_image_returns_404(bare_client):
     client, _ = bare_client
     resp = client.post(
@@ -685,20 +717,90 @@ def test_screen_response_carries_cal_seed(bare_client):
     assert r2.headers["X-Sleep-Cal-N"] == "0"
 
 
-def test_screen_mac_is_durable_key_across_rename(bare_client):
-    """A rename (same MAC) does not create a second screen record."""
+def test_known_screen_keeps_the_servers_name(bare_client):
+    """A known screen (by MAC) reporting a different name keeps the server's
+    name, which is sent back so the device adopts it."""
     client, state = bare_client
     mac = "de:ad:be:ef:00:09"
-    client.get(
-        "/hokku/screen/",
-        headers={"X-Screen-Name": "old", "X-Screen-Model": "huessen_epf1301", "X-Screen-Mac": mac},
+    r = _check_in(client, "old", mac)
+    assert r.headers["X-Screen-Name"] == "old"
+    r = _check_in(client, "new", mac)
+    assert r.headers["X-Screen-Name"] == "old"
+    assert list(state.scheduler.screens()) == ["old"]
+
+
+def _check_in(client, name: str, mac: str | None):
+    headers = {"X-Screen-Name": name, "X-Screen-Model": "huessen_epf1301"}
+    if mac:
+        headers["X-Screen-Mac"] = mac
+    return client.get("/hokku/screen/", headers=headers)
+
+
+def test_rename_is_sent_back_and_keeps_the_record(bare_client):
+    """A UI rename takes effect at once; every response (even a 404 with no
+    images) carries the new name, and the device's old name still maps to it."""
+    client, state = bare_client
+    mac = "de:ad:be:ef:00:0a"
+    _check_in(client, "old", mac)
+    client.patch("/hokku/api/screens/old/config", json={"orientation": "portrait"})
+
+    r = client.post("/hokku/api/screens/old/rename", json={"name": " hallway "})
+    assert r.status_code == 200 and r.get_json()["name"] == "hallway"
+    assert list(state.scheduler.screens()) == ["hallway"]
+
+    r = _check_in(client, "old", mac)  # device hasn't adopted it yet
+    assert r.headers["X-Screen-Name"] == "hallway"
+    assert list(state.scheduler.screens()) == ["hallway"]
+    assert state.scheduler.get_screen_config("hallway").orientation == "portrait"
+
+
+def test_new_screen_with_a_taken_name_is_told_a_unique_one(bare_client):
+    client, _ = bare_client
+    assert _check_in(client, "bigme-f7", "aa:aa:aa:aa:aa:01").headers["X-Screen-Name"] == "bigme-f7"
+    assert (
+        _check_in(client, "bigme-f7", "aa:aa:aa:aa:aa:02").headers["X-Screen-Name"] == "bigme-f7-2"
     )
-    client.get(
-        "/hokku/screen/",
-        headers={"X-Screen-Name": "new", "X-Screen-Model": "huessen_epf1301", "X-Screen-Mac": mac},
-    )
-    screens = state.scheduler.screens()
-    assert "new" in screens and "old" not in screens
+
+
+def test_legacy_name_outside_the_rule_is_not_sent_back(bare_client):
+    """A name set over USB that the rename rule refuses is left alone: the
+    device already has it and would refuse it."""
+    client, _ = bare_client
+    assert "X-Screen-Name" not in _check_in(client, "a/b", "aa:aa:aa:aa:aa:05").headers
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "a/b", "<b>", "x" * 64, 'a"b', "a\tb", "café", 7, None])
+def test_rename_rejects_names_the_firmware_would_refuse(bare_client, bad):
+    client, state = bare_client
+    _check_in(client, "old", "de:ad:be:ef:00:0c")
+    r = client.post("/hokku/api/screens/old/rename", json={"name": bad})
+    assert r.status_code == 400
+    assert list(state.scheduler.screens()) == ["old"]
+
+
+def test_rename_refused_without_a_mac(bare_client):
+    """Without a MAC the name is the only key: renamed, the screen's next
+    check-in would look like a new screen."""
+    client, _ = bare_client
+    _check_in(client, "no-mac", None)
+    assert client.post("/hokku/api/screens/no-mac/rename", json={"name": "y"}).status_code == 409
+
+
+def test_rename_refuses_a_name_in_use_and_unknown_screens(bare_client):
+    client, _ = bare_client
+    _check_in(client, "a", "de:ad:be:ef:00:0e")
+    _check_in(client, "b", "de:ad:be:ef:00:0f")
+    assert client.post("/hokku/api/screens/a/rename", json={"name": "b"}).status_code == 409
+    assert client.post("/hokku/api/screens/zzz/rename", json={"name": "c"}).status_code == 404
+
+
+def test_status_reports_renamable(bare_client):
+    client, _ = bare_client
+    _check_in(client, "a", "de:ad:be:ef:00:10")
+    _check_in(client, "no-mac", None)
+    screens = client.get("/hokku/api/status").get_json()["screens"]
+    assert screens["a"]["renamable"] is True
+    assert screens["no-mac"]["renamable"] is False
 
 
 # ── navigation ────────────────────────────────────────────────────────────────
@@ -949,3 +1051,130 @@ def test_ui_returns_html(bare_client):
     resp = client.get("/hokku/ui")
     assert resp.status_code == 200
     assert b"<!DOCTYPE html>" in resp.data or b"<html" in resp.data
+
+
+# ── /hokku/api/labels + per-screen label filter ──────────────────────────────
+
+
+def _labels_of(client, name: str) -> list[str]:
+    files = client.get("/hokku/api/status").get_json()["upload_files"]
+    return next(e for e in files if e["name"] == name)["labels"]
+
+
+def test_labels_replace_and_status(synced_client):
+    client, _, name = synced_client
+    assert _labels_of(client, name) == []
+
+    resp = client.patch("/hokku/api/labels", json={"names": [name], "labels": [" Hall ", "summer"]})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "missing": []}
+
+    status = client.get("/hokku/api/status").get_json()
+    assert _labels_of(client, name) == ["Hall", "summer"]
+    assert status["labels"] == ["Hall", "summer"]
+
+
+def test_labels_bulk_add_remove_reports_missing(synced_client):
+    client, _, name = synced_client
+    resp = client.patch(
+        "/hokku/api/labels", json={"names": [name, "ghost.png"], "add": ["hall", "summer"]}
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["missing"] == ["ghost.png"]
+    assert _labels_of(client, name) == ["hall", "summer"]
+
+    resp = client.patch("/hokku/api/labels", json={"names": [name], "remove": ["hall"]})
+    assert resp.status_code == 200
+    assert _labels_of(client, name) == ["summer"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"names": []},
+        {"names": "a.png", "labels": ["x"]},
+        {"names": ["a.png"], "labels": "x"},
+        {"names": ["a.png"], "labels": [""]},
+        {"names": ["a.png"], "labels": ["x"], "add": ["y"]},
+        {"names": ["a.png"], "bogus": 1},
+    ],
+    ids=["empty", "no names", "names not list", "labels not list", "blank", "mixed", "unknown key"],
+)
+def test_labels_rejects_malformed(bare_client, body):
+    client, _ = bare_client
+    resp = client.patch("/hokku/api/labels", json=body)
+    assert resp.status_code == 400
+    assert "error" in resp.get_json()
+
+
+def test_labels_do_not_rerender(synced_client):
+    """Tagging is metadata only — the dithered output must stay as it was."""
+    client, state, name = synced_client
+    before = state.manager.status(name)
+    assert before is not None
+    client.patch("/hokku/api/labels", json={"names": [name], "labels": ["hall"]})
+    state.manager.wait_for_idle()
+    after = state.manager.status(name)
+    assert after is not None
+    assert after.slugs == before.slugs
+
+
+def test_screen_label_filter_round_trip(synced_client):
+    client, state, _ = synced_client
+    resp = client.patch("/hokku/api/screens/frame-1/config", json={"labels": ["b", "a", "a"]})
+    assert resp.status_code == 200
+    assert state.scheduler.get_screen_config("frame-1").labels == ("a", "b")
+    assert client.get("/hokku/api/status").get_json()["screens"]["frame-1"]["labels"] == ["a", "b"]
+
+    resp = client.patch("/hokku/api/screens/frame-1/config", json={"labels": "a"})
+    assert resp.status_code == 400
+
+    resp = client.patch("/hokku/api/screens/frame-1/config", json={"labels": []})
+    assert resp.status_code == 200
+    assert state.scheduler.get_screen_config("frame-1").labels == ()
+
+
+def test_screen_label_filter_gates_what_is_served(synced_client):
+    """A screen filtering on a label nothing carries gets a 404, not the picture."""
+    client, _, name = synced_client
+    headers = {"X-Screen-Name": "frame-1", "X-Screen-Model": "huessen_epf1301"}
+
+    assert client.get("/hokku/screen/", headers=headers).status_code == 200
+
+    client.patch("/hokku/api/screens/frame-1/config", json={"labels": ["winter"]})
+    resp = client.get("/hokku/screen/", headers=headers)
+    assert resp.status_code == 404
+    assert b"labels" in resp.data
+
+    client.patch("/hokku/api/labels", json={"names": [name], "add": ["winter"]})
+    assert client.get("/hokku/screen/", headers=headers).status_code == 200
+
+
+def test_screen_label_filter_no_match_sleeps_the_normal_interval(synced_client, monkeypatch):
+    """No match will not fix itself, so the frame must not fast-retry and drain."""
+    monkeypatch.setattr("hokku.webserver.flask_app.calculate_sleep_seconds", lambda _config: 3600)
+    client, _, _ = synced_client
+    headers = {"X-Screen-Name": "frame-1", "X-Screen-Model": "huessen_epf1301"}
+    client.patch("/hokku/api/screens/frame-1/config", json={"labels": ["winter"]})
+
+    resp = client.get("/hokku/screen/", headers=headers)
+    assert resp.status_code == 404
+    assert resp.headers["X-Sleep-Seconds"] == "3600"
+
+
+def test_status_flags_a_label_filter_that_matches_nothing(synced_client):
+    client, _, name = synced_client
+    headers = {"X-Screen-Name": "frame-1", "X-Screen-Model": "huessen_epf1301"}
+    client.get("/hokku/screen/", headers=headers)  # register the screen
+
+    def flagged() -> bool:
+        return client.get("/hokku/api/status").get_json()["screens"]["frame-1"][
+            "labels_match_nothing"
+        ]
+
+    assert flagged() is False  # no filter at all
+    client.patch("/hokku/api/screens/frame-1/config", json={"labels": ["winter"]})
+    assert flagged() is True
+    client.patch("/hokku/api/labels", json={"names": [name], "add": ["winter"]})
+    assert flagged() is False

@@ -1,22 +1,96 @@
-hokku-server (4.0.1~dev.92-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.3-1) unstable; urgency=medium
 
-  * tools/hokku_upgrade.py: run on the Raspberry Pi appliance too -- refuse
-    while the appliance is in setup mode, check free space before the backup,
-    back up with an uncompressed tar, keep the numba cache across a restore,
-    and wait long enough for a Pi Zero 2 W's first start. Flags follow the
-    other tools: --tag, --reconvert ask|yes|no, --startup-timeout,
-    --convert-timeout. docs/appliance.md: how to update the server.
+  * tools/hokku_upgrade.py: pick a release from a list and upgrade (or roll
+    back) a .deb install, on Debian/Ubuntu or the Raspberry Pi appliance --
+    free-space-checked backup of /var/lib/hokku, SHA-256-checked download,
+    report of new settings and of drift from the release's default presets,
+    optional re-render, and a printed --restore rollback command. Refuses to
+    run while the appliance is still in setup mode.
+  * docs/appliance.md: updating the server without reflashing the card.
 
  -- Dan Rowe <draco2003@gmail.com>  Wed, 07 Oct 2026 03:00:00 +0000
 
+hokku-server (4.0.0~beta4-1) unstable; urgency=medium
+
+  * Release v4.0.0-beta4
+  * Bundled firmware: bigme_f7 1.2.12 -> 1.2.16, huessen_epf1301 1.2.25 -> 1.2.27,
+    seeedstudio_e1004 1.2.5 -> 1.2.7.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 07 Oct 2026 00:03:05 +0000
+
+hokku-server (4.0.1~dev.98-1) unstable; urgency=medium
+
+  * Firmware: one shared rule for the server's reply to an image fetch on every
+    model. A screen whose labels match no picture keeps its picture and checks
+    back at its normal interval. bigme_f7 1.2.16, huessen_epf1301 1.2.27,
+    seeedstudio_e1004 1.2.7.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 03 Oct 2026 10:51:21 -0500
+
+hokku-server (4.0.1~dev.97-1) unstable; urgency=medium
+
+  * Flash a screen installs the firmware library's pinned version (as OTA
+    does) instead of always the bundled one; the scan judges freshness
+    against it.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 03 Oct 2026 10:45:33 -0500
+
+hokku-server (4.0.1~dev.96-1) unstable; urgency=medium
+
+  * DISCLAIMER: correct palette attribution (esp32-photoframe, MIT;
+    epdoptimize, Apache-2.0). Reverse-engineering docs tidied.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 03 Oct 2026 10:13:44 -0500
+
+hokku-server (4.0.1~dev.95-1) unstable; urgency=medium
+
+  * Docs: beta 4 changelog; README, manual and screen docs brought in line
+    with the current web app and firmware. F7 initial flasher now says
+    long-press (not replug) to boot after a flash.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 02 Oct 2026 21:44:27 -0500
+
+hokku-server (4.0.1~dev.94-1) unstable; urgency=medium
+
+  * Docs: README and manual now describe all three buttons on the Hokku /
+    Huessen frame (power button = next image, the other two unused; #18).
+    Physical-button mapping follow-up in #56.
+  * README: new Colour accuracy section with images from the calibration
+    discussions (#38, #42).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 01 Oct 2026 22:15:42 -0500
+
+hokku-server (4.0.1~dev.93-1) unstable; urgency=medium
+
+  * Labels: tag pictures with free-form labels and let each screen show
+    only pictures carrying any of its ticked labels (empty = whole
+    library, as before). The image grid can be filtered by label. A
+    screen whose labels match nothing keeps its picture and checks back
+    at its normal interval. Idea and code from Erik Rogne (#41) and Dan
+    Rowe (draco2003); closes the tagging request in #18.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 30 Sep 2026 22:03:09 -0500
+
+hokku-server (4.0.1~dev.92-1) unstable; urgency=medium
+
+  * Rename a screen from the web UI. The server owns the name of every screen
+    it knows (by MAC) and sends it back as X-Screen-Name; the screen saves it
+    when it differs. History, settings and calibration are kept. A new screen
+    reporting a name already in use gets a unique one. The Bigme F7 now sends
+    X-Screen-Mac too.
+  * Firmware versions: huessen_epf1301 1.2.26, seeedstudio_e1004 1.2.6,
+    bigme_f7 1.2.15 (a screen adopts its new name from these on).
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Thu, 01 Oct 2026 02:36:50 +0000
+
 hokku-server (4.0.1~dev.91-1) unstable; urgency=medium
 
-  * tools/hokku_upgrade.py: pick a release from a list and upgrade (or roll
-    back) a .deb install -- backup of /var/lib/hokku, SHA-256-checked
-    download, report of new settings and of drift from the release's default
-    presets, re-render, and a printed --restore rollback command.
+  * docs(agents): derive the dev-version N from the highest dev number in
+    python/debian/changelog on main rather than a commit count. The old
+    rev-list formula regressed as soon as PRs were squash-merged, and again
+    after every prerelease tag, so apt could stop seeing an upgrade.
 
- -- Dan Rowe <draco2003@gmail.com>  Wed, 07 Oct 2026 02:00:00 +0000
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 30 Sep 2026 21:27:32 -0500
 
 hokku-server (4.0.0~beta3-1) unstable; urgency=medium
 

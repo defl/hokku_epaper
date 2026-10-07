@@ -20,6 +20,7 @@ from pathlib import Path
 from hokku.webserver.filesystem import atomic_write_json
 from hokku.webserver.image_manager_abstract import AbstractImageManager
 from hokku.webserver.image_record import ConvertStatus, ImageRecord
+from hokku.webserver.labels import matches_labels
 from hokku.webserver.orientation import Orientation
 from hokku.webserver.screen_config import ScreenConfig
 from hokku.webserver.screen_headers import battery_percent, parse_battery_header
@@ -166,13 +167,21 @@ class ServeScheduler:
 
     # ── Rotation ─────────────────────────────────────────────────
 
-    def pick_next(self, orientation: Orientation) -> str | None:
+    def pick_next(
+        self, orientation: Orientation, labels: frozenset[str] = frozenset()
+    ) -> str | None:
         """Return the pre-determined next image for the given orientation filter.
 
         orientation=NEUTRAL means no filter — returns the global best next image.
         Reconciles state with manager.list() before returning — adds new
         entries, drops orphans, resets show_index for everyone when a new
         image appears so it gets a fair chance immediately.
+
+        ``labels`` narrows the pool further to images carrying any of them.
+        Label filters are per screen, so they are not part of the shared
+        pre-computed slots: the slot is honoured when it passes the filter
+        (which is how a pinned "Show next" still lands on a labelled screen),
+        otherwise the least-shown eligible image is chosen on the spot.
         """
         with self._lock:
             ready = [r for r in self._manager.list() if r.convert_status == ConvertStatus.OK]
@@ -185,13 +194,23 @@ class ServeScheduler:
                 return None
 
             # If the pre-computed choice for this orientation is still valid, honour it.
-            if self._next_for.get(orientation) in ready_names:
-                return self._next_for[orientation]
+            if self._next_for.get(orientation) not in ready_names:
+                # Pre-computed choice is stale or absent — recompute all orientations.
+                self._precompute_all_locked(ready)
+                self._save()
+            precomputed = self._next_for.get(orientation)
+            if not labels:
+                return precomputed
 
-            # Pre-computed choice is stale or absent — recompute all orientations.
-            self._precompute_all_locked(ready)
-            self._save()
-            return self._next_for.get(orientation)
+            by_name = {r.name: r for r in ready}
+            if precomputed is not None and matches_labels(by_name[precomputed].labels, labels):
+                return precomputed
+            eligible = [
+                r
+                for r in self._eligible_for(ready, orientation)
+                if matches_labels(r.labels, labels)
+            ]
+            return self._least_shown_locked(eligible)
 
     def mark_served(self, name: str) -> None:
         """Bump rotation pointer and stats. Attributes elapsed time to the
@@ -235,6 +254,14 @@ class ServeScheduler:
         with self._lock:
             return self._next_for.get(orientation)
 
+    def has_eligible(self, orientation: Orientation, labels: frozenset[str]) -> bool:
+        """Whether any ready image passes both the orientation and label filters."""
+        with self._lock:
+            ready = [r for r in self._manager.list() if r.convert_status == ConvertStatus.OK]
+            return any(
+                matches_labels(r.labels, labels) for r in self._eligible_for(ready, orientation)
+            )
+
     def set_next(self, name: str) -> None:
         """Force a specific image to be served next (overrides rotation order).
 
@@ -268,15 +295,32 @@ class ServeScheduler:
             return sid
         return None
 
+    def _unique_name_locked(self, name: str) -> str:
+        """``name``, or ``name-2``, ``name-3``... if another record already has it."""
+        if name not in self._by_name:
+            return name
+        n = 2
+        while f"{name}-{n}" in self._by_name:
+            n += 1
+        return f"{name}-{n}"
+
     def _resolve_or_create_sid_locked(self, name: str, mac: str | None) -> str:
         """Return the sid for (name, MAC), creating a record and reconciling the
-        name/MAC indexes as needed. MAC is authoritative: a device that reappears
-        with a known MAC keeps its sid even if its name changed (rename), and a
-        record first seen by name adopts a MAC the moment the device reports one."""
+        name/MAC indexes as needed.
+
+        The server owns the name of any screen it knows: a device found by MAC
+        keeps its record's name whatever it reports (the name is sent back and
+        the device adopts it; change it with rename_screen, or remove the record
+        to let the device's own name back in). A device seen for the first time
+        is named after what it reports, made unique when another device already
+        has that name. A record first seen by name adopts a MAC the moment the
+        device reports one."""
         sid = self._resolve_sid_locked(name, mac)
         if sid is None:
             self._sid_seq += 1
             sid = str(self._sid_seq)
+            # Without a MAC the name is the only key, so it can't be changed.
+            name = self._unique_name_locked(name) if mac else name
             self._screens[sid] = ScreenTelemetryEntry(
                 name=name,
                 ip="",
@@ -294,18 +338,46 @@ class ServeScheduler:
                 firmware_build=None,
                 mac=mac,
             )
-        # Reconcile indexes for this sid — a rename repoints name->sid; a
-        # first-seen MAC attaches mac->sid; both stay unique.
+        # A first-seen MAC attaches mac->sid.
         entry = self._screens[sid]
-        if entry.name != name or entry.mac != (mac or entry.mac):
-            self._screens[sid] = replace(entry, name=name, mac=mac or entry.mac)
-        # Drop any stale name index entries that used to point here.
-        for n in [n for n, s in self._by_name.items() if s == sid and n != name]:
-            del self._by_name[n]
-        self._by_name[name] = sid
+        if mac and entry.mac != mac:
+            self._screens[sid] = replace(entry, mac=mac)
+        self._by_name[entry.name] = sid
         if mac:
             self._by_mac[mac] = sid
         return sid
+
+    def identify(self, name: str, mac: str | None) -> str:
+        """The name the server knows this device by, registering it if new.
+
+        This is the name to use for everything about the request and to send
+        back to the device (see _resolve_or_create_sid_locked for who wins)."""
+        with self._lock:
+            sid = self._resolve_or_create_sid_locked(name, mac)
+            self._save()
+            return self._screens[sid].name
+
+    def rename_screen(self, name: str, new_name: str) -> None:
+        """Rename the screen called ``name``. Takes effect on the server at once;
+        the device learns it from the next response and saves it. The record is
+        keyed by MAC, so history, settings and calibration stay with it.
+
+        Raises KeyError if the screen is unknown, ValueError if another screen
+        already has ``new_name``. The caller validates the name itself
+        (screen_headers.screen_name_valid) and that the screen has a MAC."""
+        with self._lock:
+            sid = self._resolve_sid_locked(name, None)
+            if sid is None:
+                raise KeyError(name)
+            if new_name == name:
+                return
+            if new_name in self._by_name:
+                raise ValueError(f"name {new_name!r} is already used by another screen")
+            logger.info("Renaming screen %r -> %r", name, new_name)
+            self._screens[sid] = replace(self._screens[sid], name=new_name)
+            del self._by_name[name]
+            self._by_name[new_name] = sid
+            self._save()
 
     def resolve(self, name: str | None = None, mac: str | None = None) -> str | None:
         """Public lookup: the sid for a screen addressed by name or MAC, or None."""
@@ -397,7 +469,7 @@ class ServeScheduler:
                 last_log_at = now
 
             self._screens[sid] = ScreenTelemetryEntry(
-                name=screen_name,
+                name=self._screens[sid].name,  # the server's name, not the reported one
                 ip=screen_ip,
                 request_count=req_count,
                 last_seen_at=now,
@@ -609,20 +681,25 @@ class ServeScheduler:
         Must be called under self._lock.
         """
         for orientation in Orientation:
-            if orientation == Orientation.NEUTRAL:
-                eligible = ready
-            else:
-                eligible = [r for r in ready if r.matches_orientation_filter(orientation)]
-            if not eligible:
-                self._next_for[orientation] = None
-            else:
-                # Pick the least-shown index, then break ties randomly rather
-                # than alphabetically — new uploads keep re-tying the least-shown
-                # images (see _reconcile), so a name-sorted tie-break would
-                # replay the same prefix first every time.
-                min_idx = min(self._stats[r.name].show_index for r in eligible)
-                tied = [r.name for r in eligible if self._stats[r.name].show_index == min_idx]
-                self._next_for[orientation] = random.choice(tied)  # noqa: S311 — rotation fairness, not crypto
+            eligible = self._eligible_for(ready, orientation)
+            self._next_for[orientation] = self._least_shown_locked(eligible)
+
+    @staticmethod
+    def _eligible_for(ready: list[ImageRecord], orientation: Orientation) -> list[ImageRecord]:
+        if orientation == Orientation.NEUTRAL:
+            return ready
+        return [r for r in ready if r.matches_orientation_filter(orientation)]
+
+    def _least_shown_locked(self, eligible: list[ImageRecord]) -> str | None:
+        if not eligible:
+            return None
+        # Pick the least-shown index, then break ties randomly rather
+        # than alphabetically — new uploads keep re-tying the least-shown
+        # images (see _reconcile), so a name-sorted tie-break would
+        # replay the same prefix first every time.
+        min_idx = min(self._stats[r.name].show_index for r in eligible)
+        tied = [r.name for r in eligible if self._stats[r.name].show_index == min_idx]
+        return random.choice(tied)  # noqa: S311 — rotation fairness, not crypto
 
     def _reconcile(self, ready_names: set[str]) -> None:
         # Drop orphans.

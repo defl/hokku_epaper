@@ -9,10 +9,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-import cv2
 import numpy as np
+from PIL import Image
 
 from hokku.webserver.bounding_box import BoundingBox
+from hokku.webserver.image_renderer import open_image_for_render
 
 # Maximum side length for detection input — resizing keeps detection fast and
 # ensures consistent sensitivity across images of varying resolution.
@@ -44,25 +45,23 @@ class AbstractFaceDetector(ABC):
 def load_image_resized(
     path: Path, max_side: int = DEFAULT_MAX_SIDE
 ) -> tuple[np.ndarray, int, int] | None:
-    """Read *path* via cv2.imread and resize so the longer edge ≤ ``max_side``.
+    """Decode *path* exactly as the renderer does, shrunk so the longer edge ≤ ``max_side``.
 
     Returns ``(img_bgr_uint8, width, height)`` on success, where ``width`` and
     ``height`` are the resized dimensions. Returns ``None`` if the file can't
-    be read.
+    be decoded.
 
-    Concrete detectors share this preprocess so memory measurements compare
-    the detection backend itself, not differences in how each variant
-    reads the source file.
+    Face bboxes are fractions of this frame and the renderer applies them to
+    its own decode, so both must come from ``open_image_for_render``: same
+    EXIF/XMP orientation handling, same formats (HEIF/AVIF/JXL/SVG, which
+    cv2.imread can't read), and the same decode budget and ``_DECODE_LOCK``,
+    so detection never materialises more than a render would.
     """
-    if path.suffix.lower() == ".svg":
-        return None  # cv2 cannot read SVG; face detection skipped for vector graphics
-    img = cv2.imread(str(path))
-    if img is None:
+    try:
+        with open_image_for_render(path) as img:
+            img.thumbnail((max_side, max_side))
+            rgb = np.asarray(img)
+    except (OSError, ValueError, Image.DecompressionBombError):
         return None
-    h, w = img.shape[:2]
-    scale = min(max_side / max(w, h), 1.0)
-    new_w = max(1, int(w * scale))
-    new_h = max(1, int(h * scale))
-    if scale < 1.0:
-        img = cv2.resize(img, (new_w, new_h))
-    return img, new_w, new_h
+    h, w = rgb.shape[:2]
+    return np.ascontiguousarray(rgb[:, :, ::-1]), w, h

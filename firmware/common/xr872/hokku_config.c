@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "image/fdcm.h"
+#include "screen_ident.h"
 
 /*
  * Flash location for the config blob. 0x340000 is 64 KB-aligned and sits in the
@@ -15,6 +16,17 @@
 #define HOKKU_CFG_ADDR    0x340000U
 #define HOKKU_CFG_SIZE    0x1000U
 
+/*
+ * Static address that early firmware wrote as its compiled-in default — the
+ * developer's own LAN, never something a user chose. On any other network a unit
+ * carrying it joins WiFi and then reaches nothing (issue #44), so a saved config
+ * that still holds exactly this pair is treated as "never configured" and falls
+ * back to DHCP. Keep in sync with LEGACY_DEFAULT_STATIC in
+ * python/hokku/screens/bigme_f7/config.py.
+ */
+#define HOKKU_LEGACY_DEFAULT_IP  "192.168.6.199"
+#define HOKKU_LEGACY_DEFAULT_GW  "192.168.6.254"
+
 static hokku_config_t g_cfg;
 static fdcm_handle_t *g_cfg_fdcm;
 
@@ -23,17 +35,25 @@ static void hokku_config_defaults(void)
     memset(&g_cfg, 0, sizeof(g_cfg));
     g_cfg.magic   = HOKKU_CFG_MAGIC;
     g_cfg.version = HOKKU_CFG_VERSION;
-    strncpy(g_cfg.server_url, "http://192.168.6.111:8080/hokku/screen/", HOKKU_URL_MAX - 1);
+    /* mDNS name of the Hokku server/appliance (lwIP 2.x resolves .local). */
+    strncpy(g_cfg.server_url, "http://hokku.local:8080/hokku/screen/", HOKKU_URL_MAX - 1);
     strncpy(g_cfg.screen_name, "bigme-f7", HOKKU_NAME_MAX - 1);
-    g_cfg.use_dhcp = 0;
+    /* DHCP by default; `cfg ip <ip> <gw> <nm>` opts into a static address. */
+    g_cfg.use_dhcp = 1;
     /* AUTO: stay awake on USB, deep-sleep on battery. Verified on hardware
      * 2026-07-05 — PA20 USB-detect polarity correct (usb_present=1 on USB) and
      * the hibernation timer-wake cycle (180 s, WiFi-off-first) is clean. */
     g_cfg.power_mode = HOKKU_PWR_AUTO;
-    strncpy(g_cfg.ip, "192.168.6.199", HOKKU_IP_MAX - 1);
-    strncpy(g_cfg.gw, "192.168.6.254", HOKKU_IP_MAX - 1);
     strncpy(g_cfg.nm, "255.255.255.0", HOKKU_IP_MAX - 1);
     g_cfg.default_sleep_s = 300;
+}
+
+/* True for a config still carrying the legacy compiled-in static address. */
+static int hokku_config_is_legacy_static(const hokku_config_t *c)
+{
+    return !c->use_dhcp &&
+           strcmp(c->ip, HOKKU_LEGACY_DEFAULT_IP) == 0 &&
+           strcmp(c->gw, HOKKU_LEGACY_DEFAULT_GW) == 0;
 }
 
 void hokku_config_load(void)
@@ -51,6 +71,11 @@ void hokku_config_load(void)
     } else {
         printf("hokku: config loaded (name '%s' url '%s')\n",
                g_cfg.screen_name, g_cfg.server_url);
+        if (hokku_config_is_legacy_static(&g_cfg)) {
+            /* In memory only; the next `cfg save` persists it. */
+            printf("hokku: legacy default static IP %s in config — using DHCP\n", g_cfg.ip);
+            g_cfg.use_dhcp = 1;
+        }
     }
 }
 
@@ -70,5 +95,23 @@ int hokku_config_save(void)
     g_cfg.version = HOKKU_CFG_VERSION;
     if (fdcm_write(g_cfg_fdcm, &g_cfg, (uint16_t)sizeof(g_cfg)) != sizeof(g_cfg))
         return -1;
+    return 0;
+}
+
+int hokku_config_set_screen_name(const char *name)
+{
+    /* Same name first: the server sends it on every response. */
+    if (name && strcmp(g_cfg.screen_name, name) == 0)
+        return 0;
+    if (!hokku_screen_name_valid(name) || strlen(name) >= HOKKU_NAME_MAX)
+        return -1;
+    char old[HOKKU_NAME_MAX];
+    memcpy(old, g_cfg.screen_name, sizeof(old));
+    strncpy(g_cfg.screen_name, name, HOKKU_NAME_MAX - 1);
+    g_cfg.screen_name[HOKKU_NAME_MAX - 1] = '\0';
+    if (hokku_config_save() != 0) {
+        memcpy(g_cfg.screen_name, old, sizeof(old));  /* RAM never ahead of flash */
+        return -1;
+    }
     return 0;
 }

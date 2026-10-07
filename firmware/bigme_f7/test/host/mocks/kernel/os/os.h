@@ -28,6 +28,7 @@ typedef enum {
 
 typedef struct OS_Thread { OS_Handle_t handle; } OS_Thread_t;
 typedef struct OS_Mutex  { OS_Handle_t handle; } OS_Mutex_t;
+typedef struct OS_Semaphore { OS_Handle_t handle; } OS_Semaphore_t;
 typedef void (*OS_ThreadEntry_t)(void *arg);
 
 /* ── Controllable mock state ──────────────────────────────────────────── */
@@ -52,3 +53,19 @@ static inline OS_Status OS_MutexUnlock(OS_Mutex_t *mutex) { (void)mutex; return 
 
 static inline void OS_MSleep(OS_Time_t msec) { (void)msec; }
 static inline OS_Time_t OS_GetTime(void) { return _mock_os_time_s; }
+
+/* Binary semaphore: `_mock_sem_count` is the token (0/1); a wait with no token
+ * "times out" immediately and records the requested timeout. */
+static int       _mock_sem_count;
+static int       _mock_sem_release_calls;
+static OS_Time_t _mock_sem_last_wait_ms;
+static inline OS_Status OS_SemaphoreCreateBinary(OS_Semaphore_t *sem) { sem->handle = (OS_Handle_t)1; _mock_sem_count = 0; return OS_OK; }
+static inline int OS_SemaphoreIsValid(OS_Semaphore_t *sem) { return sem->handle != OS_INVALID_HANDLE; }
+static inline OS_Status OS_SemaphoreRelease(OS_Semaphore_t *sem)
+{ (void)sem; _mock_sem_release_calls++; _mock_sem_count = 1; return OS_OK; }
+static inline OS_Status OS_SemaphoreWait(OS_Semaphore_t *sem, OS_Time_t waitMS)
+{
+    (void)sem; _mock_sem_last_wait_ms = waitMS;
+    if (_mock_sem_count) { _mock_sem_count = 0; return OS_OK; }
+    return OS_E_TIMEOUT;
+}

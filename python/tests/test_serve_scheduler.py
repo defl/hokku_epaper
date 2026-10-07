@@ -7,6 +7,8 @@ import random
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
 from hokku.webserver.orientation import Orientation
@@ -180,17 +182,60 @@ def test_cal_seed_unknown_is_zero(app_config: AppConfig):
     assert sched.cal_seed_for("frame-1") == (0, 0)
 
 
-def test_calibration_survives_rename_via_mac(app_config: AppConfig):
-    """Renaming a device (same MAC) keeps its record + calibration."""
+def test_known_screen_keeps_the_servers_name(app_config: AppConfig):
+    """Once the server knows a device (by MAC) it owns the name: a different
+    reported name doesn't rename the record, and calibration stays with it."""
     mgr = SingleThreadedImageManager(app_config)
     sched = ServeScheduler(mgr)
     mac = "de:ad:be:ef:00:01"
     sched.record_screen_call("old-name", "1.1.1.1", 300, None, None, None, mac=mac, cal_ppm=8000)
     sched.record_screen_call("new-name", "1.1.1.1", 300, None, None, None, mac=mac, cal_ppm=8000)
-    screens = sched.screens()
-    assert "new-name" in screens and "old-name" not in screens
-    mean, n = sched.cal_seed_for("new-name")
-    assert mean == 8000 and n == 2  # both samples kept across the rename
+    assert list(sched.screens()) == ["old-name"]
+    assert sched.identify("new-name", mac) == "old-name"
+    mean, n = sched.cal_seed_for("old-name")
+    assert mean == 8000 and n == 2
+
+
+def test_rename_keeps_the_record(app_config: AppConfig):
+    """A UI rename changes the server's name at once; the device, still
+    reporting its old name, is handled under the new one."""
+    mgr = SingleThreadedImageManager(app_config)
+    sched = ServeScheduler(mgr)
+    mac = "de:ad:be:ef:00:02"
+    sched.record_screen_call("old", "1.1.1.1", 300, None, None, None, mac=mac, cal_ppm=7000)
+    sid = sched.resolve(name="old")
+
+    sched.rename_screen("old", "hallway")
+    assert list(sched.screens()) == ["hallway"]
+    assert sched.identify("old", mac) == "hallway"
+    sched.record_screen_call("old", "1.1.1.1", 300, None, None, None, mac=mac)
+    assert list(sched.screens()) == ["hallway"]
+    assert sched.resolve(name="hallway") == sid
+    assert sched.cal_seed_for("hallway") == (7000, 1)
+    assert list(ServeScheduler(mgr).screens()) == ["hallway"]  # persisted
+
+
+def test_rename_conflicts(app_config: AppConfig):
+    sched = ServeScheduler(SingleThreadedImageManager(app_config))
+    sched.record_screen_call("a", "1.1.1.1", 300, None, None, None, mac="aa:aa:aa:aa:aa:01")
+    sched.record_screen_call("b", "1.1.1.2", 300, None, None, None, mac="aa:aa:aa:aa:aa:02")
+    with pytest.raises(ValueError, match="already used"):
+        sched.rename_screen("a", "b")
+    with pytest.raises(KeyError):
+        sched.rename_screen("nobody", "d")
+    sched.rename_screen("a", "a")  # no-op
+    assert set(sched.screens()) == {"a", "b"}
+
+
+def test_new_screen_with_a_taken_name_gets_a_unique_one(app_config: AppConfig):
+    """Two devices reporting the same name (e.g. two F7s on the default) become
+    two records; the second is given a unique name, which is sent back."""
+    sched = ServeScheduler(SingleThreadedImageManager(app_config))
+    assert sched.identify("bigme-f7", "aa:aa:aa:aa:aa:01") == "bigme-f7"
+    assert sched.identify("bigme-f7", "aa:aa:aa:aa:aa:02") == "bigme-f7-2"
+    assert sched.identify("bigme-f7", "aa:aa:aa:aa:aa:03") == "bigme-f7-3"
+    assert sched.identify("bigme-f7", "aa:aa:aa:aa:aa:02") == "bigme-f7-2"  # stable
+    assert set(sched.screens()) == {"bigme-f7", "bigme-f7-2", "bigme-f7-3"}
 
 
 def test_calibration_reattaches_when_mac_appears(app_config: AppConfig):
@@ -414,3 +459,93 @@ def test_precompute_all_locked_neutral_images_appear_in_all_slots(
     assert sched._next_for[Orientation.NEUTRAL] == "square.png"
     assert sched._next_for[Orientation.LANDSCAPE] == "square.png"
     assert sched._next_for[Orientation.PORTRAIT] == "square.png"
+
+
+# ── Label filter ──────────────────────────────────────────────────────────────
+
+
+def _label(mgr: SingleThreadedImageManager, name: str, *labels: str) -> None:
+    assert mgr.set_labels([name], replace_with=tuple(labels)) == []
+
+
+def test_pick_next_without_labels_is_unchanged(app_config: AppConfig, make_test_image):
+    """The default filter is the pre-labels code path: same precomputed pick."""
+    mgr, sched = _setup(app_config, make_test_image, ["a.png", "b.png"])
+    _label(mgr, "a.png", "kitchen")
+    expected = sched.peek_next(Orientation.NEUTRAL)
+    assert sched.pick_next(Orientation.NEUTRAL, frozenset()) == expected
+
+
+def test_pick_next_honours_label_filter(app_config: AppConfig, make_test_image):
+    mgr, sched = _setup(app_config, make_test_image, ["a.png", "b.png", "c.png"])
+    _label(mgr, "a.png", "kitchen")
+    _label(mgr, "b.png", "summer", "kitchen")
+    for _ in range(12):
+        n = sched.pick_next(Orientation.NEUTRAL, frozenset({"kitchen"}))
+        assert n is not None and n in ("a.png", "b.png")
+        sched.mark_served(n)
+
+
+def test_label_filter_is_any_of(app_config: AppConfig, make_test_image):
+    mgr, sched = _setup(app_config, make_test_image, ["a.png", "b.png", "c.png"])
+    _label(mgr, "a.png", "kitchen")
+    _label(mgr, "b.png", "summer")
+    seen = set()
+    for _ in range(20):
+        n = sched.pick_next(Orientation.NEUTRAL, frozenset({"kitchen", "summer"}))
+        assert n is not None and n != "c.png"
+        seen.add(n)
+        sched.mark_served(n)
+    assert seen == {"a.png", "b.png"}
+
+
+def test_label_filter_with_no_match_serves_nothing(app_config: AppConfig, make_test_image):
+    _, sched = _setup(app_config, make_test_image, ["a.png"])
+    assert sched.pick_next(Orientation.NEUTRAL, frozenset({"winter"})) is None
+
+
+def test_label_filter_stays_fair_within_the_subset(app_config: AppConfig, make_test_image):
+    """Filtered screens rotate through their own pool, least-shown first."""
+    mgr, sched = _setup(app_config, make_test_image, ["a.png", "b.png", "c.png", "d.png"])
+    for n in ("a.png", "b.png", "c.png"):
+        _label(mgr, n, "hall")
+    counts = {"a.png": 0, "b.png": 0, "c.png": 0}
+    for _ in range(9):
+        n = sched.pick_next(Orientation.NEUTRAL, frozenset({"hall"}))
+        assert n is not None
+        sched.mark_served(n)
+        counts[n] += 1
+    assert counts == {"a.png": 3, "b.png": 3, "c.png": 3}
+
+
+def test_label_filter_combines_with_orientation(app_config: AppConfig, make_test_image):
+    mgr, sched = _setup_with_sizes(
+        app_config,
+        make_test_image,
+        [("land.png", (800, 600)), ("port.png", (600, 800)), ("port2.png", (600, 800))],
+    )
+    _label(mgr, "land.png", "hall")
+    _label(mgr, "port.png", "hall")
+    for _ in range(6):
+        n = sched.pick_next(Orientation.PORTRAIT, frozenset({"hall"}))
+        assert n == "port.png"
+        sched.mark_served("port.png")
+
+
+def test_has_eligible_checks_labels_and_orientation(app_config: AppConfig, make_test_image):
+    mgr, sched = _setup_with_sizes(
+        app_config, make_test_image, [("land.png", (800, 600)), ("port.png", (600, 800))]
+    )
+    _label(mgr, "land.png", "hall")
+    assert sched.has_eligible(Orientation.NEUTRAL, frozenset())
+    assert sched.has_eligible(Orientation.NEUTRAL, frozenset({"hall"}))
+    assert sched.has_eligible(Orientation.LANDSCAPE, frozenset({"hall"}))
+    assert not sched.has_eligible(Orientation.PORTRAIT, frozenset({"hall"}))
+    assert not sched.has_eligible(Orientation.NEUTRAL, frozenset({"winter"}))
+
+
+def test_screen_labels_persist(app_config: AppConfig, make_test_image):
+    mgr, sched = _setup(app_config, make_test_image, ["a.png"])
+    sched.set_screen_config("frame-1", ScreenConfig(labels=("hall", "summer")))
+    sched2 = ServeScheduler(mgr)
+    assert sched2.get_screen_config("frame-1").labels == ("hall", "summer")

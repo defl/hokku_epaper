@@ -19,7 +19,7 @@ The device uses two channels:
 
 | Field | Value / Format |
 |---|---|
-| Device ID | `BIGME_<MAC>` — e.g. `BIGME_189E2DF98754` |
+| Device ID | `BIGME_<MAC>` (MAC as 12 uppercase hex digits) |
 | Setup AP SSID | `BigmeFrameRouter` |
 | Setup AP password | `88888888` |
 | Operational AP (SSID) | `XRZ_<MAC>` (used during WiFi provisioning phase) |
@@ -149,13 +149,13 @@ OTA firmware check. Called when `otaUpdate.otaUrl` is present. Fields include `f
 - `Content-Type: application/octet-stream`
 - `Content-Length: 192000` (required — device uses this to know when transfer is complete)
 - Body: 192,000 bytes, 4 bits per pixel, 2 pixels per byte (high nibble = left pixel)
-- Color nibble encoding: 0=Black, 1=White, 2=Green, 3=Blue, 4=Red, 5=Yellow, 6=Orange
+- Color nibble encoding (Spectra 6): 0=Black, 1=White, 2=Yellow, 3=Red, 5=Blue, 6=Green
 - Resolution: 800 × 480 pixels, row-major top-to-bottom
 
 The device streams the HTTP response body byte-by-byte to the EPD via SPI (CMD 0x10 DTM) as
 it downloads. There is no JPEG decoder and no intermediate RAM buffer for the full image.
 After the last byte, the device sends CMD 0x04 (PON), CMD 0x12 (DRF), and CMD 0x02 (POF) to
-trigger the ~30-second ACeP display refresh.
+trigger the ~30-second display refresh.
 
 ## Integration with hokku_epaper
 
@@ -176,4 +176,4 @@ Replace the `ereader.bigme.vip` hostname string in the boot partition binary (at
 
 ### Option C — Custom firmware
 
-Write a new boot partition that speaks the hokku_epaper wire protocol directly. Requires XR Skylark SDK and ARM cross-compilation toolchain (not currently available in this environment).
+Write new firmware that speaks the hokku_epaper wire protocol directly. This is the route taken — see [`custom_firmware.md`](custom_firmware.md).

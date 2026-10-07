@@ -22,9 +22,9 @@
  *   - epd.c: pure hardware SPI/GPIO bit-banging, no host-testable logic
  *     (unlike the ESP32's text_render.c, there's no pure-software module to
  *     extract here).
- *   - do_refresh() / refresh_thread_fn(): top-level HTTP+EPD streaming
- *     orchestration; integration-level, not unit-tested (mirrors huessen's
- *     firmware, which also doesn't unit-test its top-level refresh loop).
+ *   - refresh_thread_fn(): the top-level loop (sleep/hibernate per outcome).
+ *     do_refresh() IS covered for how it acts on each server reply (shared
+ *     fetch_outcome decision) against the controllable HTTPC mock.
  *   - command.c (`cfg`/`wifi`/`ota` console dispatch): argv parsing/routing
  *     over SDK console utilities not otherwise mocked here; a reasonable
  *     follow-up, not included in this pass.
@@ -53,6 +53,7 @@
 #include "mocks/net/HTTPClient/API/HTTPClientCommon.h"
 #include "mocks/lwip/netif.h"
 #include "mocks/lwip/dhcp.h"
+#include "mocks/lwip/netifapi.h"
 #include "mocks/lwip/ip_addr.h"
 #include "mocks/image/image.h"
 #include "mocks/image/fdcm.h"
@@ -75,8 +76,10 @@
 #include "../../led.c"    /* led_usb_present() -> _mock_gpio, shared with main.c below */
 #include "../../../common/all/firmware_url.c"  /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/backoff.c"       /* SoC-agnostic (shared with ESP32) */
+#include "../../../common/all/fetch_outcome.c"  /* shared reply decision */
 #include "../../../common/all/frame_state.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/frame_proto.c"   /* SoC-agnostic (shared with ESP32) */
+#include "../../../common/all/screen_ident.c"  /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/interactive.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/logbuf.c"        /* SoC-agnostic (shared with ESP32) */
 /* Shared XR872 code (firmware/common/xr872) — included before main.c so its
@@ -105,7 +108,8 @@
 void epd_send_cmd(uint8_t cmd) { (void)cmd; }
 void epd_send_data(uint8_t data) { (void)data; }
 void epd_init(void) { }
-void epd_refresh(void) { }
+static int _mock_epd_refresh_calls;
+void epd_refresh(void) { _mock_epd_refresh_calls++; }
 void heap_get_space(uint8_t **start, uint8_t **end, uint8_t **current)
 {
     static uint8_t buf[65536];
@@ -135,9 +139,20 @@ static void reset_all_mocks(void)
     _mock_os_time_s = 1000;
     _mock_thread_created = 0;
     memset(&g_refresh_thread, 0, sizeof(g_refresh_thread));
+    memset(&g_refresh_kick, 0, sizeof(g_refresh_kick));
+    _mock_sem_count = 0;
+    _mock_sem_release_calls = 0;
+    _mock_sem_last_wait_ms = 0;
 
     _mock_http_header_present = 0;
     _mock_http_header_value = "";
+    _mock_httpc_open_result = 1;     /* transport down unless a test brings it up */
+    _mock_httpc_request_result = 0;
+    _mock_httpc_info_result = 0;
+    _mock_httpc_status = 0;
+    _mock_httpc_body_len = 0;
+    _mock_httpc_body_read = 0;
+    _mock_epd_refresh_calls = 0;
 
     netif_list = NULL;
     _mock_netif_set_addr_called = 0;
@@ -183,6 +198,11 @@ static void reset_all_mocks(void)
     _mock_wlan_sta_ap_rssi = 0;
     _mock_wlan_sta_config_result = 0;
     _mock_wlan_sta_enable_result = 0;
+    memset(_mock_wlan_calls, 0, sizeof(_mock_wlan_calls));
+    _mock_wlan_call_count = 0;
+    memset(_mock_wlan_config_ssid, 0, sizeof(_mock_wlan_config_ssid));
+    g_wlan_netif = NULL;
+    _mock_net_ip4_valid = 0;
 
     memset(&_mock_sysinfo_state, 0, sizeof(_mock_sysinfo_state));
     _mock_sysinfo_get_null = 0;
@@ -609,6 +629,63 @@ static void test_wifi_provision_persists_creds_on_success(void)
     CHECK(_mock_sysinfo_save_call_count == 1,
           "wifi_provision: calls sysinfo_save() exactly once");
 }
+/* Issue #44 regression: `wifi <ssid> <pw>` while already associated must
+ * disable the station before reconfiguring it, then re-enable. Config-then-
+ * enable on a running station left the unit on the old AP, no longer checking in. */
+static void test_wifi_provision_live_switch_disables_config_enables(void)
+{
+    reset_all_mocks();
+    static struct netif live_netif;
+    memcpy(_mock_sysinfo_state.wlan_sta_param.ssid, "MMIOT", 5); /* currently joined */
+    _mock_sysinfo_state.wlan_sta_param.ssid_len = 5;
+    g_wlan_netif = &live_netif;
+    _mock_net_ip4_valid = 1;                                      /* holding a lease */
+
+    CHECK(hokku_wifi_provision("McMansion", "password1") == 0,
+          "wifi_provision: live switch succeeds");
+    /* Without the address drop the SDK reconnects with "netif is already up":
+     * no DHCP, no NETWORK_UP (seen on hardware with 1.2.14 before this). */
+    CHECK(_mock_wlan_call_count == 5 &&
+          _mock_wlan_calls[0] == MOCK_NET_CONFIG_DOWN &&
+          _mock_wlan_calls[1] == MOCK_NETIF_CLEAR_ADDR &&
+          _mock_wlan_calls[2] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[3] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[4] == MOCK_WLAN_ENABLE,
+          "wifi_provision: drops the address, then disable -> config -> enable");
+    CHECK(strcmp((const char *)_mock_wlan_config_ssid, "McMansion") == 0,
+          "wifi_provision: configures the NEW ssid");
+}
+static void test_wifi_provision_config_failure_reenables_station(void)
+{
+    reset_all_mocks();
+    _mock_wlan_sta_config_result = -1;
+    CHECK(hokku_wifi_provision("McMansion", "password1") == -1,
+          "wifi_provision: reports a wlan_sta_config failure");
+    CHECK(_mock_wlan_call_count == 3 &&
+          _mock_wlan_calls[0] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[1] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[2] == MOCK_WLAN_ENABLE,
+          "wifi_provision: a failed config still re-enables the station (radio not left off)");
+}
+static void test_wifi_connect_saved_uses_same_sequence(void)
+{
+    reset_all_mocks();
+    memcpy(_mock_sysinfo_state.wlan_sta_param.ssid, "McMansion", 9);
+    _mock_sysinfo_state.wlan_sta_param.ssid_len = 9;
+    hokku_wifi_connect_saved();
+    CHECK(_mock_wlan_call_count == 3 &&
+          _mock_wlan_calls[0] == MOCK_WLAN_DISABLE &&
+          _mock_wlan_calls[1] == MOCK_WLAN_CONFIG &&
+          _mock_wlan_calls[2] == MOCK_WLAN_ENABLE,
+          "wifi_connect_saved: boot connect uses disable -> config -> enable");
+}
+static void test_wifi_provision_rejected_input_leaves_station_alone(void)
+{
+    reset_all_mocks();
+    hokku_wifi_provision("", "password1");
+    CHECK(_mock_wlan_call_count == 0,
+          "wifi_provision: rejected input never touches the running station");
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
  *  hokku_hibernate — sleep_s clamping (5..60000)
@@ -699,6 +776,36 @@ static void test_net_cb_network_up_starts_refresh_thread_once(void)
     CHECK(_mock_thread_created == 1,
           "net_cb: a second NETWORK_UP does not start a duplicate thread");
 }
+/* Issue #44: after a `wifi` switch the refresh thread was mid-way through a
+ * server-given sleep (can be ~9 h overnight) and did not check in until it ended. */
+static void test_net_cb_network_up_kicks_running_refresh_thread(void)
+{
+    reset_all_mocks();
+    OS_SemaphoreCreateBinary(&g_refresh_kick);
+    net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL);   /* first up: starts the thread */
+    CHECK(_mock_sem_release_calls == 0,
+          "net_cb: first NETWORK_UP starts the thread, no kick needed");
+    net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL);   /* up again after a switch */
+    CHECK(_mock_sem_release_calls == 1,
+          "net_cb: NETWORK_UP with the thread running kicks the refresh wait");
+}
+static void test_refresh_wait_returns_early_when_kicked(void)
+{
+    reset_all_mocks();
+    OS_SemaphoreCreateBinary(&g_refresh_kick);
+    OS_SemaphoreRelease(&g_refresh_kick);
+    hokku_refresh_wait(33092U * 1000U);
+    CHECK(_mock_sem_last_wait_ms == 33092U * 1000U,
+          "refresh_wait: waits on the kick with the server-given sleep as timeout");
+    CHECK(_mock_sem_count == 0, "refresh_wait: consumes the kick");
+}
+static void test_refresh_wait_without_semaphore_falls_back_to_sleep(void)
+{
+    reset_all_mocks();   /* g_refresh_kick invalid */
+    hokku_refresh_wait(1000);
+    CHECK(_mock_sem_last_wait_ms == 0,
+          "refresh_wait: no semaphore -> plain sleep, never waits on an invalid handle");
+}
 static void test_net_cb_network_down_does_not_crash(void)
 {
     reset_all_mocks();
@@ -761,6 +868,74 @@ static void test_frame_receive_refuses_while_ota_lock_held(void)
  *  Entry point
  * ═══════════════════════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════════════════════
+ *  do_refresh — acting on the server's reply (shared fetch_outcome)
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+static void mock_server_reply(UINT32 status, const char *header, UINT32 body_len)
+{
+    _mock_httpc_open_result = 0;
+    _mock_httpc_status = status;
+    _mock_http_header_present = header != NULL;
+    _mock_http_header_value = header ? header : "";
+    _mock_httpc_body_len = body_len;
+}
+
+static void test_refresh_404_label_filter_keeps_picture(void)
+{
+    reset_all_mocks();
+    mock_server_reply(404, "X-Sleep-Seconds: 21600", 0);
+    hokku_fetch_outcome_t o = do_refresh(2);
+    CHECK(o.action == HOKKU_FETCH_KEEP && o.sleep_s == 21600 && o.failures == 0 &&
+          _mock_epd_refresh_calls == 0,
+          "do_refresh: 404 + X-Sleep-Seconds keeps the picture, sleeps the server's interval");
+}
+
+static void test_refresh_503_busy_honours_header(void)
+{
+    reset_all_mocks();
+    mock_server_reply(503, "X-Sleep-Seconds: 45", 0);
+    hokku_fetch_outcome_t o = do_refresh(0);
+    CHECK(o.action == HOKKU_FETCH_KEEP && o.sleep_s == 45 && _mock_epd_refresh_calls == 0,
+          "do_refresh: 503 busy sleeps X-Sleep-Seconds (was a fixed 30 s)");
+}
+
+static void test_refresh_error_without_header_backs_off(void)
+{
+    reset_all_mocks();
+    mock_server_reply(500, NULL, 0);
+    hokku_fetch_outcome_t o = do_refresh(1);
+    CHECK(o.action == HOKKU_FETCH_BACKOFF && o.failures == 2 &&
+          o.sleep_s == 2 * HOKKU_RETRY_BASE_S,
+          "do_refresh: error without X-Sleep-Seconds is an outage, backs off");
+}
+
+static void test_refresh_transport_failure_backs_off(void)
+{
+    reset_all_mocks();                  /* HTTPC_open fails */
+    hokku_fetch_outcome_t o = do_refresh(0);
+    CHECK(o.action == HOKKU_FETCH_BACKOFF && o.first_failure && o.sleep_s == HOKKU_RETRY_BASE_S,
+          "do_refresh: no connection backs off from the shared base");
+}
+
+static void test_refresh_image_displays(void)
+{
+    reset_all_mocks();
+    mock_server_reply(200, "X-Sleep-Seconds: 3600", EPD_IMAGE_BYTES);
+    hokku_fetch_outcome_t o = do_refresh(3);
+    CHECK(o.action == HOKKU_FETCH_DISPLAY && o.sleep_s == 3600 && o.failures == 0 &&
+          _mock_epd_refresh_calls == 1,
+          "do_refresh: full image is refreshed onto the panel, sleeps X-Sleep-Seconds");
+}
+
+static void test_refresh_short_image_not_displayed(void)
+{
+    reset_all_mocks();
+    mock_server_reply(200, "X-Sleep-Seconds: 3600", EPD_IMAGE_BYTES / 2);
+    hokku_fetch_outcome_t o = do_refresh(0);
+    CHECK(o.action == HOKKU_FETCH_BACKOFF && _mock_epd_refresh_calls == 0,
+          "do_refresh: short image is not refreshed and backs off");
+}
 int main(void)
 {
     printf("=== test_logic (bigme_f7) ===\n\n");
@@ -811,6 +986,10 @@ int main(void)
     test_wifi_provision_rejects_empty_ssid();
     test_wifi_provision_rejects_oversized_psk();
     test_wifi_provision_persists_creds_on_success();
+    test_wifi_provision_live_switch_disables_config_enables();
+    test_wifi_provision_config_failure_reenables_station();
+    test_wifi_connect_saved_uses_same_sequence();
+    test_wifi_provision_rejected_input_leaves_station_alone();
 
     test_hibernate_clamps_low_sleep();
     test_hibernate_clamps_high_sleep();
@@ -821,11 +1000,21 @@ int main(void)
     test_net_cb_wlan_connected_static_ip_sets_address();
     test_net_cb_wlan_connected_bad_static_ip_leaves_dhcp();
     test_net_cb_network_up_starts_refresh_thread_once();
+    test_net_cb_network_up_kicks_running_refresh_thread();
+    test_refresh_wait_returns_early_when_kicked();
+    test_refresh_wait_without_semaphore_falls_back_to_sleep();
     test_net_cb_network_down_does_not_crash();
 
     test_frame_receive_acks_every_chunk();
     test_frame_receive_restores_console_when_host_dies();
     test_frame_receive_refuses_while_ota_lock_held();
+
+    test_refresh_404_label_filter_keeps_picture();
+    test_refresh_503_busy_honours_header();
+    test_refresh_error_without_header_backs_off();
+    test_refresh_transport_failure_backs_off();
+    test_refresh_image_displays();
+    test_refresh_short_image_not_displayed();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

@@ -17,7 +17,7 @@
 
 /* Outputs captured from the response. Any pointer may be NULL. */
 typedef struct {
-    int32_t *out_sleep_seconds;   /* X-Sleep-Seconds (if > 0) */
+    int32_t *out_sleep_seconds;   /* X-Sleep-Seconds via hokku_sleep_seconds_parse (if valid) */
     int64_t *out_server_epoch;    /* X-Server-Time-Epoch (if > 0); also sets the clock */
     int     *out_http_status;     /* HTTP status code */
     char    *out_fw_update;       /* X-Firmware-Update version string (empty if none) */

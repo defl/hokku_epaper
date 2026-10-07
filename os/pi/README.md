@@ -17,7 +17,7 @@ runs its standard `stage0`–`stage2`, then a custom `stage-hokku` on top:
 | Stage step | What it does |
 |---|---|
 | `00-install` | Installs the `hokku-server` and `hokku-installer` `.deb`s plus their arm64 wheels into the rootfs |
-| `01-pi-tweaks` | Appliance hardening — USB gadget serial console, journald to RAM, security-only unattended upgrades, Bluetooth/avahi/swap off, `gpu_mem=16` |
+| `01-pi-tweaks` | Appliance hardening — USB gadget serial console, size-capped journald, security-only unattended upgrades, Bluetooth/avahi off, zram plus a small last-resort swapfile, `gpu_mem=16` |
 | `02-systemd` | Enables `hokku-installer`, sets a placeholder WiFi country, bypasses the stock first-boot user dialog, unlocks the default account |
 | `03-cleanup` | Removes build leftovers |
 
@@ -39,7 +39,7 @@ Then, from the repo root:
 bash os/pi/build-image.sh
 ```
 
-Output lands in `build/` as `image-<date>-hokku.img.xz` (~880 MB compressed,
+Output lands in `build/` as `image_<date>-hokku.img.xz` (~880 MB compressed,
 ~3.9 GB written). Expect roughly 45–50 minutes.
 
 **Requires a Linux host.** pi-gen builds a Linux rootfs with `debootstrap` and

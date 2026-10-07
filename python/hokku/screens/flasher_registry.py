@@ -7,8 +7,9 @@ name): ``flash_device``, ``merged_firmware_file``, ``scan_devices``,
 
 Only ESP32-S3 boards live here — the Bigme F7 (XR872 mask-BROM + device-local
 FDCM config) is flashed via its own bootstrap path and is deliberately absent.
-Because the two ESP32 boards share one USB VID:PID, a scan cannot tell them
-apart; the operator picks the model in the UI, and that choice keys this table.
+The two ESP32 boards enumerate differently (huessen as native USB Serial/JTAG,
+the E1004 through its CH340K bridge), so a scan passing :func:`esp32_specs`
+reports each device's model; the operator's model choice still keys the flash.
 """
 
 from __future__ import annotations
@@ -35,3 +36,9 @@ def esp32_models() -> list[str]:
 def esp32_screens() -> list:
     """Every USB-flashable ESP32-S3 screen module, in registration order."""
     return list(_ESP32_SCREENS.values())
+
+
+def esp32_specs() -> list:
+    """Every ESP32-S3 screen's :class:`Esp32Spec`, for recognising any of them by
+    USB id without knowing the model up front."""
+    return [screen.SPEC for screen in _ESP32_SCREENS.values()]

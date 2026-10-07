@@ -30,6 +30,7 @@ from hokku.webserver import flashing
 from hokku.webserver import flask_app as flask_app_mod
 from hokku.webserver.app_config import AppConfig
 from hokku.webserver.app_state import AppState, build_manager
+from hokku.webserver.firmware_library import FirmwareStore
 from hokku.webserver.flask_app import OTA_MAX_ATTEMPTS, create_app
 from hokku.webserver.image_classifier import ImageClassifier
 from hokku.webserver.image_manager_single import SingleThreadedImageManager
@@ -369,6 +370,39 @@ def test_flash_start_dispatches_selected_model_end_to_end(app_config, tmp_path, 
     assert captured["port"] == "COM9"
 
 
+def test_flash_start_writes_the_pinned_firmware(app_config, tmp_path, monkeypatch):
+    """A USB flash installs the firmware library's pinned version — the same one
+    OTA serves — not the newest bundled build."""
+    bundled_fw = tmp_path / "hokku-seeedstudio_e1004-1.2.6.bin"
+    bundled_fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
+    monkeypatch.setattr(seeedstudio_e1004, "merged_firmware_file", lambda *a, **k: bundled_fw)
+    monkeypatch.setattr(seeedstudio_e1004, "nvs_tool_available", lambda: True)
+    fw_dir = tmp_path / "fw"
+    fw_dir.mkdir()
+    pinned_fw = fw_dir / "hokku-seeedstudio_e1004-1.2.4.bin"
+    pinned_fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
+    FirmwareStore(fw_dir).set_pin("seeedstudio_e1004", "1.2.4")
+    state = _bare_state(replace(app_config, firmware_dir=str(fw_dir)))
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        state.flash_jobs,
+        "start",
+        lambda port, config, firmware_path, screen_model="": captured.update(fw=firmware_path) or 1,
+    )
+    r = _client(state, tmp_path).post(
+        "/hokku/api/flash/start",
+        json={
+            "screen_model": "seeedstudio_e1004",
+            "port": "COM9",
+            "wifi_ssid1": "Net",
+            "image_url": "http://x/hokku/screen/",
+        },
+    )
+    assert r.status_code == 200
+    assert captured["fw"] == pinned_fw
+
+
 def test_flash_start_remembers_wifi_credentials(app_config, tmp_path, monkeypatch):
     """Flashing persists the Wi-Fi credentials to config so the form pre-fills
     next time — the same network provisions every screen."""
@@ -589,6 +623,15 @@ def test_flash_devices_classifies_bigme_f7(app_config, tmp_path, monkeypatch):
                 "vid": 0x303A,
                 "pid": 0x1001,
                 "is_esp32": True,
+                "model": "huessen_epf1301",
+            },
+            {
+                "port": "COM12",
+                "description": "USB-SERIAL CH340K",
+                "vid": 0x1A86,
+                "pid": 0x7522,
+                "is_esp32": True,
+                "model": "seeedstudio_e1004",
             },
         ],
     )
@@ -596,6 +639,25 @@ def test_flash_devices_classifies_bigme_f7(app_config, tmp_path, monkeypatch):
     devs = {d["port"]: d for d in client.get("/hokku/api/flash/devices").get_json()["devices"]}
     assert devs["COM7"]["is_bigme_f7"] is True  # CH340 -> Bigme F7
     assert devs["COM3"]["is_bigme_f7"] is False  # ESP32-S3 -> not F7
+    assert devs["COM12"]["is_bigme_f7"] is False  # E1004's CH340K -> not F7
+
+
+def test_flash_devices_scan_recognises_every_esp32_model(app_config, tmp_path, monkeypatch):
+    # The web scan is not told the model, so it must match every ESP32 screen's
+    # USB id, not just huessen's (#45).
+    fw = tmp_path / "hokku-huessen_epf1301-1.2.9.bin"
+    fw.write_bytes(b"\x00" * (APP_OFFSET + 256))
+    monkeypatch.setattr(huessen_epf1301, "merged_firmware_file", lambda *a, **k: fw)
+    seen = {}
+
+    def fake_scan(**kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(huessen_epf1301, "scan_devices", fake_scan)
+    client = _client(_bare_state(app_config), tmp_path)
+    assert client.get("/hokku/api/flash/devices").status_code == 200
+    assert {s.model_id for s in seen["specs"]} == {"huessen_epf1301", "seeedstudio_e1004"}
 
 
 # ── ServeScheduler: OTA pending flag ──────────────────────────────────────────

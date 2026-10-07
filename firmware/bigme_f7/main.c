@@ -25,6 +25,7 @@
 #include "net/HTTPClient/API/HTTPClientCommon.h"
 #include "lwip/netif.h"
 #include "lwip/dhcp.h"
+#include "lwip/netifapi.h"
 #include "lwip/ip_addr.h"
 
 #include "image/image.h"
@@ -45,10 +46,11 @@
 /* SoC-agnostic shared code (firmware/common/all — pure C, no SDK headers). */
 #include "firmware_url.h"
 #include "frame_state.h"
-#include "backoff.h"
+#include "fetch_outcome.h"
 #include "logbuf.h"
 #include "frame_proto.h"
 #include "interactive.h"
+#include "screen_ident.h"
 
 /* SoC-shared XR872 code (firmware/common/xr872 — usable by any XR872/XR872AT
  * screen): activity log, software clock, HTTP-header helpers, hibernation. */
@@ -57,15 +59,9 @@
 #include "http_util.h"
 #include "pm.h"
 
-/* Static IP config — used when DHCP is unavailable on the network */
-#define STATIC_IP_ADDR   "192.168.6.199"
-#define STATIC_GW_ADDR   "192.168.6.254"
-#define STATIC_NM_ADDR   "255.255.255.0"
-
-#define HOKKU_SERVER_URL        "http://192.168.6.111:8080/hokku/screen/"
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.12"
+#define FIRMWARE_VERSION        "1.2.16"
 
 #define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
 #define DEFAULT_SLEEP_SECONDS   300
@@ -90,6 +86,16 @@ static int         g_epd_ready = 0;
  * itself does NOT lock — its callers already hold the lock (no recursive lock).
  */
 static OS_Mutex_t  g_ota_lock;
+
+/*
+ * Wakes the awake-mode refresh wait early. The server can hand out a sleep of
+ * many hours (overnight), and the refresh thread used to OS_MSleep() through it,
+ * so a `wifi` switch (or any reconnect) was not followed by a check-in until that
+ * sleep ended — it looked like the unit had stopped checking in. net_cb releases
+ * this on NETWORK_UP once the refresh thread exists, so the unit checks in on the
+ * new network straight away. Binary: repeated releases collapse into one wake.
+ */
+static OS_Semaphore_t g_refresh_kick;
 
 /* --------------------------------------------------------------------------
  * Reporting: wake reason, battery, and frame-state telemetry. The activity log
@@ -191,6 +197,20 @@ static void build_frame_state(char *buf, size_t sz)
         .wifi_cached     = false,
     };
     frame_state_build(buf, sz, &fs);
+}
+
+/* This device's WiFi MAC as X-Screen-Mac ("" if unknown). sysinfo derives it
+ * from the chip ID at every boot (PRJCONF_MAC_ADDR_SOURCE), so it is stable per
+ * unit and is what the network sees. The server keys the screen by it, so a
+ * rename or reflash keeps the screen's history. */
+static void hokku_screen_mac_str(char *out, size_t len)
+{
+    const struct sysinfo *si = sysinfo_get();
+    if (si == NULL) {
+        if (len) out[0] = '\0';
+        return;
+    }
+    hokku_mac_format(si->mac_addr, out, len);
 }
 
 /*
@@ -415,12 +435,25 @@ int hokku_frame_receive(void)
     return 0;
 }
 
+/* Run the shared reply decision (common/all/fetch_outcome.h) and log it. */
+static hokku_fetch_outcome_t refresh_decide(const hokku_fetch_result_t *res,
+                                            unsigned prior_failures)
+{
+    hokku_fetch_outcome_t o = hokku_fetch_decide(res, prior_failures);
+    hlog("hokku: fetch status=%d -> %s, next in %d s\n",
+         res->http_status, o.reason, (int)o.sleep_s);
+    return o;
+}
+
 /*
- * Fetch one image from the server and stream it byte-by-byte to the EPD.
- * Returns the number of seconds to sleep before the next refresh, or -1 on
- * any error (caller should retry after a short backoff).
+ * Fetch one image from the server and act on the reply. The body is streamed
+ * byte-by-byte into the EPD's frame memory as it arrives; the panel refresh only
+ * runs when the shared decision says DISPLAY, so a "keep your picture" reply or
+ * a broken download leaves the glass untouched. prior_failures is the outage
+ * streak before this fetch; the returned outcome carries the new streak and the
+ * seconds until the next fetch.
  */
-static int do_refresh(void)
+static hokku_fetch_outcome_t do_refresh(unsigned prior_failures)
 {
     hokku_config_t *cfg = hokku_config_get();
     HTTPParameters  params;
@@ -429,7 +462,7 @@ static int do_refresh(void)
     char            frame_state[384];
     UINT32          bytes_streamed = 0;
     uint32_t        log_sent;                 /* bytes snapshotted for the POST body */
-    int             sleep_sec = (int)cfg->default_sleep_s;
+    hokku_fetch_result_t res = { .http_status = 0 };   /* 0 = no response */
     int             ret;
 
     build_frame_state(frame_state, sizeof(frame_state));
@@ -447,12 +480,17 @@ static int do_refresh(void)
     ret = HTTPC_open(&params);
     if (ret != HTTP_CLIENT_SUCCESS) {
         hlog("hokku: HTTP open failed (%d)\n", ret);
-        return -1;
+        return refresh_decide(&res, prior_failures);
     }
 
     /* Request headers — server uses these for telemetry / OTA checks */
+    char mac_str[HOKKU_MAC_STR_LEN];
+    hokku_screen_mac_str(mac_str, sizeof(mac_str));
+
     HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Name",      cfg->screen_name, 1);
     HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Model",     SCREEN_MODEL,     1);
+    if (mac_str[0])
+        HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Mac",   mac_str,          1);
     HTTPClientAddRequestHeaders(params.pHTTP, "X-Firmware-Version", FIRMWARE_VERSION, 1);
     HTTPClientAddRequestHeaders(params.pHTTP, "X-Firmware-Build",   HOKKU_BUILD_TS,   1);
     HTTPClientAddRequestHeaders(params.pHTTP, "X-Frame-State",      frame_state,      1);
@@ -462,19 +500,26 @@ static int do_refresh(void)
     if (ret != HTTP_CLIENT_SUCCESS) {
         hlog("hokku: HTTP request failed (%d)\n", ret);
         HTTPC_close(&params);
-        return -1;
+        return refresh_decide(&res, prior_failures);
     }
 
-    /* Check HTTP status code */
     if (HTTPC_get_request_info(&params, &info) != HTTP_CLIENT_SUCCESS) {
         HTTPC_close(&params);
-        return -1;
+        return refresh_decide(&res, prior_failures);
+    }
+
+    /* The server answered. X-Sleep-Seconds rides on every reply, including the
+     * no-image ones (503 converting, 404 no label match / empty library). */
+    res.http_status = (int)info.HTTPStatusCode;
+    {
+        char v[16];
+        if (read_resp_header_str(params.pHTTP, "X-Sleep-Seconds", v, sizeof(v)))
+            res.sleep_s = hokku_sleep_seconds_parse(v);
     }
     if (info.HTTPStatusCode != 200) {
         hlog("hokku: server returned %u\n", (unsigned)info.HTTPStatusCode);
         HTTPC_close(&params);
-        /* For 503/404 (no image ready), use a short retry */
-        return (info.HTTPStatusCode == 503 || info.HTTPStatusCode == 404) ? 30 : -1;
+        return refresh_decide(&res, prior_failures);
     }
 
     /* The POST body (log) reached the server in a 200 — clear the buffer so the
@@ -483,15 +528,26 @@ static int do_refresh(void)
     hlog_reset();
     (void)log_sent;
 
-    /* Capture sleep + server clock + any OTA signal from response headers */
+    /* Capture server clock + any OTA signal from response headers */
     char fw_update[32] = "";
     {
         uint32_t v;
-        if (read_resp_header_uint(params.pHTTP, "X-Sleep-Seconds", &v) && v > 0)
-            sleep_sec = (int)v;
         if (read_resp_header_uint(params.pHTTP, "X-Server-Time-Epoch", &v) && v > 1600000000U)
             hokku_clock_set(v);              /* sanity: after 2020-09-13 */
         read_resp_header_str(params.pHTTP, "X-Firmware-Update", fw_update, sizeof(fw_update));
+
+        /* The server owns the name of a screen it knows (set in its web UI):
+         * adopt it when it differs, so the next request carries it. One byte
+         * beyond the max so an over-long value is refused rather than
+         * truncated into a valid one. */
+        char name[HOKKU_SCREEN_NAME_MAX + 2];
+        if (read_resp_header_str(params.pHTTP, HOKKU_HDR_SCREEN_NAME, name, sizeof(name)) &&
+            strcmp(name, cfg->screen_name) != 0) {
+            if (hokku_config_set_screen_name(name) == 0)
+                hlog("hokku: renamed to '%s'\n", cfg->screen_name);
+            else
+                hlog("hokku: rename refused\n");
+        }
     }
 
     /* OTA takes priority over display: the server told us to update. Discard the
@@ -501,7 +557,8 @@ static int do_refresh(void)
         hlog("hokku: firmware update signalled -> %s\n", fw_update);
         HTTPC_close(&params);
         hokku_do_ota(fw_update);
-        return -1;                           /* OTA failed: short backoff, unchanged */
+        res.ota_failed = true;
+        return refresh_decide(&res, prior_failures);
     }
 
     /* Stream response body to EPD (CMD 0x10 was not sent yet — do it now) */
@@ -527,17 +584,18 @@ static int do_refresh(void)
 
     HTTPC_close(&params);
 
-    if (bytes_streamed < EPD_IMAGE_BYTES) {
+    res.image_ok = (bytes_streamed >= EPD_IMAGE_BYTES);
+    if (!res.image_ok)
         hlog("hokku: short image: %u / %u bytes\n",
                (unsigned)bytes_streamed, (unsigned)EPD_IMAGE_BYTES);
-        return -1;
+
+    hokku_fetch_outcome_t o = refresh_decide(&res, prior_failures);
+    if (o.action == HOKKU_FETCH_DISPLAY) {
+        hlog("hokku: image received, refreshing display...\n");
+        epd_refresh();  /* ~30 s */
+        hlog("hokku: refresh done\n");
     }
-
-    hlog("hokku: image received, refreshing display...\n");
-    epd_refresh();  /* ~30 s */
-    hlog("hokku: refresh done, sleeping %d s\n", sleep_sec);
-
-    return sleep_sec;
+    return o;
 }
 
 /* hokku_hibernate() is now shared XR872 code in firmware/common/xr872/pm.h. */
@@ -563,6 +621,17 @@ static int hokku_should_sleep(void)
     }
 }
 
+/* Awake-mode wait between refreshes: `ms`, or less if net_cb kicks it. */
+static void hokku_refresh_wait(uint32_t ms)
+{
+    if (!OS_SemaphoreIsValid(&g_refresh_kick)) {
+        OS_MSleep(ms);
+        return;
+    }
+    if (OS_SemaphoreWait(&g_refresh_kick, ms) == OS_OK)
+        hlog("hokku: network came (back) up — refreshing now\n");
+}
+
 static void refresh_thread_fn(void *arg)
 {
     (void)arg;
@@ -574,8 +643,8 @@ static void refresh_thread_fn(void *arg)
         g_epd_ready = 1;
     }
 
-    /* Consecutive server-unreachable failures, for exponential retry backoff.
-     * Persists across the awake loop (the churn case); on battery each
+    /* Consecutive outages (fetch_outcome BACKOFFs), for exponential retry
+     * backoff. Persists across the awake loop (the churn case); on battery each
      * hibernation wake restarts this thread and resets it, which is fine —
      * hibernation is already low-power. */
     unsigned refresh_failures = 0;
@@ -596,22 +665,17 @@ static void refresh_thread_fn(void *arg)
         /* Hold the OTA/flash lock across the whole refresh (which may itself run
          * an OTA on X-Firmware-Update) so a console `ota` can't run concurrently. */
         OS_MutexLock(&g_ota_lock, OS_WAIT_FOREVER);
-        int sleep_sec = do_refresh();          /* may reboot via OTA and never return */
+        /* may reboot via OTA and never return */
+        hokku_fetch_outcome_t o = do_refresh(refresh_failures);
         OS_MutexUnlock(&g_ota_lock);
-        if (sleep_sec < 0) {
-            /* Couldn't reach the server — back off (shared SoC-agnostic policy):
-             * 30s, 60, 120, ... capped at 1 h, instead of hammering every 30s. */
-            sleep_sec = hokku_backoff_seconds(refresh_failures, 30, 3600);
-            if (refresh_failures < 255) refresh_failures++;
-        } else {
-            refresh_failures = 0;              /* reached the server — reset streak */
-        }
+        refresh_failures = o.failures;
+        uint32_t sleep_sec = (uint32_t)o.sleep_s;   /* >= 1, <= HOKKU_SLEEP_MAX_S */
 
         if (hokku_should_sleep()) {
             led_park_for_sleep();                   /* nothing driving the LEDs while asleep */
-            hokku_hibernate((uint32_t)sleep_sec);   /* battery: deep sleep, restarts on wake */
+            hokku_hibernate(sleep_sec);             /* battery: deep sleep, restarts on wake */
         } else {
-            OS_MSleep((uint32_t)sleep_sec * 1000);  /* USB/awake: keep looping */
+            hokku_refresh_wait(sleep_sec * 1000);   /* USB/awake: keep looping (no overflow) */
         }
     }
 }
@@ -665,6 +729,9 @@ static void net_cb(uint32_t event, uint32_t data, void *arg)
                             NULL,
                             REFRESH_THREAD_PRIO,
                             REFRESH_THREAD_STACK);
+        } else if (OS_SemaphoreIsValid(&g_refresh_kick)) {
+            /* Reconnect / network switch: check in now, don't sleep it out. */
+            OS_SemaphoreRelease(&g_refresh_kick);
         }
         break;
     }
@@ -910,12 +977,36 @@ void platform_init_level0(void)
  *
  * WLAN_STA_CONF_FLAG_WPA3 advertises WPA3 support but negotiates down to WPA2-PSK,
  * which is what a WPA2/WPA3-mixed AP actually associates with.
+ *
+ * The station is disabled BEFORE it is reconfigured, matching every SDK path that
+ * re-points a live station (at_demo join, sc_assistant_port.c). Without it, a
+ * `wifi` switch while associated replaced the supplicant config under a running
+ * connection, and wlan_sta_enable() on an already-enabled station is a no-op: the
+ * unit never left the old AP and stopped checking in until a reboot (issue #44).
+ * Disabling an idle station at boot is harmless (the SDK paths do it unconditionally).
+ *
+ * The IPv4 address is dropped first, as the SDK's net_switch_mode() does. On a
+ * plain disconnect the SDK keeps a BOUND lease (roaming), so on reconnect it
+ * logs "netif is already up", never restarts DHCP and never sends NETWORK_UP:
+ * a unit moved to another subnet would keep a stale address, and net_cb would
+ * never kick the refresh thread. net_config(nif, 0) releases the DHCP lease; the
+ * explicit clear also covers a static address (lwIP's release leaves those in
+ * place). With no address, the reconnect runs DHCP (or net_cb's static set) and
+ * the address change fires NETWORK_UP. Seen on hardware 2026-09-29 (1.2.14 test).
  */
 static int hokku_wifi_connect(const uint8_t *ssid, uint8_t ssid_len, const uint8_t *psk)
 {
+    struct netif *nif = g_wlan_netif;
+
+    if (nif != NULL && NET_IS_IP4_VALID(nif)) {
+        net_config(nif, 0);                                /* release the lease */
+        netifapi_netif_set_addr(nif, NULL, NULL, NULL);   /* and any static address */
+    }
+    wlan_sta_disable();
     if (wlan_sta_config((uint8_t *)ssid, ssid_len, (uint8_t *)psk,
                         WLAN_STA_CONF_FLAG_WPA3) != 0) {
         hlog("hokku: wlan_sta_config failed\n");
+        wlan_sta_enable();   /* don't leave the radio off: retry whatever config remains */
         return -1;
     }
     return wlan_sta_enable();
@@ -974,6 +1065,7 @@ int main(void)
     /* Create the OTA/refresh lock before platform_init() (which brings up the
      * console) so a `ota` command can never reference an uninitialised mutex. */
     OS_MutexCreate(&g_ota_lock);
+    OS_SemaphoreCreateBinary(&g_refresh_kick);   /* before net_cb can release it */
 
     platform_init();
 
