@@ -2,6 +2,7 @@
 #include "log.h"    /* hokku_log_snapshot / hokku_log_reset / HOKKU_LOG_MAX_UPLOAD */
 #include "config.h" /* config_set_screen_name */
 #include "screen_ident.h"
+#include "http_headers.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -17,7 +18,8 @@
 
 typedef struct {
     uint8_t *buf;
-    size_t   received;
+    size_t   kept;      /* bytes copied into buf (never more than capacity) */
+    size_t   received;  /* every body byte that arrived, kept or not */
     size_t   capacity;
     /* Response-header captures, populated from HTTP_EVENT_ON_HEADER and read
      * after perform(). (Capturing from the event stream is the only correct
@@ -37,6 +39,12 @@ typedef struct {
     char     name_hdr[HOKKU_SCREEN_NAME_MAX + 2];
 } http_download_ctx_t;
 
+static void capture(char *dst, size_t dstlen, const char *value)
+{
+    strncpy(dst, value, dstlen - 1);
+    dst[dstlen - 1] = '\0';
+}
+
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 {
     http_download_ctx_t *ctx = (http_download_ctx_t *)evt->user_data;
@@ -44,10 +52,10 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 
     switch (evt->event_id) {
         case HTTP_EVENT_ON_CONNECTED:
-            /* Reset buffer on each new connection (handles redirects): without
-             * this, a 308 redirect's body accumulates before the real image
-             * data, causing a size mismatch. Header captures reset too so we
-             * only see the final response's values. */
+            /* Reset on each new connection (handles redirects): without this, a
+             * 308 redirect's body would count toward the image. Header captures
+             * reset too so we only see the final response's values. */
+            ctx->kept = 0;
             ctx->received = 0;
             ctx->sleep_seconds_hdr[0] = '\0';
             ctx->server_epoch_hdr[0]  = '\0';
@@ -58,37 +66,29 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             break;
         case HTTP_EVENT_ON_HEADER:
             if (evt->header_key && evt->header_value) {
-                if (strcasecmp(evt->header_key, "X-Sleep-Seconds") == 0) {
-                    strncpy(ctx->sleep_seconds_hdr, evt->header_value,
-                            sizeof(ctx->sleep_seconds_hdr) - 1);
-                    ctx->sleep_seconds_hdr[sizeof(ctx->sleep_seconds_hdr) - 1] = '\0';
-                } else if (strcasecmp(evt->header_key, "X-Server-Time-Epoch") == 0) {
-                    strncpy(ctx->server_epoch_hdr, evt->header_value,
-                            sizeof(ctx->server_epoch_hdr) - 1);
-                    ctx->server_epoch_hdr[sizeof(ctx->server_epoch_hdr) - 1] = '\0';
-                } else if (strcasecmp(evt->header_key, "X-Firmware-Update") == 0) {
-                    strncpy(ctx->fw_update_hdr, evt->header_value,
-                            sizeof(ctx->fw_update_hdr) - 1);
-                    ctx->fw_update_hdr[sizeof(ctx->fw_update_hdr) - 1] = '\0';
-                } else if (strcasecmp(evt->header_key, "X-Sleep-Cal-PPM") == 0) {
-                    strncpy(ctx->cal_ppm_hdr, evt->header_value,
-                            sizeof(ctx->cal_ppm_hdr) - 1);
-                    ctx->cal_ppm_hdr[sizeof(ctx->cal_ppm_hdr) - 1] = '\0';
-                } else if (strcasecmp(evt->header_key, "X-Sleep-Cal-N") == 0) {
-                    strncpy(ctx->cal_n_hdr, evt->header_value,
-                            sizeof(ctx->cal_n_hdr) - 1);
-                    ctx->cal_n_hdr[sizeof(ctx->cal_n_hdr) - 1] = '\0';
-                } else if (strcasecmp(evt->header_key, HOKKU_HDR_SCREEN_NAME) == 0) {
-                    strncpy(ctx->name_hdr, evt->header_value,
-                            sizeof(ctx->name_hdr) - 1);
-                    ctx->name_hdr[sizeof(ctx->name_hdr) - 1] = '\0';
-                }
+                const char *k = evt->header_key, *v = evt->header_value;
+                if (strcasecmp(k, HOKKU_HDR_SLEEP_SECONDS) == 0)
+                    capture(ctx->sleep_seconds_hdr, sizeof(ctx->sleep_seconds_hdr), v);
+                else if (strcasecmp(k, HOKKU_HDR_SERVER_TIME) == 0)
+                    capture(ctx->server_epoch_hdr, sizeof(ctx->server_epoch_hdr), v);
+                else if (strcasecmp(k, HOKKU_HDR_FW_UPDATE) == 0)
+                    capture(ctx->fw_update_hdr, sizeof(ctx->fw_update_hdr), v);
+                else if (strcasecmp(k, HOKKU_HDR_SLEEP_CAL_PPM) == 0)
+                    capture(ctx->cal_ppm_hdr, sizeof(ctx->cal_ppm_hdr), v);
+                else if (strcasecmp(k, HOKKU_HDR_SLEEP_CAL_N) == 0)
+                    capture(ctx->cal_n_hdr, sizeof(ctx->cal_n_hdr), v);
+                else if (strcasecmp(k, HOKKU_HDR_SCREEN_NAME) == 0)
+                    capture(ctx->name_hdr, sizeof(ctx->name_hdr), v);
             }
             break;
         case HTTP_EVENT_ON_DATA:
-            if (ctx->received + evt->data_len <= ctx->capacity) {
-                memcpy(ctx->buf + ctx->received, evt->data, evt->data_len);
-                ctx->received += evt->data_len;
+            if (evt->data_len > 0) {
+                size_t n = (size_t)evt->data_len;
+                ctx->received += n;
+                if (ctx->kept + n <= ctx->capacity) {
+                    memcpy(ctx->buf + ctx->kept, evt->data, n);
+                    ctx->kept += n;
+                }
             }
             break;
         default:
@@ -108,12 +108,26 @@ void hokku_screen_mac_str(char *out, size_t len)
     hokku_mac_format(mac, out, len);
 }
 
+/* A reply that carries the server time sets the system clock (RTC-backed, so it
+ * survives deep sleep + esp_restart); the next X-Frame-State reports it. */
+static void set_clock(int64_t epoch)
+{
+    struct timeval tv = { .tv_sec = (time_t)epoch, .tv_usec = 0 };
+    settimeofday(&tv, NULL);
+    ESP_LOGI("hokku", "clock set from the server: %lld", (long long)epoch);
+}
+
 bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
                             const char *url, const char *screen_name,
                             const char *screen_model, const char *frame_state,
-                            const char *fw_build, hokku_fetch_out_t *out)
+                            const char *fw_build, hokku_fetch_result_t *res,
+                            char *fw_update, size_t fw_update_len)
 {
-    http_download_ctx_t ctx = { .buf = buf, .received = 0, .capacity = expect_bytes };
+    http_download_ctx_t ctx = { .buf = buf, .capacity = expect_bytes };
+
+    res->http_status = 0;
+    res->image_ok    = false;
+    if (fw_update && fw_update_len) fw_update[0] = '\0';
 
     esp_http_client_config_t http_cfg = {
         .url = url,
@@ -140,20 +154,20 @@ bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
     esp_http_client_set_method(client, HTTP_METHOD_POST);
 
     if (screen_name && screen_name[0] != '\0')
-        esp_http_client_set_header(client, "X-Screen-Name", screen_name);
+        esp_http_client_set_header(client, HOKKU_HDR_SCREEN_NAME, screen_name);
     if (screen_model && screen_model[0] != '\0')
-        esp_http_client_set_header(client, "X-Screen-Model", screen_model);
+        esp_http_client_set_header(client, HOKKU_HDR_SCREEN_MODEL, screen_model);
     /* X-Screen-Mac: the server's durable per-device key (name is only a label). */
     char mac_str[HOKKU_MAC_STR_LEN];
     hokku_screen_mac_str(mac_str, sizeof(mac_str));
     if (mac_str[0] != '\0')
-        esp_http_client_set_header(client, "X-Screen-Mac", mac_str);
-    esp_http_client_set_header(client, "X-Frame-State", frame_state);
+        esp_http_client_set_header(client, HOKKU_HDR_SCREEN_MAC, mac_str);
+    esp_http_client_set_header(client, HOKKU_HDR_FRAME_STATE, frame_state);
 
     const esp_app_desc_t *app = esp_app_get_description();
     const char *fw_ver = (app && app->version[0]) ? app->version : "unknown";
-    esp_http_client_set_header(client, "X-Firmware-Version", fw_ver);
-    esp_http_client_set_header(client, "X-Firmware-Build", fw_build);
+    esp_http_client_set_header(client, HOKKU_HDR_FW_VERSION, fw_ver);
+    esp_http_client_set_header(client, HOKKU_HDR_FW_BUILD, fw_build);
 
     /* Attach the log ring (carry + active, joined) as the POST body. Size the
      * receiving buffer to the max joined length so nothing is truncated.
@@ -172,75 +186,32 @@ bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
 
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
-
-    /* Response headers captured during perform() — safe to read now (copied
-     * into ctx, not pointers into esp_http_client internals). */
-    if (ctx.sleep_seconds_hdr[0] != '\0' && out && out->out_sleep_seconds) {
-        int32_t secs = atoi(ctx.sleep_seconds_hdr);
-        if (secs > 0) {
-            *out->out_sleep_seconds = secs;
-            ESP_LOGI("hokku", "X-Sleep-Seconds: %d", secs);
-        } else {
-            ESP_LOGW("hokku", "X-Sleep-Seconds present but non-positive: '%s'", ctx.sleep_seconds_hdr);
-        }
-    } else {
-        ESP_LOGW("hokku", "X-Sleep-Seconds header missing (status=%d)", status);
-    }
-    if (ctx.server_epoch_hdr[0] != '\0' && out && out->out_server_epoch) {
-        int64_t epoch = atoll(ctx.server_epoch_hdr);
-        if (epoch > 0) {
-            *out->out_server_epoch = epoch;
-            /* Set the system clock to server time (RTC-backed — survives deep
-             * sleep + esp_restart). Next X-Frame-State reports time(NULL). */
-            struct timeval tv = { .tv_sec = (time_t)epoch, .tv_usec = 0 };
-            settimeofday(&tv, NULL);
-            struct tm t;
-            gmtime_r(&tv.tv_sec, &t);
-            char timestamp[40];
-            strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S UTC", &t);
-            ESP_LOGI("hokku", "X-Server-Time-Epoch: %lld — clock set to %s", epoch, timestamp);
-        } else {
-            ESP_LOGW("hokku", "X-Server-Time-Epoch non-positive: '%s'", ctx.server_epoch_hdr);
-        }
-    } else {
-        ESP_LOGW("hokku", "X-Server-Time-Epoch header missing (status=%d)", status);
-    }
-
-    /* Server calibration seed: both headers arrive on every response. Report the
-     * pair only when both parsed, so the board can apply its adoption policy. */
-    if (ctx.cal_ppm_hdr[0] != '\0' && ctx.cal_n_hdr[0] != '\0' &&
-        out && out->out_cal_seed_ppm && out->out_cal_seed_n) {
-        int n = atoi(ctx.cal_n_hdr);
-        if (n >= 0) {
-            int ppm = atoi(ctx.cal_ppm_hdr);
-            *out->out_cal_seed_ppm = (int32_t)ppm;
-            *out->out_cal_seed_n   = n;
-            ESP_LOGI("hokku", "X-Sleep-Cal: %d ppm from %d samples", ppm, n);
-        }
-    }
-
-    /* Surface any OTA-update request (server sends it only on the 200). */
-    if (out && out->out_fw_update && out->fw_update_buflen > 0) {
-        out->out_fw_update[0] = '\0';
-        if (ctx.fw_update_hdr[0] != '\0') {
-            strncpy(out->out_fw_update, ctx.fw_update_hdr, out->fw_update_buflen - 1);
-            out->out_fw_update[out->fw_update_buflen - 1] = '\0';
-            ESP_LOGI("hokku", "X-Firmware-Update: %s (server requested OTA)", out->out_fw_update);
-        }
-    }
-
     esp_http_client_cleanup(client);
     free(log_body);
 
-    if (out && out->out_http_status) *out->out_http_status = status;
-
-    if (err != ESP_OK || status != 200) {
-        ESP_LOGE("hokku", "HTTP download failed: err=%s status=%d", esp_err_to_name(err), status);
+    if (err != ESP_OK && status < 100) {
+        ESP_LOGE("hokku", "HTTP request failed: %s", esp_err_to_name(err));
         return false;
     }
 
-    /* Log upload succeeded with the image: reset the ring so the next cycle
-     * starts fresh rather than re-uploading the same content. */
+    /* Response headers captured during perform() — copied into ctx, not
+     * pointers into esp_http_client internals, so safe to read now. */
+    res->http_status  = status;
+    res->sleep_s      = hokku_sleep_seconds_parse(ctx.sleep_seconds_hdr[0] ? ctx.sleep_seconds_hdr : NULL);
+    res->server_epoch = hokku_server_epoch_parse(ctx.server_epoch_hdr[0] ? ctx.server_epoch_hdr : NULL);
+    if (!hokku_cal_seed_parse(ctx.cal_ppm_hdr, ctx.cal_n_hdr, &res->cal_seed_ppm, &res->cal_seed_n))
+        res->cal_seed_n = 0;
+    ESP_LOGI("hokku", "reply %d: sleep=%d epoch=%lld seed=%d ppm/%d", status, (int)res->sleep_s,
+             (long long)res->server_epoch, (int)res->cal_seed_ppm, (int)res->cal_seed_n);
+
+    if (res->server_epoch > 0)
+        set_clock(res->server_epoch);
+
+    if (status != 200)
+        return false;
+
+    /* The log reached the server with this 200: reset the ring so the next
+     * cycle starts fresh rather than re-uploading the same content. */
     hokku_log_reset();
 
     /* The server owns the name of a screen it knows: adopt its name (a no-op
@@ -248,12 +219,15 @@ bool hokku_http_fetch_image(uint8_t *buf, size_t expect_bytes,
     if (ctx.name_hdr[0] != '\0')
         config_set_screen_name(ctx.name_hdr);
 
-    if (ctx.received != expect_bytes) {
-        ESP_LOGE("hokku", "Image size mismatch: got %d, expected %d",
-                 (int)ctx.received, (int)expect_bytes);
-        return false;
+    /* OTA request (the server sends it only on a 200): the body is ignored. */
+    if (ctx.fw_update_hdr[0] != '\0' && fw_update && fw_update_len) {
+        capture(fw_update, fw_update_len, ctx.fw_update_hdr);
+        ESP_LOGI("hokku", "X-Firmware-Update: %s (server requested OTA)", fw_update);
     }
 
-    ESP_LOGI("hokku", "Downloaded %d bytes", (int)ctx.received);
-    return true;
+    res->image_ok = hokku_image_size_ok(ctx.received, expect_bytes);
+    if (!res->image_ok)
+        ESP_LOGE("hokku", "image size %u, expected %u",
+                 (unsigned)ctx.received, (unsigned)expect_bytes);
+    return res->image_ok;
 }

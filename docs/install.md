@@ -71,7 +71,7 @@ A minimal config looks like this (the `version` field is required — without it
 
 ```json
 {
-  "version": 6,
+  "version": 11,
   "refresh_image_at_time": ["0600", "1200", "1800"],
   "upload_dir": "/var/lib/hokku/images",
   "cache_dir": "/var/lib/hokku/cache",
@@ -79,7 +79,7 @@ A minimal config looks like this (the `version` field is required — without it
 }
 ```
 
-All options can also be changed live from the web app without restarting the server.
+Most options can also be changed from the web app; the exceptions are listed in the [user manual](manual.md#13-admin).
 
 **From source (any platform)**
 
@@ -91,10 +91,10 @@ source .venv/bin/activate   # Linux / macOS
 .venv\Scripts\activate      # Windows
 pip install -r requirements.txt
 cd python
-python -m hokku.webserver
+python -m hokku.webserver config.json
 ```
 
-The `cd python` step is required — the server package lives there. On first start without a config file it writes a fresh default (including `upload_dir`, which defaults to `/var/lib/hokku/images` — change this in the config to a local path if you're not running on Linux). Web GUI at `http://<your-server>:8080/`.
+The `cd python` step is required — the server package lives there. If `config.json` doesn't exist it is written with defaults, and the server stops unless `upload_dir` and `cache_dir` (default `/var/lib/hokku/images` and `/var/lib/hokku/cache`) already exist — point them at existing local directories and start it again. Web GUI at `http://<your-server>:8080/`.
 
 ---
 
@@ -127,6 +127,8 @@ The package creates a default config at `/var/lib/hokku/config.json` on first st
 
 ### 1.3 Flash and configure the frame
 
+This covers the ESP32 frames (Hokku / Huessen and Seeed reTerminal E1004). If your server runs on the machine the frame plugs into, **Flash a screen** in the web app does all of this for you. The Bigme F7 is only installed that way — see [Bigme F7 bootstrap](screens/bigme_f7/bootstrap.md).
+
 **Prerequisites**
 
 - A data-capable USB-C cable — not all cables carry data, try a different one if nothing shows up
@@ -143,15 +145,15 @@ pip install -r requirements.txt
 
 Connect the frame to your computer via the USB-C charging port. Find the serial port:
 
-- **Windows:** Device Manager → Ports (COM & LPT) — look for a Silicon Labs or CP210x device and note the COM number (e.g. `COM3`). If it doesn't appear, install the [CP210x driver](https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers).
-- **Linux / macOS:** `ls /dev/ttyUSB* /dev/ttyACM* /dev/cu.usbserial*` — the frame typically appears as `/dev/ttyUSB0` or similar.
+- **Windows:** Device Manager → Ports (COM & LPT) — note the COM number (e.g. `COM3`). The Hokku / Huessen frame uses the ESP32-S3's built-in USB and shows up as a *USB Serial Device* with no driver needed. The Seeed reTerminal E1004 goes through a CH340K bridge (USB id `1A86:7522`); if it doesn't appear, install the [WCH CH340 driver](https://www.wch-ic.com/downloads/CH341SER_EXE.html).
+- **Linux / macOS:** `ls /dev/ttyUSB* /dev/ttyACM* /dev/cu.usb*` — the Hokku / Huessen frame typically appears as `/dev/ttyACM0`, the E1004 as `/dev/ttyUSB0`.
 
 **Step 2: Flash the firmware**
 
-Download `hokku-huessen_epf1301-<tag>.bin` from the latest GitHub release, then:
+Download `hokku-huessen_epf1301-<version>.bin` (or `hokku-seeedstudio_e1004-<version>.bin`) from the latest GitHub release, then:
 
 ```bash
-esptool.py --chip esp32s3 --port <PORT> write_flash 0x0 hokku-huessen_epf1301-<tag>.bin
+esptool.py --chip esp32s3 --port <PORT> write_flash 0x0 hokku-huessen_epf1301-<version>.bin
 ```
 
 The flash takes about 30 seconds.
@@ -174,8 +176,8 @@ The frame reads its configuration from NVS (non-volatile storage), written over 
 The setup tool can handle just the config-write step if you prefer not to do it by hand:
 
 ```bash
-python tools/hokku_setup.py
-# Select: [4] ESP32: configure only (keep existing firmware)
+python tools/hokku_setup.py              # add --model seeedstudio_e1004 for the E1004
+# Select: [5] ESP32: configure only (keep existing firmware)
 ```
 
 **Step 4: Verify**
@@ -218,7 +220,7 @@ The wizard scans for a connected frame on startup and displays its current state
   Connected frame
   ---------------
   Port:      COM3
-  Firmware:  20260421035048Z  (up to date)
+  Firmware:  1.2.26  (up to date)
   Config:    WiFi=MyNetwork, server=192.168.1.10:8080, name=Living Room
 ```
 
@@ -226,18 +228,23 @@ It then presents a menu and pre-selects the most sensible option for the detecte
 
 ```
   What would you like to do?
-    [1] Full install — image SD card, then configure + flash ESP32
-    [2] Server only — image SD card with hokku-server, skip ESP32
-    [3] ESP32: configure + flash firmware  <-- default
-    [4] ESP32: configure only (keep existing firmware)
-    [5] ESP32: flash firmware only (keep existing config)
-    [6] Advanced — install settings, cache management
-    [7] Exit
+    [1] Appliance image — flash Hokku appliance image (captive-portal setup on Pi)
+    [2] Full install — image SD card, configure on this PC, then flash ESP32
+    [3] Server only — image SD card with hokku-server (configure on this PC)
+    [4] ESP32: configure + flash firmware  <-- default
+    [5] ESP32: configure only (keep existing firmware)
+    [6] ESP32: flash firmware only (keep existing config)
+    [7] Advanced — install settings, cache management
+    [8] Exit
 ```
+
+The wizard targets the Hokku / Huessen frame; start it with `--model seeedstudio_e1004` for the E1004.
 
 ### 2.3 What the wizard does, step by step
 
-**Full install [1] and Server only [2] — Pi OS SD card imaging (Windows only)**
+**Appliance image [1]** — writes the prebuilt [appliance image](appliance.md) to an SD card (Windows only, administrator). WiFi and everything else are then set up on the Pi's own setup page; afterwards the wizard offers to flash a frame.
+
+**Full install [2] and Server only [3] — Pi OS SD card imaging (Windows only)**
 
 > These options require Windows and administrator privileges. They write directly to the raw disk.
 
@@ -247,9 +254,9 @@ It then presents a menu and pre-selects the most sensible option for the detecte
 
    ```
      Available versions:
-       1. hokku-server_3.0.0~alpha2-1_all.deb  [2026-05-12, local build]
-       2. hokku-server_3.0.0~alpha2-1_all.deb  [2026-05-12, GitHub v3.0.0-alpha2]
-       3. hokku-server_3.0.0~alpha1-30_all.deb  [2026-04-28, GitHub v3.0.0-alpha1]
+       1. hokku-server_4.0.1~dev.94-1_all.deb  [2026-10-01, local build]
+       2. hokku-server_4.0.0.beta3-1_all.deb  [2026-09-27, GitHub v4.0.0-beta3]
+       3. hokku-server_4.0.0.beta2-1_all.deb  [2026-08-01, GitHub v4.0.0-beta2]
 
      Select version [1-3]:
    ```
@@ -312,17 +319,17 @@ It then presents a menu and pre-selects the most sensible option for the detecte
 
    If either phase times out, the wizard asks `Keep waiting? [Y/n]` so you can extend the wait without restarting.
 
-**Configure + flash [3] / Configure only [4] / Flash only [5] — ESP32 frame**
+**Configure + flash [4] / Configure only [5] / Flash only [6] — ESP32 frame**
 
 1. **Device detection** — the wizard scans USB serial ports for an ESP32-S3. If multiple devices are found you'll be asked to pick one. The device's current firmware version and config are displayed.
 
-2. **Configuration prompts** (options 3 and 4) — you're asked for WiFi SSID, WiFi password, server IP, server port (default `8080`), and an optional screen name. You can also configure an optional secondary WiFi network; if you do, a connection-order prompt follows (`primary first` or `last-used first`). The wizard checks the server is reachable before writing; if it isn't you'll see a warning and can continue anyway.
+2. **Configuration prompts** (options 4 and 5) — you're asked for WiFi SSID, WiFi password, server IP, server port (default `8080`), and an optional screen name. You can also configure an optional secondary WiFi network; if you do, a connection-order prompt follows (`primary first` or `last-used first`). The wizard checks the server is reachable before writing; if it isn't you'll see a warning and can continue anyway.
 
-3. **Firmware download and flash** (options 3 and 5) — the wizard fetches the latest `hokku-huessen_epf1301-*.bin` from GitHub releases (or imports a local build if one exists) and flashes it over USB. Takes about 30 seconds. A boot check follows: the wizard reads serial output for 10 seconds and reports whether the firmware started cleanly.
+3. **Firmware download and flash** (options 4 and 6) — the wizard fetches the latest `hokku-<model>-*.bin` from GitHub releases (or imports a local build if one exists) and flashes it over USB. Takes about 30 seconds. A boot check follows: the wizard reads serial output for 10 seconds and reports whether the firmware started cleanly.
 
 ![Setup tool configuring a frame](../images/configurator.png)
 
-**Advanced [6]**
+**Advanced [7]**
 
 - **Show / edit install settings** — view or change the cached WiFi, user, SSH, country, timezone values. Passwords can be revealed on request.
 - **Download everything into .cache** — prefetch the Pi OS image, hokku-server `.deb`, and firmware so a subsequent install can run fully offline.
@@ -334,7 +341,7 @@ It then presents a menu and pre-selects the most sensible option for the detecte
 
 **`esptool not installed`** — activate your `.venv` and run `pip install -r requirements.txt` from the project root.
 
-**`No serial devices found`** — the cable is charge-only, or the driver isn't installed. On Windows, install the [CP210x driver](https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers) if the port doesn't appear in Device Manager.
+**`No serial devices found`** — the cable is charge-only, or (Seeed E1004 on Windows) the [CH340 driver](https://www.wch-ic.com/downloads/CH341SER_EXE.html) isn't installed.
 
 **Server IP warning during configure** — the wizard checks the server is reachable before writing config. If your server isn't running yet, proceed anyway; the frame will retry on its own schedule once the server is up.
 

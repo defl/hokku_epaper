@@ -55,7 +55,7 @@ static void seed_valid_saved_config(void)
     strncpy(c.screen_name, "kitchen", HOKKU_NAME_MAX - 1);
     c.use_dhcp = 1;
     c.power_mode = HOKKU_PWR_SLEEP;
-    c.default_sleep_s = 600;
+    c.reserved_sleep_s = 600;   /* what old firmware/flashers wrote there */
     memcpy(_mock_fdcm_read_buf, &c, sizeof(c));
     _mock_fdcm_read_size = sizeof(c);
 }
@@ -75,8 +75,6 @@ static void test_load_uses_defaults_when_fdcm_open_fails(void)
           "config_load: default screen_name is 'bigme-f7'");
     CHECK(g_cfg.power_mode == HOKKU_PWR_AUTO,
           "config_load: default power_mode is AUTO");
-    CHECK(g_cfg.default_sleep_s == 300,
-          "config_load: default default_sleep_s is 300");
     /* Issue #44: no hard-coded addresses — DHCP, and an mDNS server name. */
     CHECK(g_cfg.use_dhcp == 1, "config_load: default is DHCP");
     CHECK(g_cfg.ip[0] == 0 && g_cfg.gw[0] == 0,
@@ -136,8 +134,8 @@ static void test_load_reads_saved_fields(void)
     CHECK(g_cfg.use_dhcp == 1, "config_load: reads use_dhcp from the saved blob");
     CHECK(g_cfg.power_mode == HOKKU_PWR_SLEEP,
           "config_load: reads power_mode from the saved blob");
-    CHECK(g_cfg.default_sleep_s == 600,
-          "config_load: reads default_sleep_s from the saved blob");
+    CHECK(sizeof(hokku_config_t) == 4 + 4 + HOKKU_URL_MAX + HOKKU_NAME_MAX + 2 + 3 * HOKKU_IP_MAX + 2 + 4,
+          "config_load: blob layout unchanged (reserved sleep field kept)");
 }
 
 static void seed_static(const char *ip, const char *gw)

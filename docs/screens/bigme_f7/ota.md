@@ -17,6 +17,35 @@ ota_get_image(OTA_PROTOCOL_HTTP, url);   // url = <server>/hokku/firmware.bin?mo
 ota_verify_image(OTA_VERIFY_NONE, NULL); // flips the OTA-cfg to the freshly-written slot
 ota_reboot();
 ```
+### Confirming the new image
+
+The new image does not keep itself just by booting. Every screen follows one
+policy ([`common/all/ota_confirm.h`](../../../firmware/common/all/ota_confirm.h)):
+an OTA'd image stays unconfirmed until the first fetch that reaches the server
+(an image, or a "keep your picture" reply). That fetch confirms it. A fetch that
+does not reach the server is retried in the same boot (3 fetches, 5 s apart);
+after the last one the screen rolls back to the image it ran before. The
+decision always completes in the new image's first boot, before any sleep.
+
+How that maps onto this SoC's A/B boot (details in `main.c`, "A/B try-boot
+rollback"):
+
+- The OTA cfg (`image_cfg_t {seq, state}` at `0x180000`) names the slot the
+  bootloader launches on **every** reset: power-on, watchdog, `HAL_WDG_Reboot`,
+  and every hibernation wake, which is a full reboot through the bootloader.
+- Every boot, `platform_init_level0` points the cfg at the other slot and arms
+  a 16 s watchdog; at the boot milestone in `main()` the watchdog stops. A
+  normally booted image points the cfg back at itself there.
+- Before flipping to the new slot, `hokku_do_ota()` writes a marker ("slot N,
+  not confirmed") into the state record (`0x341000`). When the new image boots
+  and finds the marker for its own slot, it leaves the cfg on the previous slot.
+- Confirm = point the cfg at its own slot and drop the marker. Roll back =
+  `HAL_WDG_Reboot()` with the cfg still on the previous slot. A crash, power
+  cycle or hibernation before confirming boots the previous slot as well; the
+  previous image finds a marker that does not match its slot and drops it.
+- An unconfirmed image refuses to OTA again: the other slot is its rollback.
+- An image flashed over USB carries no marker and confirms at the boot
+  milestone, as before.
 
 - **Served image = the full `xr_system.img`, verbatim.** The SDK OTA discards the
   first `bl_size` (`0x8000`) bytes itself and writes the rest to the inactive
@@ -38,12 +67,13 @@ one-time fresh-unit bootstrap is documented in [`bootstrap.md`](bootstrap.md).
 
 ## Server side (model-aware)
 
-- `python/hokku/screens/bigme_f7/firmware.py` serves `xr_system.img` verbatim and
-  resolves the version from a `<img>.version` sidecar or `main.c`'s
-  `FIRMWARE_VERSION`.
+- `python/hokku/screens/bigme_f7/firmware.py` serves the bundled
+  `hokku-bigme_f7-<version>.img` verbatim (from `firmware/release/` in a dev tree,
+  else `/usr/share/hokku-server/firmware/`). The version is parsed from the
+  filename, which `ci-build.sh` takes from `main.c`'s `FIRMWARE_VERSION`.
 - `python/hokku/screens/firmware_registry.py` maps `model_id` → firmware provider
-  (`bundled_firmware_version` / `release_app_image`). huessen and bigme_f7 both
-  register.
+  (`bundled_firmware_version` / `release_app_image`). Every OTA-capable model
+  registers there.
 - `flask_app.py`: `/hokku/firmware.bin?model=…`, the `X-Firmware-Update` signal,
   the version comparison, and `/api/status`'s `bundled_firmware_versions` map all
   resolve per-model. `/hokku/firmware.bin` defaults to the huessen reference model

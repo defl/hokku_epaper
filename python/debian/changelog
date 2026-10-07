@@ -1,11 +1,68 @@
-hokku-server (4.0.1~dev.95-1) unstable; urgency=medium
+hokku-server (4.0.1~dev.101-1) unstable; urgency=medium
 
   * Render core: screens declare which palette entries are black and white;
     the B&W ink table, letterbox padding and palette-derived DRC range use
     them instead of assuming indices 0/1. One renderer factory picks the
     render path per screen. No change to rendered output (#62).
 
- -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 02 Oct 2026 22:20:48 -0500
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 07 Oct 2026 06:46:16 -0500
+
+hokku-server (4.0.1~dev.100-1) unstable; urgency=medium
+
+  * Firmware parity: every model shows the same error messages, confirms or
+    rolls back a new firmware the same way, and wakes on the server's schedule
+    with drift correction. bigme_f7 1.2.17, huessen_epf1301 1.2.28,
+    seeedstudio_e1004 1.2.8.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 03 Oct 2026 12:08:26 -0500
+
+hokku-server (4.0.1~dev.99-1) unstable; urgency=medium
+
+  * A refresh slot less than a minute away counts as the current one, so a
+    screen waking slightly early is sent to the next slot instead of
+    refreshing twice.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sun, 04 Oct 2026 22:16:10 -0500
+
+hokku-server (4.0.0~beta4-1) unstable; urgency=medium
+
+  * Release v4.0.0-beta4
+  * Bundled firmware: bigme_f7 1.2.12 -> 1.2.16, huessen_epf1301 1.2.25 -> 1.2.27,
+    seeedstudio_e1004 1.2.5 -> 1.2.7.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Wed, 07 Oct 2026 00:03:05 +0000
+
+hokku-server (4.0.1~dev.98-1) unstable; urgency=medium
+
+  * Firmware: one shared rule for the server's reply to an image fetch on every
+    model. A screen whose labels match no picture keeps its picture and checks
+    back at its normal interval. bigme_f7 1.2.16, huessen_epf1301 1.2.27,
+    seeedstudio_e1004 1.2.7.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 03 Oct 2026 10:51:21 -0500
+
+hokku-server (4.0.1~dev.97-1) unstable; urgency=medium
+
+  * Flash a screen installs the firmware library's pinned version (as OTA
+    does) instead of always the bundled one; the scan judges freshness
+    against it.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 03 Oct 2026 10:45:33 -0500
+
+hokku-server (4.0.1~dev.96-1) unstable; urgency=medium
+
+  * DISCLAIMER: correct palette attribution (esp32-photoframe, MIT;
+    epdoptimize, Apache-2.0). Reverse-engineering docs tidied.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Sat, 03 Oct 2026 10:13:44 -0500
+
+hokku-server (4.0.1~dev.95-1) unstable; urgency=medium
+
+  * Docs: beta 4 changelog; README, manual and screen docs brought in line
+    with the current web app and firmware. F7 initial flasher now says
+    long-press (not replug) to boot after a flash.
+
+ -- Dennis Fleurbaaij <mail@dennisfleurbaaij.com>  Fri, 02 Oct 2026 21:44:27 -0500
 
 hokku-server (4.0.1~dev.94-1) unstable; urgency=medium
 

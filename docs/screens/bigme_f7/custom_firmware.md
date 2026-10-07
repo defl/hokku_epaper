@@ -18,9 +18,11 @@ Related docs: [`hardware_facts.md`](hardware_facts.md) (pins, battery, display),
 | Capability | How it works on the F7 |
 |---|---|
 | **Reporting** | `POST /hokku/screen/` with the activity-log ring as the body, a rich `X-Frame-State` JSON (`fw`, `uptime_s`, `heap_kb`, `rssi`, `regime`, `wake`, `cfg_ver`, `clk_now`, `bat_mv`, `ota`), `X-Screen-Mac` (the server's durable key for the screen), `X-Firmware-Version` / `X-Firmware-Build`, and a software wall-clock anchored to `X-Server-Time-Epoch`. The server sends its name for the screen back as `X-Screen-Name` (changed in the web UI); the screen saves it to the config blob when it differs. |
-| **Configuration** | FDCM-backed `hokku_config` (`hokku_config.c`) at flash `0x340000`: server URL, screen name, static-IP/DHCP, `power_mode`, default sleep. Provisioned over the UART console (`cfg` command group), versioned (`cfg_ver`), forward-migrating. WiFi creds live separately in **sysinfo** (fdcm) via the `wifi` command. |
-| **Power / battery** | USB-aware hibernation: stay awake on USB, deep-sleep on battery (`power_mode` = auto/sleep/awake). `pm_enter_mode(PM_MODE_HIBERNATION)` + `HAL_Wakeup_SetTimer_Sec`; requires `PRJCONF_PM_EN=1` **and** `PRJCONF_NET_PM_EN=1` (WiFi is powered off before hibernate — without this it reset-loops). Battery via ADC ch4/PA14 (see [`hardware_facts.md`](hardware_facts.md#voltage-sensing)). |
-| **OTA** | A/B slot update over HTTP — see [`ota.md`](ota.md). |
+| **Configuration** | FDCM-backed `hokku_config` (`hokku_config.c`) at flash `0x340000`: server URL, screen name, DHCP (default) or static IP, `power_mode`. Provisioned over the UART console (`cfg` command group), versioned (`cfg_ver`), forward-migrating. WiFi creds live separately in **sysinfo** (fdcm) via the `wifi` command. |
+| **Power / battery** | USB-aware hibernation: stay awake on USB, deep-sleep on battery (`power_mode` = auto/sleep/awake). `pm_enter_mode(PM_MODE_HIBERNATION)` + `HAL_Wakeup_SetTimer_Sec`; requires `PRJCONF_PM_EN=1` **and** `PRJCONF_NET_PM_EN=1` (WiFi is powered off before hibernate — without this it reset-loops). Battery via ADC ch4/PA14 (see [`hardware_facts.md`](hardware_facts.md#voltage-sensing-confirmed-2026-07-06-reverse-engineered-from-oem-firmware)). |
+| **Schedule + drift** | Wakes at the server's next fetch time, its hibernation timer corrected by a drift calibration learned against the server clock, seeded from the server's `X-Sleep-Cal-*` headers; same shared code as the ESP32 boards ([`common/all/schedule.h`](../../../firmware/common/all/schedule.h)). The schedule, calibration, outage streak and boot count persist across hibernation in a state record at flash `0x341000` (written only when it changes). |
+| **Messages** | The same on-glass messages as the other models (outage, missing WiFi, OTA), rendered row by row straight into the panel since there is no RAM for a framebuffer. |
+| **OTA** | A/B slot update over HTTP; a new image confirms itself on its first fetch that reaches the server, else rolls back — see [`ota.md`](ota.md). |
 
 ## Power button — invisible to firmware
 
@@ -40,8 +42,10 @@ OTA'd one) can never brick the unit:
   16 s `WDG_EVT_RESET` watchdog, then brings up XIP. If the image faults before
   reaching a healthy milestone, the watchdog resets → the bootloader boots the
   other slot.
-- `hokku_rollback_commit()` (early in `main()`) points the cfg back at our own
-  slot and stops the watchdog once boot is proven healthy.
+- At the boot milestone early in `main()` the watchdog stops and a normally
+  booted image points the cfg back at its own slot (`hokku_rollback_commit()`).
+  An image an OTA just installed leaves the cfg on the previous slot until its
+  first fetch reaches the server, then confirms; see [`ota.md`](ota.md#confirming-the-new-image).
 - The rollback only arms if the fallback slot passes `image_check_sections()` — an
   OTA erases its target slot up front, so a failed OTA can leave it blank; we never
   arm the watchdog into a blank slot.
@@ -61,6 +65,7 @@ was the near-brick the adversarial review caught (see [`ota.md`](ota.md#adversar
 | slot1 | `0x181000 – 0x300000` | the other A/B slot |
 | sysinfo | `0x300000 – …` | WiFi creds (fdcm) — `PRJCONF_SYSINFO_ADDR=0x300000` |
 | hokku_config | `0x340000 – 0x341000` | our app-config fdcm store |
+| hokku_state | `0x341000 – 0x343000` | runtime state fdcm store (schedule, drift calibration, boot count, OTA marker) |
 
 `sysinfo` was relocated to `0x300000` (the SDK default `0xFF000` overlaps slot 0).
 
@@ -68,12 +73,15 @@ was the near-brick the adversarial review caught (see [`ota.md`](ota.md#adversar
 
 `FIRMWARE_VERSION` in `main.c`. Bring-up/test iterations ran `1.0.0` → `1.1.4`;
 `1.2.0` was the first clean release, `1.2.1` the first fully user-driven web-GUI
-OTA. The version is reported in `X-Firmware-Version` and the frame-state `fw`.
+OTA; current is `1.2.17` (changes per release in the [CHANGELOG](../../../CHANGELOG.md)).
+The version is reported in `X-Firmware-Version` and the frame-state `fw`.
 
 ## Console commands (UART @115200)
 
-- `wifi <ssid> <password>` — persist WiFi creds to sysinfo + connect.
-- `cfg show | server <url> | name <n> | ip <ip> <gw> <nm> | dhcp | static | sleep <s> | power <auto|sleep|awake> | save`
+- `wifi <ssid> <password>` — persist WiFi creds to sysinfo + connect. Works on a
+  running unit: the station is disabled and its address dropped first, so a switch
+  takes effect without a reboot.
+- `cfg show | server <url> | name <n> | ip <ip> <gw> <nm> | dhcp | static | power <auto|sleep|awake> | save`
 - `ota` — trigger an OTA from the configured server right now (test hook).
 - `frame` — upload one ready-made 192000-byte panel buffer over this console and
   display it. No server, no WiFi, no render pipeline: the host sends exact bytes,
@@ -92,12 +100,16 @@ OTA. The version is reported in `X-Firmware-Version` and the frame-state `fw`.
   timeout alike — so a host that dies mid-transfer costs ~5 s, not the console.
   `console_disable()` state is pure RAM, so a reboot restores it regardless, and
   the mask-BROM replug+press catch is unaffected either way.
+- `interactive on|off` — hand the screen to a USB host: no fetching, no
+  hibernation, so the console stays up between `frame` uploads. Not persisted, and
+  inert off USB.
 - `upgrade` — SDK command that drops to the mask-BROM (used by the flashers).
   **Only our firmware answers `upgrade`; stock OEM does not.**
 
 ## Build & flash
 
-Build: `firmware_build.md`. First-time flash of a unit (bootstrap) is USB-only via
-the safe slot-0 flashers (`python/hokku/common/xr872/{slot0,catch}.py`) — the pre-OTA image
-must be flashed over USB because it has no OTA client yet. After that, updates go
-over the air. See [`ota.md`](ota.md) and [`restore_to_stock.md`](restore_to_stock.md).
+Build: `firmware_build.md`. First-time flash of a unit (bootstrap) is USB-only —
+stock firmware has no OTA client — via the A/B slot flasher
+(`python/hokku/common/xr872/{slots,catch}.py`); see [`bootstrap.md`](bootstrap.md).
+After that, updates go over the air. See [`ota.md`](ota.md) and
+[`restore_to_stock.md`](restore_to_stock.md).

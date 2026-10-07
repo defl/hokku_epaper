@@ -8,7 +8,7 @@ that story.
 
 If you change anything in the dithering pipeline, **update this document to
 match**. This file exists so a future maintainer (human or AI) doesn't have to
-re-run the whole investigation. `AGENTS.md` carries the same reminder.
+re-run the whole investigation. `python/AGENTS.md` carries the same reminder.
 
 ---
 
@@ -52,12 +52,12 @@ The pipeline is split across several modules. Understanding the split helps
 locate the right file to change:
 
 ```
-webserver/hokku_server/
+python/hokku/webserver/
 ├── dither_config.py          DitherConfig dataclass (algorithm, LUT, serpentine, …)
 ├── dither_abc.py             AbstractDither ABC
-├── dither_streaming.py       Streaming error-diffusion (production, ≤ 50 MB):
+├── dither_streaming.py       Streaming error-diffusion (≤ 50 MB):
 │                               adaptive_saturate(), build_rgb_lut*(),
-│                               dither_with_prep(), _streaming_diffusion_dither()
+│                               StreamingDither.dither_with_prep() / _diffuse()
 ├── dither_streaming_numba.py JIT-compiled production dither (NumbaStreamingDither)
 ├── dither_unconstrained.py   Full-canvas reference dither (quality comparison only,
 │                               ~60 MB peak, NOT used in production)
@@ -71,7 +71,8 @@ webserver/hokku_server/
 ├── image_manager_abstract.py Image lifecycle, cache, sync loop
 ├── bounding_box.py           BoundingBox frozen dataclass (normalised 0–1)
 ├── screen_image_config.py    ScreenImageConfig { image_config, orientation,
-│                               crop_threshold, clahe_keepout_bboxes }
+│                               crop_to_fill_threshold, clahe_keepout_bboxes,
+│                               face_crop_bboxes, screen_model }
 └── face_detect_yunet_opencv.py  YuNet DNN face detector (OpenCV)
 ```
 
@@ -79,27 +80,27 @@ webserver/hokku_server/
 
 ```
 ImageClassifier.decision_for(path, sha1)
-    └─ returns ImageClassifierDecision { image_config, crop_threshold,
-                                     clahe_keepout_bboxes }
+    └─ returns ImageClassifierDecision { image_config, crop_to_fill_threshold,
+                                     clahe_keepout_bboxes, face_crop_bboxes }
         # orientation is supplied by the caller per render target
 
-renderer_for_display(display).render_panel_bytes(img, cfg, orientation)
+renderer_for_display(display).render_panel_bytes(img, cfg, orientation, …)
     ↓
-render_indices(img, cfg, orientation, FULL_W, PANEL_H,
-               clahe_keepout_bboxes_norm=keepout)
-    1. Resize / crop-to-fill → PIL canvas (uint8 RGB, ≤ 15 MB)
-    2. _apply_prepare_enhancements()   # autocontrast → gamma → CLAHE → USM
-    3. Rotate canvas for landscape (−90°)
+render_indices(img, cfg, orientation, display.panel_w, display.panel_h, …)
+    1. Resize / crop-to-fill → PIL canvas (uint8 RGB)
+    2. _apply_prepare_enhancements()   # autocontrast → gamma → midtone →
+                                       # brightness/contrast → CLAHE → USM → colour
+    3. Rotate canvas −90° for landscape (panels with panel_rotated only)
     4. np.asarray(canvas) → uint8 H×W×3 array
-    5. dither_with_prep(arr, cfg.dither, prep_stripe)
-           prep_stripe(100-row stripe) →
-               adaptive_saturate() + compress_dynamic_range()
-               → float32 stripe (3.8 MB)
-           _streaming_diffusion_dither()
-               rolling 2–3 row error buffer, LUT lookup per pixel
+    5. dither_with_prep(arr, cfg.dither, _prep_stripe)
+           _prep_stripe(100-row stripe) →
+               adaptive saturation + compress_dynamic_range()
+               + per-panel correction LUT (if built) + dither noise
+               → float32 stripe
+           rolling 2–3 row error buffer, LUT lookup per pixel
     6. result_idx[padding_mask] = display.white_index
     ↓
-indices_to_panel_bytes(result_idx) → wire bytes
+display.indices_to_panel_bytes(result_idx) → wire bytes
 ```
 
 ---
@@ -112,7 +113,7 @@ indices_to_panel_bytes(result_idx) → wire bytes
 @dataclass(frozen=True)
 class DitherConfig:
     algorithm: "floyd_steinberg" | "atkinson" | "stucki" | "noop"
-    lut_name:  "euclidean" | "hue_aware"
+    lut_name:  LutName          # see §8
     serpentine: bool
     hue_cutoff_deg: float   # hue_aware only — how many degrees off-hue to forbid
     neutral_chroma: float   # chroma below which a palette entry is "neutral" (always allowed)
@@ -130,27 +131,35 @@ Wraps `DitherConfig` plus the tonal-chain settings:
 @dataclass(frozen=True)
 class ImageConfig:
     dither: DitherConfig
+    prepare_autocontrast: "per_channel" | "preserve_tone" | "off"
     prepare_autocontrast_cutoff: float
     prepare_gamma: float
     prepare_brightness: float
     prepare_contrast: float
-    color_enhance: float          # used only when use_adaptive_saturate=False
-    use_adaptive_saturate: bool
+    color_enhance: float          # used only when adaptive_saturate_space="off"
+    adaptive_saturate_space: "off" | "cielab" | "oklab"
     saturate_max_enhance: float
-    saturate_low_chroma_thresh: float
+    saturate_low_chroma_thresh: float         # CIELAB units
     saturate_high_chroma_thresh: float
+    saturate_low_chroma_thresh_oklab: float   # OKLAB units
+    saturate_high_chroma_thresh_oklab: float
     scale_chroma: bool            # legacy: uniformly scale chroma in DRC
-    adaptive_vivid: bool          # recommended: chroma-gated DRC (see §5b)
+    adaptive_vivid: bool          # chroma-gated DRC (see §5c)
     vivid_chroma_low: float
     vivid_chroma_high: float
-    # ── post-release additions (lenient: old configs load with defaults) ──────
-    prepare_midtone: float = 1.0       # >1 lifts mid-tones independently of gamma
-    clahe_clip_limit: float = 0.0      # local contrast (CLAHE); 0 = off, 2–4 typical
-    clahe_keepout_feather: float = 0.015  # Gaussian feather at keepout boundary; 0 = hard edge
-    prepare_usm_radius: float = 1.0    # unsharp mask radius (px)
-    prepare_usm_amount: int = 120      # unsharp mask strength (percent)
-    dither_noise: float = 0.0          # pre-dither Gaussian noise std (RGB units)
+    vivid_chroma_low_oklab: float
+    vivid_chroma_high_oklab: float
+    drc_l_space: "cielab" | "oklab"
+    drc_chroma_space: "cielab" | "oklab"
+    prepare_midtone: float        # >1 lifts mid-tones independently of gamma
+    clahe_clip_limit: float       # local contrast (CLAHE); 0 = off
+    clahe_keepout_feather: float  # Gaussian feather at keepout boundary; 0 = hard edge
+    prepare_usm_radius: float     # unsharp mask radius (px)
+    prepare_usm_amount: int       # unsharp mask strength (percent); 0 = off
+    dither_noise: float           # pre-dither Gaussian noise std (RGB units)
 ```
+
+No field has a default; the parser requires every one (§12).
 
 `AppConfig` holds three `ImageConfig` objects: `image_config_default`,
 `image_config_bw`, and `image_config_face`. The classifier selects among them
@@ -173,16 +182,22 @@ so while the defaults sat outside the catalog a stock install displayed
 
 | Preset key                  | Algorithm       | LUT       | Serpentine | Adaptive sat | Adaptive vivid | DRC space |
 |-----------------------------|-----------------|-----------|:----------:|:------------:|:--------------:|-----------|
-| `default_general`           | Atkinson        | hue_aware | ✓          | **OKLAB**    | ✓              | **OKLAB** |
+| `default_general`           | Atkinson        | hue_aware | ✓          | **OKLAB**    |                | **OKLAB** |
 | `default_bw`                | Atkinson        | bw        | ✓          | Off          |                | **OKLAB** |
 | `default_face`              | Atkinson        | hue_aware | ✓          | **Off**      |                | CIELAB    |
-| `floyd_steinberg_hue_aware` | Floyd-Steinberg | hue_aware |            | CIELAB       | ✓              | CIELAB    |
+| `floyd_steinberg_hue_aware` | Floyd-Steinberg | hue_aware | ✓          | CIELAB       | ✓              | CIELAB    |
 | `floyd_steinberg_bw`        | Floyd-Steinberg | bw        | ✓          | Off          |                | CIELAB    |
 | `atkinson_hue_aware`        | Atkinson        | hue_aware |            | CIELAB       | ✓              | CIELAB    |
+| `calibration_raw`           | noop            | euclidean |            | Off          |                | CIELAB    |
 
-The bottom three are hand-picked alternatives and are not redundant with the
+The UI labels the first three "General (default)", "Black & white (default)"
+and "Faces (default)".
+
+The next three are hand-picked alternatives and are not redundant with the
 defaults: `atkinson_hue_aware` differs from `default_general` in serpentine scan
-and in doing saturation and DRC in CIELAB rather than OKLAB.
+and in doing saturation and DRC in CIELAB rather than OKLAB. `calibration_raw`
+is a service preset that neutralises every stage, for art already authored in
+the panel's inks; photos rendered with it band.
 
 `default_face` is deliberately gentle — it is the right pipeline for skin and a
 poor general-purpose choice, which is why its description says so. Keeping it
@@ -203,7 +218,8 @@ chain (CLAHE, unsharp, gamma) was hand-tuned at the time.
 The tonal chain has since been settled on real glass instead — measured,
 photographed off the panel and judged blind. The face pipeline no longer keeps
 a gentler CLAHE and a stronger unsharp mask: that trade did not survive being
-rated, and faces now match the general default on both. See
+rated, and faces now match the general default on both. The same rating turned
+adaptive vivid off for general photos, overriding the sweep. See
 [the rendering campaign](screens/huessen_epf1301/rendering_campaign.md).
 
 Three things are worth knowing about that table:
@@ -218,9 +234,10 @@ Three things are worth knowing about that table:
   numbers; it is the clearest example in this codebase of a synthetic test
   signal giving a confidently wrong answer.
 
-The auto-classifier picks between the three per image (see §6). All enable
-hue-aware palette mapping; the B&W pipeline additionally turns off chroma
-boosting since there's no meaningful colour to enhance in a monochrome image.
+The auto-classifier picks between the three per image (see §6). The two colour
+pipelines use the hue-aware LUT; the B&W pipeline uses the two-ink `bw` LUT with
+chroma boosting off, since there's no meaningful colour to enhance in a
+monochrome image.
 
 Presets live in `presets.py` as `PRESET_IMAGE_CONFIGS`, a plain
 `dict[str, ImageConfig]`. There are no partials; every field is spelled out so
@@ -278,7 +295,7 @@ the hue mismatch, the nearest Lab-Euclidean palette entry is **Blue**
 (L=30, a=+22, b=−55 — hue 110° off). Result: isolated blue speckles through
 skin regions.
 
-**Fix: hue-aware palette LUT** (`build_rgb_lut_hue_aware()`).
+**Attempted fix: hue-aware palette LUT** (`build_rgb_lut_hue_aware()`).
 At LUT build time, for every (R, G, B) grid point the code computes the
 pixel's hue angle and marks any palette entry "forbidden" if its hue differs
 by more than `hue_cutoff_deg` (default 95°). `np.inf` replaces the forbidden
@@ -286,6 +303,11 @@ distances so `argmin` skips them. Neutral palette entries (chroma <
 `neutral_chroma`, i.e. Black and White) are **always** allowed — they have
 no meaningful hue, and forbidding them would leave very-low-chroma pixels
 with no valid pick.
+
+Measured, it does not fix this artifact: it is bit-identical to `euclidean` on
+lip swatches and across the photo corpus. The gate tests the hue of the
+accumulated value, which the cascade has already walked toward blue. See
+[dither_search.md §2](dither_search.md#2-hue_aware-does-not-do-what-the-docs-claim).
 
 The LUT is a 32³ `uint8` cube (`32×32×32 = 32 768` cells); build takes ~40 ms
 and is cached with `@lru_cache`. At dither time, every pixel lookup is O(1).
@@ -395,19 +417,17 @@ which case the L stage runs first and then the buffer is re-encoded into
 the other space for the chroma stage. The motivation:
 
 * **L\* mapping.** OKLAB has an ~8× lower lightness RMS error than CIELAB
-  (Bottosson 2020). The biggest visible difference is the tanh soft-shoulder
-  near panel-white — in CIELAB it slightly compresses tones the eye doesn't
-  perceive as compressed; in OKLAB the shoulder lines up with where viewers
-  actually start losing highlight detail.
+  (Bottosson 2020), so the S-curve follows perceived brightness more
+  faithfully near the panel's limits.
 * **Chroma scaling.** OKLAB's better hue uniformity carries over from the
   saturation case above.
 
-The L stage maps into the target panel's own black/white range: the Display's
-measured `drc_anchor_l`, or else its `black_index` / `white_index` palette rows
-(`ImageRenderer._drc_anchors`). The chroma stage still scales by the Huessen
-reference palette's range (`PALETTE_OKLAB` black ≈ 0.085, white ≈ 0.825) on
-every panel, until per-model config lets it follow the screen.
-`vivid_chroma_low_oklab` /
+The L stage's panel anchors come from `ImageRenderer._drc_anchors()`: the
+display's `drc_anchor_l` when the panel has been measured, otherwise its
+`black_index` / `white_index` rows of `palette_measured_rgb`, converted to each
+space. The chroma stage still scales by the Huessen reference palette's range
+(`PALETTE_OKLAB` black ≈ 0.085, white ≈ 0.825) on every panel, until
+per-model config lets it follow the screen. `vivid_chroma_low_oklab` /
 `vivid_chroma_high_oklab` are the OKLAB-unit thresholds (defaults
 `0.025` / `0.075`).
 
@@ -420,13 +440,12 @@ amplifies that noise into visible colour. There are two complementary fixes.
 **Fix 1: detect near-grayscale images and route them to a conservative
 `ImageConfig`.** The `ImageClassifier` (see §6) runs B&W detection and, if
 enabled, selects `AppConfig.image_config_bw` instead of the default. The B&W
-config uses `use_adaptive_saturate=False`, `color_enhance=1.0` (the 1.05 it
+config uses `adaptive_saturate_space="off"`, `color_enhance=1.0` (the 1.05 it
 used to carry was a 5 % chroma boost in the one preset that promises not to
-boost colour),
-`adaptive_vivid=False`, and a Euclidean LUT — because there is no meaningful
+boost colour) and `adaptive_vivid=False` — because there is no meaningful
 hue in a grey image to protect.
 
-**Fix 2: B&W-only palette LUT.** The B&W dither config can additionally set
+**Fix 2: B&W-only palette LUT.** The B&W dither config sets
 `lut_name = "bw"`, which builds a LUT that only ever picks the Display's `black_index` or `white_index`
 palette entries. This completely eliminates any possibility of a colour ink
 landing on a monochrome image, at the cost of pure two-tone rendering
@@ -442,12 +461,15 @@ AbstractImageManager._decision_for_record(src_path, rec)
   │
   ├─ ImageClassifier.decision_for(path, sha1)
   │    │
-  │    ├─ B&W detection enabled? → is_grayscale(path)?
+  │    ├─ B&W detection enabled? → _check_grayscale(path)?
   │    │      → yes → use AppConfig.image_config_bw
   │    │
-  │    ├─ Face detection enabled? → has_faces(path)?
+  │    ├─ Face detection enabled? → detector.detect(path) non-empty?
   │    │      → yes → use AppConfig.image_config_face
   │    │               clahe_keepout_bboxes = all detected face bboxes
+  │    │                 (if classifier_face_detect_clahe_keepout)
+  │    │               face_crop_bboxes = the same
+  │    │                 (if classifier_face_aware_crop_enabled)
   │    │
   │    └─ otherwise → use AppConfig.image_config_default
   │
@@ -460,9 +482,9 @@ AbstractImageManager._decision_for_record(src_path, rec)
 ### Per-picture overrides
 
 Two nullable fields on `ImageRecord`, stored in `<cache_dir>/image_manager.json`
-and set from the image's Details panel in the web UI. They are the only
-user-authored data in that file — everything else is derived from the source
-image and can be recomputed.
+and set from the image's Details panel in the web UI. They and the picture's
+labels are the only user-authored data in that file — everything else is
+derived from the source image and can be recomputed.
 
 They are applied by the **manager**, not the classifier, and deliberately so:
 
@@ -497,14 +519,16 @@ Detection fires **before** the render, not inside it. `ImageRenderer` takes an
 explicit `ScreenImageConfig` (which carries the chosen `ImageConfig` plus face
 bounding boxes) — no hidden dispatch inside the renderer.
 
-`is_grayscale()` (`image_classifier.py`) samples a 200×200 thumbnail and
+`_is_near_grayscale()` (`image_classifier.py`) samples a 200×200 thumbnail and
 checks whether the 95th-percentile Lab chroma is below
 `GRAYSCALE_CHROMA_THRESHOLD = 8.0`.
 
 Face detection (`face_detect_yunet_opencv.py`) uses **OpenCV's YuNet DNN**
-model (`face_detection_yunet_2023mar.onnx`). All detected faces are returned as
-a tuple of `BoundingBox` objects (normalised 0–1 against the original image).
-When face detection is enabled, all detected bounding boxes are passed to the
+model (`face_detection_yunet_2023mar.onnx`). It decodes through
+`open_image_for_render()`, so the boxes are found in the same EXIF-oriented
+frame the renderer draws. All detected faces are returned as a tuple of
+`BoundingBox` objects (normalised 0–1 against that frame). With
+`classifier_face_detect_clahe_keepout` on, all of them are passed to the
 renderer as `clahe_keepout_bboxes` — the CLAHE preparation step (§11) protects
 every detected face region, not just the primary one.
 
@@ -512,9 +536,9 @@ every detected face region, not just the primary one.
 
 ## 7. Diffusion algorithms
 
-All three algorithms share a single inner loop in
-`_streaming_diffusion_dither()` (`dither_streaming.py`). The kernel is
-the only thing that differs.
+All three algorithms share a single inner loop — `StreamingDither._diffuse()`
+in `dither_streaming.py`, and its JIT twin `_diffuse_stripe()` in
+`dither_streaming_numba.py`. The kernel is the only thing that differs.
 
 ### Floyd-Steinberg
 
@@ -559,7 +583,7 @@ without FS's diagonal streaks. Slower per pixel because of the larger kernel.
 Optional (`serpentine: bool` in `DitherConfig`). Alternate rows are processed
 right-to-left with the kernel's `dx` values mirrored, so quantisation error
 still flows only into unvisited pixels. Reduces directional streaking in smooth
-gradients. Disabled by default for backward compatibility.
+gradients.
 
 ### noop
 
@@ -613,8 +637,8 @@ Idea credit: [mattcarter11/eink-dithering-tester](https://github.com/mattcarter1
 Same unweighted CIELAB distance as `euclidean`, but chromatic (chroma >
 `neutral_chroma`) palette entries whose hue angle differs from the source
 pixel's hue by more than `hue_cutoff_deg` are set to `np.inf` before `argmin`.
-This forces the nearest *same-hue* palette entry to win, preventing the
-error-cascade hue-swaps described in §5a.
+This forces the nearest *same-hue* palette entry to win — but not the
+error-cascade hue-swaps of §5a, which it does not prevent.
 
 ```python
 forbidden = (
@@ -696,9 +720,13 @@ Zero 2 W with 512 MB total RAM.
 The streaming architecture brings peak RSS to **≤ 50 MB** (measured: 34–37 MB
 on real photos) by never materialising a full-panel float buffer.
 
+Sizes in this section are for the 3200 × 1600 canvas the pipeline was built and
+measured on. The Huessen canvas is now 1200 × 1600 (§1), so every per-pixel
+buffer is about 2.7× smaller.
+
 ### Rolling error buffer
 
-`_streaming_diffusion_dither()` holds only `max_dy + 1` rows of float32 RGB
+The diffusion loop holds only `max_dy + 1` rows of float32 RGB
 working state:
 
 - **Floyd-Steinberg** (`max_dy=1`): 2 rows × 3200 × 3 × 4 bytes = 77 KB
@@ -730,7 +758,7 @@ allocated, so the GC can reclaim before the transients arrive.
 ### Why the unconstrained path still exists
 
 `dither_unconstrained.py` is a self-contained copy of the original full-canvas
-algorithm with no shared code with `dither_constrained`. It is used by
+algorithm with no shared code with `dither_streaming`. It is used by
 `test_dither_quality.py` to produce side-by-side PNGs for visual comparison
 and as a regression baseline — if the streaming output ever diverges from the
 reference algorithm, the test catches it. The unconstrained path is **never
@@ -758,26 +786,28 @@ stripe-height benchmarks, and measurement methodology.
 
 ## 10. Source-image ingestion (`open_image_for_render`)
 
-Before any pipeline stage runs, the source image is opened and normalised:
+Before any pipeline stage runs, the source image is opened and normalised
+(`image_renderer.py`; decodes are serialised by `_DECODE_LOCK` because libheif
+is not thread-safe):
 
-1. **EXIF rotation** (`ImageOps.exif_transpose`) — phone photos are typically
-   stored landscape and tagged for portrait display; we rotate them up front.
-2. **Convert to RGB** — drop alpha, handle palette/CMYK/L modes.
-3. **Source cap and JPEG draft** — the panel's long edge is 3200 px.
-   Sources larger than 3200 px on the long edge trigger JPEG draft
-   (`Image.draft`) at the largest power-of-two scale factor that still lands
-   above the cap. A 6000 × 4000 JPEG decodes at 3000 × 2000 without ever
-   materialising the full 72 MB buffer. Non-JPEG formats fall back to
-   `thumbnail()` after open (their decoders have no equivalent of draft).
-4. **Return to caller** — the caller gets a `≤ 3200-long-edge` PIL image.
-   `render_panel_bytes` calls `img.close()` as soon as the panel canvas has
-   been composed (`release_input=True`), dropping the source buffer
-   mid-render.
+1. **Bomb guard** — a header declaring more than `MAX_IMAGE_PIXELS` (40 MP) is
+   refused before anything is decoded.
+2. **JPEG draft** — JPEGs larger than the source cap shrink-on-load via
+   `Image.draft` at a power-of-two factor, so a 6000 × 4000 JPEG never
+   materialises its full 72 MB buffer.
+3. **Decode budget** — anything still above `DECODE_BUDGET_PIXELS` after draft
+   (in practice un-draftable PNG/HEIF/…) is refused with a "downscale it"
+   message. The budget is derived from the memory budget at startup (~16 MP on
+   the Pi). The same check runs at ingest (`decoded_pixels_exceed_budget()`),
+   so an over-budget picture is marked failed and no phase — thumbnail,
+   classify, render — decodes it.
+4. **Shrink to the source bbox** — 1.5 × the reference screen (2400 × 1800),
+   or the long side clamped to 2400 for panoramas.
+5. **EXIF rotation and RGB** — `ImageOps.exif_transpose` runs on the shrunk
+   image; transparency is flattened onto white.
 
-**PNG ceiling:** a 10 000 × 10 000 PNG requires ~285 MB decoded buffer before
-any cap can fire. This is a documented hard limit — the memory test asserts
-the peak exceeds 200 MB so any future fix that drops below 200 MB causes the
-test to go red and forces a budget-spec update.
+`render_panel_bytes` calls `img.close()` as soon as the panel canvas has been
+composed (`release_input=True`), dropping the source buffer mid-render.
 
 ---
 
@@ -792,8 +822,12 @@ Runs before the canvas is rotated or handed to the dither strategy.
 
 1. **Autocontrast** — `ImageOps.autocontrast(cutoff=prepare_autocontrast_cutoff)`:
    stretch the histogram, ignoring the darkest/brightest `cutoff`% of pixels.
-2. **Gamma** — 256-entry uint8 LUT: `out[i] = (i/255)^gamma × 255`. Default
-   gamma 0.85 brightens mid-tones to compensate for e-ink's darker appearance
+   `prepare_autocontrast` picks `per_channel` (PIL's default, which acts as an
+   automatic white balance and casts colour), `preserve_tone` (one stretch on
+   luminance) or `off`. Every shipped preset has it `off`, which rated best on
+   glass.
+2. **Gamma** — 256-entry uint8 LUT: `out[i] = (i/255)^gamma × 255`. The shipped
+   gamma 0.88 brightens mid-tones to compensate for e-ink's darker appearance
    under typical ambient light.
 3. **Midtone lift** — a second 256-entry LUT: `out[i] = (i/255)^(1/midtone) × 255`.
    Applied only when `prepare_midtone ≠ 1.0`. Independently lifts mid-tones
@@ -820,7 +854,7 @@ Runs before the canvas is rotated or handed to the dither strategy.
    `ImageEnhance.Sharpness` kernel. The `threshold=3` suppresses noise
    amplification in flat areas. A `prepare_usm_amount` of 0 is a no-op.
 7. **Colour enhance** — `ImageEnhance.Color(color_enhance)`, only when
-   `use_adaptive_saturate=False`. The flat saturation boost is skipped when
+   `adaptive_saturate_space="off"`. The flat saturation boost is skipped when
    the chroma-gated path is active (§5b).
 
 All PIL operations work on the uint8 canvas. Each one peaks at about one
@@ -831,14 +865,14 @@ start until `dither_with_prep` is called.
 
 Called per 100-row batch, returning float32 data ready for the dither loop.
 
-1. **Adaptive saturation** (if `use_adaptive_saturate=True`) — Lab-space
-   chroma boost gated on source chroma (§5b).
+1. **Adaptive saturation** (if `adaptive_saturate_space` is not `"off"`) —
+   chroma boost gated on source chroma, in CIELAB or OKLAB (§5b).
 2. **Dynamic range compression** — `compress_dynamic_range()`: maps L\* from
-   [0, 100] into [panel_black_L, panel_white_L]; applies a tanh soft shoulder
-   for the top 15 % of the L\* range to prevent near-white regions from hard-
-   clipping. With `adaptive_vivid=True`, chroma is preserved for saturated
-   pixels (§5c).
-3. **Pre-dither noise** (if `dither_noise > 0.0`) — adds `N(0, dither_noise)`
+   [0, 100] into the panel's own anchors through the bounded S-curve (§5c).
+   With `adaptive_vivid=True`, chroma is preserved for saturated pixels.
+3. **Correction LUT** — if the display has a `correction_lut_path`, a
+   trilinear RGB→RGB gamut-correction LUT built by `tools/color_lut_build.py`.
+4. **Pre-dither noise** (if `dither_noise > 0.0`) — adds `N(0, dither_noise)`
    Gaussian noise to the float32 RGB values (clipped to [0, 255]). Applied
    immediately before quantisation so the error-diffusion kernel sees
    independently perturbed inputs on each pixel. This breaks up the regular
@@ -859,7 +893,7 @@ the complete nested config to `config.json`.
 
 The pipeline editor is a component: `mountDitherEditor(panelId, mountEl, opts)`
 generates its markup and wires its handlers. It is mounted four times — the
-`default` / `bw` / `face` pipelines in the Config tab, and `imgcfg`, the
+`default` / `bw` / `face` pipelines under Admin → *Image rendering*, and `imgcfg`, the
 per-picture editor inside the image Details modal. Each instance's working
 `ImageConfig` lives in `ditherStates[panelId]`, and DOM ids are prefixed by
 `_pfx(panelId)` (`default` keeps the historical `dither-` prefix).
@@ -875,7 +909,7 @@ The per-picture editor additionally offers **Automatic** (hand the picture back
 to the classifier), an independent letterbox-fill override, and **Compare
 presets**, which renders several candidates for that one picture into a
 clickable grid. The grid sweeps the palette LUT as well as the named presets:
-all three presets share `lut_name="hue_aware"`, so a picture that comes out the
+every colour preset shares `lut_name="hue_aware"`, so a picture that comes out the
 wrong colour cannot be fixed by choosing a different preset — the fix is a LUT
 change, which is otherwise buried in the advanced knobs. Tiles render strictly
 one at a time; the source decode dominates their cost and the server serialises
@@ -925,11 +959,13 @@ computed, and how to interpret the numbers — are in
 | `sat_hit`     | higher         | saturation preservation in colourful areas       |
 | `overall_dE`  | lower          | mean CIE76 ΔE — overall colour accuracy          |
 
-### Current production presets
+### Dropdown presets
 
 Aggregate across 10 test images, `NumbaStreamingDither`, landscape,
-`crop_to_fill_threshold=0.0`. Re-run `test_dither_quality_metrics` and update
-this table whenever the pipeline changes.
+`crop_to_fill_threshold=0.0`. Re-run `test_dither_quality_metrics` (in
+`python/tests/test_dither_quality.py`) and update this table whenever the
+pipeline changes. The table predates the `default_*` presets and has not been
+re-run for them.
 
 | Preset                       | neutral_leak | sat_hit   | overall_dE |
 |------------------------------|:------------:|:---------:|:----------:|
@@ -937,11 +973,9 @@ this table whenever the pipeline changes.
 | `floyd_steinberg_hue_aware`  |    10.80     |   0.650   |   32.42    |
 | `floyd_steinberg_bw`         |   (B&W only — comparison would be against grey reference, not run for this table) |
 
-`atkinson_hue_aware` is the current default for general (and face-detected)
-photos because it wins on both `neutral_leak` and `sat_hit` simultaneously.
-`floyd_steinberg_hue_aware` is the fallback when Atkinson's bold contrast
-isn't desired.  The B&W preset is evaluated separately against monochrome
-references — colour-fidelity metrics don't meaningfully apply.
+`atkinson_hue_aware` wins on both `neutral_leak` and `sat_hit` simultaneously.
+The B&W preset is evaluated separately against monochrome references —
+colour-fidelity metrics don't meaningfully apply.
 
 Earlier branches of this project exposed `atkinson`, `stucki`, `stucki_hue_aware`
 and other algorithm/LUT combinations as named presets and benchmarked them
@@ -977,13 +1011,12 @@ skin tones start looking sunburnt on outdoor/skin-heavy photos.
 ## 14. File map
 
 ```
-webserver/hokku_server/
+python/hokku/webserver/
   dither_config.py          DitherConfig dataclass + cache_slug()
-  dither_abc.py             AbstractDither ABC
-  dither_streaming.py       Production streaming dither (≤ 50 MB peak):
-                              adaptive_saturate, build_rgb_lut_euclidean,
-                              build_rgb_lut_hue_aware, build_rgb_lut_bw,
-                              dither_with_prep, _streaming_diffusion_dither
+  dither_abc.py             AbstractDither ABC, _DEFAULT_STRIPE_H
+  dither_streaming.py       Streaming dither (≤ 50 MB peak): StreamingDither,
+                              adaptive_saturate{,_oklab}, build_rgb_lut*,
+                              colour-space helpers
   dither_streaming_numba.py JIT-compiled wrapper: NumbaStreamingDither (default)
   dither_unconstrained.py   Reference full-canvas dither (~60 MB dither peak):
                               dither() — quality comparison / regression baseline only
@@ -998,23 +1031,23 @@ webserver/hokku_server/
                               render_preview_png(), compress_dynamic_range()
   image_classifier.py       B&W + face detection, per-image config dispatch
   bounding_box.py           BoundingBox frozen dataclass (normalised 0–1)
-  screen_image_config.py    ScreenImageConfig (image_config + orientation +
-                              crop_threshold + clahe_keepout_bboxes)
-  face_detect_abstract.py   AbstractFaceDetector
+  screen_image_config.py    ScreenImageConfig (render spec + cache key)
+  face_detect_abstract.py   AbstractFaceDetector, load_image_resized()
   face_detect_yunet_opencv.py  OpenCV YuNet DNN detector
-  memory_guard.py           RLIMIT_AS context manager (opt-in)
+  memory_guard.py           RLIMIT_AS context manager (opt-in, unused in production)
 
-webserver/tests/
-  test_dither_quality.py      Side-by-side streaming vs unconstrained PNGs
-  test_dither_quality_metrics.py  neutral_leak / sat_hit / overall_dE table
+python/tests/
+  test_dither_quality.py      Streaming vs unconstrained PNGs; test_dither_quality_metrics
+                                (neutral_leak / sat_hit / overall_dE table)
   test_memory_budget.py       50 MB / render assertions (subprocess RSS sampling)
-  test_render_worker.py       render_one() smoke test in the pool worker context
+  test_render_worker.py       render_one() smoke test
   _memory_helpers.py          Layer A (tracemalloc) / Layer C (subprocess + psutil)
 
 docs/
   dithering.md                      ← this file
+  dither_search.md                  ← how the default_* dither settings were measured
   image_processing_memory_usage.md  ← full memory optimisation journey and measurements
-  image_quality.md                  ← metric definitions (neutral_leak, dE2000, etc.)
+  screens/huessen_epf1301/image_quality.md  ← metric definitions
 ```
 
 ---
@@ -1055,7 +1088,7 @@ Key triggers:
 - Adding a new `AlgorithmName` literal to `dither_config.py`
 - Changing kernel weights or the number of neighbours in any algorithm
 - Adding a new `LutName` or changing how the LUT is built
-- Changing `DEFAULT_STRIPE_H` (update §9 and `image_processing_memory_usage.md`)
+- Changing `_DEFAULT_STRIPE_H` (update §9 and `image_processing_memory_usage.md`)
 - Changing the tonal-chain order in `_apply_prepare_enhancements`
 - Adding a new classifier detector or dispatch priority
 - Changing palette calibration values in `display.py`

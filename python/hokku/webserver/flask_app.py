@@ -41,7 +41,6 @@ from werkzeug.utils import secure_filename
 
 from hokku.screens import firmware_registry, huessen_epf1301
 from hokku.screens.bigme_f7 import bootstrap as bigme_bootstrap
-from hokku.screens.bigme_f7 import firmware as bigme_firmware
 from hokku.screens.flasher_registry import esp32_screen, esp32_screens, esp32_specs
 from hokku.screens.registry import DISPLAY_REGISTRY
 from hokku.webserver import firmware_github
@@ -1517,11 +1516,18 @@ def create_app(
         Every ESP32 screen is recognised by its own USB VID:PID (huessen as native
         USB Serial/JTAG, the E1004 as its CH340K bridge), and each device's
         ``model`` is the one its id matched; its "up to date?" freshness is
-        judged against that model's release.
+        judged against the firmware a flash of that model would write (the
+        firmware library's effective version, honouring a pin).
         """
-        if not any(s.merged_firmware_file() for s in esp32_screens()):
-            logger.error("Flash scan requested but no bundled ESP32 firmware available")
-            return jsonify({"error": "no bundled firmware available on this server"}), 503
+        store = _firmware_store()
+        release_files = {
+            s.SPEC.model_id: f
+            for s in esp32_screens()
+            if (f := store.effective_file(s.SPEC.model_id))
+        }
+        if not release_files:
+            logger.error("Flash scan requested but no ESP32 firmware available")
+            return jsonify({"error": "no firmware available on this server"}), 503
         if not state.flash_jobs.begin_scan():
             logger.warning("Flash scan rejected: the serial port is busy")
             return jsonify({"error": "a flash is in progress", "busy": True}), 409
@@ -1532,7 +1538,9 @@ def create_app(
             # mid-refresh and wedge the panel controller. The panel keeps showing
             # its last image meanwhile (e-paper holds without power), and
             # arm_deferred_boot puts it back to work if no flash follows.
-            devices = huessen_epf1301.scan_devices(boot_after=False, specs=esp32_specs())
+            devices = huessen_epf1301.scan_devices(
+                boot_after=False, specs=esp32_specs(), release_files=release_files
+            )
         finally:
             state.flash_jobs.end_scan()
         for d in devices:
@@ -1609,10 +1617,12 @@ def create_app(
         if screen is None:
             logger.info("Flash start: unknown ESP32 model %r", screen_model)
             return jsonify({"error": f"unknown ESP32 screen model {screen_model!r}"}), 400
-        model_firmware = screen.merged_firmware_file()
+        # The firmware library's effective version (a pin, else the newest
+        # bundled/stable), so USB installs exactly what OTA would serve.
+        model_firmware = _firmware_store().effective_file(screen_model)
         if model_firmware is None:
-            logger.error("Flash start requested but no bundled firmware for %s", screen_model)
-            return jsonify({"error": f"no bundled firmware for {screen_model} on this server"}), 503
+            logger.error("Flash start requested but no firmware for %s", screen_model)
+            return jsonify({"error": f"no firmware for {screen_model} on this server"}), 503
         if not screen.nvs_tool_available():
             logger.error("Flash start requested but esp-idf-nvs-partition-gen is not installed")
             return jsonify(
@@ -1681,16 +1691,16 @@ def create_app(
         """Bootstrap a fresh Bigme F7 (XR872) into Hokku firmware over USB.
 
         Catches the mask-BROM (the operator power-cycles with a USB replug + power
-        press) and writes slot 0 via the same validated ``flash_slot`` — bootloader
-        and OEM slot 1 untouched. Wi-Fi/config are provisioned afterward over the
-        device console, not here. Progress polls the shared ``/flash/status``."""
+        press) and writes the inactive A/B slot via the same validated ``flash_slot`` —
+        bootloader and running slot untouched. Optional Wi-Fi/name/server provisioning
+        follows. Progress polls the shared ``/flash/status``."""
         if not bigme_bootstrap.tooling_available():
             logger.error("F7 bootstrap requested but tools/ flash primitives are absent")
             return jsonify({"error": "Bigme F7 flash tooling is not available on this server"}), 503
-        image = bigme_firmware.firmware_image_file()
+        image = _firmware_store().effective_file("bigme_f7")
         if image is None:
-            logger.error("F7 bootstrap requested but no bundled xr_system.img is present")
-            return jsonify({"error": "no bundled Bigme F7 firmware on this server"}), 503
+            logger.error("F7 bootstrap requested but no Bigme F7 firmware image is present")
+            return jsonify({"error": "no Bigme F7 firmware on this server"}), 503
 
         body = request.get_json(silent=True) or {}
         port = (body.get("port") or "").strip()

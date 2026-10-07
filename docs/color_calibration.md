@@ -2,8 +2,10 @@
 
 The dither pipeline is built on one array per screen model —
 `palette_measured_rgb` in `python/hokku/screens/<model>/display.py`. Every
-palette LUT, the hue gating, the dynamic-range anchors and the quality metrics
-are derived from it (see [dithering.md](dithering.md) §1, §8).
+palette LUT, the hue gating and the quality metrics are derived from it (see
+[dithering.md](dithering.md) §1, §8). The dynamic-range anchors are too, unless
+the display sets `drc_anchor_l` — Huessen and the F7 do, from the colour
+campaign's measured black and white points.
 
 Its provenance is weak. `bigme_f7` borrowed its values from a third party's
 `default-palettes.json`; `seeedstudio_e1004` inherits huessen's wholesale;
@@ -82,7 +84,7 @@ Writes to `build/colorcal/`:
 
 | File | Purpose |
 |---|---|
-| `colorcal_<model>.png` | Upload this to the server |
+| `colorcal_<model>.png` | The target as an image |
 | `colorcal_<model>.json` | Patch manifest — feeds `color_read.py` |
 | `colorcal_<model>.bin` | Packed panel bytes, for `screen_sim.py --file` |
 
@@ -90,9 +92,10 @@ The target is 15 patches on a 5×3 grid: six flat ink anchors, seven
 Bayer-dithered ramp patches at exactly k/8 black-ink coverage, and repeats of
 white and black at the end of the sequence as a drift check.
 
-### Route A — over the serial console (preferred, Bigme F7)
+### Over the serial console
 
-If the unit runs firmware with the `frame` command, skip the server entirely:
+The target goes to the panel over USB with the firmware's `frame` command, never
+through a server ([AGENTS.md](../AGENTS.md) explains why):
 
 ```powershell
 python tools\send_frame.py --port COM9 --target
@@ -106,26 +109,8 @@ while metering, and what makes a measurement session reproducible.
 `--cycle` walks every ink and then the target, which is also the quickest way to
 confirm all six inks actually fire on a given unit.
 
-### Route B — through the server
-
-For screens without the `frame` command, upload the PNG and let the server render
-it. To get it onto the glass **unmodified**:
-
-1. Set the screen's preset to **`calibration_raw`**. This matters. The normal
-   presets run autocontrast, gamma, CLAHE, unsharp mask and error diffusion —
-   any one of which destroys a flat patch or shifts a ramp's coverage away from
-   the k/8 it is supposed to be. `calibration_raw` neutralises the whole chain
-   and uses `noop` quantisation, so each pixel maps to the ink it was painted
-   in. `test_color_target.py` asserts bit-exactness through the real renderer,
-   so this cannot silently rot.
-2. Upload the PNG and pin it with **show next**.
-3. Wait for the screen to poll (or power-cycle it) and refresh.
-
-Sanity-check the glass before metering: the six anchor patches must be visibly
-flat, with no speckle. If they are not, the preset did not take.
-
-**Put the preset back afterwards** — photos rendered with `calibration_raw`
-band badly.
+If a unit's firmware is too old to have `frame`, flash one that does (subject to
+the STOP rules in [AGENTS.md](../AGENTS.md)).
 
 ---
 
@@ -211,8 +196,8 @@ building — it would be a global quality win, not a per-image tweak.
 ## 7. After measuring
 
 1. Paste the new `palette_measured_rgb` into the model's `display.py`.
-2. Re-run the quality metrics — the LUTs, the DRC anchors and the metrics all
-   move with the palette:
+2. Re-run the quality metrics — the LUTs and the metrics move with the palette
+   (the DRC anchors too, where the display has no `drc_anchor_l`):
    `pytest -m time_intensive -k test_dither_quality_metrics`
 3. Update the table in [dithering.md](dithering.md) §1 (measured RGB / Lab /
    hue / chroma per ink) and the benchmark table in §13.

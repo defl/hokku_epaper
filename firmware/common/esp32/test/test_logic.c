@@ -50,6 +50,11 @@
 #include "../../all/frame_state.c"
 #include "../../all/sleep_cal.c"
 #include "../../all/screen_ident.c"
+#include "../../all/backoff.c"
+#include "../../all/fetch_outcome.c"
+#include "../../all/schedule.c"
+#include "../../all/messages.c"
+#include "../../all/ota_confirm.c"
 #include "config.c"
 #include "state.c"
 #include "scheduler.c"
@@ -67,148 +72,118 @@ static int g_fail = 0;
     else      { printf("FAIL  %s\n", name); g_fail++; }     \
 } while (0)
 
-/* ═══ scheduler.c ═══ */
+/* ═══ scheduler.c — ESP-IDF clocks around common/all/schedule.c ═══
+ * The schedule/drift logic itself is tested in common/all/test/test_schedule.c;
+ * these check the glue: this board's clocks and RTC state reach it. */
 static void test_now_epoch_post_2020(void)
 {
-    CHECK(now_epoch() > 1577836800LL, "scheduler: now_epoch returns a post-2020 timestamp");
+    CHECK(now_epoch() > HOKKU_EPOCH_MIN, "scheduler: now_epoch returns a post-2020 timestamp");
 }
 static void test_refresh_due(void)
 {
-    next_refresh_epoch = 0;
+    hokku_sched_init(&hokku_sched);
     CHECK(refresh_due(), "scheduler: refresh_due true when unscheduled (0)");
-    next_refresh_epoch = 1;
+    hokku_sched.next_epoch = 1;
     CHECK(refresh_due(), "scheduler: refresh_due true when epoch in the past");
-    next_refresh_epoch = 9999999999LL;   /* year 2286 */
+    hokku_sched.next_epoch = 9999999999LL;   /* year 2286 */
     CHECK(!refresh_due(), "scheduler: refresh_due false when epoch far in the future");
 }
-static void test_schedule_retry_in(void)
+
+static void test_apply_fetch(void)
 {
-    next_refresh_epoch = 0;
-    pre_sleep_server_epoch = 123;
-    last_sleep_err_known = true;
+    /* Image with a full schedule: anchored to the server clock, streak cleared. */
+    hokku_sched_init(&hokku_sched);
+    hokku_sched.failures = 3;
+    last_sleep_mode = LAST_SLEEP_MODE_NONE;
+    hokku_fetch_result_t img = { .http_status = 200, .image_ok = true, .sleep_s = 3600,
+                                 .server_epoch = 1700000000LL };
+    hokku_fetch_outcome_t o = scheduler_apply_fetch(&img);
+    CHECK(o.action == HOKKU_FETCH_DISPLAY && hokku_sched.next_epoch == 1700003600LL &&
+          hokku_sched.failures == 0,
+          "scheduler: apply_fetch anchors a displayed image to the server clock");
+
+    /* Outage: streak grows, backoff doubles, relative to the device clock. */
+    hokku_sched.failures = 1;
+    hokku_fetch_result_t down = { .http_status = 0 };
     time_t before = time(NULL);
-    schedule_retry_in(60, "test");
-    time_t after = time(NULL);
-    CHECK(next_refresh_epoch >= (int64_t)before + 60 && next_refresh_epoch <= (int64_t)after + 60,
-          "scheduler: schedule_retry_in sets next_refresh_epoch to now + seconds");
-    CHECK(pre_sleep_server_epoch == 0 && !last_sleep_err_known,
-          "scheduler: schedule_retry_in clears the sleep-error snapshot");
-}
-static void test_save_pre_sleep_epoch(void)
-{
-    save_pre_sleep_epoch(0, 0);
-    CHECK(pre_sleep_server_epoch == 0 && !last_sleep_err_known,
-          "scheduler: save_pre_sleep_epoch(0) clears the snapshot");
-    save_pre_sleep_epoch(1700000000LL, esp_timer_get_time());
-    CHECK(pre_sleep_server_epoch >= 1700000000LL,
-          "scheduler: save_pre_sleep_epoch stores a server-anchored epoch");
+    o = scheduler_apply_fetch(&down);
+    CHECK(o.action == HOKKU_FETCH_BACKOFF && hokku_sched.failures == 2 &&
+          o.sleep_s == 2 * HOKKU_RETRY_BASE_S &&
+          hokku_sched.next_epoch >= (int64_t)before + 2 * HOKKU_RETRY_BASE_S,
+          "scheduler: apply_fetch outage bumps the streak and backs off");
 }
 
-/* ═══ scheduler.c — consolidated schedule + drift calibration ═══ */
-static void test_set_after_refresh(void)
+static void test_timer_wake_learns_drift(void)
 {
-    next_refresh_epoch = 42;   /* sentinel to prove the reject path changes nothing */
-    bool ok = scheduler_set_after_refresh(1700000000LL, 3600, esp_timer_get_time());
-    CHECK(ok && next_refresh_epoch == 1700003600LL && last_sleep_seconds == 3600 &&
-          pre_sleep_server_epoch >= 1700000000LL,
-          "scheduler: set_after_refresh anchors next_ep = server_epoch + sleep");
-
-    next_refresh_epoch = 42;
-    ok = scheduler_set_after_refresh(0, 3600, esp_timer_get_time());
-    CHECK(!ok && next_refresh_epoch == 42,
-          "scheduler: set_after_refresh rejects server_epoch<=0, leaves state for caller fallback");
-}
-
-static void test_observe_sleep_learns_drift(void)
-{
-    /* Slept ~1% long (slow oscillator). intended=armed=43200; actual=+432. */
-    const int64_t armed = 43200, actual = 43200 + 432;
+    /* Armed 43200 s; the server says it is now 43632 s after sleep start and we
+     * have been awake 10 s: the oscillator ran ~1% slow. */
+    hokku_sched_init(&hokku_sched);
+    hokku_sched.sleep_start_epoch = 1700000000LL;
+    hokku_sched.armed_s = 43200;
+    hokku_sched.next_epoch = 1700000000LL + 43200;
     last_sleep_mode = LAST_SLEEP_MODE_TIMER_WAKE;
-    last_sleep_seconds = (int32_t)armed;
-    last_armed_sleep_s = (int32_t)armed;
-    pre_sleep_server_epoch = (int64_t)time(NULL) - actual;
-    cal_ppm = 0; cal_samples = 0; last_sleep_err_known = false;
+    _mock_timer_us = 10LL * 1000000LL;
+    hokku_fetch_result_t img = { .http_status = 200, .image_ok = true, .sleep_s = 3600,
+                                 .server_epoch = 1700000000LL + 43200 + 432 + 10 };
+    scheduler_apply_fetch(&img);
+    CHECK(hokku_sched.cal_samples == 1 && hokku_sched.cal_ppm >= 9900 &&
+          hokku_sched.cal_ppm <= 10100,
+          "scheduler: a timer wake learns the drift from the server clock");
+    CHECK(hokku_sched.sleep_err_known && hokku_sched.sleep_err_s == 432,
+          "scheduler: records how late the wake landed");
 
-    scheduler_observe_sleep();
-
-    CHECK(last_sleep_err_known && last_sleep_err_s >= 430 && last_sleep_err_s <= 435,
-          "scheduler: observe_sleep records the slot error (~+432 s)");
-    CHECK(cal_ppm >= 9900 && cal_ppm <= 10100 && cal_samples == 1,
-          "scheduler: observe_sleep learns +1% drift (~+10000 ppm) on first sample");
-}
-
-static void test_observe_sleep_skips_non_timer(void)
-{
     last_sleep_mode = LAST_SLEEP_MODE_BUTTON_WAKE;
-    last_sleep_seconds = 43200; last_armed_sleep_s = 43200;
-    pre_sleep_server_epoch = (int64_t)time(NULL) - 43600;
-    cal_ppm = 1234; cal_samples = 5; last_sleep_err_known = false;
-
-    scheduler_observe_sleep();
-
-    CHECK(cal_ppm == 1234 && cal_samples == 5 && !last_sleep_err_known,
-          "scheduler: observe_sleep is a no-op on a non-timer wake");
-}
-
-static void test_observe_sleep_skips_without_armed(void)
-{
-    /* Retry/fallback sleeps leave last_armed_sleep_s == 0: err is still recorded
-     * but no drift sample is taken. */
-    last_sleep_mode = LAST_SLEEP_MODE_TIMER_WAKE;
-    last_sleep_seconds = 43200; last_armed_sleep_s = 0;
-    pre_sleep_server_epoch = (int64_t)time(NULL) - 43600;
-    cal_ppm = 1234; cal_samples = 5; last_sleep_err_known = false;
-
-    scheduler_observe_sleep();
-
-    CHECK(last_sleep_err_known && cal_ppm == 1234 && cal_samples == 5,
-          "scheduler: observe_sleep records err but skips calibration without an armed value");
+    hokku_sched.sleep_start_epoch = 1700000000LL;
+    scheduler_apply_fetch(&img);
+    CHECK(hokku_sched.cal_samples == 1, "scheduler: a button wake is not a drift sample");
+    _mock_timer_us = 0;
 }
 
 static void test_next_sleep_us_calibrated(void)
 {
-    /* No drift: arms ~the desired interval and records it. */
-    cal_ppm = 0; cal_samples = 0;
-    next_refresh_epoch = (int64_t)time(NULL) + 3600;
-    int64_t us = scheduler_next_sleep_us(9999000000LL);
-    CHECK(us >= 3590000000LL && us <= 3600000000LL && last_armed_sleep_s >= 3590 &&
-          last_armed_sleep_s <= 3600,
-          "scheduler: next_sleep_us arms ~desired and records last_armed_sleep_s");
+    hokku_sched_init(&hokku_sched);
+    hokku_sched.next_epoch = (int64_t)time(NULL) + 3600;
+    int64_t us = scheduler_next_sleep_us(9999);
+    CHECK(us >= 3590000000LL && us <= 3600000000LL && hokku_sched.armed_s >= 3590,
+          "scheduler: next_sleep_us arms ~the remaining time and records it");
 
-    /* Slow oscillator (+10000 ppm) -> arm LESS than desired. */
-    cal_ppm = 10000;
-    next_refresh_epoch = (int64_t)time(NULL) + 3600;
-    us = scheduler_next_sleep_us(9999000000LL);
+    hokku_sched.cal_ppm = 10000;
+    hokku_sched.next_epoch = (int64_t)time(NULL) + 3600;
+    us = scheduler_next_sleep_us(9999);
     CHECK(us >= 3554000000LL && us <= 3566000000LL,
           "scheduler: next_sleep_us arms less for a slow clock");
 
-    /* Tick-deadline (negative) -> not calibrated, last_armed cleared. */
-    cal_ppm = 10000;
-    next_refresh_epoch = -(esp_timer_get_time() + 5000000LL);
-    us = scheduler_next_sleep_us(9999000000LL);
-    CHECK(us > 0 && us <= 5000000LL && last_armed_sleep_s == 0,
-          "scheduler: next_sleep_us honours a tick deadline without calibrating");
-
-    /* Unscheduled (zero) -> board fallback, last_armed cleared. */
-    next_refresh_epoch = 0;
-    us = scheduler_next_sleep_us(7200000000LL);
-    CHECK(us == 7200000000LL && last_armed_sleep_s == 0,
-          "scheduler: next_sleep_us returns the board fallback when unscheduled");
+    hokku_sched.next_epoch = 0;
+    us = scheduler_next_sleep_us(7200);
+    CHECK(us == 7200000000LL && hokku_sched.armed_s == 0,
+          "scheduler: next_sleep_us returns the fallback when unscheduled");
 }
 
-static void test_adopt_cal_seed(void)
+static void test_retry_in(void)
 {
-    cal_ppm = 0; cal_samples = 0;
-    CHECK(scheduler_adopt_cal_seed(8000, 5) && cal_ppm == 8000 && cal_samples == 1,
-          "scheduler: uncalibrated device adopts a well-backed server seed");
+    hokku_sched_init(&hokku_sched);
+    time_t before = time(NULL);
+    scheduler_retry_in(HOKKU_FALLBACK_SLEEP_S);
+    CHECK(hokku_sched.next_epoch >= (int64_t)before + HOKKU_FALLBACK_SLEEP_S,
+          "scheduler: retry_in schedules the next try from now");
+}
 
-    cal_ppm = 3000; cal_samples = 4;   /* already calibrated */
-    CHECK(!scheduler_adopt_cal_seed(8000, 5) && cal_ppm == 3000,
-          "scheduler: a calibrated device ignores the seed");
+/* ═══ ota.c — the shared confirm policy with ESP-IDF mechanics ═══ */
+static int g_fetches;
+static hokku_fetch_action_t fetch_fails(void *ctx)
+{
+    (void)ctx;
+    g_fetches++;
+    return HOKKU_FETCH_BACKOFF;
+}
 
-    cal_ppm = 0; cal_samples = 0;
-    CHECK(!scheduler_adopt_cal_seed(8000, 2) && cal_ppm == 0,
-          "scheduler: seed rejected when server sample count is too low");
+static void test_ota_first_fetch_not_pending(void)
+{
+    /* The mock reports no pending image: one fetch, no retries, even if it failed. */
+    g_fetches = 0;
+    hokku_fetch_action_t a = ota_first_fetch(fetch_fails, NULL);
+    CHECK(a == HOKKU_FETCH_BACKOFF && g_fetches == 1,
+          "ota: a confirmed image fetches once, whatever the outcome");
 }
 
 /* ═══ log.c (single crash-safe RTC ring) ═══ */
@@ -289,14 +264,11 @@ int main(void)
     printf("=== test_logic (common/esp32) ===\n\n");
     test_now_epoch_post_2020();
     test_refresh_due();
-    test_schedule_retry_in();
-    test_save_pre_sleep_epoch();
-    test_set_after_refresh();
-    test_observe_sleep_learns_drift();
-    test_observe_sleep_skips_non_timer();
-    test_observe_sleep_skips_without_armed();
+    test_apply_fetch();
+    test_timer_wake_learns_drift();
     test_next_sleep_us_calibrated();
-    test_adopt_cal_seed();
+    test_retry_in();
+    test_ota_first_fetch_not_pending();
     test_log_ring_lifecycle();
     test_config_valid();
     test_config_set_screen_name();

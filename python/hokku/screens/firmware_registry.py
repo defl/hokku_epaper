@@ -43,6 +43,17 @@ def release_app_image_for(model_id: str | None) -> bytes | None:
     return provider.release_app_image() if provider else None
 
 
+def release_file_for(model_id: str | None) -> Path | None:
+    """The bundled full release artifact for *model_id* (what a USB flash writes:
+    ESP32 merged ``.bin``, F7 ``.img``), or None if the model has none."""
+    provider = _PROVIDERS.get(model_id or "")
+    if provider is None:
+        return None
+    if _FIRMWARE_EXT.get(model_id or "") == "img":
+        return provider.firmware_image_file()
+    return provider.merged_firmware_file()
+
+
 def bundled_firmware_versions() -> dict[str, str | None]:
     """Map of every OTA-capable model_id -> its bundled firmware version."""
     return {model: provider.bundled_firmware_version() for model, provider in _PROVIDERS.items()}

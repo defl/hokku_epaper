@@ -95,9 +95,14 @@ included.
 - **Pillow, NumPy, Flask, pillow-heif** — the image server's Python
   dependencies. Each has its own license; see their individual
   projects.
-- **Measured Spectra 6 palette values** are sourced from the
-  [esp32-photoframe](https://github.com/vroland/esp32-photoframe)
-  project (GPL). See the dithering pipeline docs for attribution.
+- **Spectra 6 ink colours.** The ink table the dither picks from comes
+  from [esp32-photoframe](https://github.com/aitjcize/esp32-photoframe)
+  (MIT) for the Hokku / Huessen and Seeed, as does the idea of
+  compressing an image into the panel's real lightness range; the
+  Bigme F7's is epdoptimize's `spectra6`
+  ([paperlesspaper/epdoptimize](https://github.com/paperlesspaper/epdoptimize),
+  Apache-2.0). The lightness range and gamut correction each panel
+  actually renders with are this project's own measurements.
 - **XR872 SDK** — required to build the Bigme F7 firmware from
   source. Not redistributed by this project; obtain it separately.
 - **pi-gen** (BSD-3-Clause) — used to build the Raspberry Pi
@@ -119,11 +124,12 @@ included.
   8080 on your network can view, upload and delete photos and
   reconfigure your frames. This is deliberate for a home appliance on
   a trusted LAN — do not expose it to the internet.
-- The image server stores a `database.json` on disk tracking per-image
-  and per-screen usage (show counts, last-seen timestamps, IP
-  addresses, full `X-Frame-State` dicts). Treat this as sensitive
-  local telemetry if you care.
-- No data is transmitted off your local network by this project — it
-  makes no outbound requests at all. The stock firmware on these
+- The image server stores per-image and per-screen usage on disk
+  (`image_manager.json`, `serve_scheduler.json`: show counts, last-seen
+  timestamps, IP addresses, full `X-Frame-State` dicts). Treat this as
+  sensitive local telemetry if you care.
+- No data is transmitted off your local network by this project. The
+  only outbound request is to the GitHub Releases API, and only when
+  you click *Check GitHub for firmware*. The stock firmware on these
   frames did talk to external servers; this project exists
   specifically to replace that behaviour.

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <stddef.h>
+#include "schedule.h"
 #include <stdbool.h>
 
 typedef struct {
@@ -15,7 +16,7 @@ typedef struct {
     const char *wake;         /* how this boot was entered (wake label) */
     const char *regime;       /* what the firmware is doing right now */
     long long   uptime_s;     /* seconds since boot */
-    int         bat_mv;       /* battery mV; < 0 OMITS the field (unknown/no sense) */
+    int         bat_mv;       /* battery mV as read; OMITTED outside HOKKU_BATT_MV_MIN..MAX */
     const char *usb;          /* "host" / "none" (external-power/USB state) */
     const char *last_sleep;   /* how the previous boot ended */
     int         rssi;         /* WiFi RSSI, dBm */
@@ -31,7 +32,17 @@ typedef struct {
     bool        wifi_cached;      /* last connect used the fast-reconnect cache */
 } frame_state_t;
 
+/* A battery reading outside this range is a failed or floating ADC read, not a
+ * battery (every board's cell is a single Li-ion). Every board reports it the
+ * same way: the field is left out. */
+#define HOKKU_BATT_MV_MIN  2500
+#define HOKKU_BATT_MV_MAX  4500
+
 /* Serialise fs into buf (truncated to buflen) as the X-Frame-State JSON object.
- * Always emits "ota":1 (the firmwares are OTA-capable). bat_mv < 0 omits the
- * bat_mv field. */
+ * Always emits "ota":1 (the firmwares are OTA-capable). bat_mv is omitted when
+ * it is not a plausible reading (see above). */
 void frame_state_build(char *buf, size_t buflen, const frame_state_t *fs);
+
+/* Fill the schedule fields (next_ep, sleep_err_s, cal_ppm) from the shared
+ * schedule state, so every board reports them the same way. */
+void frame_state_set_schedule(frame_state_t *fs, const hokku_sched_t *s);

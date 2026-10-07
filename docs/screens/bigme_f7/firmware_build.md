@@ -17,7 +17,7 @@ cd /path/to/xr872_sdk
 git apply /path/to/hokku_epaper/firmware/bigme_f7/sdk_patches/*.patch
 ```
 
-See [`../../firmware/bigme_f7/sdk_patches/README.md`](../../../firmware/bigme_f7/sdk_patches/README.md).
+See [`firmware/bigme_f7/sdk_patches/README.md`](../../../firmware/bigme_f7/sdk_patches/README.md).
 
 > **Switching lwIP versions needs a full SDK object clean.** The SDK compiles its
 > net stack (e.g. `ethernetif.c`) from source into the mounted checkout, and make's
@@ -27,7 +27,10 @@ See [`../../firmware/bigme_f7/sdk_patches/README.md`](../../../firmware/bigme_f7
 > After changing `__CONFIG_LWIP_VER`, force a recompile once:
 > `find /xr872_sdk/src -name '*.o' -delete && find /xr872_sdk/src -name '*.d' -delete`.
 
-Build requires Docker (ubuntu:18.04 / GCC 6.3.1):
+The normal route is `bash firmware/bigme_f7/build.sh` (builder image from
+`firmware/bigme_f7/Dockerfile`), which also copies the image to
+`firmware/release/hokku-bigme_f7-<version>.img`. The manual equivalent needs
+Docker (ubuntu:18.04 / GCC 6.3.1):
 
 ```bash
 docker run --rm \
@@ -59,11 +62,13 @@ Why lib32: `xr872_sdk/tools/mkimage` is a 32-bit Linux ELF. Requires
 After `make image`:
 
 ```
-firmware/bigme_f7/gcc/hokku_bigme_f7.axf      ~600 KB   ELF (no debug)
-firmware/bigme_f7/gcc/hokku_bigme_f7.bin       21 KB    SRAM portion
-firmware/bigme_f7/gcc/hokku_bigme_f7_xip.bin  464 KB    XIP (flash-execute) portion
+firmware/bigme_f7/gcc/hokku_bigme_f7.axf       ~6 MB    ELF
+firmware/bigme_f7/gcc/hokku_bigme_f7.bin       29 KB    SRAM portion
+firmware/bigme_f7/gcc/hokku_bigme_f7_xip.bin  652 KB    XIP (flash-execute) portion
 firmware/bigme_f7/image/xr872/xr_system.img     1 MB    flashable image
 ```
+
+(Sizes from a 1.2.15 build.)
 
 ## Flash layout and why the image is always ~1 MB
 
@@ -72,18 +77,17 @@ The `xr_system.img` spans flash offsets 0 to ~1019 KB regardless of app size:
 | Offset  | Section        | Size  | Source          |
 |---------|----------------|-------|-----------------|
 | 0 K     | boot_40M.bin   | 10 KB | SDK binary      |
-| 32 K    | app.bin        | 21 KB | SRAM code       |
-| 76 K    | app_xip.bin   | 464 KB | XIP code + libs |
-| 540 K   | (gap)          | 440 KB | OTA update reserve |
+| 32 K    | app.bin        | 29 KB | SRAM code       |
+| 76 K    | app_xip.bin   | 652 KB | XIP code + libs |
+| 728 K   | (gap)          | 252 KB | unused          |
 | 980 K   | wlan_bl.bin    | 2 KB  | SDK binary      |
 | 984 K   | wlan_fw.bin    | 33 KB | SDK binary      |
 | 1018 K  | wlan_sdd_40M   | 1 KB  | SDK binary      |
 
-The image is ~1 MB because the WLAN section is fixed at offset 980 K by
-the XR872 system architecture. The 440 KB gap between app_xip and wlan_bl
-is OTA update space and is not stored in the image file — mkimage writes
-the actual binary at each section's flash offset, so the file must span
-the full range.
+The image is ~1 MB because the WLAN section is fixed at offset 980 K in
+`image/xr872/.image.cfg`. mkimage writes each section at its flash offset,
+so the file spans the full range, gap included. On the device everything
+after the bootloader lands in one A/B slot ([`custom_firmware.md`](custom_firmware.md#flash-layout-on-device-from-the-oem-bootloader-header)).
 
 ## Optimization — already at minimum
 
@@ -95,7 +99,7 @@ flags:
 - `--specs=nano.specs` (newlib-nano, smallest libc)
 - `-fomit-frame-pointer`
 
-The 464 KB XIP is dominated by the precompiled WiFi/TLS/TCP-IP stack
+The XIP portion is dominated by the precompiled WiFi/TLS/TCP-IP stack
 (WPA supplicant, lwIP, mbed TLS, HTTP client). These are pulled in
 transitively by `platform_init()` and the HTTP client calls. LTO does
 not help because the libraries are precompiled without LTO bytecode.

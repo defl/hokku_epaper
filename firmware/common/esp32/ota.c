@@ -4,6 +4,9 @@
 #include "firmware_url.h"  /* firmware_url_build */
 #include "net.h"           /* HTTP_TIMEOUT_MS */
 #include "screen_ident.h"  /* HOKKU_MAC_STR_LEN */
+#include "http_headers.h"
+#include "messages.h"     /* the OTA screens' words */
+#include "ota_confirm.h"  /* confirm-or-roll-back policy */
 
 #include <string.h>
 #include <stdlib.h>
@@ -81,14 +84,14 @@ static bool ota_fetch_config(const char *base_url, const char *screen_name,
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) { free(buf); return false; }
     if (screen_name && screen_name[0] != '\0')
-        esp_http_client_set_header(client, "X-Screen-Name", screen_name);
+        esp_http_client_set_header(client, HOKKU_HDR_SCREEN_NAME, screen_name);
     if (screen_model && screen_model[0] != '\0')
-        esp_http_client_set_header(client, "X-Screen-Model", screen_model);
+        esp_http_client_set_header(client, HOKKU_HDR_SCREEN_MODEL, screen_model);
     char mac_str[HOKKU_MAC_STR_LEN];
     hokku_screen_mac_str(mac_str, sizeof(mac_str));
     if (mac_str[0] != '\0')
-        esp_http_client_set_header(client, "X-Screen-Mac", mac_str);
-    esp_http_client_set_header(client, "X-Config-State", cfgstate);
+        esp_http_client_set_header(client, HOKKU_HDR_SCREEN_MAC, mac_str);
+    esp_http_client_set_header(client, HOKKU_HDR_CONFIG_STATE, cfgstate);
 
     esp_err_t perr = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
@@ -154,9 +157,9 @@ static bool ota_write_app(const char *base_url, const char *screen_name,
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) { esp_ota_abort(handle); return false; }
     if (screen_name && screen_name[0] != '\0')
-        esp_http_client_set_header(client, "X-Screen-Name", screen_name);
+        esp_http_client_set_header(client, HOKKU_HDR_SCREEN_NAME, screen_name);
     if (screen_model && screen_model[0] != '\0')
-        esp_http_client_set_header(client, "X-Screen-Model", screen_model);
+        esp_http_client_set_header(client, HOKKU_HDR_SCREEN_MODEL, screen_model);
     esp_err_t perr = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
@@ -202,33 +205,50 @@ static bool ota_flash_nvs(const uint8_t *img, size_t len)
     return true;
 }
 
+
+/* Show an OTA failure through the board's progress callback. */
+static void ota_failed(ota_progress_fn progress, const char *stage)
+{
+    char msg[HOKKU_MSG_MAX];
+    hokku_msg_ota_failed(msg, sizeof(msg), stage);
+    PROGRESS(msg);
+}
+
 bool perform_ota(const char *target_version, const char *base_url,
                  const char *screen_name, const char *screen_model,
                  ota_progress_fn progress)
 {
+    /* An image that has not confirmed itself must not overwrite the previous
+     * one: that slot is its rollback (ota_confirm.h). ESP-IDF refuses the write
+     * anyway; refusing here skips the config round trip and the screens. */
+    if (ota_is_pending_verify()) {
+        ESP_LOGW("hokku", "OTA to %s refused: this image is not confirmed yet", target_version);
+        return false;
+    }
+
     ESP_LOGI("hokku", "OTA starting -> %s", target_version);
-    PROGRESS("Updating firmware...\n\nDo not unplug.\nThe screen will\nrestart itself.");
+    PROGRESS(HOKKU_MSG_OTA_START);
 
     /* 1. Migrated NVS config (held in RAM; flashed only after the app image is
      *    downloaded + validated, so a failed download never touches NVS). */
     uint8_t *nvs_img = NULL;
     size_t   nvs_len = 0;
     if (!ota_fetch_config(base_url, screen_name, screen_model, &nvs_img, &nvs_len)) {
-        PROGRESS("Firmware update\nfailed.\n\n(config migration)\n\nWill retry later.");
+        ota_failed(progress, "config migration");
         return false;
     }
 
     /* 2. App image -> inactive slot (validated by esp_ota_end). */
     if (!ota_write_app(base_url, screen_name, screen_model)) {
         free(nvs_img);
-        PROGRESS("Firmware update\nfailed.\n\n(download)\n\nWill retry later.");
+        ota_failed(progress, "download");
         return false;
     }
 
     /* 3. Rewrite NVS with the migrated config. */
     if (!ota_flash_nvs(nvs_img, nvs_len)) {
         free(nvs_img);
-        PROGRESS("Firmware update\nfailed.\n\n(config write)\n\nWill retry later.");
+        ota_failed(progress, "config write");
         return false;
     }
     free(nvs_img);
@@ -238,27 +258,14 @@ bool perform_ota(const char *target_version, const char *base_url,
     esp_err_t e = esp_ota_set_boot_partition(next);
     if (e != ESP_OK) {
         ESP_LOGE("hokku", "esp_ota_set_boot_partition: %s", esp_err_to_name(e));
-        PROGRESS("Firmware update\nfailed.\n\n(commit)\n\nWill retry later.");
+        ota_failed(progress, "commit");
         return false;
     }
     ESP_LOGI("hokku", "OTA complete — rebooting into %s", next ? next->label : "new slot");
-    PROGRESS("Update complete.\n\nRestarting...");
+    PROGRESS(HOKKU_MSG_OTA_DONE);
     vTaskDelay(pdMS_TO_TICKS(800));
     esp_restart();
     return true;  /* unreachable */
-}
-
-void ota_mark_valid_if_pending(void)
-{
-#ifdef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    esp_ota_img_states_t st;
-    if (running && esp_ota_get_state_partition(running, &st) == ESP_OK
-        && st == ESP_OTA_IMG_PENDING_VERIFY) {
-        esp_err_t e = esp_ota_mark_app_valid_cancel_rollback();
-        ESP_LOGI("hokku", "OTA pending-verify confirmed -> mark valid: %s", esp_err_to_name(e));
-    }
-#endif
 }
 
 bool ota_is_pending_verify(void)
@@ -271,4 +278,54 @@ bool ota_is_pending_verify(void)
 #else
     return false;
 #endif
+}
+
+/* ── The shared confirm policy (common/all/ota_confirm.h), ESP-IDF mechanics ── */
+
+typedef struct {
+    hokku_fetch_action_t (*fetch)(void *ctx);
+    void *ctx;
+} esp_first_fetch_ctx_t;
+
+static hokku_fetch_action_t esp_fetch(void *c)
+{
+    esp_first_fetch_ctx_t *f = (esp_first_fetch_ctx_t *)c;
+    return f->fetch(f->ctx);
+}
+
+static void esp_wait_s(void *c, unsigned seconds)
+{
+    (void)c;
+    ESP_LOGW("hokku", "new firmware: server not reached, trying again in %u s", seconds);
+    vTaskDelay(pdMS_TO_TICKS(seconds * 1000u));
+}
+
+static void esp_confirm(void *c)
+{
+    (void)c;
+    esp_err_t e = esp_ota_mark_app_valid_cancel_rollback();
+    ESP_LOGI("hokku", "new firmware reached the server: confirmed (%s)", esp_err_to_name(e));
+}
+
+static void esp_rollback(void *c)
+{
+    (void)c;
+    ESP_LOGE("hokku", "new firmware never reached the server: rolling back");
+    esp_ota_mark_app_invalid_rollback_and_reboot();
+}
+
+hokku_fetch_action_t ota_first_fetch(hokku_fetch_action_t (*fetch)(void *ctx), void *ctx)
+{
+    esp_first_fetch_ctx_t f = { .fetch = fetch, .ctx = ctx };
+    hokku_ota_first_fetch_t ops = {
+        .pending  = ota_is_pending_verify(),
+        .fetch    = esp_fetch,
+        .wait_s   = esp_wait_s,
+        .confirm  = esp_confirm,
+        .rollback = esp_rollback,
+        .ctx      = &f,
+    };
+    if (ops.pending)
+        ESP_LOGI("hokku", "new firmware: confirms on the first fetch that reaches the server");
+    return hokku_ota_first_fetch(&ops);
 }

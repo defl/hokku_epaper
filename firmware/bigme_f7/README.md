@@ -49,8 +49,11 @@ After the first flash, all further updates go
 
 - **A/B slots are the safety net — never bypass them.** The flashers write only
   the **inactive** slot plus its config sector, and never touch the bootloader or
-  the OEM slot. A new image marks itself verified only after it boots and reaches
-  the server, so a bad build rolls back automatically. This is not optional
+  the slot the unit currently boots. A flashed image commits itself only once it
+  reaches `main()` (`hokku_rollback_commit()`); a crash before that rolls back to
+  the other slot automatically. An OTA'd image goes further: it commits only once
+  a fetch reaches the server, and rolls back otherwise (shared policy,
+  [`ota.md`](../../docs/screens/bigme_f7/ota.md#confirming-the-new-image)). This is not optional
   belt-and-braces: this SoC's only recovery path runs through the mask BROM, and
   a crash-on-boot image that removed the software BROM trigger is exactly how a
   unit was bricked on 2026-06-13. See the STOP rules in the root
@@ -59,8 +62,9 @@ After the first flash, all further updates go
   into the BROM. Keep it working and keep it early in boot — it is the difference
   between a recoverable unit and a paperweight.
 - **`sys_reboot` re-enters the BROM**, it does not boot the app. After flashing,
-  the unit must be **power-cycled** to actually run the new image. Tooling passes
-  `reboot=False` for this reason.
+  the unit must be **power-cycled with a long-press** to actually run the new
+  image — a USB replug is not a power cycle while the battery is charged. Tooling
+  passes `reboot=False` for this reason.
 - **The version string is hardcoded** as `FIRMWARE_VERSION` at the top of
   `main.c` — unlike the ESP32 screens, which read a `VERSION` file at build time.
   There is no `firmware/bigme_f7/VERSION`; update `main.c` when bumping. Worth

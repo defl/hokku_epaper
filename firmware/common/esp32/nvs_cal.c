@@ -17,8 +17,8 @@ void hokku_cal_load(void)
     uint16_t n   = 0;
     if (nvs_get_i32(nvs, "cal_ppm", &ppm) == ESP_OK &&
         nvs_get_u16(nvs, "cal_samp", &n) == ESP_OK) {
-        cal_ppm     = ppm;
-        cal_samples = n;
+        hokku_sched.cal_ppm     = ppm;
+        hokku_sched.cal_samples = n;
         ESP_LOGI("hokku", "cal loaded from NVS: %d ppm, %u samples", (int)ppm, n);
     }
     nvs_close(nvs);
@@ -34,17 +34,19 @@ void hokku_cal_save_if_changed(void)
     bool have = (nvs_get_i32(nvs, "cal_ppm", &stored_ppm) == ESP_OK &&
                  nvs_get_u16(nvs, "cal_samp", &stored_n) == ESP_OK);
 
-    int32_t d = cal_ppm - stored_ppm;
+    int32_t d = hokku_sched.cal_ppm - stored_ppm;
     if (d < 0) d = -d;
 
     /* Write on first-ever store, once a fresh device crosses into "calibrated",
      * or when the value drifted past the wear threshold. */
-    bool changed = !have || (stored_n == 0 && cal_samples > 0) || d > HOKKU_CAL_WRITE_PPM;
+    bool changed = !have || (stored_n == 0 && hokku_sched.cal_samples > 0) ||
+                   d > HOKKU_CAL_WRITE_PPM;
     if (changed) {
-        nvs_set_i32(nvs, "cal_ppm", cal_ppm);
-        nvs_set_u16(nvs, "cal_samp", cal_samples);
+        nvs_set_i32(nvs, "cal_ppm", hokku_sched.cal_ppm);
+        nvs_set_u16(nvs, "cal_samp", hokku_sched.cal_samples);
         nvs_commit(nvs);
-        ESP_LOGI("hokku", "cal saved to NVS: %d ppm, %u samples", (int)cal_ppm, cal_samples);
+        ESP_LOGI("hokku", "cal saved to NVS: %d ppm, %u samples",
+                 (int)hokku_sched.cal_ppm, hokku_sched.cal_samples);
     }
     nvs_close(nvs);
 }

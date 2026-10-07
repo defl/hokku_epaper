@@ -51,7 +51,8 @@ already ends in a reboot:
 Getting the console back on a configured appliance means sending it back to
 setup mode, which any of these do:
 
-- `sudo /usr/lib/hokku-installer/reset.sh` (over SSH, or from the web UI)
+- `sudo /usr/lib/hokku-installer/reset.sh` over SSH (the web UI's
+  *Reset to Setup Wizard…* returns to setup mode but leaves the port a host)
 - the WiFi watchdog, **automatically**, on any boot where WiFi doesn't
   connect within ~3.5 minutes — so an appliance that falls off the network
   restores its own console without anyone touching it

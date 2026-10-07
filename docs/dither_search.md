@@ -16,8 +16,8 @@ blue on real lipstick at full panel resolution while the proposed "fix" measures
 is the pathological case for error diffusion; real lips have texture and
 gradient, which break the cascade before it runs.
 
-Also established: `hue_aware` does nothing for this artifact despite
-[dithering.md §5a](dithering.md) presenting it as the fix (§2).
+Also established: `hue_aware` does nothing for this artifact, although
+[dithering.md §5a](dithering.md) presented it as the fix (§2).
 
 Everything here is reproducible with `tools/dither_search.py` — no hardware, no
 measurements.
@@ -51,7 +51,7 @@ palette, and the residual grows accordingly.
 
 ## 2. `hue_aware` does not do what the docs claim
 
-[dithering.md §5a](dithering.md) presents the hue-aware LUT as *the* fix for this
+[dithering.md §5a](dithering.md) presented the hue-aware LUT as *the* fix for this
 exact artifact, "preventing the error-cascade hue-swaps". Measured, it is
 **bit-identical to `euclidean`** on every swatch above, and identical across the
 whole photo corpus too.
@@ -84,9 +84,6 @@ the repeated white picks that accumulate the cold residual.
 
 OKLAB and CAM16-UCS help for a different reason: they change the *distance
 geometry*, so the residual never heads toward blue to begin with.
-
-> **Documentation correction needed.** §5a should not claim the hue-aware LUT
-> fixes the warm-skin cascade. It does not, at any usable cutoff.
 
 ## 3. The search
 
@@ -259,7 +256,7 @@ photographs. A uniform colour field is the pathological case for error
 diffusion; real lips carry texture, specular highlight and gradient, all of
 which break the cascade before it can run.
 
-### 4e. One contradiction, unresolved
+### 4f. One contradiction, unresolved
 
 The sheet prefers `adaptive_saturate=off`; the dither-only test in §4a prefers
 `sat=cielab` and rates `off` far worse (4.74 % vs 1.47 %).
@@ -316,7 +313,7 @@ fit for this question.
    ~5× worse (0.64 % → 3.09 %). The cost lands in `neutral_leak` (18 → 26).
    The 6.4× win exists only on flat colour fields, which do not occur in
    photographs.
-3. **Leave `adaptive_saturate_space` alone** — the two methods disagree (§4e).
+3. **Leave `adaptive_saturate_space` alone** — the two methods disagree (§4f).
 
 **What would actually settle it**, roughly in order of value:
 
@@ -330,19 +327,19 @@ fit for this question.
 5. **A neutral-leak-aware search**, if the LUT question is ever revisited. The
    regression shows the LUT choice trades warm-hue accuracy against neutral
    purity; that trade should be measured deliberately.
-6. **Correct [dithering.md §5a](dithering.md)** — the hue-aware LUT is not the
-   fix it is described as (§2). That finding is independent of all the above
-   and stands on its own.
-7. The palette anchors every number here rests on are unverified. Each model's
+6. The palette anchors every number here rests on are unverified. Each model's
    `palette_measured_rgb` in `python/hokku/screens/*/display.py` has weak
    provenance — borrowed from a third party for the Bigme F7, inherited
    wholesale for the Seeed, unrecorded for the Hokku/Huessen — and every LUT is
    built from it. So a CIELAB-vs-OKLAB comparison is partly a comparison of how
-   each space tolerates *wrong anchors*. Measuring them on real glass with a
-   colorimeter would make the whole exercise more trustworthy; that work is on a
-   separate branch.
+   each space tolerates *wrong anchors*. The colour campaign later measured each
+   panel's black and white points (`drc_anchor_l`) but not this ink table — see
+   [findings](screens/huessen_epf1301/measurements/findings.md).
 
-Nothing here has been applied to the shipped presets.
+The shipped `default_*` presets later took their dither settings from a
+six-dimension sweep with this tool (see [dithering.md §4](dithering.md)); their
+tonal chain was then settled on glass in
+[the rendering campaign](screens/huessen_epf1301/rendering_campaign.md).
 
 > **Method note.** Two recommendations in this document were retracted after
 > further measurement: "the presets are already optimal" (wrong — under-searched,
@@ -360,5 +357,5 @@ Nothing here has been applied to the shipped presets.
 - Scoring weights are a judgement call, not a measurement. A different weighting
   reorders the tables; the *corpus* finding in §5 does not depend on them.
 - Everything is measured against `palette_measured_rgb`, whose provenance is
-  weak (see §6.5). This compares configurations against a model of the panel,
+  weak (see §6, item 6). This compares configurations against a model of the panel,
   not against the panel.

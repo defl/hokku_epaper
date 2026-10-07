@@ -2,14 +2,16 @@
  * Hokku EPaper firmware for Bigme F7 (XR872AT + EK79655 7-color EPD)
  *
  * Flow:
- *   platform_init() auto-connects WiFi from sysinfo flash credentials.
- *   On NETWORK_UP: init EPD, then loop:
- *     GET /hokku/screen/ → stream 192000-byte 4bpp response body to EPD → refresh
- *     sleep X-Sleep-Seconds (from response header)
+ *   platform_init(); the boot cfg + watchdog handling is in "A/B try-boot
+ *   rollback" below. main() loads config + state, connects WiFi from the saved
+ *   sysinfo credentials and starts the refresh thread, which loops:
+ *     wait for the network -> POST /hokku/screen/ -> stream the 192000-byte
+ *     4bpp body into the EPD -> act on the reply exactly like every other
+ *     screen (common/all: fetch_outcome, schedule, messages, ota_confirm) ->
+ *     hibernate (battery) or wait (USB) until the server's next fetch time.
  *
  * WiFi provisioning via UART console:
- *   net sta config <ssid> <password>
- *   net sta enable
+ *   wifi <ssid> <password>
  */
 
 #include <stdio.h>
@@ -46,42 +48,66 @@
 /* SoC-agnostic shared code (firmware/common/all — pure C, no SDK headers). */
 #include "firmware_url.h"
 #include "frame_state.h"
-#include "backoff.h"
+#include "fetch_outcome.h"
+#include "schedule.h"
+#include "messages.h"
+#include "ota_confirm.h"
+#include "http_headers.h"
 #include "logbuf.h"
 #include "frame_proto.h"
 #include "interactive.h"
 #include "screen_ident.h"
 
 /* SoC-shared XR872 code (firmware/common/xr872 — usable by any XR872/XR872AT
- * screen): activity log, software clock, HTTP-header helpers, hibernation. */
+ * screen): activity log, software clock, HTTP-header helpers, hibernation,
+ * persistent runtime state. */
 #include "log.h"
 #include "clock.h"
 #include "http_util.h"
 #include "pm.h"
+#include "state.h"
 
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.15"
+#define FIRMWARE_VERSION        "1.2.17"
 
-#define EPD_IMAGE_BYTES         192000U  /* 800 x 480 x 4bpp / 8 */
-#define DEFAULT_SLEEP_SECONDS   300
 #define HTTP_TIMEOUT_S          90       /* covers 192KB DL + EPD streaming time */
+
+/* How long a fetch waits for the network before it counts as "WiFi connect
+ * failed". Covers WLAN bring-up after a boot, association and DHCP. */
+#define HOKKU_WIFI_WAIT_S       30
+
+/* With no WiFi saved at boot, how long to leave the console alone (a flasher
+ * provisions WiFi over it right after the first boot) before putting the
+ * config message on the glass. */
+#define HOKKU_NO_WIFI_GRACE_S   15
+
+/* How a person asks this screen to retry right now (common/all/messages.h).
+ * The button is a hardware power latch the firmware cannot see
+ * (docs/screens/bigme_f7/hardware_facts.md), so: a power cycle. */
+#define HOKKU_RETRY_HINT        "Turn the screen off\nand on again to\ntry again now."
 
 #define REFRESH_THREAD_STACK    (8 * 1024)
 #define REFRESH_THREAD_PRIO     OS_THREAD_PRIO_APP
 
 /* Config schema version reported to the server (frame-state cfg_ver). */
 #define HOKKU_CFG_VER           1
-/* Firmware build stamp (X-Firmware-Build). Clean builds keep this fresh. */
+/* Firmware build stamp (X-Firmware-Build), passed in by gcc/Makefile in the
+ * ESP32 boards' format; the fallback only serves the host tests. */
+#ifndef HOKKU_BUILD_TS
 #define HOKKU_BUILD_TS          (__DATE__ " " __TIME__)
+#endif
 
 static OS_Thread_t g_refresh_thread;
 static int         g_epd_ready = 0;
 
+/* NETWORK_UP seen and not followed by NETWORK_DOWN (set by net_cb). */
+static volatile int g_net_up;
+
 /*
  * Serializes the network+flash critical section so an OTA (flash erase/write via a
  * second HTTP session) can never run concurrently with a periodic refresh or a
- * second OTA. The refresh thread holds it around do_refresh(); the console `ota`
+ * second OTA. The refresh thread holds it around each fetch; the console `ota`
  * command TRY-locks it and refuses if the refresh thread is busy. hokku_do_ota()
  * itself does NOT lock — its callers already hold the lock (no recursive lock).
  */
@@ -92,8 +118,8 @@ static OS_Mutex_t  g_ota_lock;
  * many hours (overnight), and the refresh thread used to OS_MSleep() through it,
  * so a `wifi` switch (or any reconnect) was not followed by a check-in until that
  * sleep ended — it looked like the unit had stopped checking in. net_cb releases
- * this on NETWORK_UP once the refresh thread exists, so the unit checks in on the
- * new network straight away. Binary: repeated releases collapse into one wake.
+ * this on NETWORK_UP, so the unit checks in on the new network straight away.
+ * Binary: repeated releases collapse into one wake.
  */
 static OS_Semaphore_t g_refresh_kick;
 
@@ -108,23 +134,26 @@ extern void heap_get_space(uint8_t **start, uint8_t **end, uint8_t **current);
 
 /* Wake reason captured once at boot (frame-state "wake"): "timer" = hibernation wake. */
 static const char *g_wake = "first_boot";
+static int         g_timer_wake;   /* this boot is the end of an armed hibernation */
 
 static void hokku_capture_wake(void)
 {
     uint32_t ev = HAL_Wakeup_GetEvent();
-    if (ev & PM_WAKEUP_SRC_WKTIMER)
+    if (ev & PM_WAKEUP_SRC_WKTIMER) {
         g_wake = "timer";
-    else if (ev != 0)                          /* 0 == cold power-on */
+        g_timer_wake = 1;
+    } else if (ev != 0) {                      /* 0 == cold power-on */
         g_wake = "wake_io";
+    }
 }
 
 /*
  * Battery read on ADC channel 4 (pin PA14) — the pack-sense line the OEM firmware
  * uses (NOT ADC_CHANNEL_VBAT, which reads the SoC's regulated internal rail and was
- * the source of the bogus steady ~2.58 V). Returns mV in the Li-ion range, or 0 if
- * unavailable/implausible (build_frame_state then omits it, so the server shows no
- * battery rather than a wrong value). Channel + scaling confirmed by disassembling
- * the OEM firmware. HAL_ADC_Conv_Polling auto-configures the PA14->CH4 pinmux.
+ * the source of the bogus steady ~2.58 V). Returns mV, or 0 if the ADC failed; the
+ * shared frame-state builder drops an implausible reading, like on every board.
+ * Channel + scaling confirmed by disassembling the OEM firmware.
+ * HAL_ADC_Conv_Polling auto-configures the PA14->CH4 pinmux.
  */
 static int g_adc_ready = 0;
 uint32_t hokku_battery_mv(void)          /* also used by the `cfg show` diagnostics */
@@ -154,13 +183,15 @@ uint32_t hokku_battery_mv(void)          /* also used by the `cfg show` diagnost
     mv = (data * 295000U / 1105920U) * 10U;
     if (mv > 4200U)
         mv = 4200U;
-    return (mv >= 3000U && mv <= 4200U) ? mv : 0;
+    return mv;
 }
+
+static int hokku_should_sleep(void);
 
 /* Build the compact X-Frame-State telemetry JSON (server parses ota/bat_mv/clk_now). */
 static void build_frame_state(char *buf, size_t sz)
 {
-    const hokku_config_t *cfg = hokku_config_get();
+    const hokku_state_t *st = hokku_state_get();
     wlan_sta_ap_t   ap;
     int             rssi = 0;
     uint8_t        *hs, *he, *hc;
@@ -173,32 +204,27 @@ static void build_frame_state(char *buf, size_t sz)
 
     /* Gather XR872-specific values, then hand off to the shared (SoC-agnostic)
      * builder in common/all so the F7 reports the same schema as the ESP32
-     * boards. Fields the F7 doesn't track (boot/spurious/next_ep/sleep_err/
-     * wifi_cached) default to 0/none; bat_mv omits itself when the reading is
-     * unavailable (bat == 0 -> -1), matching the prior F7 behaviour. */
+     * boards. spurious and wifi_cached are ESP32 mechanics (spurious EXT1
+     * wakes, a BSSID fast-reconnect cache) this board does not have. */
     frame_state_t fs = {
         .fw       = FIRMWARE_VERSION,
-        .boot     = 0,
+        .boot     = (unsigned)st->boot_count,
         .wake     = g_wake,
-        .regime   = (cfg->power_mode == HOKKU_PWR_AWAKE || led_usb_present())
-                        ? "usb_awake" : "battery",
+        .regime   = hokku_should_sleep() ? "battery_idle" : "usb_awake",
         .uptime_s = (long long)(unsigned)OS_GetTime(),
-        .bat_mv   = (bat > 0) ? (int)bat : -1,
+        .bat_mv   = (int)bat,
         .usb      = led_usb_present() ? "host" : "none",
-        .last_sleep = "none",
+        .last_sleep = g_timer_wake ? "timer_wake" : "none",
         .rssi     = rssi,
         .heap_kb  = (unsigned)((he - hc) / 1024),
         .spurious = 0,
         .cfg_ver  = (unsigned)HOKKU_CFG_VER,
         .clk_now  = (long long)(unsigned)hokku_clock_now(),
-        .next_ep  = 0,
-        .sleep_err_known = false,
-        .sleep_err_s     = 0,
         .wifi_cached     = false,
     };
+    frame_state_set_schedule(&fs, &st->sched);
     frame_state_build(buf, sz, &fs);
 }
-
 /* This device's WiFi MAC as X-Screen-Mac ("" if unknown). sysinfo derives it
  * from the chip ID at every boot (PRJCONF_MAC_ADDR_SOURCE), so it is stable per
  * unit and is what the network sees. The server keys the screen by it, so a
@@ -219,8 +245,36 @@ static void hokku_screen_mac_str(char *out, size_t len)
  * g_boot_seq is the image sequence the bootloader launched US from (captured in
  * platform_init_level0 before we touch the OTA cfg). g_rollback_armed is set once
  * we have (a) repointed the OTA cfg at the OTHER (known-good) slot and (b) started
- * the watchdog. While armed, any fault/hang before hokku_rollback_commit() lets the
- * watchdog reset the chip; the bootloader then boots the known-good slot.
+ * the watchdog; it stays set until the cfg points back at our own slot.
+ *
+ * The semantics, as the bootloader sees them. The OTA cfg (fdcm at 0x180000,
+ * image_cfg_t {seq, state}) names the slot the bootloader launches on EVERY
+ * reset — power-on, watchdog, HAL_WDG_Reboot, and every hibernation wake, which
+ * on this SoC is a full reboot through the bootloader. Each boot:
+ *   level0  cfg -> the other slot, watchdog (16 s, the hardware max) started.
+ *           Skipped when the other slot fails image_check_sections().
+ *   main()  boot milestone (XIP, SDK init, console up): watchdog stopped
+ *           (hokku_rollback_boot_ok). A normally booted image points the cfg
+ *           back at itself here (hokku_rollback_commit): it is confirmed.
+ * So a reset of a confirmed image reboots it; a reset while the cfg still points
+ * at the other slot boots the other slot.
+ *
+ * An image an OTA just installed is NOT confirmed at the boot milestone: its cfg
+ * stays on the previous slot until the first fetch that reaches the server
+ * (common/all/ota_confirm.h). The state record (common/xr872/state.h) carries
+ * the marker hokku_do_ota() set for it ("slot N, not confirmed"). Consequences:
+ *   - the confirm-or-rollback decision completes in this first boot, before any
+ *     hibernation: a hibernation wake while unconfirmed IS a rollback;
+ *   - out of attempts -> HAL_WDG_Reboot() -> the previous slot boots;
+ *   - a crash, a power cycle or power loss while unconfirmed -> the previous
+ *     slot boots (the marker no longer matches the running slot and is dropped);
+ *   - a crash before the milestone -> the watchdog, exactly as before.
+ * The watchdog is stopped at the milestone either way: the confirm attempts run
+ * minutes (WiFi, a 90 s HTTP timeout, a 30 s panel refresh), far past its 16 s.
+ * A hang after the milestone therefore waits for a power cycle, which then boots
+ * the previous slot (the ESP32 boards behave the same: their task watchdog does
+ * not reset either). An image flashed over USB carries no marker and confirms at
+ * the milestone, as before.
  *
  * On our target unit the candidate lives in slot 0 and the live OEM
  * firmware in slot 1, so g_boot_seq==0 and the rollback target is seq 1. The logic
@@ -228,6 +282,8 @@ static void hokku_screen_mac_str(char *out, size_t len)
  */
 static image_seq_t g_boot_seq;
 static int         g_rollback_armed = 0;
+/* This boot runs an OTA'd image that has not reached the server yet. */
+static int         g_ota_pending = 0;
 
 /*
  * Phase B0 — brick-safe watchdog-semantics bench test.
@@ -260,9 +316,6 @@ static int         g_rollback_armed = 0;
 static uint32_t g_b0_rst_src, g_b0_boot_flag, g_b0_boot_arg, g_b0_wdg_cfg;
 #endif
 
-/* read_resp_header_uint / read_resp_header_str are now shared XR872 code in
- * firmware/common/xr872/http_util.h. */
-
 /*
  * Derive the firmware.bin URL from the configured screen server_url, e.g.
  *   "http://host:port/hokku/screen/" -> "http://host:port/hokku/firmware.bin?model=bigme_f7"
@@ -277,25 +330,52 @@ static void hokku_build_firmware_url(char *out, size_t outsz)
                        "firmware.bin?model=" SCREEN_MODEL);
 }
 
+/* Message text buffer. File scope rather than on the stack: the refresh thread
+ * also runs the SDK's OTA download, and its 8 KB stack has better uses. Only used
+ * under g_ota_lock (refresh thread, or the console `ota` which try-locks it). */
+static char g_msg[HOKKU_MSG_MAX];
+
+/* Put a message on the glass, once the panel is up (common/all/messages.h). */
+static void hokku_show(const char *msg)
+{
+    if (g_epd_ready)
+        epd_show_text(msg);
+}
+
+static void hokku_ota_show_failed(const char *stage)
+{
+    hokku_msg_ota_failed(g_msg, sizeof(g_msg), stage);
+    hokku_show(g_msg);
+}
+
 /*
  * Run an A/B OTA update: stream the server's firmware image into the INACTIVE
  * slot, flip the boot cfg to it, and reboot into it. On success this does NOT
- * return — it reboots, and platform_init_level0 re-arms the rollback watchdog so
- * a bad new image auto-reverts to the slot we are running now. On ANY failure it
- * returns with the current image still active and the boot cfg unchanged (the
- * half-written slot is never booted).
+ * return — it reboots, and the new image confirms itself or rolls back under the
+ * shared policy (see "A/B try-boot rollback"). On ANY failure it returns with the
+ * current image still active and the boot cfg unchanged (the half-written slot
+ * is never booted).
  *
- * Safe because: (1) the rollback WDG was already stopped at boot-commit, so the
- * multi-second download won't trip it; (2) ota_get_image validates the written
- * section chain before we flip anything; (3) the cfg flip is the last step.
+ * Safe because: (1) the rollback WDG was already stopped at the boot milestone,
+ * so the multi-second download won't trip it; (2) ota_get_image validates the
+ * written section chain before we flip anything; (3) the cfg flip is the last
+ * step; (4) it refuses while this image is itself unconfirmed: the other slot is
+ * its rollback.
  */
 static void hokku_do_ota(const char *server_ver)
 {
     char url[192];
+    hokku_state_t *st = hokku_state_get();
     const image_ota_param_t *iop = image_get_ota_param();
     image_seq_t upd = (image_seq_t)((image_get_running_seq() + 1) % IMAGE_SEQ_NUM);
     uint32_t wr_start = iop ? iop->addr[upd] : 0;
     uint32_t wr_end   = iop ? wr_start + IMAGE_AREA_SIZE(iop->img_max_size) : 0;
+
+    if (g_ota_pending) {
+        hlog("hokku: OTA refused — this image is not confirmed yet (slot %d is its rollback)\n",
+             (int)upd);
+        return;
+    }
 
     /* Safety guard: the SDK OTA erases [addr[upd], addr[upd]+img_max_size) BEFORE
      * a single byte is downloaded. The update target ALTERNATES by A/B policy:
@@ -313,23 +393,36 @@ static void hokku_do_ota(const char *server_ver)
 
     hokku_build_firmware_url(url, sizeof(url));
     hlog("hokku: OTA start (server ver '%s') <- %s\n", server_ver, url);
+    hokku_show(HOKKU_MSG_OTA_START);
 
     if (ota_init() != OTA_STATUS_OK) {
         hlog("hokku: OTA ota_init failed\n");
+        hokku_ota_show_failed("download");
         return;
     }
     if (ota_get_image(OTA_PROTOCOL_HTTP, url) != OTA_STATUS_OK) {
         hlog("hokku: OTA download/write failed (slot unchanged)\n");
+        hokku_ota_show_failed("download");
         return;
     }
+    /* Mark the new slot "not confirmed" BEFORE the cfg flips to it: from the
+     * flip on, its first boot must find the marker. If the flip then fails the
+     * marker is dropped again (it would not match the running slot anyway). */
+    st->ota_pending = (uint8_t)(upd + 1);
+    if (hokku_state_save() != 0)
+        hlog("hokku: OTA could not mark the new image unconfirmed — it will confirm at boot\n");
     /* No verify trailer in our image (built without mkimage -O); the per-section
      * checksum walk inside ota_get_image already ran. VERIFY_NONE still commits
      * the boot cfg to the freshly written slot. */
     if (ota_verify_image(OTA_VERIFY_NONE, NULL) != OTA_STATUS_OK) {
         hlog("hokku: OTA verify/commit failed (slot unchanged)\n");
+        st->ota_pending = 0;
+        hokku_state_save();
+        hokku_ota_show_failed("commit");
         return;
     }
     hlog("hokku: OTA OK — rebooting into new image\n");
+    hokku_show(HOKKU_MSG_OTA_DONE);
     OS_MSleep(200);                                 /* flush log over UART first */
     ota_reboot();                                   /* HAL_WDG_Reboot(); no return */
     hlog("hokku: OTA reboot returned?!\n");         /* unreached */
@@ -436,20 +529,21 @@ int hokku_frame_receive(void)
 }
 
 /*
- * Fetch one image from the server and stream it byte-by-byte to the EPD.
- * Returns the number of seconds to sleep before the next refresh, or -1 on
- * any error (caller should retry after a short backoff).
+ * Fetch one image from the server, transport only: fills *res with what the
+ * reply carried. The body is streamed byte-by-byte into the EPD's frame memory
+ * as it arrives; refresh_once() decides whether the panel then refreshes, so a
+ * "keep your picture" reply or a broken download leaves the glass untouched.
+ * A server-signalled OTA runs from here (and reboots when it succeeds).
  */
-static int do_refresh(void)
+static void do_refresh(hokku_fetch_result_t *res)
 {
     hokku_config_t *cfg = hokku_config_get();
     HTTPParameters  params;
     HTTP_CLIENT     info;
     char            buf[512];
     char            frame_state[384];
-    UINT32          bytes_streamed = 0;
+    UINT32          received = 0;
     uint32_t        log_sent;                 /* bytes snapshotted for the POST body */
-    int             sleep_sec = (int)cfg->default_sleep_s;
     int             ret;
 
     build_frame_state(frame_state, sizeof(frame_state));
@@ -467,57 +561,68 @@ static int do_refresh(void)
     ret = HTTPC_open(&params);
     if (ret != HTTP_CLIENT_SUCCESS) {
         hlog("hokku: HTTP open failed (%d)\n", ret);
-        return -1;
+        return;
     }
 
-    /* Request headers — server uses these for telemetry / OTA checks */
+    /* Request headers (common/all/http_headers.h) */
     char mac_str[HOKKU_MAC_STR_LEN];
     hokku_screen_mac_str(mac_str, sizeof(mac_str));
 
-    HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Name",      cfg->screen_name, 1);
-    HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Model",     SCREEN_MODEL,     1);
+    if (cfg->screen_name[0])
+        HTTPClientAddRequestHeaders(params.pHTTP, HOKKU_HDR_SCREEN_NAME, cfg->screen_name, 1);
+    HTTPClientAddRequestHeaders(params.pHTTP, HOKKU_HDR_SCREEN_MODEL, SCREEN_MODEL, 1);
     if (mac_str[0])
-        HTTPClientAddRequestHeaders(params.pHTTP, "X-Screen-Mac",   mac_str,          1);
-    HTTPClientAddRequestHeaders(params.pHTTP, "X-Firmware-Version", FIRMWARE_VERSION, 1);
-    HTTPClientAddRequestHeaders(params.pHTTP, "X-Firmware-Build",   HOKKU_BUILD_TS,   1);
-    HTTPClientAddRequestHeaders(params.pHTTP, "X-Frame-State",      frame_state,      1);
-    HTTPClientAddRequestHeaders(params.pHTTP, "Content-Type",       "text/plain",     1);
+        HTTPClientAddRequestHeaders(params.pHTTP, HOKKU_HDR_SCREEN_MAC, mac_str, 1);
+    HTTPClientAddRequestHeaders(params.pHTTP, HOKKU_HDR_FW_VERSION, FIRMWARE_VERSION, 1);
+    HTTPClientAddRequestHeaders(params.pHTTP, HOKKU_HDR_FW_BUILD, HOKKU_BUILD_TS, 1);
+    HTTPClientAddRequestHeaders(params.pHTTP, HOKKU_HDR_FRAME_STATE, frame_state, 1);
+    if (log_sent)
+        HTTPClientAddRequestHeaders(params.pHTTP, "Content-Type", "text/plain", 1);
 
     ret = HTTPC_request(&params, NULL);
     if (ret != HTTP_CLIENT_SUCCESS) {
         hlog("hokku: HTTP request failed (%d)\n", ret);
         HTTPC_close(&params);
-        return -1;
+        return;
     }
 
-    /* Check HTTP status code */
     if (HTTPC_get_request_info(&params, &info) != HTTP_CLIENT_SUCCESS) {
         HTTPC_close(&params);
-        return -1;
+        return;
     }
+
+    /* The server answered. X-Sleep-Seconds, the server time and the drift seed
+     * ride on every reply, including the no-image ones (503 converting, 404 no
+     * label match / empty library); a reply carrying the time sets the clock. */
+    res->http_status = (int)info.HTTPStatusCode;
+    {
+        char v[24], n[16];
+        if (read_resp_header_str(params.pHTTP, HOKKU_HDR_SLEEP_SECONDS, v, sizeof(v)))
+            res->sleep_s = hokku_sleep_seconds_parse(v);
+        if (read_resp_header_str(params.pHTTP, HOKKU_HDR_SERVER_TIME, v, sizeof(v)))
+            res->server_epoch = hokku_server_epoch_parse(v);
+        read_resp_header_str(params.pHTTP, HOKKU_HDR_SLEEP_CAL_PPM, v, sizeof(v));
+        read_resp_header_str(params.pHTTP, HOKKU_HDR_SLEEP_CAL_N, n, sizeof(n));
+        if (!hokku_cal_seed_parse(v, n, &res->cal_seed_ppm, &res->cal_seed_n))
+            res->cal_seed_n = 0;
+    }
+    if (res->server_epoch > 0)
+        hokku_clock_set((uint32_t)res->server_epoch);
+
     if (info.HTTPStatusCode != 200) {
         hlog("hokku: server returned %u\n", (unsigned)info.HTTPStatusCode);
         HTTPC_close(&params);
-        /* For 503/404 (no image ready), use a short retry */
-        return (info.HTTPStatusCode == 503 || info.HTTPStatusCode == 404) ? 30 : -1;
+        return;
     }
 
     /* The POST body (log) reached the server in a 200 — clear the buffer so the
      * next cycle starts fresh. (A handful of lines logged during this exchange
      * are dropped too; the F7 uploads every cycle so little accumulates.) */
     hlog_reset();
-    (void)log_sent;
 
-    /* Capture sleep + server clock + any OTA signal from response headers */
-    char fw_update[32] = "";
+    char fw_update[48] = "";
+    read_resp_header_str(params.pHTTP, HOKKU_HDR_FW_UPDATE, fw_update, sizeof(fw_update));
     {
-        uint32_t v;
-        if (read_resp_header_uint(params.pHTTP, "X-Sleep-Seconds", &v) && v > 0)
-            sleep_sec = (int)v;
-        if (read_resp_header_uint(params.pHTTP, "X-Server-Time-Epoch", &v) && v > 1600000000U)
-            hokku_clock_set(v);              /* sanity: after 2020-09-13 */
-        read_resp_header_str(params.pHTTP, "X-Firmware-Update", fw_update, sizeof(fw_update));
-
         /* The server owns the name of a screen it knows (set in its web UI):
          * adopt it when it differs, so the next request carries it. One byte
          * beyond the max so an over-long value is refused rather than
@@ -539,44 +644,135 @@ static int do_refresh(void)
         hlog("hokku: firmware update signalled -> %s\n", fw_update);
         HTTPC_close(&params);
         hokku_do_ota(fw_update);
-        return -1;                           /* OTA failed: short backoff, unchanged */
+        res->ota_failed = true;
+        return;
     }
 
-    /* Stream response body to EPD (CMD 0x10 was not sent yet — do it now) */
+    /* Stream the body into the EPD frame memory. Read until the stream ends so
+     * an over-long body is seen (hokku_image_size_ok wants it exact); stop as
+     * soon as it is past the panel size. */
     epd_send_cmd(0x10);  /* DTM: data start transmission */
-
-    while (bytes_streamed < EPD_IMAGE_BYTES) {
-        UINT32 want = EPD_IMAGE_BYTES - bytes_streamed;
-        UINT32 to_read = want < sizeof(buf) ? want : (UINT32)sizeof(buf);
+    do {
         UINT32 n = 0;
-
-        ret = HTTPC_read(&params, buf, to_read, &n);
-        if (n > 0) {
-            UINT32 usable = n;
-            if (bytes_streamed + usable > EPD_IMAGE_BYTES)
-                usable = EPD_IMAGE_BYTES - bytes_streamed;
-            for (uint32_t i = 0; i < usable; i++)
-                epd_send_data((uint8_t)buf[i]);
-            bytes_streamed += n;  /* count all received, stream only usable */
-        }
-        if (ret != HTTP_CLIENT_SUCCESS)
-            break;
-    }
+        ret = HTTPC_read(&params, buf, (UINT32)sizeof(buf), &n);
+        for (UINT32 i = 0; i < n && received + i < EPD_IMAGE_BYTES; i++)
+            epd_send_data((uint8_t)buf[i]);
+        received += n;
+    } while (ret == HTTP_CLIENT_SUCCESS && received <= EPD_IMAGE_BYTES);
 
     HTTPC_close(&params);
 
-    if (bytes_streamed < EPD_IMAGE_BYTES) {
-        hlog("hokku: short image: %u / %u bytes\n",
-               (unsigned)bytes_streamed, (unsigned)EPD_IMAGE_BYTES);
-        return -1;
+    res->image_ok = hokku_image_size_ok(received, EPD_IMAGE_BYTES);
+    if (!res->image_ok)
+        hlog("hokku: image size %u, expected %u\n",
+             (unsigned)received, (unsigned)EPD_IMAGE_BYTES);
+}
+
+/* Wait up to timeout_s for the network to be up. */
+static int hokku_wait_network(uint32_t timeout_s)
+{
+    uint32_t waited_ms = 0;
+    while (!g_net_up && waited_ms < timeout_s * 1000U) {
+        OS_MSleep(100);
+        waited_ms += 100;
+    }
+    return g_net_up;
+}
+
+/*
+ * One fetch, acted on like every other screen does: the shared decision, next
+ * fetch time and drift calibration (hokku_sched_apply_fetch), then the image or
+ * the shared error message on the glass. Returns the outcome's action.
+ */
+static hokku_fetch_action_t refresh_once(void)
+{
+    hokku_state_t *st = hokku_state_get();
+    hokku_fetch_result_t res = { .http_status = 0 };   /* 0 = no response */
+
+    if (!hokku_wait_network(HOKKU_WIFI_WAIT_S)) {
+        hlog("hokku: WiFi connect failed (no network after %u s)\n",
+             (unsigned)HOKKU_WIFI_WAIT_S);
+        res.wifi_failed = true;
+    } else {
+        do_refresh(&res);
     }
 
-    hlog("hokku: image received, refreshing display...\n");
-    epd_refresh();  /* ~30 s */
-    hlog("hokku: refresh done, sleeping %d s\n", sleep_sec);
+    uint32_t up = OS_GetTime();
+    hokku_sched_now_t now = {
+        .now_epoch  = (int64_t)hokku_clock_now(),
+        .mono_us    = (int64_t)up * 1000000LL,
+        .awake_s    = (int64_t)up,
+        .timer_wake = g_timer_wake != 0,
+    };
+    hokku_fetch_outcome_t o = hokku_sched_apply_fetch(&st->sched, &res, &now);
+    hlog("hokku: fetch status=%d -> %s, next in %d s (cal %d ppm, %u samples)\n",
+         res.http_status, o.reason, (int)o.sleep_s,
+         (int)st->sched.cal_ppm, (unsigned)st->sched.cal_samples);
 
-    return sleep_sec;
+    if (o.action == HOKKU_FETCH_DISPLAY) {
+        hlog("hokku: image received, refreshing display...\n");
+        epd_refresh();  /* ~30 s */
+        hlog("hokku: refresh done\n");
+    } else if (hokku_msg_fetch_error(g_msg, sizeof(g_msg), &res, &o,
+                                     hokku_config_get()->server_url, HOKKU_RETRY_HINT)) {
+        hokku_show(g_msg);
+    }
+    return o.action;
 }
+
+/* ── New-firmware confirmation (common/all/ota_confirm.h), F7 mechanics ── */
+
+void hokku_rollback_commit(void);
+
+/* Keep this image: point the boot cfg at our own slot and drop the marker. */
+static void hokku_ota_confirm(void)
+{
+    hokku_state_t *st = hokku_state_get();
+
+    hokku_rollback_commit();
+    if (g_rollback_armed) {
+        /* Could not repoint the cfg: the next reset rolls back. Better than
+         * adopting an image we could not confirm. */
+        hlog("hokku: new firmware reached the server but could not be confirmed\n");
+        return;
+    }
+    g_ota_pending = 0;
+    st->ota_pending = 0;
+    hokku_state_save();
+    hlog("hokku: new firmware reached the server: confirmed (seq %d)\n", (int)g_boot_seq);
+}
+
+static hokku_fetch_action_t ota_fetch(void *c)  { (void)c; return refresh_once(); }
+static void ota_wait_s(void *c, unsigned s)
+{
+    (void)c;
+    hlog("hokku: new firmware: server not reached, trying again in %u s\n", s);
+    OS_MSleep(s * 1000U);
+}
+static void ota_confirm(void *c)  { (void)c; hokku_ota_confirm(); }
+static void ota_rollback(void *c)
+{
+    (void)c;
+    hlog("hokku: new firmware never reached the server: rolling back to seq %d\n",
+         (g_boot_seq + 1) % IMAGE_SEQ_NUM);
+    OS_MSleep(200);          /* flush the log over UART */
+    HAL_WDG_Reboot();        /* the cfg still names the previous slot */
+}
+
+/* A boot's first fetch: under the confirm policy when this image is pending. */
+static hokku_fetch_action_t hokku_first_fetch(void)
+{
+    hokku_ota_first_fetch_t ops = {
+        .pending  = g_ota_pending != 0,
+        .fetch    = ota_fetch,
+        .wait_s   = ota_wait_s,
+        .confirm  = ota_confirm,
+        .rollback = ota_rollback,
+        .ctx      = NULL,
+    };
+    return hokku_ota_first_fetch(&ops);
+}
+
 
 /* hokku_hibernate() is now shared XR872 code in firmware/common/xr872/pm.h. */
 
@@ -612,10 +808,42 @@ static void hokku_refresh_wait(uint32_t ms)
         hlog("hokku: network came (back) up — refreshing now\n");
 }
 
+static int hokku_wifi_saved(void)
+{
+    const struct sysinfo *si = sysinfo_get();
+    return si != NULL && si->wlan_sta_param.ssid_len > 0;
+}
+
+/*
+ * No WiFi saved: this screen cannot fetch, so it says so on the glass (the
+ * shared "cannot read config" message) and waits for `wifi` on the console.
+ * Unlike the ESP32 boards it stays awake rather than sleeping: the console is
+ * how this board is provisioned, and hibernation would close it. The grace
+ * period leaves a flasher's provisioning, right after the first boot, alone.
+ */
+static void hokku_wait_for_wifi_config(void)
+{
+    uint32_t s;
+
+    for (s = 0; !hokku_wifi_saved() && s < HOKKU_NO_WIFI_GRACE_S; s++)
+        OS_MSleep(1000);
+    if (hokku_wifi_saved())
+        return;
+    hlog("hokku: no WiFi saved — provision with: wifi <ssid> <password>\n");
+    if (!hokku_interactive_engaged(led_usb_present())) {   /* a host owns the glass */
+        OS_MutexLock(&g_ota_lock, OS_WAIT_FOREVER);
+        hokku_show(HOKKU_MSG_CONFIG_MISSING);
+        OS_MutexUnlock(&g_ota_lock);
+    }
+    while (!hokku_wifi_saved())
+        OS_MSleep(1000);
+}
+
 static void refresh_thread_fn(void *arg)
 {
     (void)arg;
-    hlog("hokku: refresh thread started (wake=%s)\n", g_wake);
+    hlog("hokku: refresh thread started (wake=%s%s)\n", g_wake,
+         g_ota_pending ? ", new firmware" : "");
 
     if (!g_epd_ready) {
         hlog("hokku: EPD init\n");
@@ -623,44 +851,56 @@ static void refresh_thread_fn(void *arg)
         g_epd_ready = 1;
     }
 
-    /* Consecutive server-unreachable failures, for exponential retry backoff.
-     * Persists across the awake loop (the churn case); on battery each
-     * hibernation wake restarts this thread and resets it, which is fine —
-     * hibernation is already low-power. */
-    unsigned refresh_failures = 0;
+    hokku_wait_for_wifi_config();
 
+    int first = 1;
     while (1) {
         /* USB-interactive mode: a host owns the screen, so do not fetch and do
-         * not repaint. Checked before taking the lock — do_refresh() holds it for
-         * the length of a network round trip, and a `frame` upload waiting behind
+         * not repaint. Checked before taking the lock — a fetch holds it for the
+         * length of a network round trip, and a `frame` upload waiting behind
          * that would stall for seconds with the host already mid-protocol.
-         *
          * Polled rather than event-driven because the thread has to keep
-         * re-testing anyway: the mode is plain RAM and the USB cable can move. */
-        if (hokku_interactive_engaged(led_usb_present())) {
+         * re-testing anyway: the mode is plain RAM and the USB cable can move.
+         * Except for the first fetch of a new firmware image: it decides there,
+         * in this boot, whether it stays (common/all/ota_confirm.h). */
+        if (!(first && g_ota_pending) && hokku_interactive_engaged(led_usb_present())) {
             OS_MSleep(500);
             continue;
         }
 
-        /* Hold the OTA/flash lock across the whole refresh (which may itself run
-         * an OTA on X-Firmware-Update) so a console `ota` can't run concurrently. */
+        /* Hold the OTA/flash lock across the fetch (which may itself run an OTA
+         * on X-Firmware-Update) so a console `ota` can't run concurrently. */
         OS_MutexLock(&g_ota_lock, OS_WAIT_FOREVER);
-        int sleep_sec = do_refresh();          /* may reboot via OTA and never return */
+        if (first)
+            hokku_first_fetch();     /* may confirm, or roll back (reboot) */
+        else
+            refresh_once();          /* may reboot via OTA */
         OS_MutexUnlock(&g_ota_lock);
-        if (sleep_sec < 0) {
-            /* Couldn't reach the server — back off (shared SoC-agnostic policy):
-             * 30s, 60, 120, ... capped at 1 h, instead of hammering every 30s. */
-            sleep_sec = hokku_backoff_seconds(refresh_failures, 30, 3600);
-            if (refresh_failures < 255) refresh_failures++;
-        } else {
-            refresh_failures = 0;              /* reached the server — reset streak */
-        }
+        first = 0;
+
+        hokku_state_t *st = hokku_state_get();
+        int64_t now  = (int64_t)hokku_clock_now();
+        int64_t mono = (int64_t)OS_GetTime() * 1000000LL;
 
         if (hokku_should_sleep()) {
+            /* Battery: hibernate until the server's next fetch time, the timer
+             * corrected for the learned drift and capped at the wake timer's
+             * range. The record goes to flash first: hibernation is a reboot. */
+            uint32_t secs = (uint32_t)hokku_sched_arm_sleep(&st->sched, now, mono,
+                                                            HOKKU_FALLBACK_SLEEP_S,
+                                                            HOKKU_HIBERNATE_MAX_S);
+            hokku_state_save();
             led_park_for_sleep();                   /* nothing driving the LEDs while asleep */
-            hokku_hibernate((uint32_t)sleep_sec);   /* battery: deep sleep, restarts on wake */
+            hokku_hibernate(secs);                  /* restarts on wake */
         } else {
-            hokku_refresh_wait((uint32_t)sleep_sec * 1000);  /* USB/awake: keep looping */
+            /* USB/awake: wait out the schedule on the running clock (no drift
+             * correction while awake), or less if the network comes back up. A
+             * kick from before this wait (the boot's own NETWORK_UP) is stale. */
+            hokku_state_save();
+            if (OS_SemaphoreIsValid(&g_refresh_kick))
+                OS_SemaphoreWait(&g_refresh_kick, 0);
+            hokku_refresh_wait((uint32_t)hokku_sched_remaining_s(&st->sched, now, mono,
+                                                                 HOKKU_FALLBACK_SLEEP_S) * 1000U);
         }
     }
 }
@@ -707,21 +947,15 @@ static void net_cb(uint32_t event, uint32_t data, void *arg)
         struct netif *nif2 = netif_list;
         if (nif2)
             hlog("hokku: network up  ip=%s\n", ipaddr_ntoa(&nif2->ip_addr));
-        if (!OS_ThreadIsValid(&g_refresh_thread)) {
-            OS_ThreadCreate(&g_refresh_thread,
-                            "hokku_refresh",
-                            refresh_thread_fn,
-                            NULL,
-                            REFRESH_THREAD_PRIO,
-                            REFRESH_THREAD_STACK);
-        } else if (OS_SemaphoreIsValid(&g_refresh_kick)) {
-            /* Reconnect / network switch: check in now, don't sleep it out. */
+        g_net_up = 1;
+        /* Reconnect / network switch: check in now, don't sleep it out. */
+        if (OS_ThreadIsValid(&g_refresh_thread) && OS_SemaphoreIsValid(&g_refresh_kick))
             OS_SemaphoreRelease(&g_refresh_kick);
-        }
         break;
     }
     case NET_CTRL_MSG_NETWORK_DOWN:
         hlog("hokku: network down\n");
+        g_net_up = 0;
         break;
     default:
         break;
@@ -844,12 +1078,12 @@ static void hokku_rollback_arm(void)
 }
 
 /*
- * Confirm the boot reached a healthy milestone: re-point the OTA cfg back at our
- * own (now-proven) slot and stop the watchdog. Called from main() right after
- * platform_init() returns — i.e. once XIP, the SDK init, and the console are up,
- * but before the WiFi/EPD work (which can exceed the 16 s window). Reaching this
- * point means the brick class (no-boot) did not occur, which is exactly what the
- * rollback guards against; functional faults past here are recoverable normally.
+ * Confirm this image: re-point the OTA cfg back at our own slot and stop the
+ * watchdog. A normally booted image does this at the boot milestone
+ * (hokku_rollback_boot_ok); an image an OTA just installed does it once a fetch
+ * has reached the server (hokku_ota_confirm). Reaching the milestone means the
+ * brick class (no-boot) did not occur, which is exactly what the watchdog
+ * guards against; functional faults past here are recoverable normally.
  */
 void hokku_rollback_commit(void)
 {
@@ -871,6 +1105,27 @@ void hokku_rollback_commit(void)
     g_rollback_armed = 0;
     hlog("hokku: boot confirmed healthy; running seq %d, rollback disarmed\n",
            g_boot_seq);
+}
+
+/*
+ * The boot milestone: called from main() right after platform_init() — XIP, the
+ * SDK init and the console are up — and before the WiFi/EPD work, which can
+ * exceed the 16 s rollback window. A normally booted image confirms itself here.
+ * An image an OTA just installed (pending) only stops the watchdog: its cfg keeps
+ * naming the previous slot until a fetch reaches the server. No-op on a unit
+ * whose cfg was never repointed.
+ */
+static void hokku_rollback_boot_ok(int pending)
+{
+    if (!g_rollback_armed)
+        return;
+    if (!pending) {
+        hokku_rollback_commit();
+        return;
+    }
+    HAL_WDG_Stop();
+    hlog("hokku: new firmware in seq %d; seq %d stays selected until a fetch "
+         "reaches the server\n", (int)g_boot_seq, (g_boot_seq + 1) % IMAGE_SEQ_NUM);
 }
 
 #if HOKKU_B0_WDGTEST
@@ -1068,11 +1323,28 @@ int main(void)
 #else
     observer_base *net_ob;
 
-    /* Boot-critical path (XIP + SDK init + console) survived: adopt this image
-     * and disarm the try-boot watchdog. Must run before the WiFi/EPD work, which
-     * can exceed the 16 s rollback window. No-op on a normally-flashed (non-A/B)
-     * unit where the cfg was never repointed. */
-    hokku_rollback_commit();
+    /* Runtime state (schedule, drift calibration, boot count, OTA marker). */
+    hokku_state_load();
+    hokku_state_t *st = hokku_state_get();
+    st->boot_count++;
+
+    /* Is this the first boot of an image an OTA just installed? Only when the
+     * marker names the slot we booted and there is a previous image to fall
+     * back to. Any other marker is stale (that image confirmed, rolled back or
+     * was reflashed) and is dropped. */
+    if (st->ota_pending) {
+        if (g_rollback_armed && st->ota_pending == (uint8_t)(g_boot_seq + 1))
+            g_ota_pending = 1;
+        else
+            st->ota_pending = 0;
+    }
+
+    /* Boot-critical path (XIP + SDK init + console) survived: stop the try-boot
+     * watchdog, and adopt this image unless it still has to prove itself. Must
+     * run before the WiFi/EPD work, which can exceed the 16 s rollback window.
+     * No-op on a normally-flashed (non-A/B) unit where the cfg was never
+     * repointed. */
+    hokku_rollback_boot_ok(g_ota_pending);
 
     /* Load persistent app config (server URL, screen name, static IP, ...) from
      * flash, or compile-time defaults on first boot. Must precede WiFi/refresh. */
@@ -1080,6 +1352,24 @@ int main(void)
 
     /* Capture why we booted (timer = returned from hibernation) for frame-state. */
     hokku_capture_wake();
+
+    /* Hibernation stops the clock. After a timer wake, carry it on from the
+     * armed sleep (corrected for the learned drift) until a reply sets it, as
+     * the ESP32's RTC clock does through deep sleep. Any other boot is a power
+     * cycle or a reset, which on the ESP32 boards clears the RTC state: start
+     * the schedule and outage streak afresh the same way, keeping only the
+     * calibration (which the ESP32 boards keep in NVS). */
+    if (g_timer_wake) {
+        int64_t est = hokku_sched_wake_estimate(&st->sched);
+        if (est > 0)
+            hokku_clock_set((uint32_t)(est + (int64_t)OS_GetTime()));
+    } else {
+        int32_t  ppm = st->sched.cal_ppm;
+        uint16_t n   = st->sched.cal_samples;
+        hokku_sched_init(&st->sched);
+        st->sched.cal_ppm     = ppm;
+        st->sched.cal_samples = n;
+    }
 
     printf("WiFi: 'wifi <ssid> <password>' to provision, 'cfg' to configure\n\n");
 
@@ -1094,8 +1384,13 @@ int main(void)
 
     /* Auto-connect from saved creds. The observer is attached first so the
      * connect/network-up events reach net_cb (which sets the static IP and
-     * starts the refresh thread). */
+     * marks the network up). */
     hokku_wifi_connect_saved();
+
+    /* The refresh thread waits for the network itself, so an unreachable
+     * network ends in the same outage handling as on every other screen. */
+    OS_ThreadCreate(&g_refresh_thread, "hokku_refresh", refresh_thread_fn, NULL,
+                    REFRESH_THREAD_PRIO, REFRESH_THREAD_STACK);
 
     return 0;
 #endif

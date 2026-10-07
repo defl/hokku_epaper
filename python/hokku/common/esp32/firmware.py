@@ -77,8 +77,11 @@ def release_app_header(spec: Esp32Spec, directory: Path | None = None) -> bytes 
     the bundled merged firmware image — used to read the release version string
     and compare against what is on a connected device."""
     merged = merged_firmware_file(spec, directory)
-    if not merged:
-        return None
+    return app_header_of(spec, merged) if merged else None
+
+
+def app_header_of(spec: Esp32Spec, merged: Path) -> bytes:
+    """The first 256 bytes of the app section of the merged image at *merged*."""
     with open(merged, "rb") as f:
         f.seek(spec.app_offset)
         return f.read(256)

@@ -29,8 +29,7 @@ Manufacturer: Bigme Cloud Literacy Technology Co., Ltd. / xrztech.com
 
 ## Firmware
 
-Source: UART boot log captured 2026-06-06, full log at `.private/uart_log_20260606_104615.txt`
-Binary analysis of flash dump performed 2026-06-06; partition files in `.private/units/<serial>_<tag>/partitions/`.
+Source: UART boot log captured 2026-06-06; binary analysis of the flash dump performed 2026-06-06.
 
 - **SDK**: XRADIO Skylark SDK 1.2.3
 - **App firmware version**: **1.2.7** (string literal `1.2.7` at boot payload offset 0x84B1)
@@ -38,10 +37,10 @@ Binary analysis of flash dump performed 2026-06-06; partition files in `.private
 - **WLAN firmware version**: R-XR_C10.08.52.64_01.80 (built Jul 6 2019)
 - **WLAN driver version**: XR_V02.06.28
 - **Flash chip**: Zbit Semiconductor SPI NOR, **4 MB**, JEDEC ID `0x5E4016`
-- **Flash dump**: `.private/units/<serial>_<tag>/flash_full.bin` (4,194,304 bytes, `AWIH` magic, captured 2026-06-06). Dumps are organised per physical unit under `units/<serial>_<tag>/`; see each unit's `NOTES.md`.
+- **Flash dump**: 4,194,304 bytes, `AWIH` magic, captured 2026-06-06; kept per physical unit, outside the repo.
 - **BROM version**: 2 (confirmed via PhoenixMC flash ID dialog)
 - **Dump procedure**: [`firmware_dump_procedure.md`](firmware_dump_procedure.md)
-- **MAC address (efuse)**: 18:9e:2d:f9:87:54
+- **MAC address**: in efuse, not flash
 
 ## Flash Partition Layout
 
@@ -102,7 +101,7 @@ Source: direct testing on the device, 2026-06-13.
   PhoenixMC connects the same way (its own driver timing) once the device is in the window.
 - **Implication — the "bricked" unit may be recoverable.** The mask-BROM's sync window runs at
   power-on, **before** the app boots and crashes, so the replug+press catch should land on a
-  crash-on-boot device too. This is UNTESTED on the bricked unit (6000203) but is worth trying
+  crash-on-boot device too. This is UNTESTED on the bricked unit but is worth trying
   before resorting to hardware (SPI-clip the NOR flash / boot-strap test pad).
 - **On a WORKING device, the `upgrade` console is a reliable UART BROM entry** (confirmed 2026-06-19
   on a working unit): send `upgrade\n` to the awake firmware console → watchdog reset into BROM. No
@@ -126,8 +125,9 @@ against live transactions, 2026-06-19. Implemented in `python/hokku/common/xr872
   to a PhoenixMC dump, and by a write→readback→erase round-trip on erased regions.)*
 - WriteSector streams a fixed **16 KB (0x20 sectors) data block per frame** after its header ACK;
   each block has its own ACK. ReadSector streams `sector_count × 512` bytes after the ACK.
-- **EraseFlash (0x19) is the exception — it uses RAW BYTE addressing**, erase-type byte `0x03`,
-  one erase per **64 KB block** (64 KB-aligned). Do not sector-convert erase addresses.
+- **EraseFlash (0x19) is the exception — it uses RAW BYTE addressing**, with an erase-type byte:
+  `0x03` = one **64 KB block** (64 KB-aligned), `0x01` = one **4 KB sector** (from `phoenixMC.dll`;
+  what the slot flasher uses). Do not sector-convert erase addresses.
 - ChangeBaud to 921600 is rejected in practice — the CH340 corrupts bulk data above 115200.
 
 ## Cloud Connectivity
@@ -138,7 +138,7 @@ Source: string literals extracted from boot partition binary, 2026-06-06. Full p
 - **MQTT broker**: `120.76.40.178:1883`
 - **MQTT credentials**: user `mqt_user`, password `xrz86112763`
 - **MQTT topics**: `iot/device/<deviceId>`, `iot/device/willTopic`, `iot/device/sever_topic`
-- **Device ID format**: `BIGME_<MAC>` (e.g. `BIGME_189E2DF98754`)
+- **Device ID format**: `BIGME_<MAC>` (MAC as 12 uppercase hex digits)
 - **Setup AP SSID**: `BigmeFrameRouter`, password `88888888`
 - **Operational AP SSID**: `XRZ_<MAC>` (used during WiFi provisioning)
 - **Default timezone**: UTC+8 (`TZ=GMT-8` is the POSIX convention for Asia/Shanghai)
@@ -242,19 +242,22 @@ Not yet changed; what PB2 is wired to on this board is unknown.
 Source: product description + E Ink Spectra 6 spec + disassembly of boot partition (2026-06-06).
 Full driver analysis: [`display_driver.md`](display_driver.md)
 
-- **Technology**: E Ink Spectra 6 (ACeP)
+- **Technology**: E Ink Spectra 6 (not 7-colour ACeP)
 - **Size**: 7.3 inch
 - **Resolution**: 800×480 pixels (confirmed by TRES command 0x61 params 0x0320, 0x01E0 in firmware)
 - **PPI**: 127.8
-- **Colors**: 7 (black, white, red, green, blue, yellow, orange)
+- **Colors**: 6 (black, white, yellow, red, blue, green)
 - **No backlight**
 - **Controller**: EK79655 or direct compatible — initialization sequence is byte-for-byte identical to
   Waveshare EPD_7in3f open source driver; confirmed from boot partition disassembly
 - **Image format**: 192,000 bytes raw, 4 bits per pixel, 2 pixels per byte (upper nibble = left pixel)
-  Color encoding: 0=Black, 1=White, 2=Green, 3=Blue, 4=Red, 5=Yellow, 6=Orange
+  Color encoding: 0=Black, 1=White, 2=Yellow, 3=Red, 5=Blue, 6=Green — confirmed by decoding the
+  OEM's built-in image (see [`display.py`](../../../python/hokku/screens/bigme_f7/display.py));
+  the 7-colour ACeP mapping produces garbage
 - **SPI interface**: bit-banged, 9-bit frames (1 D/C bit + 8 data bits), MSB first
-  PA19=MOSI/DC, PA21=SCLK, PA22=CS (active low), PA9=BUSY input (HIGH = ready)
-- **Refresh time**: ~20–30 seconds for full ACeP refresh
+  PA19=MOSI/DC, PA21=SCLK, PA22=CS (active low), PA9=BUSY input (HIGH = ready),
+  PA13=RST (active low), PB17=panel POWER_EN (active high)
+- **Refresh time**: ~20–30 seconds for a full refresh
 
 ## Wakeup IOs
 
@@ -304,7 +307,7 @@ Consequences:
 - **A USB unplug/replug is NOT a power cycle when the battery is charged** — it
   only toggles the USB-detect line; the SoC (and its PRCM domain, which holds the
   sticky `CPUA_BOOT_FLAG`) stays powered off the battery. A unit left in the BROM
-  by `upgrade`/`flash_slot0` therefore re-enters the BROM on every reset until a
+  by `upgrade`/`flash_slot` therefore re-enters the BROM on every reset until a
   **long-press** actually removes power. Confirmed 2026-07-28: three replugs left
   it in the BROM; one long-press plus a short press booted it.
 

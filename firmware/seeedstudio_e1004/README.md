@@ -22,8 +22,9 @@ foundation, but its panel bring-up work is what this driver is based on.
 
 ## Status — read before flashing
 
-**Confirmed on real E1004 hardware once** — see
-[issue #14](https://github.com/defl/hokku_epaper/issues/14).
+**Supported.** First confirmed on real E1004 hardware in
+[issue #14](https://github.com/defl/hokku_epaper/issues/14), and since run by
+several other users on their own units.
 - Built with ESP-IDF v5.5.5 (`idf.py set-target esp32s3 && idf.py build`),
   flashed over USB, provisioned with
   `tools/hokku_config.py set --ssid ... --url ... --name ...`. WiFi connected,
@@ -34,8 +35,6 @@ foundation, but its panel bring-up work is what this driver is based on.
 - The shared logic is unit-tested on the host (`test/host/`) and exercised by
   huessen's suite; the whole firmware compiles + links in CI via the real
   ESP-IDF toolchain.
-- **Still unproven:** deep sleep across days, an OTA on this board, and battery
-  behaviour over a full discharge. One unit, one session — not a track record.
 
 **Serial console is on UART0, not native USB Serial/JTAG.** This baseboard's
 USB-C port is an external **CH340K** bridge wired to UART0 (GPIO43/44), so the
@@ -59,11 +58,11 @@ A bad OTA image self-checks and rolls back automatically.
 | Board-specific (`main.c`) | Shared (`common/`) |
 |---|---|
 | T133A01 dual-CS panel driver, DC line | `net` — HTTP image fetch + header capture |
-| battery ADC (GPIO1 + enable GPIO21, ×2) | `ota` — A/B OTA (model-aware) |
+| battery ADC (GPIO1 + enable GPIO21, ×2; the enable's RTC hold from sleep is released before each read — issue #43) | `ota` — A/B OTA (model-aware) |
 | GPIO/SPI init | `wifi` — dual-network connect + BSSID cache |
 | deep-sleep (timer + button GPIO3/4/5 wake) | `config` — NVS config store |
 | frame-state gatherer (fills the struct) | `log` — crash-safe RTC log ring |
-| `display_message` (text via `text_render`) | `scheduler`, `state`, `frame_state`, `text_render` |
+| `display_message` (renders the shared `messages`) | `scheduler`/`schedule`, `state`, `frame_state`, `text_render`, `messages`, `ota_confirm` |
 
 ## Differences from `huessen_epf1301`
 
@@ -75,6 +74,8 @@ A bad OTA image self-checks and rolls back automatically.
 - **DC line.** The T133A01 has a real DC GPIO (11): LOW=command, HIGH=data,
   toggled around each command/data pair. huessen's UC8179C uses the SPI
   peripheral's hardware command-phase instead.
+- **No console commands.** No `frame` upload and no USB-interactive mode
+  (`common/all/frame_proto`, `interactive`); see the header comment in `main.c`.
 - **No colour LUT.** hokku's wire nibbles are already the T133A01's native
   encoding, so the downloaded bytes DMA straight to the panel (the Arduino
   client needs a LUT only because it routes through GxEPD2's framebuffer).

@@ -67,13 +67,22 @@ static void test_bat_mv_omitted_when_negative(void)
           "frame_state: uptime_s is followed directly by usb when bat_mv omitted");
 }
 
-static void test_bat_mv_zero_is_emitted(void)
+static void test_bat_mv_implausible_omitted(void)
 {
     char buf[512];
     frame_state_t fs = base_fs();
-    fs.bat_mv = 0;                     /* 0 is a real reading, not 'unknown' */
+    fs.bat_mv = 0;                     /* a failed read: no battery reads 0 mV */
     frame_state_build(buf, sizeof(buf), &fs);
-    CHECK(strstr(buf, "\"bat_mv\":0") != NULL, "frame_state: bat_mv:0 is emitted (0 != unknown)");
+    CHECK(strstr(buf, "bat_mv") == NULL, "frame_state: bat_mv 0 (no reading) omitted");
+    fs.bat_mv = 2148;                  /* floating ADC */
+    frame_state_build(buf, sizeof(buf), &fs);
+    CHECK(strstr(buf, "bat_mv") == NULL, "frame_state: implausibly low reading omitted");
+    fs.bat_mv = HOKKU_BATT_MV_MIN;
+    frame_state_build(buf, sizeof(buf), &fs);
+    CHECK(strstr(buf, "\"bat_mv\":2500") != NULL, "frame_state: lowest plausible reading kept");
+    fs.bat_mv = HOKKU_BATT_MV_MAX + 1;
+    frame_state_build(buf, sizeof(buf), &fs);
+    CHECK(strstr(buf, "bat_mv") == NULL, "frame_state: implausibly high reading omitted");
 }
 
 static void test_sleep_err_null_when_unknown(void)
@@ -145,12 +154,36 @@ static void test_epoch_beyond_int32(void)
           "frame_state: next_ep renders a post-2038 epoch (64-bit width)");
 }
 
+static void test_set_schedule(void)
+{
+    frame_state_t fs = base_fs();
+    hokku_sched_t s;
+    memset(&s, 0, sizeof(s));
+    s.next_epoch = 1700003600LL;
+    s.sleep_err_known = 1;
+    s.sleep_err_s = 12;
+    s.cal_samples = 4;
+    s.cal_ppm = -900;
+    frame_state_set_schedule(&fs, &s);
+    CHECK(fs.next_ep == 1700003600LL && fs.sleep_err_known && fs.sleep_err_s == 12 &&
+          fs.cal_known && fs.cal_ppm == -900,
+          "frame_state: schedule fields come from the shared schedule");
+
+    s.next_epoch = -5000000;           /* tick deadline: not a time */
+    s.cal_samples = 0;
+    s.sleep_err_known = 0;
+    frame_state_set_schedule(&fs, &s);
+    CHECK(fs.next_ep == 0 && !fs.cal_known && !fs.sleep_err_known,
+          "frame_state: tick deadline reports no next_ep; uncalibrated omits cal");
+}
+
 int main(void)
 {
     test_full_object_exact();
+    test_set_schedule();
     test_worst_case_fits_caller_buffer();
     test_bat_mv_omitted_when_negative();
-    test_bat_mv_zero_is_emitted();
+    test_bat_mv_implausible_omitted();
     test_sleep_err_null_when_unknown();
     test_cal_ppm_omitted_when_unknown();
     test_cal_ppm_negative();

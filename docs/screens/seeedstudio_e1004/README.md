@@ -4,22 +4,11 @@ A 13.3" E Ink Spectra 6 panel (T133A01, 1200×1600) on a Seeed XIAO ESP32-S3
 mounted on the reTerminal E-Series baseboard — same panel family and resolution
 as the Hokku/Huessen frame, on open, documented hardware.
 
-> ## ⚠️ Confirmed on hardware once, lightly tested
->
-> A first end-to-end run on a physical E1004 is confirmed
-> ([issue #14](https://github.com/defl/hokku_epaper/issues/14)): built with
-> ESP-IDF v5.5.5, flashed over USB, then WiFi + server fetch + a photo rendered
-> with correct colours and orientation, and the frame registered in the dashboard
-> with a sane battery reading — so the ESP-IDF SPI/DC/DMA plumbing and the ×2.0
-> battery divider both check out.
->
-> That is **one unit, one session** — not the long-running fleet history behind
-> the huessen frame and the Bigme F7. Deep sleep over days, OTA and battery
-> behaviour over a full discharge are still unproven.
->
-> **Serial console:** logs come out over UART0 via the baseboard's CH340K USB
-> bridge, not the SoC's native USB Serial/JTAG. See
-> [serial console](#serial-console) below.
+**Status:** ✅ supported. First confirmed end-to-end in
+[issue #14](https://github.com/defl/hokku_epaper/issues/14) (flash, WiFi, server
+fetch, correct colours and orientation, sane battery reading), and since run by
+several other users on their own units. Its track record is shorter than the
+huessen frame's and the Bigme F7's.
 
 ## Documentation
 

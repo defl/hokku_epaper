@@ -22,9 +22,9 @@
  *   - epd.c: pure hardware SPI/GPIO bit-banging, no host-testable logic
  *     (unlike the ESP32's text_render.c, there's no pure-software module to
  *     extract here).
- *   - do_refresh() / refresh_thread_fn(): top-level HTTP+EPD streaming
- *     orchestration; integration-level, not unit-tested (mirrors huessen's
- *     firmware, which also doesn't unit-test its top-level refresh loop).
+ *   - refresh_thread_fn(): the top-level loop (sleep/hibernate per outcome).
+ *     do_refresh() IS covered for how it acts on each server reply (shared
+ *     fetch_outcome decision) against the controllable HTTPC mock.
  *   - command.c (`cfg`/`wifi`/`ota` console dispatch): argv parsing/routing
  *     over SDK console utilities not otherwise mocked here; a reasonable
  *     follow-up, not included in this pass.
@@ -76,6 +76,12 @@
 #include "../../led.c"    /* led_usb_present() -> _mock_gpio, shared with main.c below */
 #include "../../../common/all/firmware_url.c"  /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/backoff.c"       /* SoC-agnostic (shared with ESP32) */
+#include "../../../common/all/fetch_outcome.c"  /* shared reply decision */
+#include "../../../common/all/sleep_cal.c"      /* drift calibration math */
+#include "../../../common/all/schedule.c"       /* next fetch + drift (shared) */
+#include "../../../common/all/messages.c"       /* on-glass texts (shared) */
+#include "../../../common/all/ota_confirm.c"    /* new-firmware policy (shared) */
+#include "../../../common/all/text_render.c"    /* (epd.c's renderer; linked for completeness) */
 #include "../../../common/all/frame_state.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/frame_proto.c"   /* SoC-agnostic (shared with ESP32) */
 #include "../../../common/all/screen_ident.c"  /* SoC-agnostic (shared with ESP32) */
@@ -87,6 +93,7 @@
 #include "../../../common/xr872/clock.c"       /* hokku_clock_set/now */
 #include "../../../common/xr872/http_util.c"   /* read_resp_header_uint/str */
 #include "../../../common/xr872/pm.c"          /* hokku_hibernate */
+#include "../../../common/xr872/state.c"       /* persistent runtime state */
 #include "../../main.c"
 
 #undef main
@@ -107,7 +114,16 @@
 void epd_send_cmd(uint8_t cmd) { (void)cmd; }
 void epd_send_data(uint8_t data) { (void)data; }
 void epd_init(void) { }
-void epd_refresh(void) { }
+static int _mock_epd_refresh_calls;
+void epd_refresh(void) { _mock_epd_refresh_calls++; }
+static int  _mock_epd_text_calls;
+static char _mock_epd_text[HOKKU_MSG_MAX];
+void epd_show_text(const char *msg)
+{
+    _mock_epd_text_calls++;
+    strncpy(_mock_epd_text, msg, sizeof(_mock_epd_text) - 1);
+    _mock_epd_text[sizeof(_mock_epd_text) - 1] = '\0';
+}
 void heap_get_space(uint8_t **start, uint8_t **end, uint8_t **current)
 {
     static uint8_t buf[65536];
@@ -144,6 +160,16 @@ static void reset_all_mocks(void)
 
     _mock_http_header_present = 0;
     _mock_http_header_value = "";
+    _mock_httpc_open_result = 1;     /* transport down unless a test brings it up */
+    _mock_httpc_request_result = 0;
+    _mock_httpc_info_result = 0;
+    _mock_httpc_status = 0;
+    _mock_httpc_body_len = 0;
+    _mock_httpc_body_read = 0;
+    _mock_epd_refresh_calls = 0;
+    _mock_epd_text_calls = 0;
+    _mock_epd_text[0] = '\0';
+    _mock_httpc_header_count = 0;
 
     netif_list = NULL;
     _mock_netif_set_addr_called = 0;
@@ -206,8 +232,14 @@ static void reset_all_mocks(void)
     _mock_pm_enter_mode_called = 0;
 
     hokku_config_load(); /* fdcm_open_fail=1 above -> loads compile-time defaults */
+    hokku_state_load();  /* likewise -> zero state */
     g_boot_seq = 0;
     g_rollback_armed = 0;
+    g_ota_pending = 0;
+    g_net_up = 0;
+    g_timer_wake = 0;
+    g_epd_ready = 1;
+    g_clk_epoch_base = 0;
     hlog_reset();
 }
 
@@ -300,23 +332,6 @@ static void test_should_sleep_interactive_cleared_restores_config(void)
  *  read_resp_header_uint / read_resp_header_str
  * ═══════════════════════════════════════════════════════════════════════ */
 
-static void test_read_header_uint_parses_value(void)
-{
-    reset_all_mocks();
-    uint32_t v = 0;
-    _mock_http_header_present = 1;
-    _mock_http_header_value = "X-Sleep-Seconds: 300";
-    CHECK(read_resp_header_uint(0, "X-Sleep-Seconds", &v) == 1 && v == 300,
-          "read_resp_header_uint: parses value after the colon");
-}
-static void test_read_header_uint_absent_returns_zero(void)
-{
-    reset_all_mocks();
-    uint32_t v = 999;
-    _mock_http_header_present = 0;
-    CHECK(read_resp_header_uint(0, "X-Sleep-Seconds", &v) == 0,
-          "read_resp_header_uint: returns 0 (not found) when header is absent");
-}
 static void test_read_header_str_strips_prefix_and_crlf(void)
 {
     reset_all_mocks();
@@ -357,8 +372,13 @@ static void test_battery_clamps_to_4200(void)
 static void test_battery_below_range_returns_zero(void)
 {
     reset_all_mocks();
-    _mock_adc_raw = 1000; /* -> 2660 mV, below the 3000 mV plausibility floor */
-    CHECK(hokku_battery_mv() == 0U, "battery_mv: implausibly low reading -> 0");
+    _mock_adc_raw = 1000; /* -> 2660 mV: reported; frame_state judges plausibility */
+    CHECK(hokku_battery_mv() == 2660U, "battery_mv: low reading reported as read");
+    _mock_adc_raw = 500;  /* -> 1330 mV: a floating ADC, not a battery */
+    char fs[384];
+    build_frame_state(fs, sizeof(fs));
+    CHECK(strstr(fs, "bat_mv") == NULL,
+          "battery_mv: an implausible reading is left out of X-Frame-State (shared rule)");
 }
 static void test_battery_adc_init_failure_returns_zero(void)
 {
@@ -758,14 +778,14 @@ static void test_net_cb_wlan_connected_bad_static_ip_leaves_dhcp(void)
     CHECK(!_mock_netif_set_addr_called,
           "net_cb: an unparseable static IP leaves DHCP running rather than crash");
 }
-static void test_net_cb_network_up_starts_refresh_thread_once(void)
+static void test_net_cb_network_up_marks_network(void)
 {
     reset_all_mocks();
     net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL);
-    CHECK(_mock_thread_created == 1, "net_cb: NETWORK_UP starts the refresh thread");
-    net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL); /* a second NETWORK_UP (e.g. reconnect) */
-    CHECK(_mock_thread_created == 1,
-          "net_cb: a second NETWORK_UP does not start a duplicate thread");
+    CHECK(g_net_up && _mock_thread_created == 0,
+          "net_cb: NETWORK_UP marks the network up (main starts the thread)");
+    net_cb(NET_CTRL_MSG_NETWORK_DOWN, 0, NULL);
+    CHECK(!g_net_up, "net_cb: NETWORK_DOWN marks it down");
 }
 /* Issue #44: after a `wifi` switch the refresh thread was mid-way through a
  * server-given sleep (can be ~9 h overnight) and did not check in until it ended. */
@@ -773,9 +793,10 @@ static void test_net_cb_network_up_kicks_running_refresh_thread(void)
 {
     reset_all_mocks();
     OS_SemaphoreCreateBinary(&g_refresh_kick);
-    net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL);   /* first up: starts the thread */
+    net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL);   /* no thread yet: nothing to kick */
     CHECK(_mock_sem_release_calls == 0,
-          "net_cb: first NETWORK_UP starts the thread, no kick needed");
+          "net_cb: NETWORK_UP before the thread exists kicks nothing");
+    g_refresh_thread.handle = (OS_Handle_t)1;
     net_cb(NET_CTRL_MSG_NETWORK_UP, 0, NULL);   /* up again after a switch */
     CHECK(_mock_sem_release_calls == 1,
           "net_cb: NETWORK_UP with the thread running kicks the refresh wait");
@@ -859,6 +880,299 @@ static void test_frame_receive_refuses_while_ota_lock_held(void)
  *  Entry point
  * ═══════════════════════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════════════════════
+ *  refresh_once — one fetch acted on through the shared decision, schedule
+ *  and messages, exactly like the ESP32 boards
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+#define T0 1700000000LL
+
+static void mock_server_reply(UINT32 status, const char *header, UINT32 body_len)
+{
+    g_net_up = 1;
+    _mock_httpc_open_result = 0;
+    _mock_httpc_status = status;
+    _mock_http_header_present = header != NULL;
+    _mock_http_header_value = header ? header : "";
+    _mock_httpc_body_len = body_len;
+    _mock_httpc_body_read = 0;
+}
+
+static hokku_sched_t *sched(void) { return &hokku_state_get()->sched; }
+
+static void test_refresh_404_label_filter_keeps_picture(void)
+{
+    reset_all_mocks();
+    sched()->failures = 2;
+    mock_server_reply(404, "X-Sleep-Seconds: 21600", 0);
+    hokku_fetch_action_t a = refresh_once();
+    CHECK(a == HOKKU_FETCH_KEEP && sched()->sleep_s == 21600 && sched()->failures == 0 &&
+          _mock_epd_refresh_calls == 0 && _mock_epd_text_calls == 0,
+          "refresh: 404 + X-Sleep-Seconds keeps the picture, draws nothing, sleeps the interval");
+}
+
+static void test_refresh_503_busy_honours_header(void)
+{
+    reset_all_mocks();
+    mock_server_reply(503, "X-Sleep-Seconds: 45", 0);
+    hokku_fetch_action_t a = refresh_once();
+    CHECK(a == HOKKU_FETCH_KEEP && sched()->sleep_s == 45 && _mock_epd_refresh_calls == 0,
+          "refresh: 503 busy sleeps X-Sleep-Seconds");
+}
+
+static void test_refresh_error_without_header_backs_off(void)
+{
+    reset_all_mocks();
+    sched()->failures = 1;
+    mock_server_reply(500, NULL, 0);
+    hokku_fetch_action_t a = refresh_once();
+    CHECK(a == HOKKU_FETCH_BACKOFF && sched()->failures == 2 &&
+          sched()->sleep_s == 2 * HOKKU_RETRY_BASE_S && _mock_epd_text_calls == 0,
+          "refresh: error without X-Sleep-Seconds backs off; a later failure draws nothing");
+}
+
+static void test_refresh_first_outage_draws_shared_message(void)
+{
+    reset_all_mocks();
+    g_net_up = 1;                       /* HTTPC_open fails: server unreachable */
+    hokku_fetch_action_t a = refresh_once();
+    CHECK(a == HOKKU_FETCH_BACKOFF && sched()->failures == 1 &&
+          sched()->sleep_s == HOKKU_RETRY_BASE_S,
+          "refresh: no connection backs off from the shared base");
+    CHECK(_mock_epd_text_calls == 1 && strstr(_mock_epd_text, "Image download failed.") &&
+          strstr(_mock_epd_text, hokku_config_get()->server_url) &&
+          strstr(_mock_epd_text, HOKKU_RETRY_HINT),
+          "refresh: the first outage draws the shared message with the F7's retry hint");
+}
+
+static void test_refresh_wifi_failure_draws_wifi_message(void)
+{
+    reset_all_mocks();                  /* network never comes up */
+    hokku_fetch_action_t a = refresh_once();
+    CHECK(a == HOKKU_FETCH_BACKOFF && _mock_epd_text_calls == 1 &&
+          strstr(_mock_epd_text, "WiFi connect failed."),
+          "refresh: no network is an outage that draws the WiFi message");
+}
+
+static void test_refresh_image_displays(void)
+{
+    reset_all_mocks();
+    sched()->failures = 3;
+    mock_server_reply(200, "X-Sleep-Seconds: 3600", EPD_IMAGE_BYTES);
+    hokku_fetch_action_t a = refresh_once();
+    CHECK(a == HOKKU_FETCH_DISPLAY && sched()->sleep_s == 3600 && sched()->failures == 0 &&
+          _mock_epd_refresh_calls == 1,
+          "refresh: full image is refreshed onto the panel, sleeps X-Sleep-Seconds");
+}
+
+static void test_refresh_short_image_not_displayed(void)
+{
+    reset_all_mocks();
+    mock_server_reply(200, "X-Sleep-Seconds: 3600", EPD_IMAGE_BYTES / 2);
+    hokku_fetch_action_t a = refresh_once();
+    CHECK(a == HOKKU_FETCH_BACKOFF && _mock_epd_refresh_calls == 0,
+          "refresh: short image is not refreshed and backs off");
+}
+
+static void test_refresh_long_image_not_displayed(void)
+{
+    reset_all_mocks();
+    mock_server_reply(200, "X-Sleep-Seconds: 3600", EPD_IMAGE_BYTES + 100);
+    hokku_fetch_action_t a = refresh_once();
+    CHECK(a == HOKKU_FETCH_BACKOFF && _mock_epd_refresh_calls == 0,
+          "refresh: an over-long body is not an image either (exact size, like ESP32)");
+}
+
+static void test_refresh_anchors_to_server_clock(void)
+{
+    reset_all_mocks();
+    mock_server_reply(404, "X-Sleep-Seconds: 600", 0);
+    _mock_httpc_headers[0] = "X-Server-Time-Epoch: 1700000000";
+    _mock_httpc_header_count = 1;
+    refresh_once();
+    CHECK(hokku_clock_now() == (uint32_t)T0,
+          "refresh: any reply carrying the server time sets the clock (not just a 200)");
+    CHECK(sched()->next_epoch == T0 + 600,
+          "refresh: next fetch anchored to the server clock");
+}
+
+static void test_refresh_learns_drift_and_seed(void)
+{
+    reset_all_mocks();
+    g_timer_wake = 1;
+    sched()->sleep_start_epoch = T0;
+    sched()->armed_s = 43200;
+    sched()->next_epoch = T0 + 43200;
+    _mock_os_time_s = 20;               /* the reply arrives 20 s after the wake */
+    mock_server_reply(200, "X-Sleep-Seconds: 3600", EPD_IMAGE_BYTES);
+    _mock_httpc_headers[0] = "X-Server-Time-Epoch: 1700043652";   /* T0 + 43200 + 432 + 20 */
+    _mock_httpc_headers[1] = "X-Sleep-Cal-PPM: 5000";
+    _mock_httpc_headers[2] = "X-Sleep-Cal-N: 9";
+    _mock_httpc_header_count = 3;
+    refresh_once();
+    CHECK(sched()->cal_samples == 1 && sched()->cal_ppm == 10000,
+          "refresh: a timer wake learns the drift from the server clock (seed not needed)");
+    CHECK(sched()->sleep_err_known && sched()->sleep_err_s == 432,
+          "refresh: reports how late the wake landed");
+
+    reset_all_mocks();
+    mock_server_reply(200, "X-Sleep-Seconds: 3600", EPD_IMAGE_BYTES);
+    _mock_httpc_headers[0] = "X-Sleep-Cal-PPM: 5000";
+    _mock_httpc_headers[1] = "X-Sleep-Cal-N: 9";
+    _mock_httpc_header_count = 2;
+    refresh_once();
+    CHECK(sched()->cal_samples == 1 && sched()->cal_ppm == 5000,
+          "refresh: an uncalibrated F7 adopts the server's seed");
+}
+
+static void test_hibernate_timer_is_drift_corrected(void)
+{
+    reset_all_mocks();
+    hokku_clock_set((uint32_t)T0);
+    sched()->next_epoch = T0 + 3600;
+    sched()->cal_ppm = 10000;
+    int64_t secs = hokku_sched_arm_sleep(sched(), (int64_t)hokku_clock_now(), 0,
+                                         HOKKU_FALLBACK_SLEEP_S, HOKKU_HIBERNATE_MAX_S);
+    CHECK(secs == 3564 && sched()->sleep_start_epoch == T0,
+          "hibernate: armed for the server's slot, drift taken out, start recorded");
+    sched()->next_epoch = T0 + 100000;
+    secs = hokku_sched_arm_sleep(sched(), (int64_t)hokku_clock_now(), 0,
+                                 HOKKU_FALLBACK_SLEEP_S, HOKKU_HIBERNATE_MAX_S);
+    CHECK(secs == HOKKU_HIBERNATE_MAX_S && sched()->armed_s == (int32_t)HOKKU_HIBERNATE_MAX_S,
+          "hibernate: capped at the wake timer's range, and the cap is what is recorded");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ *  Persistent state record (common/xr872/state.c)
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+static void test_state_round_trip_and_wear_guard(void)
+{
+    reset_all_mocks();
+    _mock_fdcm_open_fail = 0;
+    hokku_state_load();                 /* nothing in flash: zero state */
+    hokku_state_get()->boot_count = 7;
+    hokku_state_get()->sched.cal_ppm = -1234;
+    CHECK(hokku_state_save() == 0 && _mock_fdcm_write_call_count == 1,
+          "state: a changed record is written");
+    CHECK(hokku_state_save() == 0 && _mock_fdcm_write_call_count == 1,
+          "state: an unchanged record is not rewritten (flash wear)");
+
+    memcpy(_mock_fdcm_read_buf, _mock_fdcm_write_buf, sizeof(hokku_state_t));
+    _mock_fdcm_read_size = sizeof(hokku_state_t);
+    hokku_state_load();
+    CHECK(hokku_state_get()->boot_count == 7 && hokku_state_get()->sched.cal_ppm == -1234,
+          "state: reloads what was written");
+
+    _mock_fdcm_read_buf[20] ^= 0x40;    /* a torn write */
+    hokku_state_load();
+    CHECK(hokku_state_get()->boot_count == 0 && hokku_state_get()->sched.cal_samples == 0,
+          "state: a corrupt record (CRC) starts from zero");
+    _mock_fdcm_open_fail = 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ *  New-firmware confirmation (common/all/ota_confirm.h) with the F7's
+ *  A/B mechanics
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+static void test_boot_ok_confirms_a_normal_boot(void)
+{
+    reset_all_mocks();
+    g_boot_seq = 1;
+    g_rollback_armed = 1;
+    hokku_rollback_boot_ok(0);
+    CHECK(!g_rollback_armed && _mock_wdg_stop_called == 1 &&
+          _mock_image_set_cfg_last.seq == 1,
+          "boot_ok: a normal boot points the cfg back at itself and stops the WDG");
+}
+
+static void test_boot_ok_keeps_previous_slot_while_pending(void)
+{
+    reset_all_mocks();
+    g_boot_seq = 1;
+    g_rollback_armed = 1;
+    hokku_rollback_boot_ok(1);
+    CHECK(g_rollback_armed && _mock_wdg_stop_called == 1 && _mock_image_set_cfg_call_count == 0,
+          "boot_ok: a pending image stops the WDG but leaves the cfg on the previous slot");
+}
+
+static void test_pending_confirms_when_server_reached(void)
+{
+    reset_all_mocks();
+    g_boot_seq = 1;
+    g_rollback_armed = 1;
+    g_ota_pending = 1;
+    hokku_state_get()->ota_pending = 2;           /* slot 1, unconfirmed */
+    mock_server_reply(404, "X-Sleep-Seconds: 21600", 0);   /* keep reply */
+    hokku_first_fetch();
+    CHECK(!g_ota_pending && !g_rollback_armed && hokku_state_get()->ota_pending == 0 &&
+          _mock_image_set_cfg_last.seq == 1 && _mock_wdg_reboot_called == 0,
+          "pending: the first fetch reaching the server confirms (cfg -> own slot, marker cleared)");
+}
+
+static void test_pending_rolls_back_when_server_never_reached(void)
+{
+    reset_all_mocks();
+    g_boot_seq = 1;
+    g_rollback_armed = 1;
+    g_ota_pending = 1;
+    hokku_state_get()->ota_pending = 2;
+    g_net_up = 1;                                 /* WiFi up, server unreachable */
+    hokku_first_fetch();
+    CHECK(_mock_wdg_reboot_called == 1 && g_rollback_armed &&
+          _mock_image_set_cfg_call_count == 0,
+          "pending: never reaching the server reboots with the cfg on the previous slot");
+    CHECK(_mock_epd_text_calls == 1,
+          "pending: the outage message is drawn once, not per attempt");
+}
+
+static void test_not_pending_fetches_once(void)
+{
+    reset_all_mocks();
+    g_net_up = 1;                                 /* server unreachable */
+    hokku_first_fetch();
+    CHECK(_mock_wdg_reboot_called == 0 && sched()->failures == 1,
+          "not pending: one fetch, normal backoff, no rollback");
+}
+
+static void test_ota_refused_while_pending(void)
+{
+    reset_all_mocks();
+    memset(&g_test_iop, 0, sizeof(g_test_iop));
+    g_test_iop.bl_size = 0x8000;
+    g_test_iop.addr[1] = 0x181000;
+    g_test_iop.img_max_size = 1500;
+    _mock_image_ota_param = &g_test_iop;
+    g_ota_pending = 1;
+    hokku_do_ota("1.0");
+    CHECK(_mock_ota_init_called == 0 && _mock_epd_text_calls == 0,
+          "ota: refused while this image is unconfirmed (the other slot is its rollback)");
+}
+
+static void test_ota_success_marks_new_slot_pending(void)
+{
+    reset_all_mocks();
+    memset(&g_test_iop, 0, sizeof(g_test_iop));
+    g_test_iop.bl_size = 0x8000;
+    g_test_iop.addr[1] = 0x181000;
+    g_test_iop.img_max_size = 1500;
+    _mock_image_ota_param = &g_test_iop;
+    _mock_image_running_seq = 0;                  /* writes slot 1 */
+    hokku_do_ota("1.0");
+    CHECK(hokku_state_get()->ota_pending == 2 && _mock_ota_reboot_called == 1,
+          "ota: the new slot is marked unconfirmed before the reboot");
+    CHECK(strcmp(_mock_epd_text, HOKKU_MSG_OTA_DONE) == 0 && _mock_epd_text_calls == 2,
+          "ota: the shared start/complete messages are drawn");
+
+    reset_all_mocks();
+    _mock_image_ota_param = &g_test_iop;
+    _mock_ota_get_image_result = OTA_STATUS_ERROR;
+    hokku_do_ota("1.0");
+    CHECK(hokku_state_get()->ota_pending == 0 && strstr(_mock_epd_text, "(download)"),
+          "ota: a failed download leaves nothing pending and says so");
+}
+
 int main(void)
 {
     printf("=== test_logic (bigme_f7) ===\n\n");
@@ -874,8 +1188,6 @@ int main(void)
     test_should_sleep_interactive_inert_on_battery();
     test_should_sleep_interactive_cleared_restores_config();
 
-    test_read_header_uint_parses_value();
-    test_read_header_uint_absent_returns_zero();
     test_read_header_str_strips_prefix_and_crlf();
     test_read_header_str_absent_leaves_empty();
 
@@ -922,7 +1234,7 @@ int main(void)
     test_net_cb_wlan_connected_dhcp_leaves_sdk_dhcp_running();
     test_net_cb_wlan_connected_static_ip_sets_address();
     test_net_cb_wlan_connected_bad_static_ip_leaves_dhcp();
-    test_net_cb_network_up_starts_refresh_thread_once();
+    test_net_cb_network_up_marks_network();
     test_net_cb_network_up_kicks_running_refresh_thread();
     test_refresh_wait_returns_early_when_kicked();
     test_refresh_wait_without_semaphore_falls_back_to_sleep();
@@ -931,6 +1243,28 @@ int main(void)
     test_frame_receive_acks_every_chunk();
     test_frame_receive_restores_console_when_host_dies();
     test_frame_receive_refuses_while_ota_lock_held();
+
+    test_refresh_404_label_filter_keeps_picture();
+    test_refresh_503_busy_honours_header();
+    test_refresh_error_without_header_backs_off();
+    test_refresh_first_outage_draws_shared_message();
+    test_refresh_wifi_failure_draws_wifi_message();
+    test_refresh_image_displays();
+    test_refresh_short_image_not_displayed();
+    test_refresh_long_image_not_displayed();
+    test_refresh_anchors_to_server_clock();
+    test_refresh_learns_drift_and_seed();
+    test_hibernate_timer_is_drift_corrected();
+
+    test_state_round_trip_and_wear_guard();
+
+    test_boot_ok_confirms_a_normal_boot();
+    test_boot_ok_keeps_previous_slot_while_pending();
+    test_pending_confirms_when_server_reached();
+    test_pending_rolls_back_when_server_never_reached();
+    test_not_pending_fetches_once();
+    test_ota_refused_while_pending();
+    test_ota_success_marks_new_slot_pending();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

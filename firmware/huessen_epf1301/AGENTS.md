@@ -1,51 +1,36 @@
 # Agent rules — firmware
 
 ## Packaging
-- Every build MUST produce `hokku-huessen_epf1301-<version>.bin` (merged: bootloader + partition table + app + otadata)
+- Every build MUST produce `firmware/release/hokku-huessen_epf1301-<version>.bin` via `ci-build.sh` (merged: bootloader @0x0 + partition table @0x8000 + app @0x10000)
+- otadata is not in the image; the flasher (`hokku.common.esp32.flasher`) writes a blank otadata @0x610000 alongside it so the bootloader boots `ota_0`
 - Do NOT commit/release individual `bootloader.bin` / `partition-table.bin` / `hokku_epaper.bin`
-- Merge command (run from repo root; note underscore args and `ota_data_initial.bin`):
-  ```
-  esptool.py --chip esp32s3 merge_bin --output firmware/release/hokku-huessen_epf1301-<version>.bin \
-      --flash_mode dio --flash_freq 80m --flash_size 16MB \
-      0x0      firmware/huessen_epf1301/build/bootloader/bootloader.bin \
-      0x8000   firmware/huessen_epf1301/build/partition_table/partition-table.bin \
-      0x10000  firmware/huessen_epf1301/build/hokku_epaper.bin \
-      0x610000 firmware/huessen_epf1301/build/ota_data_initial.bin
-  ```
-  The `ota_data_initial.bin` is required so the bootloader boots `ota_0` on a
-  fresh flash; it is generated automatically by `idf.py build`.
 - GitHub release must attach the merged file as the single firmware asset
 - Setup tool aborts if no `hokku-huessen_epf1301-*.bin` asset is found
 
-## Firmware versioning — `firmware/VERSION`
+## Firmware versioning — `firmware/huessen_epf1301/VERSION`
 
-Format: `PROTOCOL.CONFIG.N`
+Format `PROTOCOL.CONFIG.N`; bump rules in the root [`AGENTS.md`](../../AGENTS.md) → "Versioning — firmware".
 
-- **`PROTOCOL`** — server↔client wire protocol (HTTP API between device and server). Bump **only** on backwards-incompatible changes to the wire protocol. If a change requires a `PROTOCOL` bump, WARN the human and wait for their explicit decision — do not bump unilaterally.
-- **`CONFIG`** — NVS configuration schema version. Bump when NVS fields are added, removed, or incompatibly changed. When bumping `CONFIG`, also update `CONFIG_VERSION` in `tools/hokku_config.py` to the same integer value. NVS changes do NOT affect `PROTOCOL`.
-- **`N`** — monotonic counter for all other firmware changes. **Never resets**, even when `PROTOCOL` or `CONFIG` bumps. Increment `N` for every firmware code commit; include the updated `firmware/VERSION` in the same commit.
-
-`CONFIG_VERSION` in `firmware/main/config.h` and `firmware/main/config.c` is derived from `firmware/VERSION` via CMake-generated `version.h` — do not edit it directly.
+The firmware's `CONFIG_VERSION` (`firmware/common/esp32/config.h`) is derived from `VERSION` via the CMake-generated `version.h` — do not edit it directly. The host-side copy is `CONFIG_VERSION` in `python/hokku/screens/huessen_epf1301/constants.py` (and `seeedstudio_e1004/constants.py`, which shares the schema); update it when `CONFIG` bumps.
 
 Examples:
-| `firmware/VERSION` | Meaning |
+| `VERSION` | Meaning |
 |---|---|
 | `1.2.5` | protocol 1, NVS config v2, 5th change |
 | `1.2.6` | bug fix — only N incremented |
-| `1.3.7` | NVS schema changed — CONFIG and N incremented, `tools/hokku_config.py` updated |
+| `1.3.7` | NVS schema changed — CONFIG and N incremented, host `CONFIG_VERSION` updated |
 | `2.3.8` | wire protocol break (human approved) — PROTOCOL and N incremented |
 
 ## Display driver (DO NOT MODIFY)
 - Do not touch: SPI init, CS management, BUSY polling, GPIO init, `epaper_reset`, `epaper_init_panel`, `epaper_send_panel`, `epaper_display_dual`, `epaper_wait_busy`
 - GPIO0 (SPI CS) is a boot strapping pin — must be managed by SPI driver (`spics_io_num = PIN_EPAPER_CS`), never `gpio_set_level`
-- GPIO7 (BUSY) has external pull-up on PCB; `gpio_reset_pin` also enables internal pull-up — both required; do not skip
+- GPIO7 (BUSY) has an external pull-up on the PCB; configure it as input with the internal pull-up DISABLED and never `gpio_reset_pin` it — an internal pull-up masks BUSY LOW (`docs/screens/huessen_epf1301/hardware_facts.md`)
 - `display_message()` must use `split_and_display()` with identical buffer layout: first 480K = panel 1, second 480K = panel 2
-- After flashing factory firmware dump (`.private/flash_dump.bin`), wait 30 s before flashing our firmware
 
 ## Flashing procedure
-1. Flash factory dump at offset 0x0
-2. Wait 30 s
-3. Flash bootloader + partition table + app + NVS config
+Root `AGENTS.md` STOP rules apply. A working unit is reflashed with the A/B recipe below.
+- The setup tool / web flasher (first install) writes the merged image @0x0 (bootloader included) + blank otadata @0x610000, then NVS config @0x9000 — a bootloader write, so root rule 4 (explicit approval) applies to agents
+- Restoring a factory dump (write at 0x0) is likewise a bootloader write; after one, wait 30 s before flashing our firmware
 - `esptool` works any time USB is connected (resets into ROM bootloader)
 - `USB_AWAKE`: never deep-sleeps while USB plugged in
 - `BATTERY_IDLE`: 5 s awake window per refresh — plug USB first to enter `USB_AWAKE` for reflash
@@ -70,8 +55,8 @@ recovery hatch in a single step.
 3. Power-cycle, then `ping` on the console to confirm.
 
 **Rollback trap.** `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` and the app only
-calls `esp_ota_mark_app_valid_cancel_rollback()` after a *successful network
-refresh*. An image left `PENDING_VERIFY` reverts on the next reset — which during
+calls `esp_ota_mark_app_valid_cancel_rollback()` once a fetch *reaches the
+server* (`common/all/ota_confirm.h`). An image left `PENDING_VERIFY` reverts on the next reset — which during
 colour calibration (poll URL parked, no server) would never be cleared. Writing
 only `seq`+CRC and leaving `ota_state` at `VALID` arms no rollback timer.
 
@@ -93,6 +78,6 @@ If `parttool`/`otatool` report `No module named 'parttool'`, add **only**
 
 ## Reverse-engineering notes
 - Stock firmware findings: `docs/screens/huessen_epf1301/reverse_engineering_overview.md` + per-version files
-- New RE pass → update existing docs or add `docs/reverse_engineering_v<VER>_<DATE>.md`
+- New RE pass → update existing docs or add `docs/screens/huessen_epf1301/reverse_engineering_v<VER>_<DATE>.md`
 - Binaries and scratch notes stay in `.private/`; digested findings go in `docs/`
 - Hardware facts: `docs/screens/huessen_epf1301/hardware_facts.md` (may be inaccurate — treat with caution)

@@ -90,7 +90,8 @@
 #include "net.h"
 #include "ota.h"
 #include "frame_state.h"
-#include "backoff.h"       /* shared exponential-retry-backoff policy (SoC-agnostic) */
+#include "fetch_outcome.h" /* shared reply decision + retry backoff (SoC-agnostic) */
+#include "messages.h"      /* on-glass message texts + when to draw (SoC-agnostic) */
 
 static const char *TAG = "e1004";
 
@@ -122,14 +123,12 @@ static const char *TAG = "e1004";
 #define HALF_H             1600
 #define HALF_BYTES     480000u   /* 600 * 1600 / 2 (4bpp) */
 #define TOTAL_IMAGE_SIZE 960000u
-#define COLOR_WHITE_BYTE   0x11  /* two white nibbles (white = 0x1) */
 #define SPI_CHUNK_SIZE     4800
 #define NUM_CHUNKS  (HALF_BYTES / SPI_CHUNK_SIZE)
 
-/* ── Regime timings ──────────────────────────────────────────────── */
-#define REFRESH_RETRY_SECONDS   60
-#define REFRESH_RETRY_MAX_SECONDS  3600   /* backoff cap when the server stays unreachable: 1 h */
-#define SLEEP_FALLBACK_S        (3 * 3600)
+/* How a person asks this screen to retry right now (common/all/messages.h):
+ * any of the three buttons wakes it into a refresh. */
+#define HOKKU_RETRY_HINT  "Press any button to\ntry again now."
 
 /* ═══════════════════════════════════════════════════════════════════
  *  T133A01 register constants (Seeed_GxEPD2 GxEPD2_T133A01_1200x1600.cpp)
@@ -373,8 +372,9 @@ static void display_message(const char *msg)
 {
     uint8_t *fb = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
     if (!fb) { ESP_LOGE(TAG, "display_message: OOM"); return; }
-    memset(fb, COLOR_WHITE_BYTE, TOTAL_IMAGE_SIZE);
-    draw_string(fb, HALF_W, HALF_H, 20, 40, msg, 0x0, 3);   /* black text, scale 3 */
+    memset(fb, (HOKKU_MSG_BG << 4) | HOKKU_MSG_BG, TOTAL_IMAGE_SIZE);
+    draw_string(fb, HALF_W, HALF_H, HOKKU_MSG_X, HOKKU_MSG_Y, msg,
+                HOKKU_MSG_COLOR, HOKKU_MSG_SCALE);
     split_and_display(fb);
     heap_caps_free(fb);
 }
@@ -436,8 +436,7 @@ static int read_battery_mv(void)
 
     int batt_mv = (int)(pin_mv * BATT_DIVIDER);
     ESP_LOGI(TAG, "battery: pin=%d mV -> %d mV", pin_mv, batt_mv);
-    if (batt_mv < 2500 || batt_mv > 4500) return 0;   /* sanity gate */
-    return batt_mv;
+    return batt_mv;   /* frame_state drops an implausible reading */
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -464,124 +463,79 @@ static void build_frame_state_json(char *buf, size_t buflen,
         .wake     = wake_label,
         .regime   = current_regime,
         .uptime_s = (esp_timer_get_time() - boot_time_us) / 1000000LL,
-        .bat_mv   = (int)last_battery_mv,   /* always >= 0 -> always emitted */
+        .bat_mv   = (int)last_battery_mv,   /* implausible -> omitted */
         .usb      = "none",                 /* E1004 has no USB-host-detect GPIO */
         .last_sleep = last_sleep_str,
         .rssi     = rssi,
         .heap_kb  = (unsigned)(esp_get_free_heap_size() / 1024u),
         .spurious = 0,
         .cfg_ver  = (unsigned)config.cfg_ver,
-        .clk_now  = (clk_now_t < 1577836800) ? 0 : (long long)clk_now_t,
-        .next_ep  = (long long)(next_refresh_epoch > 0 ? next_refresh_epoch : 0LL),
-        .sleep_err_known = last_sleep_err_known,
-        .sleep_err_s     = (int)last_sleep_err_s,
-        .cal_known       = (cal_samples > 0),
-        .cal_ppm         = (int)cal_ppm,
+        .clk_now  = (clk_now_t < HOKKU_EPOCH_MIN) ? 0 : (long long)clk_now_t,
         .wifi_cached     = last_wifi_used_cache,
     };
+    frame_state_set_schedule(&fs, &hokku_sched);
     frame_state_build(buf, buflen, &fs);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
  *  Refresh — fetch (or OTA) + display + schedule the next wake.
  * ═══════════════════════════════════════════════════════════════════ */
-/* Exponential backoff for repeated "server unreachable" failures. Bumps the
- * RTC-persistent failure streak and returns the next retry interval (60s, 120,
- * ... capped at REFRESH_RETRY_MAX_SECONDS) via the shared SoC-agnostic policy,
- * so a server outage doesn't reboot the device every 60s forever. The caller
- * resets the streak to 0 on any successful server contact. */
-static int refresh_retry_backoff_seconds(void)
+/* What to do with the server's reply (display / keep / back off), the outage
+ * streak, the next wake, the drift calibration and which error to draw are all
+ * shared (scheduler_apply_fetch, common/all messages.h). This board only puts
+ * the image or the message on the glass. Returns the outcome's action (DISPLAY
+ * or KEEP proves a freshly-OTA'd app works, common/all/ota_confirm.h). */
+static hokku_fetch_action_t perform_refresh(const char *wake_label, int64_t boot_time_us)
 {
-    uint8_t n = consecutive_refresh_failures;
-    if (consecutive_refresh_failures < 255) consecutive_refresh_failures++;
-    return hokku_backoff_seconds(n, REFRESH_RETRY_SECONDS, REFRESH_RETRY_MAX_SECONDS);
-}
+    hokku_fetch_result_t res = { .http_status = 0 };   /* 0 = no response */
+    uint8_t *img = NULL;
 
-static void perform_refresh(const char *wake_label, int64_t boot_time_us)
-{
     if (!wifi_connect()) {
         ESP_LOGE(TAG, "WiFi connect failed");
-        schedule_retry_in(refresh_retry_backoff_seconds(), "wifi_connect failed");
-        return;
-    }
-
-    uint8_t *img = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM);
-    if (!img) {
+        res.wifi_failed = true;
+    } else if ((img = heap_caps_malloc(TOTAL_IMAGE_SIZE, MALLOC_CAP_SPIRAM)) == NULL) {
         ESP_LOGE(TAG, "image buffer OOM");
         wifi_shutdown();
-        schedule_retry_in(REFRESH_RETRY_SECONDS, "image OOM");
-        return;
-    }
+    } else {
+        char frame_state[384];
+        build_frame_state_json(frame_state, sizeof(frame_state), wake_label, boot_time_us);
 
-    char frame_state[384];
-    build_frame_state_json(frame_state, sizeof(frame_state), wake_label, boot_time_us);
+        char fw_update[48] = "";
+        hokku_http_fetch_image(img, TOTAL_IMAGE_SIZE, config.image_url,
+                               config.screen_name, SCREEN_MODEL, frame_state,
+                               FW_BUILD_TIMESTAMP, &res, fw_update, sizeof(fw_update));
 
-    int64_t local_at_download = esp_timer_get_time();
-    int32_t sleep_seconds = 0;
-    int64_t server_epoch  = 0;
-    int     http_status   = 0;
-    int32_t cal_seed_ppm  = 0;
-    int     cal_seed_n    = -1;   /* < 0 until the server's seed headers arrive */
-    char    fw_update[48] = "";
-    hokku_fetch_out_t out = {
-        .out_sleep_seconds = &sleep_seconds,
-        .out_server_epoch  = &server_epoch,
-        .out_http_status   = &http_status,
-        .out_fw_update     = fw_update,
-        .fw_update_buflen  = sizeof(fw_update),
-        .out_cal_seed_ppm  = &cal_seed_ppm,
-        .out_cal_seed_n    = &cal_seed_n,
-    };
-
-    bool ok = hokku_http_fetch_image(img, TOTAL_IMAGE_SIZE, config.image_url,
-                                     config.screen_name, SCREEN_MODEL, frame_state,
-                                     FW_BUILD_TIMESTAMP, &out);
-
-    /* Server-requested OTA: the image body is ignored; update instead. */
-    if (fw_update[0] != '\0') {
-        heap_caps_free(img);
-        perform_ota(fw_update, config.image_url, config.screen_name,
-                    SCREEN_MODEL, display_message);   /* reboots on success */
-        wifi_shutdown();
-        schedule_retry_in(REFRESH_RETRY_SECONDS, "ota returned (failed)");
-        return;
-    }
-
-    if (!ok) {
-        heap_caps_free(img);
-        wifi_shutdown();
-        if (sleep_seconds > 0) {
-            /* Server responded (e.g. 503 busy) — it IS reachable; clear the
-             * outage streak and honour its suggested retry interval. */
-            consecutive_refresh_failures = 0;
-            schedule_retry_in((int)sleep_seconds, "server busy / no image");
-        } else {
-            /* Couldn't reach the server — back off exponentially. */
-            schedule_retry_in(refresh_retry_backoff_seconds(), "fetch failed");
+        /* Server-requested OTA: the image body is ignored; update instead. */
+        if (fw_update[0] != '\0') {
+            perform_ota(fw_update, config.image_url, config.screen_name,
+                        SCREEN_MODEL, display_message);   /* reboots on success */
+            res.ota_failed = true;
         }
-        return;
+        wifi_shutdown();
     }
 
-    wifi_shutdown();
-
-    /* Got an image — server reached and healthy; clear any outage streak. */
-    consecutive_refresh_failures = 0;
-
-    /* Cold-start seed: an uncalibrated device (fresh flash / wiped NVS) adopts
-     * the server's MAC-pinned mean so it doesn't re-converge from scratch. */
-    if (cal_seed_n >= 0 && scheduler_adopt_cal_seed(cal_seed_ppm, cal_seed_n)) {
-        hokku_cal_save_if_changed();
+    hokku_fetch_outcome_t o = scheduler_apply_fetch(&res);
+    if (o.action == HOKKU_FETCH_DISPLAY) {
+        /* The freshly-downloaded image (bytes are already panel-native). */
+        split_and_display(img);
+        ESP_LOGI(TAG, "refresh done; next in %d s", (int)o.sleep_s);
+    } else {
+        char msg[HOKKU_MSG_MAX];
+        if (hokku_msg_fetch_error(msg, sizeof(msg), &res, &o, config.image_url,
+                                  HOKKU_RETRY_HINT))
+            display_message(msg);
     }
+    if (img) heap_caps_free(img);
+    return o.action;
+}
 
-    /* Schedule the next refresh from the server's absolute clock (drift-free). */
-    if (!scheduler_set_after_refresh(server_epoch, sleep_seconds, local_at_download)) {
-        schedule_retry_in(REFRESH_RETRY_SECONDS, "server response missing/invalid schedule");
-    }
+/* ota_first_fetch() callback: one refresh with this boot's labels. */
+typedef struct { const char *wake_label; int64_t boot_time_us; } refresh_ctx_t;
 
-    /* Display the freshly-downloaded image (bytes are already panel-native). */
-    split_and_display(img);
-    heap_caps_free(img);
-    ESP_LOGI(TAG, "refresh done; next in %d s", (int)sleep_seconds);
+static hokku_fetch_action_t refresh_once(void *ctx)
+{
+    const refresh_ctx_t *r = (const refresh_ctx_t *)ctx;
+    return perform_refresh(r->wake_label, r->boot_time_us);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -590,7 +544,7 @@ static void perform_refresh(const char *wake_label, int64_t boot_time_us)
 static void enter_deep_sleep(int64_t sleep_us)
 {
     ESP_LOGI(TAG, "Deep sleep %lld s (next_ep=%lld)",
-             sleep_us / 1000000LL, (long long)next_refresh_epoch);
+             sleep_us / 1000000LL, (long long)hokku_sched.next_epoch);
     esp_wifi_stop();
     spi_teardown();
     gpio_set_level(PIN_EPAPER_ENABLE, 0);   /* cut panel power */
@@ -615,14 +569,13 @@ static void enter_deep_sleep(int64_t sleep_us)
     esp_deep_sleep_start();
 }
 
-/* Compute how long to sleep from the schedule anchor, then sleep. The shared
- * scheduler handles all three anchor states, pre-distorts the interval by the
- * learned oscillator drift so the wake lands on the slot, and records what it
- * armed for the next cycle's measurement. */
+
+/* Compute how long to sleep from the schedule, then sleep. The shared scheduler
+ * takes the learned oscillator drift out so the wake lands on time, and records
+ * what it armed for the next cycle's measurement. */
 static void schedule_and_sleep(void)
 {
-    int64_t sleep_us = scheduler_next_sleep_us((int64_t)SLEEP_FALLBACK_S * 1000000LL);
-    enter_deep_sleep(sleep_us);
+    enter_deep_sleep(scheduler_next_sleep_us(HOKKU_FALLBACK_SLEEP_S));
 }
 
 // cppcheck-suppress unusedFunction
@@ -647,6 +600,7 @@ void app_main(void)
         last_sleep_mode = LAST_SLEEP_MODE_TIMER_WAKE;
     } else {
         wake_label = "first_boot";
+        last_sleep_mode = LAST_SLEEP_MODE_NONE;
     }
 
     /* NVS + config. */
@@ -665,34 +619,29 @@ void app_main(void)
     hw_gpio_init();
     last_battery_mv = read_battery_mv();
 
-    /* Measure the previous sleep's drift on a timer wake and update the
-     * calibration — before perform_refresh overwrites the schedule anchor.
-     * Records last_sleep_err_s (the slot error) and refines cal_ppm. */
-    scheduler_observe_sleep();
-    hokku_cal_save_if_changed();
-
+    /* Config must be valid before we can download anything. If not, say so and
+     * try again in HOKKU_FALLBACK_SLEEP_S. */
     if (!config_version_ok()) {
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-                 "Config version\nmismatch.\n\nExpected: %d\nFound: %d\n\n"
-                 "Run hokku-setup to\nreconfigure.", CONFIG_VERSION, config.cfg_ver);
+        char msg[HOKKU_MSG_MAX];
+        hokku_msg_config_version(msg, sizeof(msg), CONFIG_VERSION, config.cfg_ver);
         display_message(msg);
-        enter_deep_sleep((int64_t)SLEEP_FALLBACK_S * 1000000LL);
+        scheduler_retry_in(HOKKU_FALLBACK_SLEEP_S);
+        schedule_and_sleep();
         return;
     }
     if (!config_is_valid()) {
-        display_message("Hokku installed but\ncannot read config.\n\n"
-                        "Connect USB and run\nhokku-setup to\nconfigure.");
-        enter_deep_sleep((int64_t)SLEEP_FALLBACK_S * 1000000LL);
+        display_message(HOKKU_MSG_CONFIG_MISSING);
+        scheduler_retry_in(HOKKU_FALLBACK_SLEEP_S);
+        schedule_and_sleep();
         return;
     }
 
-    perform_refresh(wake_label, boot_time);
-
-    /* A successful refresh proves a freshly-OTA'd app can reach the server and
-     * drive the display — confirm it so the bootloader stops watching for a
-     * rollback. No-op on a normally-booted (non-pending) app. */
-    ota_mark_valid_if_pending();
+    /* Fetch under the shared new-firmware policy: a freshly-OTA'd app confirms
+     * itself on the first fetch that reaches the server, retries otherwise, and
+     * rolls back when out of attempts — all before the deep sleep below, whose
+     * wake would roll an unconfirmed app back anyway. */
+    refresh_ctx_t rctx = { .wake_label = wake_label, .boot_time_us = boot_time };
+    ota_first_fetch(refresh_once, &rctx);
 
     schedule_and_sleep();
 }

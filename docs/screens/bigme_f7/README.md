@@ -32,8 +32,8 @@ letter (FCC ID `2A8EM-F7`); only the sales region differs.
 > comfortable with the recovery procedure.
 >
 > The flashing tooling only ever writes the inactive A/B slot and its config
-> sector — the bootloader and the OEM slot are never touched, so a bad image
-> rolls back rather than bricking the unit.
+> sector — the bootloader and the slot the unit currently boots are never
+> touched, so a bad image rolls back rather than bricking the unit.
 
 ## Documentation
 
