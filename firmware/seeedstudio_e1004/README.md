@@ -62,7 +62,7 @@ A bad OTA image self-checks and rolls back automatically.
 | GPIO/SPI init | `wifi` — dual-network connect + BSSID cache |
 | deep-sleep (timer + button GPIO3/4/5 wake) | `config` — NVS config store |
 | frame-state gatherer (fills the struct) | `log` — crash-safe RTC log ring |
-| `display_message` (text via `text_render`) | `scheduler`, `state`, `frame_state`, `text_render` |
+| `display_message` (renders the shared `messages`) | `scheduler`/`schedule`, `state`, `frame_state`, `text_render`, `messages`, `ota_confirm` |
 
 ## Differences from `huessen_epf1301`
 

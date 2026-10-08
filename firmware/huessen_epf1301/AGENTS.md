@@ -55,8 +55,8 @@ recovery hatch in a single step.
 3. Power-cycle, then `ping` on the console to confirm.
 
 **Rollback trap.** `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` and the app only
-calls `esp_ota_mark_app_valid_cancel_rollback()` after a *successful network
-refresh*. An image left `PENDING_VERIFY` reverts on the next reset — which during
+calls `esp_ota_mark_app_valid_cancel_rollback()` once a fetch *reaches the
+server* (`common/all/ota_confirm.h`). An image left `PENDING_VERIFY` reverts on the next reset — which during
 colour calibration (poll URL parked, no server) would never be cleared. Writing
 only `seq`+CRC and leaving `ota_state` at `VALID` arms no rollback timer.
 

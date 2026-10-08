@@ -95,6 +95,30 @@ def test_multiple_slots_picks_nearest_future():
     assert 7_000 <= result <= 7_300, f"Expected ~7200 s, got {result}"
 
 
+def _sleep_at(now: datetime, times: list[str]) -> int:
+    cfg = _cfg(debug_fast_refresh=False, refresh_image_at_time=times)
+    with patch("hokku.webserver.time_utils.datetime") as mock_dt:
+        mock_dt.now.return_value = now
+        return calculate_sleep_seconds(cfg)
+
+
+def test_early_wake_counts_as_current_slot():
+    """A screen waking at 11:59:59 for the 12:00 slot is sent to 18:00, not told
+    to come back in a minute (which refreshed it twice)."""
+    assert _sleep_at(_fake_now(11, 59, 59), ["0600", "1200", "1800"]) == 6 * 3600 + 1
+
+
+def test_grace_boundary():
+    """Exactly 60 s ahead is still the current slot; 61 s ahead is the next one."""
+    assert _sleep_at(_fake_now(11, 59, 0), ["1200", "1800"]) == 6 * 3600 + 60
+    assert _sleep_at(_fake_now(11, 58, 59), ["1200", "1800"]) == 61
+
+
+def test_early_wake_before_lone_midnight_slot_goes_to_next_day():
+    """A lone 00:00 slot reached 30 s early is served now; next is a day later."""
+    assert _sleep_at(_fake_now(23, 59, 30), ["0000"]) == 24 * 3600 + 30
+
+
 # ── format_duration_human ─────────────────────────────────────────────────────
 
 

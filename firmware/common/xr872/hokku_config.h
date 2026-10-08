@@ -35,7 +35,10 @@ typedef struct hokku_config {
     char     ip[HOKKU_IP_MAX];             /* static IP / gateway / netmask */
     char     gw[HOKKU_IP_MAX];
     char     nm[HOKKU_IP_MAX];
-    uint32_t default_sleep_s;              /* fallback sleep when no X-Sleep-Seconds */
+    /* Reserved: was a fallback sleep, unused since the server's X-Sleep-Seconds
+     * and the shared schedule (common/all/schedule.h) always set the next wake.
+     * Kept so the blob layout, and with it every saved config, stays valid. */
+    uint32_t reserved_sleep_s;
 } hokku_config_t;
 
 /* Load config from flash (or compile-time defaults). Call once at boot. */

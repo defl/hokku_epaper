@@ -79,6 +79,10 @@ OBJS := $(addsuffix .o,$(SRCS))
 # ----------------------------------------------------------------------------
 IMAGE_CFG_PATH := $(ROOT_PATH)/project/image_cfg
 
+# X-Firmware-Build: the same UTC stamp format as the ESP32 boards' version.h
+# (FW_BUILD_TIMESTAMP), e.g. 20261003165900Z.
+PRJ_EXTRA_SYMBOLS += -DHOKKU_BUILD_TS='"$(shell date -u +%Y%m%d%H%M%SZ)"'
+
 # ----------------------------------------------------------------------------
 # project rules
 # ----------------------------------------------------------------------------
