@@ -3148,7 +3148,7 @@ function renderScreens(screens, bundledFirmwareVersions) {
       : '<span style="color:var(--bamboo)">—</span>';
     let nameBadges = '';
     if (s.ota_error) nameBadges += ' <span title="Firmware update error" style="color:#a33;font-weight:700">⛔</span>';
-    else if (s.ota_pending) nameBadges += ' <span title="Firmware update scheduled for next refresh" style="color:var(--accent,#2a6);font-weight:700">⟳</span>';    const modelCell = s.screen_model
+    else if (s.ota_pending) nameBadges += ` <span title="${s.ota_battery_hold_mv ? otaBatteryHoldText(s) : 'Firmware update scheduled for next refresh'}" style="color:var(--accent,#2a6);font-weight:700">⟳</span>`;    const modelCell = s.screen_model
       ? `<span style="font-family:var(--font-mono);font-size:0.85em">${escapeHtml(s.screen_model)}</span>`
       : '<span style="color:var(--bamboo)">—</span>';
     const labelRow = (s.labels && s.labels.length)
@@ -3286,6 +3286,14 @@ async function setScreenRename(name, newName) {
       statusEl.style.color = '#a33';
     }
   }
+}
+
+// A pending update the server holds until the battery recovers (it would
+// otherwise run on a flat cell the panel can't refresh from).
+function otaBatteryHoldText(s) {
+  const want = (s.ota_battery_hold_mv / 1000).toFixed(2);
+  const now = s.battery_mv != null ? ` (now ${(s.battery_mv / 1000).toFixed(2)} V)` : '';
+  return `Waiting for battery ≥ ${want} V${now}.`;
 }
 
 // Toggle the one-shot "update firmware on next refresh" flag for a screen.
@@ -3452,7 +3460,8 @@ function showScreenConfig(name) {
         <input type="checkbox" ${checked} onchange="setScreenOtaPending('${safeName}', this.checked)">
         <span>Update firmware on next refresh${upToDate ? ' (re-flash current version)' : ''}</span>
       </label>`;
-      body += `<div id="ota-pending-status" style="font-size:0.85em;color:var(--stone);margin-top:4px">${s.ota_pending ? 'Will update on next refresh.' : 'Not scheduled to update.'}</div>`;
+      const pendingText = s.ota_battery_hold_mv ? otaBatteryHoldText(s) : 'Will update on next refresh.';
+      body += `<div id="ota-pending-status" style="font-size:0.85em;color:var(--stone);margin-top:4px">${s.ota_pending ? pendingText : 'Not scheduled to update.'}</div>`;
     } else {
       body += `<div style="font-size:0.85em;color:#a33">This screen's firmware predates over-the-air updates — connect USB and use "Flash a screen" to enable them.</div>`;
     }

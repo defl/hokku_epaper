@@ -97,6 +97,12 @@ version — so a transient failure (e.g. a dropped WiFi download) self-heals —
 at `OTA_MAX_ATTEMPTS` (5) signals, after which it records an `ota_error`. A
 same-version **re-flash** stays one-shot (no version change to confirm).
 
+While the screen's check-in reports a battery below `OTA_MIN_BATTERY_MV`
+(`screen_headers.py`, the dashboard's 0 %) the server sends no signal at all:
+the update stays pending, the poll does not count against `OTA_MAX_ATTEMPTS`,
+and a re-flash is not consumed. A check-in without a plausible reading is not
+held. `/api/status` reports the hold as `ota_battery_hold_mv`.
+
 ## Adversarial review
 
 Two independent Opus reviews + on-hardware testing found and fixed four defects
