@@ -123,6 +123,42 @@ static void test_sleep_parse(void)
     CHECK(hokku_sleep_seconds_parse("2678400") == HOKKU_SLEEP_MAX_S, "parse: exactly the max");
 }
 
+static void test_image_size(void)
+{
+    CHECK(hokku_image_size_ok(192000, 192000), "size: exact body is the image");
+    CHECK(!hokku_image_size_ok(191999, 192000), "size: one byte short is not");
+    CHECK(!hokku_image_size_ok(192001, 192000), "size: one byte long is not");
+    CHECK(!hokku_image_size_ok(0, 0), "size: nothing expected, nothing ok");
+}
+
+static void test_epoch_parse(void)
+{
+    CHECK(hokku_server_epoch_parse("1700000000") == 1700000000LL, "epoch: plain value");
+    CHECK(hokku_server_epoch_parse(" 1700000000\r\n") == 1700000000LL, "epoch: whitespace");
+    CHECK(hokku_server_epoch_parse(NULL) == 0, "epoch: absent");
+    CHECK(hokku_server_epoch_parse("1500000000") == 0, "epoch: before 2020 rejected");
+    CHECK(hokku_server_epoch_parse("-1700000000") == 0, "epoch: signed rejected");
+    CHECK(hokku_server_epoch_parse("17e8") == 0, "epoch: junk rejected");
+    CHECK(hokku_server_epoch_parse("4102444800") == 4102444800LL, "epoch: past 2038 kept (64-bit)");
+    CHECK(hokku_server_epoch_parse("99999999999999999999999") > 0,
+          "epoch: absurd value saturates instead of overflowing");
+}
+
+static void test_cal_seed_parse(void)
+{
+    int32_t ppm = 1, n = 1;
+    CHECK(hokku_cal_seed_parse("-1234", "7", &ppm, &n) && ppm == -1234 && n == 7,
+          "seed: negative ppm and a count");
+    CHECK(hokku_cal_seed_parse(" 900 ", "0", &ppm, &n) && ppm == 900 && n == 0,
+          "seed: whitespace, zero count");
+    CHECK(!hokku_cal_seed_parse("900", NULL, &ppm, &n), "seed: count missing");
+    CHECK(!hokku_cal_seed_parse("", "3", &ppm, &n), "seed: ppm empty");
+    CHECK(!hokku_cal_seed_parse("12x", "3", &ppm, &n), "seed: ppm junk");
+    CHECK(!hokku_cal_seed_parse("5", "-3", &ppm, &n), "seed: negative count");
+    CHECK(hokku_cal_seed_parse("99999999999999", "3", &ppm, &n) && ppm == 1000000000,
+          "seed: huge ppm saturates into int32");
+}
+
 int main(void)
 {
     test_image();
@@ -135,5 +171,8 @@ int main(void)
     test_transport_failure();
     test_ota_failed();
     test_sleep_parse();
+    test_image_size();
+    test_epoch_parse();
+    test_cal_seed_parse();
     TEST_MAIN_END();
 }

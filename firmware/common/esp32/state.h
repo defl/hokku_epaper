@@ -16,7 +16,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define RTC_MAGIC            0x484F4B55  /* "HOKU" — validates RTC memory after POR / flash */
+#include "schedule.h"   /* common/all: hokku_sched_t */
+
+/* Validates RTC memory after POR / flash. Bumped whenever the RTC layout changes
+ * (last: hokku_sched_t replaced the separate schedule globals), so an OTA into a
+ * new layout starts from clean state instead of misreading the old bytes. */
+#define RTC_MAGIC            0x484F4B56  /* "HOKV" */
 #define MAX_SPURIOUS_RESETS  3           /* cap on repeated spurious deep-sleep wakes */
 #define LOG_RING_SIZE        6144        /* log ring buffer size (RTC slow memory) */
 
@@ -52,42 +57,15 @@ extern uint8_t  last_wifi_index;   /* 0 or 1 — which network last succeeded */
  * X-Frame-State. */
 extern uint16_t last_battery_mv;
 
-/* Last server-provided sleep interval (seconds); fallback if the next boot's
- * download fails. */
-extern int32_t  last_sleep_seconds;
-
-/* Canonical next-refresh schedule anchor:
- *   0        → not scheduled; always due (first boot, no server contact yet)
- *   positive → absolute server-epoch seconds; compare against time(NULL)
- *   negative → tick-based deadline: esp_timer_get_time() µs stored negated
- *              (used when the wall clock was unset at schedule time). */
-extern int64_t  next_refresh_epoch;
-
-/* Pre-sleep server-epoch snapshot for the sleep-error diagnostic. */
-extern int64_t  pre_sleep_server_epoch;
-extern int32_t  last_sleep_err_s;
-extern bool     last_sleep_err_known;
-
-/* Deep-sleep oscillator-drift calibration (see common/all/sleep_cal.h).
- *   cal_ppm            — learned correction, ppm deviation from nominal.
- *   cal_samples        — accepted measurements; doubles as the EMA warmup weight
- *                        and the "is this device calibrated yet" test (== 0 → no).
- *   last_armed_sleep_s — timer value actually armed last sleep; needed to compute
- *                        the observed drift ratio on the next wake.
- * cal_ppm/cal_samples are mirrored to NVS so they survive power loss; the RTC copy
- * is authoritative across deep sleep / restart and is only re-hydrated from NVS on
- * a cold POR (see hokku_state_validate). */
-extern int32_t  cal_ppm;
-extern uint16_t cal_samples;
-extern int32_t  last_armed_sleep_s;
+/* Next-fetch schedule, outage streak and oscillator-drift calibration — the
+ * shared common/all/schedule.h state, kept in RTC memory across deep sleep and
+ * esp_restart(). Its cal_ppm/cal_samples are mirrored to NVS so they survive
+ * power loss (nvs_cal.h); the RTC copy is authoritative across deep sleep /
+ * restart and is only re-hydrated from NVS on a cold POR (see
+ * hokku_state_validate). */
+extern hokku_sched_t hokku_sched;
 
 extern uint8_t  consecutive_spurious_resets;
-
-/* Count of consecutive failed refreshes because the server was unreachable
- * (WiFi down or download failed). Drives exponential retry backoff so a server
- * outage doesn't make the device reboot + re-render the panel every 60 s
- * forever. Reset to 0 on any successful server contact. */
-extern uint8_t  consecutive_refresh_failures;
 
 extern uint8_t  last_sleep_mode;    /* LAST_SLEEP_MODE_* */
 extern uint8_t  pending_action;     /* ACTION_* */

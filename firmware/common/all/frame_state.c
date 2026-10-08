@@ -45,11 +45,10 @@ static void frame_state_i64(char *out, size_t outlen, long long v)
 
 void frame_state_build(char *buf, size_t buflen, const frame_state_t *fs)
 {
-    /* bat_mv is optional: a >=0 value emits ,"bat_mv":N right after uptime_s
-     * (matching the huessen schema position); <0 omits it entirely (matching
-     * the F7 "omit when unknown" behaviour). */
+    /* bat_mv is optional: a reading emits ,"bat_mv":N right after uptime_s;
+     * an implausible one (no reading, a floating ADC) omits it entirely. */
     char batfield[24];
-    if (fs->bat_mv >= 0) {
+    if (fs->bat_mv >= HOKKU_BATT_MV_MIN && fs->bat_mv <= HOKKU_BATT_MV_MAX) {
         snprintf(batfield, sizeof(batfield), ",\"bat_mv\":%d", fs->bat_mv);
     } else {
         batfield[0] = '\0';
@@ -94,4 +93,14 @@ void frame_state_build(char *buf, size_t buflen, const frame_state_t *fs)
         fs->spurious, fs->cfg_ver, clk_buf,
         next_ep_buf, sleep_err_buf, calfield,
         fs->wifi_cached ? "true" : "false");
+}
+
+void frame_state_set_schedule(frame_state_t *fs, const hokku_sched_t *s)
+{
+    /* A negative next_epoch is a tick deadline, not a time: report none. */
+    fs->next_ep         = s->next_epoch > 0 ? (long long)s->next_epoch : 0;
+    fs->sleep_err_known = s->sleep_err_known != 0;
+    fs->sleep_err_s     = (int)s->sleep_err_s;
+    fs->cal_known       = s->cal_samples > 0;
+    fs->cal_ppm         = (int)s->cal_ppm;
 }

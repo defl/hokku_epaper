@@ -183,15 +183,16 @@ With Hokku firmware the power button never switches the frame off. There's no "o
 
 ### 2.2 Error messages
 
-If something goes wrong the frame doesn't go blank or silently stop working — it renders a plain-English explanation directly on the e-paper. This means you can diagnose problems without a serial cable or a laptop.
+If something goes wrong the frame doesn't go blank or silently stop working — it renders a plain-English explanation directly on the e-paper. This means you can diagnose problems without a serial cable or a laptop. Every model shows the same messages at the same moments; a connection error is drawn once, when the problem starts, and the frame then retries quietly, waiting longer each time (up to an hour).
 
 Common error messages and what to do:
 
-- **Config missing or invalid** — the frame was flashed without being configured, or the configuration version doesn't match the firmware. Reconfigure it from **Flash a screen** in the web app, or run `python tools/hokku_setup.py` and use option [4] or [5].
+- **Config missing or invalid** — the frame was flashed without being configured (on the Bigme F7: no Wi-Fi saved), or the configuration version doesn't match the firmware. Reconfigure it from **Flash a screen** in the web app, or run `python tools/hokku_setup.py` and use option [4] or [5].
 - **WiFi connection failed** — the SSID or password is wrong, or the network isn't available at the frame's location. If a secondary network is configured the frame tries both before giving up. Check your WiFi credentials and run configure again.
-- **Image download failed** — the frame connected to WiFi but got no image from the server address it shows. Check that the server is running, that the address is correct, and that nothing on your network is blocking port 8080. An empty library or a label filter that matches nothing does not show this; the frame keeps its picture.
+- **Image download failed** — the frame connected to WiFi but got no usable reply from the server address it shows. Check that the server is running, that the address is correct, and that nothing on your network is blocking port 8080. An empty library or a label filter that matches nothing does not show this; the frame keeps its picture.
+- **Firmware update failed** — an over-the-air update could not be downloaded or installed. The frame keeps its current firmware and the server tries again on a later refresh.
 
-After fixing the underlying issue, the frame will try again on its next scheduled refresh. You can also press the power button to trigger an immediate retry.
+After fixing the underlying issue, the frame will try again on its next retry. To retry right away, do what the message says: press the button (Hokku / Huessen), press any button (Seeed E1004), or turn the frame off and on again (Bigme F7, whose button only switches power).
 
 ### 2.3 Sleep and power
 

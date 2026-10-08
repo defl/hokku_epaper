@@ -53,27 +53,75 @@ hokku_fetch_outcome_t hokku_fetch_decide(const hokku_fetch_result_t *r,
     return fetch_backoff(prior_failures, "error without schedule");
 }
 
-int32_t hokku_sleep_seconds_parse(const char *value)
+bool hokku_image_size_ok(size_t received, size_t expected)
+{
+    return expected > 0 && received == expected;
+}
+
+/* One plain decimal header value: optional surrounding whitespace, an optional
+ * leading '-' when allow_neg, then digits and nothing else. The magnitude stops
+ * growing once it passes cap, so a huge value saturates instead of overflowing.
+ * Returns false for anything else. */
+static bool parse_decimal(const char *value, bool allow_neg, int64_t cap, int64_t *out)
 {
     if (value == NULL)
-        return 0;
+        return false;
 
     const char *p = value;
     while (*p == ' ' || *p == '\t')
         p++;
+    bool neg = false;
+    if (allow_neg && *p == '-') {
+        neg = true;
+        p++;
+    }
     if (*p < '0' || *p > '9')
-        return 0;
+        return false;
 
-    int32_t secs = 0;
+    int64_t v = 0;
     while (*p >= '0' && *p <= '9') {
-        if (secs < HOKKU_SLEEP_MAX_S)      /* stop growing once clamped: no overflow */
-            secs = secs * 10 + (*p - '0');
+        if (v <= cap)
+            v = v * 10 + (*p - '0');
         p++;
     }
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
         p++;
     if (*p != '\0')
-        return 0;
+        return false;
 
-    return secs > HOKKU_SLEEP_MAX_S ? HOKKU_SLEEP_MAX_S : secs;
+    *out = neg ? -v : v;
+    return true;
+}
+
+int32_t hokku_sleep_seconds_parse(const char *value)
+{
+    int64_t secs;
+    if (!parse_decimal(value, false, HOKKU_SLEEP_MAX_S, &secs) || secs == 0)
+        return 0;
+    return secs > HOKKU_SLEEP_MAX_S ? HOKKU_SLEEP_MAX_S : (int32_t)secs;
+}
+
+int64_t hokku_server_epoch_parse(const char *value)
+{
+    int64_t epoch;
+    /* Cap far past any real clock (year ~33658) yet far inside int64. */
+    if (!parse_decimal(value, false, 1000000000000LL, &epoch) || epoch < HOKKU_EPOCH_MIN)
+        return 0;
+    return epoch;
+}
+
+bool hokku_cal_seed_parse(const char *ppm, const char *n,
+                          int32_t *out_ppm, int32_t *out_n)
+{
+    int64_t p, k;
+    if (!parse_decimal(ppm, true, 1000000000LL, &p) ||
+        !parse_decimal(n, false, 1000000000LL, &k))
+        return false;
+    /* A saturated magnitude can reach 10 * cap + 9; clamp it into int32. */
+    if (p > 1000000000LL) p = 1000000000LL;
+    if (p < -1000000000LL) p = -1000000000LL;
+    if (k > 1000000000LL) k = 1000000000LL;
+    *out_ppm = (int32_t)p;
+    *out_n   = (int32_t)k;
+    return true;
 }

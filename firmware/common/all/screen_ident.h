@@ -25,9 +25,6 @@
 /* Characters a name may use besides ASCII letters and digits. */
 #define HOKKU_SCREEN_NAME_PUNCT  " -_.'()"
 
-/* Response header carrying the server's name for this screen. */
-#define HOKKU_HDR_SCREEN_NAME    "X-Screen-Name"
-
 /* Format mac as lowercase "aa:bb:cc:dd:ee:ff" into out (needs >= 18 bytes).
  * An all-zero MAC means "unknown" and yields "". */
 void hokku_mac_format(const uint8_t mac[6], char *out, size_t len);

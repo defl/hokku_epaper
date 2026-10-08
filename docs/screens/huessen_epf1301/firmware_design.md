@@ -81,7 +81,7 @@ Boot-loop guard: `pending_action` is cleared early in `app_main`, *before* the r
 
 ### Schedule anchored to absolute server time
 
-Earlier firmwares computed sleep as "relative to now", which accumulated `+60 s` of awake-window drift per cycle. The current firmware stores `next_refresh_epoch` (Unix seconds, server-provided) in RTC-NOINIT memory and computes `remaining = (next_refresh_epoch − now_epoch) * 1e6`. RTC slow-clock drift between cycles washes out because we re-anchor on every server response; drift within one sleep is corrected by the learned calibration in [`sleep_cal.h`](../../../firmware/common/all/sleep_cal.h).
+Earlier firmwares computed sleep as "relative to now", which accumulated `+60 s` of awake-window drift per cycle. The current firmware stores the next fetch time (`hokku_sched.next_epoch`, Unix seconds, server-provided; shared with every model in [`schedule.h`](../../../firmware/common/all/schedule.h)) in RTC-NOINIT memory and computes `remaining = (next_refresh_epoch − now_epoch) * 1e6`. RTC slow-clock drift between cycles washes out because we re-anchor on every server response; drift within one sleep is corrected by the learned calibration in [`sleep_cal.h`](../../../firmware/common/all/sleep_cal.h).
 
 Floored at 5 s minimum (spec awake window) before entering sleep.
 

@@ -1,16 +1,14 @@
 /*
  * test_text_render.c — host-side unit tests for draw_char / draw_string.
  *
- * No ESP-IDF dependency: text_render.c is pure C (standard headers only).
- * Build: compiled alongside ../../main/text_render.c by CMakeLists.txt.
- * Run:   ./test_text_render   (exit 0 on all pass, 1 if any fail)
+ * Pure C, no mocks: includes the unit under test directly (see CMakeLists.txt).
  */
 
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 
-#include "../../../common/esp32/text_render.h"
+#include "../text_render.c"
 
 /* ── Minimal test framework ──────────────────────────────────────────── */
 static int g_pass = 0;
@@ -226,6 +224,36 @@ static void test_nibble_values_are_preserved_across_chars(void)
     CHECK(nibble == 0x7, "draw_string: color nibble stored correctly in framebuffer");
 }
 
+
+/* ── text_render_row: the streaming renderer must lay text out exactly like
+ *    draw_string, row for row, so a board without a framebuffer shows the
+ *    same message. ───────────────────────────────────────────────────────── */
+
+static int rows_match(int w, int h, int x, int y0, const char *msg, int scale)
+{
+    static uint8_t fb[200 * 120 / 2];
+    static uint8_t row[200 / 2];
+    fill_nibble(fb, w * h / 2, 0x1);
+    draw_string(fb, w, h, x, y0, msg, 0x0, scale);
+    for (int y = 0; y < h; y++) {
+        text_render_row(row, w, h, y, x, y0, msg, 0x0, 0x1, scale);
+        if (memcmp(row, fb + y * (w / 2), (size_t)(w / 2)) != 0)
+            return 0;
+    }
+    return 1;
+}
+
+static void test_row_renderer_matches_framebuffer(void)
+{
+    CHECK(rows_match(200, 120, 4, 6, "Image download failed.\n\nTried:\nhttp://x/", 1),
+          "text_render_row: matches draw_string (newlines, scale 1)");
+    CHECK(rows_match(200, 120, 3, 2, "a long line that has to wrap at the edge", 2),
+          "text_render_row: matches draw_string (wrapping, scale 2)");
+    CHECK(rows_match(200, 120, 0, 0, "line1\nline2\nline3\nline4\nline5\nline6\nline7", 3),
+          "text_render_row: matches draw_string (clipped at the bottom, scale 3)");
+    CHECK(rows_match(200, 120, 1, 1, "odd x \x01\x7f", 1),
+          "text_render_row: matches draw_string (odd x, unprintable chars)");
+}
 /* ── Entry point ─────────────────────────────────────────────────────── */
 
 int main(void)
@@ -249,6 +277,8 @@ int main(void)
     test_stops_when_next_row_exceeds_fb_height();
     test_string_respects_start_offset();
     test_nibble_values_are_preserved_across_chars();
+
+    test_row_renderer_matches_framebuffer();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

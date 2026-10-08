@@ -28,3 +28,4 @@ static inline esp_err_t esp_ota_abort(esp_ota_handle_t handle) { (void)handle; r
 static inline esp_err_t esp_ota_set_boot_partition(const esp_partition_t *partition) { (void)partition; return ESP_OK; }
 static inline esp_err_t esp_ota_get_state_partition(const esp_partition_t *partition, esp_ota_img_states_t *ota_state) { (void)partition; (void)ota_state; return ESP_FAIL; }
 static inline esp_err_t esp_ota_mark_app_valid_cancel_rollback(void) { return ESP_OK; }
+static inline esp_err_t esp_ota_mark_app_invalid_rollback_and_reboot(void) { return ESP_FAIL; }
