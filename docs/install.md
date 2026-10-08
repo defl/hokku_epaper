@@ -121,6 +121,13 @@ sudo apt install ./hokku-server_*.deb
 
 The package creates a default config at `/var/lib/hokku/config.json` on first start and brings up the web UI at `http://hokku.local:8080/`.
 
+**Upgrading later.** [`tools/hokku_upgrade.py`](../tools/hokku_upgrade.py) lists the releases, then backs up `/var/lib/hokku`, installs the one you pick, shows new settings and how yours differ from the release's defaults, offers to re-render the pictures and to update frames on older firmware over the air on their next refresh, and prints a rollback command. The same script upgrades the [appliance](appliance.md#updating-the-server):
+
+```bash
+curl -LO https://raw.githubusercontent.com/defl/hokku_epaper/main/tools/hokku_upgrade.py
+sudo python3 hokku_upgrade.py            # or --tag v4.0.0-beta4, --list, --dry-run
+```
+
 **First boot is slow.** On a Pi Zero 2 W expect 3–8 minutes for the OS to fully initialise, install packages, and bring the webserver up. SSH in and tail `/var/log/hokku-firstboot-install.log` if you want to watch progress.
 
 ---

@@ -1,3 +1,19 @@
+hokku-server (4.0.1~dev.101-1) unstable; urgency=medium
+
+  * tools/hokku_upgrade.py: pick a release from a list and upgrade (or roll
+    back) a .deb install, on Debian/Ubuntu or the Raspberry Pi appliance --
+    free-space-checked backup of /var/lib/hokku, SHA-256-checked download,
+    report of new settings and of drift from the release's default presets,
+    optional re-render, and a printed --restore rollback command. Refuses to
+    run while the appliance is still in setup mode.
+  * docs/appliance.md: updating the server without reflashing the card.
+  * tools/hokku_upgrade.py: after an upgrade, list frames on older firmware
+    than the release serves and offer to tick "Update firmware on next
+    refresh" for each (POST /hokku/api/screens/<name>/update); --firmware
+    ask|yes|no. Frames without over-the-air support are pointed at USB.
+
+ -- Dan Rowe <draco2003@gmail.com>  Wed, 07 Oct 2026 20:30:00 +0000
+
 hokku-server (4.0.1~dev.100-1) unstable; urgency=medium
 
   * Firmware parity: every model shows the same error messages, confirms or
