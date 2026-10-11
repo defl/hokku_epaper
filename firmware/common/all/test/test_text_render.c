@@ -254,6 +254,40 @@ static void test_row_renderer_matches_framebuffer(void)
     CHECK(rows_match(200, 120, 1, 1, "odd x \x01\x7f", 1),
           "text_render_row: matches draw_string (odd x, unprintable chars)");
 }
+
+/* Pixel (px, py) of a 4bpp framebuffer w pixels wide. */
+static uint8_t px_at(const uint8_t *fb, int w, int px, int py)
+{
+    uint8_t b = fb[py * (w / 2) + px / 2];
+    return (uint8_t)((px % 2 == 0) ? (b >> 4) : (b & 0x0F));
+}
+
+/* Every pixel of the rot180 stream equals the upright framebuffer's pixel at
+ * (w-1-px, h-1-py): the panel then shows the text upright. */
+static int rot180_matches(int w, int h, int x, int y0, const char *msg, int scale)
+{
+    static uint8_t fb[200 * 120 / 2];
+    static uint8_t row[200 / 2];
+    fill_nibble(fb, w * h / 2, 0x1);
+    draw_string(fb, w, h, x, y0, msg, 0x0, scale);
+    for (int y = 0; y < h; y++) {
+        text_render_row_rot180(row, w, h, y, x, y0, msg, 0x0, 0x1, scale);
+        for (int px = 0; px < w; px++)
+            if (px_at(row, w, px, 0) != px_at(fb, w, w - 1 - px, h - 1 - y))
+                return 0;
+    }
+    return 1;
+}
+
+static void test_rot180_row_renderer(void)
+{
+    CHECK(rot180_matches(200, 120, 4, 6, "Updating firmware...\n\nDo not turn off.", 1),
+          "text_render_row_rot180: draw_string rotated 180 (scale 1)");
+    CHECK(rot180_matches(200, 120, 3, 2, "a long line that has to wrap at the edge", 2),
+          "text_render_row_rot180: draw_string rotated 180 (wrapping, scale 2)");
+    CHECK(rot180_matches(198, 120, 1, 1, "odd byte count in a row", 1),
+          "text_render_row_rot180: odd number of bytes per row");
+}
 /* ── Entry point ─────────────────────────────────────────────────────── */
 
 int main(void)
@@ -279,6 +313,7 @@ int main(void)
     test_nibble_values_are_preserved_across_chars();
 
     test_row_renderer_matches_framebuffer();
+    test_rot180_row_renderer();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

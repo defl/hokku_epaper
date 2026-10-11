@@ -69,7 +69,7 @@
 
 #define SCREEN_NAME             "bigme-f7"
 #define SCREEN_MODEL            "bigme_f7"
-#define FIRMWARE_VERSION        "1.2.17"
+#define FIRMWARE_VERSION        "1.2.18"
 
 #define HTTP_TIMEOUT_S          90       /* covers 192KB DL + EPD streaming time */
 

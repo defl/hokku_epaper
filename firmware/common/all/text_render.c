@@ -201,3 +201,21 @@ void text_render_row(uint8_t *row, int fb_w, int fb_h, int y, int x, int y0,
         cx += char_w;
     }
 }
+
+static uint8_t swap_nibbles(uint8_t b)
+{
+    return (uint8_t)((b << 4) | (b >> 4));
+}
+
+void text_render_row_rot180(uint8_t *row, int fb_w, int fb_h, int y, int x, int y0,
+                            const char *str, uint8_t color, uint8_t bg, int scale)
+{
+    /* Row y of the rotated image is row fb_h-1-y of the upright one, mirrored:
+     * bytes in reverse order, and the two pixels within each byte swapped. */
+    text_render_row(row, fb_w, fb_h, fb_h - 1 - y, x, y0, str, color, bg, scale);
+    for (int i = 0, j = fb_w / 2 - 1; i <= j; i++, j--) {
+        uint8_t left = row[i];
+        row[i] = swap_nibbles(row[j]);
+        row[j] = swap_nibbles(left);
+    }
+}
