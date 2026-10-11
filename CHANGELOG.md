@@ -26,7 +26,7 @@
 
 ### Firmware
 
-- `bigme_f7` **1.2.16 → 1.2.17**, `huessen_epf1301` **1.2.27 → 1.2.28**,
+- `bigme_f7` **1.2.16 → 1.2.18**, `huessen_epf1301` **1.2.27 → 1.2.28**,
   `seeedstudio_e1004` **1.2.7 → 1.2.8** — shared behaviour (messages, schedule
   and drift correction, update confirmation).
 

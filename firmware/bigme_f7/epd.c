@@ -266,7 +266,9 @@ void epd_refresh(void)
  * Put a message on the glass (common/all/messages.h). There is no RAM for a
  * 192 KB framebuffer, so each row is rendered on the fly and streamed straight
  * into the controller, exactly as an image is; the layout is the same as the
- * ESP32 boards' framebuffer path (text_render.h).
+ * ESP32 boards' framebuffer path (text_render.h). The panel's scan origin is
+ * the opposite corner, so rows go out rotated 180°, matching the flip the
+ * server applies when it packs an image for this panel.
  */
 void epd_show_text(const char *msg)
 {
@@ -274,8 +276,8 @@ void epd_show_text(const char *msg)
 
     epd_send_cmd(0x10);                              /* DTM: data start transmission */
     for (int y = 0; y < EPD_HEIGHT; y++) {
-        text_render_row(row, EPD_WIDTH, EPD_HEIGHT, y, HOKKU_MSG_X, HOKKU_MSG_Y, msg,
-                        HOKKU_MSG_COLOR, HOKKU_MSG_BG, HOKKU_MSG_SCALE);
+        text_render_row_rot180(row, EPD_WIDTH, EPD_HEIGHT, y, HOKKU_MSG_X, HOKKU_MSG_Y, msg,
+                               HOKKU_MSG_COLOR, HOKKU_MSG_BG, HOKKU_MSG_SCALE);
         for (int i = 0; i < EPD_WIDTH / 2; i++)
             epd_send_data(row[i]);
     }

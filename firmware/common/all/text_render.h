@@ -27,3 +27,9 @@ void draw_string(uint8_t *fb, int fb_w, int fb_h, int x, int y,
  * row[0 .. fb_w/2). fb_w must be even. */
 void text_render_row(uint8_t *row, int fb_w, int fb_h, int y, int x, int y0,
                      const char *str, uint8_t color, uint8_t bg, int scale);
+
+/* As text_render_row(), but row y of the same image rotated 180°: for a panel
+ * whose scan origin is the opposite corner (the Bigme F7), so streaming rows
+ * 0..fb_h-1 puts the text upright, as the server's packing does for images. */
+void text_render_row_rot180(uint8_t *row, int fb_w, int fb_h, int y, int x, int y0,
+                            const char *str, uint8_t color, uint8_t bg, int scale);
