@@ -1,3 +1,27 @@
+hokku-server (4.0.1~dev.103-1) unstable; urgency=medium
+
+  * Picture details: the letterbox slider says, per registered frame,
+    whether the picture fills it or shows with bars; with several models
+    the preview can be switched between them.
+
+ -- dmbutko <253267065+dmbutko@users.noreply.github.com>  Mon, 19 Oct 2026 17:15:32 +1100
+
+hokku-server (4.0.1~dev.102-1) unstable; urgency=medium
+
+  * Connected screens show what each frame is displaying and will fetch
+    next, rendered for that frame's model and mount orientation; picture
+    thumbnails open the details view.
+
+ -- dmbutko <253267065+dmbutko@users.noreply.github.com>  Mon, 19 Oct 2026 16:31:44 +1100
+
+hokku-server (4.0.1~dev.101-1) unstable; urgency=medium
+
+  * Web UI previews and the letterbox-fill hint use the screen model that
+    has checked in (e.g. bigme_f7 800x480) instead of always huessen_epf1301;
+    /api/dithered takes ?screen_model=.
+
+ -- dmbutko <253267065+dmbutko@users.noreply.github.com>  Mon, 19 Oct 2026 16:05:28 +1100
+
 hokku-server (4.0.1~dev.100-1) unstable; urgency=medium
 
   * Firmware parity: every model shows the same error messages, confirms or

@@ -74,6 +74,7 @@ from hokku.webserver.resource_budget import (
     memory_budget_too_low,
 )
 from hokku.webserver.resource_limits import detect_memory_limit_bytes
+from hokku.webserver.screen_config import ScreenConfig
 from hokku.webserver.screen_headers import (
     parse_battery_header,
     parse_cal_ppm,
@@ -85,6 +86,7 @@ from hokku.webserver.screen_headers import (
     parse_screen_model,
     screen_name_valid,
 )
+from hokku.webserver.serve_scheduler import ServeScheduler
 from hokku.webserver.time_utils import calculate_sleep_seconds, format_duration_human
 
 logger = logging.getLogger(__name__)
@@ -243,6 +245,28 @@ def _pipeline_label(rec: ImageRecord, obs: Observations | None) -> str:
     return "default"
 
 
+def _preview_model(state: AppState) -> str:
+    """The screen model the web UI previews and hints for.
+
+    The UI shows one picture against one panel geometry, so it needs a single
+    answer: the model every self-identified screen reports. With no screen
+    yet, or a mix of models, it is the reference model — the only one that is
+    always rendered.
+    """
+    models = {m for m in state.scheduler.known_models() if m in DISPLAY_REGISTRY}
+    return next(iter(models)) if len(models) == 1 else "huessen_epf1301"
+
+
+def _next_for_screen(scheduler: ServeScheduler, cfg: ScreenConfig) -> str | None:
+    """The picture a screen with this config gets on its next check-in.
+
+    Shared by the serve path and the dashboard's "Next" preview, so the
+    dashboard shows what the frame will actually fetch.
+    """
+    orientation = cfg.orientation if cfg.filter_by_orientation else Orientation.NEUTRAL
+    return scheduler.pick_next(orientation=orientation, labels=frozenset(cfg.labels))
+
+
 def create_app(
     state: AppState,
     *,
@@ -354,8 +378,7 @@ def create_app(
                 screen_log = raw.decode("utf-8", errors="replace")
 
         cfg = scheduler.get_screen_config(screen_name)
-        pick_orientation = cfg.orientation if cfg.filter_by_orientation else Orientation.NEUTRAL
-        chosen = scheduler.pick_next(orientation=pick_orientation, labels=frozenset(cfg.labels))
+        chosen = _next_for_screen(scheduler, cfg)
         sleep_seconds = calculate_sleep_seconds(config) if chosen else _busy_retry_seconds(config)
 
         if chosen is None:
@@ -574,8 +597,7 @@ def create_app(
 
     @app.route("/hokku/ui")
     def web_gui():
-        ref = DISPLAY_REGISTRY["huessen_epf1301"]
-        return render_template("index.html", visual_w=ref.visual_w, visual_h=ref.visual_h)
+        return render_template("index.html")
 
     @app.route("/hokku/static/<path:filename>")
     def static_asset(filename: str):
@@ -597,7 +619,12 @@ def create_app(
 
     @app.route("/hokku/api/dithered/<path:name>")
     def api_dithered(name: str):
-        png = state.manager.preview_png(name)
+        # Omitted means the reference model, which is always rendered and is
+        # what tools/ fetch; the UI passes the model it previews for.
+        model = request.args.get("screen_model", "huessen_epf1301")
+        if model not in DISPLAY_REGISTRY:
+            return jsonify({"error": f"unknown screen_model {model!r}"}), 400
+        png = state.manager.preview_png(name, model)
         if png is None:
             abort(404)
         return _png_response(png)
@@ -866,6 +893,36 @@ def create_app(
         """
         state.scheduler.remove_screen(name)
         return jsonify({"ok": True})
+
+    @app.route("/hokku/api/screens/<string:name>/preview")
+    def api_screen_preview(name: str):
+        """The picture this screen is showing (``?which=showing``) or will fetch
+        on its next check-in (``?which=next``), as the frame renders it: its
+        model and mount orientation. 404 until something has been served, or
+        while the render is still pending."""
+        which = request.args.get("which", "showing")
+        if which not in ("showing", "next"):
+            return jsonify({"error": "which must be 'showing' or 'next'"}), 400
+        t = state.scheduler.screens().get(name)
+        if t is None:
+            return jsonify({"error": f"screen {name!r} not found"}), 404
+        cfg = state.scheduler.get_screen_config(name)
+        image = t.last_served if which == "showing" else _next_for_screen(state.scheduler, cfg)
+        if image is None:
+            abort(404)
+        # No reported model means pre-1.2.9 firmware, i.e. a Huessen (see /hokku/screen/).
+        model = t.screen_model or "huessen_epf1301"
+        rec = state.manager.status(image)
+        png = state.manager.preview_png(image, model, cfg.orientation)
+        if rec is None or png is None:
+            abort(404)
+        resp = _png_response(png)
+        # The dashboard re-requests this on every poll: let the browser
+        # revalidate rather than re-download until the picture or its render
+        # (the slug) changes.
+        resp.set_etag(f"{image}/{rec.slug_for(model, cfg.orientation)}")
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp.make_conditional(request)
 
     @app.route("/hokku/api/screens/<string:name>/rename", methods=["POST"])
     def api_screen_rename(name: str):
@@ -1207,6 +1264,7 @@ def create_app(
                 ),
                 "last_sleep_seconds": t.last_sleep_seconds,
                 "last_served": t.last_served,
+                "next_image": _next_for_screen(scheduler, scfg),
                 "screen_model": t.screen_model,
                 "battery_mv": t.battery_mv,
                 "battery_percent": t.battery_percent,
@@ -1313,16 +1371,20 @@ def create_app(
                 "dither_preset_order": list(PRESET_IMAGE_CONFIGS),
                 "server_time": datetime.now().isoformat(timespec="seconds"),
                 # Per-model panel geometry, keyed by model id — auto-includes any
-                # model added to the registry.  The legacy "panel" key mirrors the
-                # reference model so older UI code keeps working.
+                # model added to the registry.  "preview_model" is the entry the
+                # UI previews and hints against (see _preview_model).  The legacy
+                # "panel" key mirrors the reference model so older UI code keeps
+                # working.
                 "panels": {
                     mid: {
                         "visual_w": d.visual_w,
                         "visual_h": d.visual_h,
+                        "panel_rotated": d.panel_rotated,
                         "total_bytes": d.total_bytes,
                     }
                     for mid, d in DISPLAY_REGISTRY.items()
                 },
+                "preview_model": _preview_model(state),
                 "panel": {
                     "visual_w": DISPLAY_REGISTRY["huessen_epf1301"].visual_w,
                     "visual_h": DISPLAY_REGISTRY["huessen_epf1301"].visual_h,
