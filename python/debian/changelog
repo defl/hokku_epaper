@@ -1,3 +1,11 @@
+hokku-server (4.0.1~dev.102-1) unstable; urgency=medium
+
+  * Connected screens show what each frame is displaying and will fetch
+    next, rendered for that frame's model and mount orientation; picture
+    thumbnails open the details view.
+
+ -- dmbutko <253267065+dmbutko@users.noreply.github.com>  Mon, 19 Oct 2026 16:31:44 +1100
+
 hokku-server (4.0.1~dev.101-1) unstable; urgency=medium
 
   * Web UI previews and the letterbox-fill hint use the screen model that

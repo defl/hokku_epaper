@@ -490,6 +490,15 @@
   }
   .screens-table td { padding: 8px 12px; border-bottom: 1px solid var(--bamboo-soft); color: var(--sumi); }
   .screens-table tr.overdue td { background: rgba(184, 58, 46, 0.08); }
+  /* What the frame shows now / fetches next: the real render for that screen's
+     model and mount orientation. The bezel makes white letterbox bars visible. */
+  .frame-previews { display: flex; gap: 10px; }
+  .frame-preview { display: block; cursor: pointer; font-size: 0.75em; color: var(--stone); line-height: 1.3; }
+  .frame-preview img {
+    display: block; height: 96px; width: auto;
+    border: 3px solid var(--sumi); border-radius: 3px; background: #fff;
+  }
+  .frame-preview span { display: block; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .screens-empty { color: var(--stone); font-style: italic; padding: 14px 0; font-size: 0.9em; }
   .screen-warning {
     background: rgba(201, 150, 43, 0.10);
@@ -764,6 +773,8 @@
   .dither-preview-result img {
     max-width: min(100%, 800px); max-height: 800px;
     border-radius: 4px; box-shadow: var(--shadow-sm);
+    /* A bezel, so white letterbox bars read as bars and not as page. */
+    border: 3px solid var(--sumi); background: #fff;
     display: block; margin: 0 auto;
   }
   .dither-preview-mask {
@@ -1359,7 +1370,7 @@
       <div class="config-row" style="margin-top:10px;">
         <label>Letterbox fill limit:</label>
         <input type="range" id="imgcfg-crop" min="0" max="100" step="1" value="0" disabled>
-        <span id="imgcfg-crop-val" class="info">automatic</span>
+        <span id="imgcfg-crop-val" class="info">global default</span>
         <button type="button" class="btn btn-secondary btn-small" id="imgcfg-crop-override-btn">Override</button>
       </div>
       <p class="info" id="imgcfg-crop-hint"></p>
@@ -1652,16 +1663,21 @@ async function downloadFirmware(model, tag, btn) {
 let ditherPresets = {};
 let ditherPresetOrder = [];   // catalog order; see /api/config dither_preset_order
 let configDefaults = null;
-// The panel the UI previews and hints against: /api/config's preview_model
-// entry of `panels`, plus its model id. null until /api/config has loaded.
+// Panel geometry per model from /api/config, and the one the UI previews and
+// hints against by default (its preview_model entry plus the model id).
+// null until /api/config has loaded.
+let lastPanels = {};
 let lastPanelData = null;
+// The panel the open details modal previews for: the screen it was opened
+// from, else lastPanelData.
+let detailPanel = null;
 
-// Visible canvas for a picture of this orientation on that panel. A rotated
-// panel (Huessen) turns with the picture; a non-rotated one (Bigme F7) stays
-// 800×480 either way, so a portrait picture is pillarboxed, not rotated.
+// Visible canvas for a picture of this orientation on the detail panel. A
+// rotated panel (Huessen) turns with the picture; a non-rotated one (Bigme F7)
+// stays 800×480 either way, so a portrait picture is pillarboxed, not rotated.
 // Mirrors _prepare_canvas() in image_abc.py.
 function panelVisibleDims(orient) {
-  const p = lastPanelData;
+  const p = detailPanel;
   const swap = p.panel_rotated && orient === 'portrait';
   return swap ? [p.visual_h, p.visual_w] : [p.visual_w, p.visual_h];
 }
@@ -2330,8 +2346,10 @@ function ditherPreviewBody(panelId, filename, extra) {
   if (panelId === 'imgcfg' && imgcfgCropOverride !== null) {
     body.crop_to_fill_threshold = imgcfgCropOverride;
   }
-  // Render for the panel the UI is showing, not the server's reference model.
-  if (lastPanelData) body.screen_model = lastPanelData.model;
+  // Render for the panel the UI is showing, not the server's reference model;
+  // the per-picture editor follows the screen its modal was opened from.
+  const panel = panelId === 'imgcfg' ? detailPanel : lastPanelData;
+  if (panel) body.screen_model = panel.model;
   return Object.assign(body, extra || {});
 }
 
@@ -3144,7 +3162,7 @@ function renderScreens(screens, bundledFirmwareVersions) {
     html += '</ul></div>';
   }
 
-  html += '<table class="screens-table"><tr><th>Name</th><th>Model</th><th>IP</th><th>Battery</th><th>Last Seen</th><th>Next Update</th><th>Last Image</th><th></th></tr>';
+  html += '<table class="screens-table"><tr><th>Name</th><th>Model</th><th>IP</th><th>Battery</th><th>Last Seen</th><th>Next Update</th><th>Showing / Next</th><th></th></tr>';
   names.forEach(name => {
     const s = screens[name];
     const late = overdueMinutes(s);
@@ -3157,8 +3175,16 @@ function renderScreens(screens, bundledFirmwareVersions) {
     const removeBtn = `<button class="btn-icon-danger" onclick="removeScreen('${safeName}')" title="Remove screen record" aria-label="Remove ${name}">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
     </button>`;
-    const lastImgThumb = s.last_served
-      ? `<a href="/hokku/api/original/${encodeURIComponent(s.last_served)}" target="_blank" title="${escapeHtml(s.last_served)}" style="display:block;line-height:0;"><img src="/hokku/api/thumbnail/${encodeURIComponent(s.last_served)}" alt="${escapeHtml(s.last_served)}" style="height:32px;width:auto;border-radius:2px;border:1px solid var(--bamboo);" loading="lazy" onerror="this.style.display='none'"></a>`
+    // The real render for this screen's model and mount orientation — what is
+    // on the glass now, and what it fetches next. Click opens the picture's
+    // details, previewing for this screen's model.
+    const framePreview = (which, image) => !image ? '' :
+      `<a class="frame-preview" title="Click for details" onclick="showImageDetails(${escapeHtml(JSON.stringify(image))}, ${escapeHtml(JSON.stringify(s.screen_model || null))})">
+        <img src="/hokku/api/screens/${encodeURIComponent(name)}/preview?which=${which}" alt="" onerror="this.style.visibility='hidden'">
+        <span>${which === 'showing' ? 'Showing' : 'Next'}: ${escapeHtml(image)}</span>
+      </a>`;
+    const framePreviews = (s.last_served || s.next_image)
+      ? `<div class="frame-previews">${framePreview('showing', s.last_served)}${framePreview('next', s.next_image)}</div>`
       : '<span style="color:var(--bamboo)">—</span>';
     let nameBadges = '';
     if (s.ota_error) nameBadges += ' <span title="Firmware update error" style="color:#a33;font-weight:700">⛔</span>';
@@ -3176,7 +3202,7 @@ function renderScreens(screens, bundledFirmwareVersions) {
       <td>${formatBattery(s)}</td>
       <td>${s.last_seen || '-'}</td>
       <td>${formatNextUpdate(s.next_update_at)}</td>
-      <td>${lastImgThumb}</td>
+      <td>${framePreviews}</td>
       <td><div style="display:flex;gap:6px;align-items:center;">${configBtn}${detailsBtn}${removeBtn}</div></td>
     </tr>`;
   });
@@ -3705,7 +3731,7 @@ function renderImageGrid(uploadFiles, serveData, nextImages) {
     const pendingBadge = dithered ? '' :
       '<div class="pending-badge" title="Dithered version for the e-ink display is still being generated">Dithering…</div>';
     const thumbHtml = `<img src="/hokku/api/thumbnail/${encodeURIComponent(fname)}" alt="${escapeHtml(fname)}"
-         style="cursor:pointer" title="Click to view original">`;
+         style="cursor:pointer" title="Click for details">`;
     // Rotation action: orientation-aware "next" badges (non-interactive) when this
     // image is queued next for any orientation; otherwise an active "Show Next" button.
     const rotationHtml = !dithered ? '' : isNext
@@ -3721,19 +3747,15 @@ function renderImageGrid(uploadFiles, serveData, nextImages) {
         ${labelChips(entry.labels)}
         <div class="card-actions">
           ${rotationHtml}
-          <button class="btn btn-secondary btn-small details-btn" data-name="">Details</button>
         </div>
       </div>
     `;
     // Wire click handlers via data attributes to avoid injection from filenames.
     const img = card.querySelector('img');
-    img.addEventListener('click', () => window.open('/hokku/api/original/' + encodeURIComponent(fname)));
+    img.addEventListener('click', () => showImageDetails(fname));
     const delBtn = card.querySelector('.delete-btn');
     delBtn.dataset.name = fname;
     delBtn.addEventListener('click', () => deleteImage(fname));
-    const detBtn = card.querySelector('.details-btn');
-    detBtn.dataset.name = fname;
-    detBtn.addEventListener('click', () => showImageDetails(fname));
     const snBtn = card.querySelector('.shownext-btn');
     if (snBtn) {
       snBtn.dataset.name = fname;
@@ -3902,7 +3924,12 @@ function setupImageLabelEditor(fname, entry) {
   render();
 }
 
-function showImageDetails(fname) {
+// `model` is the screen model to preview for when opened from a screen's row;
+// otherwise the UI's default panel.
+function showImageDetails(fname, model) {
+  detailPanel = (model && lastPanels[model])
+    ? Object.assign({model}, lastPanels[model])
+    : lastPanelData;
   const entry   = (lastUploadFiles || []).find(e => e.name === fname) || {};
   const sd      = (lastServeData   || {})[fname] || {};
 
@@ -3955,7 +3982,7 @@ function showImageDetails(fname) {
   // doesn't perfectly match the screen. Computed from the fit/cover scale ratio
   // using the same formula as _prepare_canvas() in image_abc.py.
   let fillLimitCell = null;
-  if (!isVector && entry.image_width && entry.image_height && lastPanelData) {
+  if (!isVector && entry.image_width && entry.image_height && detailPanel) {
     // Preview/dither use the image's native orientation, so the
     // letterbox-fill limit shown here must match.
     const orient = entry.native_orientation || 'landscape';
@@ -3985,7 +4012,7 @@ function showImageDetails(fname) {
 
   const actions = document.getElementById('img-detail-actions');
   if (entry.dithered) {
-    const model = lastPanelData ? `?screen_model=${encodeURIComponent(lastPanelData.model)}` : '';
+    const model = detailPanel ? `?screen_model=${encodeURIComponent(detailPanel.model)}` : '';
     actions.innerHTML = `<a class="btn btn-secondary btn-small" href="/hokku/api/dithered/${encodeURIComponent(fname)}${model}" target="_blank">View dithered</a>`;
   } else {
     actions.innerHTML = '<span style="color:#92400e;font-size:0.85em">Dithered version not ready yet</span>';
@@ -4099,14 +4126,17 @@ function renderImageOverrideCropHint(entry) {
   const hint = document.getElementById('imgcfg-crop-hint');
   if (!hint) return;
   hint.textContent = '';
-  if (!entry || !entry.image_width || !entry.image_height || !lastPanelData) return;
+  if (!entry || !entry.image_width || !entry.image_height || !detailPanel) return;
   const orient = entry.native_orientation || 'landscape';
   const [visW, visH] = panelVisibleDims(orient);
   const scaleFit   = Math.min(visW / entry.image_width, visH / entry.image_height);
   const scaleCover = Math.max(visW / entry.image_width, visH / entry.image_height);
   const zoom = scaleCover / scaleFit - 1.0;
   if (zoom > 1e-9) {
-    hint.textContent = `Needs at least ${Math.ceil(zoom * 100)}% to fill the frame with no letterbox bars.`;
+    const pct = Math.ceil(zoom * 100);
+    hint.textContent = pct > 100
+      ? `On ${detailPanel.model} this picture needs ${pct}% — more than the 100% limit — so it always shows letterbox bars.`
+      : `On ${detailPanel.model} this picture needs at least ${pct}% to fill the frame with no letterbox bars.`;
   }
 }
 
@@ -4168,7 +4198,7 @@ function syncImageCropControl(effectiveValue) {
   slider.value = Math.round(shown * 100);
   slider.disabled = !overridden;
   label.textContent = overridden ? `${Math.round(shown * 100)}%`
-                                 : `automatic (${Math.round(shown * 100)}%)`;
+                                 : `global default (${Math.round(shown * 100)}%)`;
   btn.textContent = overridden ? 'Use automatic' : 'Override';
   slider.dataset.effective = String(effectiveValue);
 }
@@ -4414,7 +4444,8 @@ async function loadConfig() {
 
     // Dither presets + current state for the three Config-tab pipelines. The
     // per-picture editor is mounted on demand by the image details modal.
-    lastPanelData = Object.assign({model: data.preview_model}, data.panels[data.preview_model]);
+    lastPanels = data.panels || {};
+    lastPanelData = Object.assign({model: data.preview_model}, lastPanels[data.preview_model]);
     configDefaults = data.config_defaults || null;
     ditherPresets = data.dither_presets || {};
     ditherPresetOrder = data.dither_preset_order || [];

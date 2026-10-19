@@ -74,6 +74,7 @@ from hokku.webserver.resource_budget import (
     memory_budget_too_low,
 )
 from hokku.webserver.resource_limits import detect_memory_limit_bytes
+from hokku.webserver.screen_config import ScreenConfig
 from hokku.webserver.screen_headers import (
     parse_battery_header,
     parse_cal_ppm,
@@ -85,6 +86,7 @@ from hokku.webserver.screen_headers import (
     parse_screen_model,
     screen_name_valid,
 )
+from hokku.webserver.serve_scheduler import ServeScheduler
 from hokku.webserver.time_utils import calculate_sleep_seconds, format_duration_human
 
 logger = logging.getLogger(__name__)
@@ -255,6 +257,16 @@ def _preview_model(state: AppState) -> str:
     return next(iter(models)) if len(models) == 1 else "huessen_epf1301"
 
 
+def _next_for_screen(scheduler: ServeScheduler, cfg: ScreenConfig) -> str | None:
+    """The picture a screen with this config gets on its next check-in.
+
+    Shared by the serve path and the dashboard's "Next" preview, so the
+    dashboard shows what the frame will actually fetch.
+    """
+    orientation = cfg.orientation if cfg.filter_by_orientation else Orientation.NEUTRAL
+    return scheduler.pick_next(orientation=orientation, labels=frozenset(cfg.labels))
+
+
 def create_app(
     state: AppState,
     *,
@@ -366,8 +378,7 @@ def create_app(
                 screen_log = raw.decode("utf-8", errors="replace")
 
         cfg = scheduler.get_screen_config(screen_name)
-        pick_orientation = cfg.orientation if cfg.filter_by_orientation else Orientation.NEUTRAL
-        chosen = scheduler.pick_next(orientation=pick_orientation, labels=frozenset(cfg.labels))
+        chosen = _next_for_screen(scheduler, cfg)
         sleep_seconds = calculate_sleep_seconds(config) if chosen else _busy_retry_seconds(config)
 
         if chosen is None:
@@ -883,6 +894,36 @@ def create_app(
         state.scheduler.remove_screen(name)
         return jsonify({"ok": True})
 
+    @app.route("/hokku/api/screens/<string:name>/preview")
+    def api_screen_preview(name: str):
+        """The picture this screen is showing (``?which=showing``) or will fetch
+        on its next check-in (``?which=next``), as the frame renders it: its
+        model and mount orientation. 404 until something has been served, or
+        while the render is still pending."""
+        which = request.args.get("which", "showing")
+        if which not in ("showing", "next"):
+            return jsonify({"error": "which must be 'showing' or 'next'"}), 400
+        t = state.scheduler.screens().get(name)
+        if t is None:
+            return jsonify({"error": f"screen {name!r} not found"}), 404
+        cfg = state.scheduler.get_screen_config(name)
+        image = t.last_served if which == "showing" else _next_for_screen(state.scheduler, cfg)
+        if image is None:
+            abort(404)
+        # No reported model means pre-1.2.9 firmware, i.e. a Huessen (see /hokku/screen/).
+        model = t.screen_model or "huessen_epf1301"
+        rec = state.manager.status(image)
+        png = state.manager.preview_png(image, model, cfg.orientation)
+        if rec is None or png is None:
+            abort(404)
+        resp = _png_response(png)
+        # The dashboard re-requests this on every poll: let the browser
+        # revalidate rather than re-download until the picture or its render
+        # (the slug) changes.
+        resp.set_etag(f"{image}/{rec.slug_for(model, cfg.orientation)}")
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp.make_conditional(request)
+
     @app.route("/hokku/api/screens/<string:name>/rename", methods=["POST"])
     def api_screen_rename(name: str):
         """Rename a screen (``{"name": "..."}``).
@@ -1223,6 +1264,7 @@ def create_app(
                 ),
                 "last_sleep_seconds": t.last_sleep_seconds,
                 "last_served": t.last_served,
+                "next_image": _next_for_screen(scheduler, scfg),
                 "screen_model": t.screen_model,
                 "battery_mv": t.battery_mv,
                 "battery_percent": t.battery_percent,

@@ -24,6 +24,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -725,6 +726,55 @@ def test_screen_delete_removes_from_telemetry(bare_client):
 
     client.delete("/hokku/api/screens/frame-1")
     assert "frame-1" not in state.scheduler.screens()
+
+
+# ── /hokku/api/screens/<name>/preview GET ────────────────────────────────────
+
+
+def test_screen_preview_is_that_screens_render(synced_client):
+    """ "Next" is the picture the frame will fetch, "showing" the one it got,
+    both rendered for the screen's own model; status carries next_image."""
+    client, state, name = synced_client
+    f7 = {"X-Screen-Name": "f7", "X-Screen-Model": "bigme_f7"}
+    client.get("/hokku/screen/", headers=f7)  # registers; F7 render not there yet
+    state.manager.set_known_models(state.scheduler.known_models())
+    state.manager.sync()
+    state.manager.wait_for_idle()
+
+    assert client.get("/hokku/api/status").get_json()["screens"]["f7"]["next_image"] == name
+    nxt = client.get("/hokku/api/screens/f7/preview?which=next")
+    assert nxt.status_code == 200
+    assert Image.open(io.BytesIO(nxt.data)).size == (800, 480)
+    assert client.get("/hokku/api/screens/f7/preview?which=showing").status_code == 404
+
+    assert client.get("/hokku/screen/", headers=f7).status_code == 200
+    showing = client.get("/hokku/api/screens/f7/preview?which=showing")
+    assert Image.open(io.BytesIO(showing.data)).size == (800, 480)
+    revalidate = client.get(
+        "/hokku/api/screens/f7/preview?which=showing",
+        headers={"If-None-Match": showing.headers["ETag"]},
+    )
+    assert revalidate.status_code == 304
+
+    assert client.get("/hokku/api/screens/f7/preview?which=bogus").status_code == 400
+    assert client.get("/hokku/api/screens/ghost/preview").status_code == 404
+
+
+def test_screen_preview_uses_the_mount_orientation(synced_client):
+    """A portrait-mounted frame gets the portrait render, whatever the
+    picture's native orientation."""
+    client, _, _ = synced_client
+    client.get("/hokku/screen/", headers={"X-Screen-Name": "hall"})
+    client.patch("/hokku/api/screens/hall/config", json={"orientation": "portrait"})
+    # The portrait render is a secondary job: wait_for_idle() only tracks the
+    # primary, so it may still be in flight (the endpoint says 404 until then).
+    for _ in range(200):
+        nxt = client.get("/hokku/api/screens/hall/preview?which=next")
+        if nxt.status_code == 200:
+            break
+        time.sleep(0.05)
+    assert nxt.status_code == 200
+    assert Image.open(io.BytesIO(nxt.data)).size == (1200, 1600)
 
 
 def test_screen_response_carries_cal_seed(bare_client):
