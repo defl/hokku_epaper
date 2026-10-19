@@ -559,7 +559,7 @@ class AbstractImageManager(ABC):
                     )
             self._save_db()
 
-    def preview_png(self, name: str) -> bytes | None:
+    def preview_png(self, name: str, model: str = _PRIMARY_MODEL) -> bytes | None:
         rec = self._records.get(name)
         if rec is None or rec.convert_status != "ok":
             return None
@@ -567,7 +567,7 @@ class AbstractImageManager(ABC):
         # have no native render target — use LANDSCAPE for those.
         native = rec.native_orientation
         orientation = native if native != Orientation.NEUTRAL else Orientation.LANDSCAPE
-        s = rec.slug_for(_PRIMARY_MODEL, orientation)
+        s = rec.slug_for(model, orientation)
         if not s:
             return None
         path = self._preview_path(rec.name_hash, s)

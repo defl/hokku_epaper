@@ -1652,7 +1652,19 @@ async function downloadFirmware(model, tag, btn) {
 let ditherPresets = {};
 let ditherPresetOrder = [];   // catalog order; see /api/config dither_preset_order
 let configDefaults = null;
-let lastPanelData = {visual_w: {{visual_w}}, visual_h: {{visual_h}}};
+// The panel the UI previews and hints against: /api/config's preview_model
+// entry of `panels`, plus its model id. null until /api/config has loaded.
+let lastPanelData = null;
+
+// Visible canvas for a picture of this orientation on that panel. A rotated
+// panel (Huessen) turns with the picture; a non-rotated one (Bigme F7) stays
+// 800×480 either way, so a portrait picture is pillarboxed, not rotated.
+// Mirrors _prepare_canvas() in image_abc.py.
+function panelVisibleDims(orient) {
+  const p = lastPanelData;
+  const swap = p.panel_rotated && orient === 'portrait';
+  return swap ? [p.visual_h, p.visual_w] : [p.visual_w, p.visual_h];
+}
 
 // Per-picture editor state, valid only while the image details modal is open.
 // null crop = this picture uses the global letterbox-fill setting.
@@ -2318,6 +2330,8 @@ function ditherPreviewBody(panelId, filename, extra) {
   if (panelId === 'imgcfg' && imgcfgCropOverride !== null) {
     body.crop_to_fill_threshold = imgcfgCropOverride;
   }
+  // Render for the panel the UI is showing, not the server's reference model.
+  if (lastPanelData) body.screen_model = lastPanelData.model;
   return Object.assign(body, extra || {});
 }
 
@@ -3941,12 +3955,11 @@ function showImageDetails(fname) {
   // doesn't perfectly match the screen. Computed from the fit/cover scale ratio
   // using the same formula as _prepare_canvas() in image_abc.py.
   let fillLimitCell = null;
-  if (!isVector && entry.image_width && entry.image_height) {
+  if (!isVector && entry.image_width && entry.image_height && lastPanelData) {
     // Preview/dither use the image's native orientation, so the
     // letterbox-fill limit shown here must match.
     const orient = entry.native_orientation || 'landscape';
-    const visW = orient === 'landscape' ? lastPanelData.visual_w : lastPanelData.visual_h;
-    const visH = orient === 'landscape' ? lastPanelData.visual_h : lastPanelData.visual_w;
+    const [visW, visH] = panelVisibleDims(orient);
     const scaleFit   = Math.min(visW / entry.image_width, visH / entry.image_height);
     const scaleCover = Math.max(visW / entry.image_width, visH / entry.image_height);
     const zoomRatio  = scaleCover / scaleFit - 1.0;
@@ -3972,7 +3985,8 @@ function showImageDetails(fname) {
 
   const actions = document.getElementById('img-detail-actions');
   if (entry.dithered) {
-    actions.innerHTML = `<a class="btn btn-secondary btn-small" href="/hokku/api/dithered/${encodeURIComponent(fname)}" target="_blank">View dithered</a>`;
+    const model = lastPanelData ? `?screen_model=${encodeURIComponent(lastPanelData.model)}` : '';
+    actions.innerHTML = `<a class="btn btn-secondary btn-small" href="/hokku/api/dithered/${encodeURIComponent(fname)}${model}" target="_blank">View dithered</a>`;
   } else {
     actions.innerHTML = '<span style="color:#92400e;font-size:0.85em">Dithered version not ready yet</span>';
   }
@@ -4085,10 +4099,9 @@ function renderImageOverrideCropHint(entry) {
   const hint = document.getElementById('imgcfg-crop-hint');
   if (!hint) return;
   hint.textContent = '';
-  if (!entry || !entry.image_width || !entry.image_height) return;
+  if (!entry || !entry.image_width || !entry.image_height || !lastPanelData) return;
   const orient = entry.native_orientation || 'landscape';
-  const visW = orient === 'landscape' ? lastPanelData.visual_w : lastPanelData.visual_h;
-  const visH = orient === 'landscape' ? lastPanelData.visual_h : lastPanelData.visual_w;
+  const [visW, visH] = panelVisibleDims(orient);
   const scaleFit   = Math.min(visW / entry.image_width, visH / entry.image_height);
   const scaleCover = Math.max(visW / entry.image_width, visH / entry.image_height);
   const zoom = scaleCover / scaleFit - 1.0;
@@ -4401,7 +4414,7 @@ async function loadConfig() {
 
     // Dither presets + current state for the three Config-tab pipelines. The
     // per-picture editor is mounted on demand by the image details modal.
-    lastPanelData = data.panel || {visual_w: {{visual_w}}, visual_h: {{visual_h}}};
+    lastPanelData = Object.assign({model: data.preview_model}, data.panels[data.preview_model]);
     configDefaults = data.config_defaults || null;
     ditherPresets = data.dither_presets || {};
     ditherPresetOrder = data.dither_preset_order || [];
