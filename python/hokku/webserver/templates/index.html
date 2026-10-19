@@ -1669,17 +1669,27 @@ let configDefaults = null;
 let lastPanels = {};
 let lastPanelData = null;
 // The panel the open details modal previews for: the screen it was opened
-// from, else lastPanelData.
+// from, else lastPanelData; switchable when more than one model is registered.
 let detailPanel = null;
 
-// Visible canvas for a picture of this orientation on the detail panel. A
-// rotated panel (Huessen) turns with the picture; a non-rotated one (Bigme F7)
-// stays 800×480 either way, so a portrait picture is pillarboxed, not rotated.
+// Models the registered screens report, in display order. The picture's
+// framing is shown for each of these — not for every model the server knows.
+function registeredModels() {
+  const models = new Set(Object.values(lastScreens).map(s => s.screen_model).filter(m => m && lastPanels[m]));
+  if (models.size === 0 && lastPanelData) models.add(lastPanelData.model);
+  return [...models].sort();
+}
+
+// How much extra zoom a picture of this size and orientation needs to fill a
+// panel without letterbox bars (0 when its shape already matches). A rotated
+// panel (Huessen) turns with the picture; a non-rotated one (Bigme F7) stays
+// 800×480 either way, so a portrait picture is pillarboxed, not rotated.
 // Mirrors _prepare_canvas() in image_abc.py.
-function panelVisibleDims(orient) {
-  const p = detailPanel;
-  const swap = p.panel_rotated && orient === 'portrait';
-  return swap ? [p.visual_h, p.visual_w] : [p.visual_w, p.visual_h];
+function zoomNeeded(panel, w, h, orient) {
+  const swap = panel.panel_rotated && orient === 'portrait';
+  const [visW, visH] = swap ? [panel.visual_h, panel.visual_w] : [panel.visual_w, panel.visual_h];
+  const zoom = Math.max(visW / w, visH / h) / Math.min(visW / w, visH / h) - 1.0;
+  return zoom > 1e-9 ? zoom : 0;
 }
 
 // Per-picture editor state, valid only while the image details modal is open.
@@ -3924,6 +3934,34 @@ function setupImageLabelEditor(fname, entry) {
   render();
 }
 
+// "View dithered" for the frame the modal previews for. With two or more
+// models registered, a switch picks which — it drives the preview, the
+// compare grid and this link together, so they always agree.
+function renderImageDetailActions(fname, entry) {
+  const actions = document.getElementById('img-detail-actions');
+  if (!entry.dithered) {
+    actions.innerHTML = '<span style="color:#92400e;font-size:0.85em">Dithered version not ready yet</span>';
+    return;
+  }
+  const models = registeredModels();
+  const current = detailPanel ? detailPanel.model : null;
+  const query = current ? `?screen_model=${encodeURIComponent(current)}` : '';
+  const toggle = models.length > 1
+    ? `<span class="info" style="align-self:center">Preview for: ` + models.map(m => m === current
+        ? `<strong>${escapeHtml(m)}</strong>`
+        : `<a href="#" onclick="setDetailPanel(${escapeHtml(JSON.stringify(m))}); return false;">${escapeHtml(m)}</a>`
+      ).join(' · ') + '</span>'
+    : '';
+  actions.innerHTML = `<a class="btn btn-secondary btn-small" href="/hokku/api/dithered/${encodeURIComponent(fname)}${query}" target="_blank">View dithered</a>${toggle}`;
+}
+
+function setDetailPanel(model) {
+  if (!lastPanels[model]) return;
+  detailPanel = Object.assign({model}, lastPanels[model]);
+  const entry = (lastUploadFiles || []).find(e => e.name === imgcfgFilename) || {};
+  renderImageDetailActions(imgcfgFilename, entry);
+}
+
 // `model` is the screen model to preview for when opened from a screen's row;
 // otherwise the UI's default panel.
 function showImageDetails(fname, model) {
@@ -3978,23 +4016,6 @@ function showImageDetails(fname, model) {
   const ditherStr = (entry.last_conversion_seconds != null)
     ? `${entry.last_conversion_seconds.toFixed(1)} s`
     : '–';
-  // Minimum letterbox fill limit: only for raster images whose aspect ratio
-  // doesn't perfectly match the screen. Computed from the fit/cover scale ratio
-  // using the same formula as _prepare_canvas() in image_abc.py.
-  let fillLimitCell = null;
-  if (!isVector && entry.image_width && entry.image_height && detailPanel) {
-    // Preview/dither use the image's native orientation, so the
-    // letterbox-fill limit shown here must match.
-    const orient = entry.native_orientation || 'landscape';
-    const [visW, visH] = panelVisibleDims(orient);
-    const scaleFit   = Math.min(visW / entry.image_width, visH / entry.image_height);
-    const scaleCover = Math.max(visW / entry.image_width, visH / entry.image_height);
-    const zoomRatio  = scaleCover / scaleFit - 1.0;
-    if (zoomRatio > 1e-9) {
-      const minPct = Math.ceil(zoomRatio * 100);
-      fillLimitCell = `${minPct}% <span title="Minimum ‘Letterbox fill limit’ to display this image without letterbox bars (based on current ${orient} orientation). Set the global slider to at least this value." style="cursor:help"><svg width="13" height="13" style="vertical-align:middle;stroke:#6b7280"><use href="#icon-help-circle"/></svg></span>`;
-    }
-  }
 
   const rows = [
     ['Dimensions', dimsCell],
@@ -4005,18 +4026,11 @@ function showImageDetails(fname, model) {
     ['Display time', sd.total_show_formatted || '0m'],
     ['B&amp;W detected', yesno(entry.is_bw)],
     ['Face detected',  yesno(entry.face_bboxes ? entry.face_bboxes.length > 0 : null)],
-    ...(fillLimitCell ? [['Letterbox fill limit', fillLimitCell]] : []),
   ];
   document.getElementById('img-detail-table').innerHTML =
     rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
 
-  const actions = document.getElementById('img-detail-actions');
-  if (entry.dithered) {
-    const model = detailPanel ? `?screen_model=${encodeURIComponent(detailPanel.model)}` : '';
-    actions.innerHTML = `<a class="btn btn-secondary btn-small" href="/hokku/api/dithered/${encodeURIComponent(fname)}${model}" target="_blank">View dithered</a>`;
-  } else {
-    actions.innerHTML = '<span style="color:#92400e;font-size:0.85em">Dithered version not ready yet</span>';
-  }
+  renderImageDetailActions(fname, entry);
 
   setupImageLabelEditor(fname, entry);
   setupImageOverrideEditor(fname, entry);
@@ -4085,11 +4099,11 @@ function setupImageOverrideEditor(fname, entry) {
   document.getElementById('imgcfg-crop').oninput = (e) => {
     imgcfgCropOverride = (parseInt(e.target.value, 10) || 0) / 100;
     document.getElementById('imgcfg-crop-val').textContent = e.target.value + '%';
+    renderImageOverrideCropHint(entry);
     markImageOverrideDirty();
   };
 
-  renderImageOverrideCropHint(entry);
-  loadImageOverrideState(fname);
+  loadImageOverrideState(fname).then(() => renderImageOverrideCropHint(entry));
 }
 
 function teardownImageOverrideEditor() {
@@ -4120,24 +4134,27 @@ function markImageOverrideDirty() {
   if (status) status.textContent = '';
 }
 
-// Tell the user what fill percentage this picture would actually need, which
-// the details table already computes — here it becomes actionable.
+// What the slider's current value does to this picture on each registered
+// frame. The limit is a property of the picture; whether it shows with bars is
+// a property of picture × frame, so there is one line per frame model. Re-run
+// on every slider move so the lines answer for the value being dragged, not
+// the saved one.
 function renderImageOverrideCropHint(entry) {
   const hint = document.getElementById('imgcfg-crop-hint');
   if (!hint) return;
-  hint.textContent = '';
-  if (!entry || !entry.image_width || !entry.image_height || !detailPanel) return;
+  hint.innerHTML = '';
+  if (!entry || !entry.image_width || !entry.image_height || entry.dimension_unit === 'pt') return;
+  const limit = (parseInt(document.getElementById('imgcfg-crop').value, 10) || 0) / 100;
   const orient = entry.native_orientation || 'landscape';
-  const [visW, visH] = panelVisibleDims(orient);
-  const scaleFit   = Math.min(visW / entry.image_width, visH / entry.image_height);
-  const scaleCover = Math.max(visW / entry.image_width, visH / entry.image_height);
-  const zoom = scaleCover / scaleFit - 1.0;
-  if (zoom > 1e-9) {
+  hint.innerHTML = registeredModels().map(m => {
+    const zoom = zoomNeeded(lastPanels[m], entry.image_width, entry.image_height, orient);
     const pct = Math.ceil(zoom * 100);
-    hint.textContent = pct > 100
-      ? `On ${detailPanel.model} this picture needs ${pct}% — more than the 100% limit — so it always shows letterbox bars.`
-      : `On ${detailPanel.model} this picture needs at least ${pct}% to fill the frame with no letterbox bars.`;
-  }
+    const outcome = zoom === 0 ? 'fills the frame (shape matches)'
+      : pct > 100 ? `shows with bars (needs ${pct}%, more than the slider allows)`
+      : limit > 0 && zoom <= limit ? `fills the frame (needs ${pct}%)`
+      : `shows with bars (needs ${pct}%)`;
+    return `<strong>${escapeHtml(m)}</strong> — ${outcome}`;
+  }).join('<br>');
 }
 
 async function loadImageOverrideState(fname) {
@@ -4208,6 +4225,7 @@ function toggleImageCropOverride() {
   const effective = parseFloat(slider.dataset.effective || '0');
   imgcfgCropOverride = imgcfgCropOverride === null ? effective : null;
   syncImageCropControl(effective);
+  renderImageOverrideCropHint((lastUploadFiles || []).find(e => e.name === imgcfgFilename));
   markImageOverrideDirty();
 }
 

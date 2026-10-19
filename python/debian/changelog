@@ -1,3 +1,11 @@
+hokku-server (4.0.1~dev.103-1) unstable; urgency=medium
+
+  * Picture details: the letterbox slider says, per registered frame,
+    whether the picture fills it or shows with bars; with several models
+    the preview can be switched between them.
+
+ -- dmbutko <253267065+dmbutko@users.noreply.github.com>  Mon, 19 Oct 2026 17:15:32 +1100
+
 hokku-server (4.0.1~dev.102-1) unstable; urgency=medium
 
   * Connected screens show what each frame is displaying and will fetch
