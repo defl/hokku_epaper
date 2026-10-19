@@ -243,6 +243,18 @@ def _pipeline_label(rec: ImageRecord, obs: Observations | None) -> str:
     return "default"
 
 
+def _preview_model(state: AppState) -> str:
+    """The screen model the web UI previews and hints for.
+
+    The UI shows one picture against one panel geometry, so it needs a single
+    answer: the model every self-identified screen reports. With no screen
+    yet, or a mix of models, it is the reference model — the only one that is
+    always rendered.
+    """
+    models = {m for m in state.scheduler.known_models() if m in DISPLAY_REGISTRY}
+    return next(iter(models)) if len(models) == 1 else "huessen_epf1301"
+
+
 def create_app(
     state: AppState,
     *,
@@ -574,8 +586,7 @@ def create_app(
 
     @app.route("/hokku/ui")
     def web_gui():
-        ref = DISPLAY_REGISTRY["huessen_epf1301"]
-        return render_template("index.html", visual_w=ref.visual_w, visual_h=ref.visual_h)
+        return render_template("index.html")
 
     @app.route("/hokku/static/<path:filename>")
     def static_asset(filename: str):
@@ -597,7 +608,12 @@ def create_app(
 
     @app.route("/hokku/api/dithered/<path:name>")
     def api_dithered(name: str):
-        png = state.manager.preview_png(name)
+        # Omitted means the reference model, which is always rendered and is
+        # what tools/ fetch; the UI passes the model it previews for.
+        model = request.args.get("screen_model", "huessen_epf1301")
+        if model not in DISPLAY_REGISTRY:
+            return jsonify({"error": f"unknown screen_model {model!r}"}), 400
+        png = state.manager.preview_png(name, model)
         if png is None:
             abort(404)
         return _png_response(png)
@@ -1313,16 +1329,20 @@ def create_app(
                 "dither_preset_order": list(PRESET_IMAGE_CONFIGS),
                 "server_time": datetime.now().isoformat(timespec="seconds"),
                 # Per-model panel geometry, keyed by model id — auto-includes any
-                # model added to the registry.  The legacy "panel" key mirrors the
-                # reference model so older UI code keeps working.
+                # model added to the registry.  "preview_model" is the entry the
+                # UI previews and hints against (see _preview_model).  The legacy
+                # "panel" key mirrors the reference model so older UI code keeps
+                # working.
                 "panels": {
                     mid: {
                         "visual_w": d.visual_w,
                         "visual_h": d.visual_h,
+                        "panel_rotated": d.panel_rotated,
                         "total_bytes": d.total_bytes,
                     }
                     for mid, d in DISPLAY_REGISTRY.items()
                 },
+                "preview_model": _preview_model(state),
                 "panel": {
                     "visual_w": DISPLAY_REGISTRY["huessen_epf1301"].visual_w,
                     "visual_h": DISPLAY_REGISTRY["huessen_epf1301"].visual_h,

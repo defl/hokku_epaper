@@ -343,6 +343,30 @@ def test_config_get_panel_dims(bare_client):
     assert panel["total_bytes"] > 0
 
 
+def test_config_get_preview_model_is_the_only_registered_model(bare_client):
+    """The UI previews and hints for the one model the screens report; with
+    none yet, or a mix, the reference model. The legacy "panel" key stays the
+    reference model throughout."""
+    client, state = bare_client
+
+    data = client.get("/hokku/api/config").get_json()
+    assert data["preview_model"] == "huessen_epf1301"
+    assert data["panels"]["bigme_f7"]["panel_rotated"] is False
+    assert data["panels"]["huessen_epf1301"]["panel_rotated"] is True
+
+    state.scheduler.record_screen_call(
+        "f7", "10.0.0.2", 60, None, None, None, screen_model="bigme_f7"
+    )
+    data = client.get("/hokku/api/config").get_json()
+    assert data["preview_model"] == "bigme_f7"
+    assert data["panel"]["visual_w"] == 1600  # legacy key: still the reference model
+
+    state.scheduler.record_screen_call(
+        "big", "10.0.0.3", 60, None, None, None, screen_model="huessen_epf1301"
+    )
+    assert client.get("/hokku/api/config").get_json()["preview_model"] == "huessen_epf1301"
+
+
 def test_config_get_presets_non_empty(bare_client):
     client, _ = bare_client
     presets = client.get("/hokku/api/config").get_json()["dither_presets"]
@@ -612,6 +636,24 @@ def test_dithered_missing_image_returns_404(bare_client):
     client, _ = bare_client
     resp = client.get("/hokku/api/dithered/ghost.jpg")
     assert resp.status_code == 404
+
+
+def test_dithered_screen_model_selects_that_models_render(synced_client):
+    """?screen_model picks the cached render for that panel; omitted stays the
+    reference model (tools/ fetch it bare)."""
+    client, state, name = synced_client
+    state.manager.set_known_models({"bigme_f7"})
+    state.manager.sync()
+    state.manager.wait_for_idle()
+
+    f7 = client.get(f"/hokku/api/dithered/{name}?screen_model=bigme_f7")
+    assert f7.status_code == 200
+    assert Image.open(io.BytesIO(f7.data)).size == (800, 480)
+
+    ref = client.get(f"/hokku/api/dithered/{name}")
+    assert Image.open(io.BytesIO(ref.data)).size == (1600, 1200)
+
+    assert client.get(f"/hokku/api/dithered/{name}?screen_model=nonesuch").status_code == 400
 
 
 # ── /hokku/api/original/<name> GET ───────────────────────────────────────────

@@ -1,3 +1,11 @@
+hokku-server (4.0.1~dev.101-1) unstable; urgency=medium
+
+  * Web UI previews and the letterbox-fill hint use the screen model that
+    has checked in (e.g. bigme_f7 800x480) instead of always huessen_epf1301;
+    /api/dithered takes ?screen_model=.
+
+ -- dmbutko <253267065+dmbutko@users.noreply.github.com>  Mon, 19 Oct 2026 16:05:28 +1100
+
 hokku-server (4.0.1~dev.100-1) unstable; urgency=medium
 
   * Firmware parity: every model shows the same error messages, confirms or
